@@ -3,10 +3,23 @@ name = "finflow_v2"
 version = "0.1.0"
 description = "Personal finance automation system"
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "boto3>=1.43.75",
+    "fastapi>=0.141.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+]
 
 [dependency-groups]
-dev = ["poethepoet>=0.48.0", "pre-commit", "pyright", "pytest", "ruff"]
+dev = [
+    "boto3-stubs[dynamodb,events,sqs]>=1.43.75",
+    "httpx2>=2.12.0",
+    "poethepoet>=0.48.0",
+    "pre-commit",
+    "pyright",
+    "pytest",
+    "ruff",
+]
 
 [tool.ruff]
 target-version = "py313"

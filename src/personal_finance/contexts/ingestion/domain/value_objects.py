@@ -3,20 +3,29 @@ from __future__ import annotations
 import dataclasses
 import enum
 import hashlib
+from typing import Self
 import uuid
+
+from personal_finance.shared.domain.value_objects import ValueObject
+
+
+_NOTIFICATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "ingestion.finflow")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class NotificationId:
+class NotificationId(ValueObject):
     value: uuid.UUID
 
     @classmethod
-    def new(cls) -> NotificationId:
-        return cls(value=uuid.uuid4())
+    def for_message(cls, message_id: EmailMessageId) -> Self:
+        """Derive the identity deterministically from the email message id, so
+        a redelivery of the same email always resolves to the same aggregate.
+        """
+        return cls(value=uuid.uuid5(_NOTIFICATION_NAMESPACE, message_id.value))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class EmailMessageId:
+class EmailMessageId(ValueObject):
     value: str
 
     def __post_init__(self) -> None:
@@ -29,7 +38,7 @@ class EmailMessageId:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class EmailAddress:
+class EmailAddress(ValueObject):
     value: str
 
     def __post_init__(self) -> None:
@@ -40,22 +49,34 @@ class EmailAddress:
 
         object.__setattr__(self, "value", value)
 
+    @property
+    def domain(self) -> str:
+        return self.value.rsplit("@", 1)[1]
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class IdempotencyKey:
+class IdempotencyKey(ValueObject):
     value: str
 
     @classmethod
-    def from_message_id(cls, message_id: EmailMessageId) -> IdempotencyKey:
+    def from_message_id(cls, message_id: EmailMessageId) -> Self:
         digest = hashlib.sha256(message_id.value.encode("utf-8")).hexdigest()
 
         return cls(value=digest)
 
 
 class ProcessingStatus(enum.Enum):
-    RECEIVED = enum.auto()
-    QUEUED = enum.auto()
-    PROCESSING = enum.auto()
-    PROCESSED = enum.auto()
-    FAILED = enum.auto()
-    IGNORED = enum.auto()
+    """Explicit string values: this enum is persisted and serialized, so the
+    stored representation must survive a reordering of the members.
+    """
+
+    RECEIVED = "received"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
+    FAILED = "failed"
+    IGNORED = "ignored"
+
+
+class NotificationIgnoredReason(enum.Enum):
+    UNAUTHORIZED_SENDER = "unauthorized_sender"
