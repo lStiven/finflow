@@ -1,12 +1,13 @@
-import pytest
-
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 
 
-def test_policy_requires_at_least_one_allowed_address_or_domain() -> None:
-    with pytest.raises(ValueError, match="at least one"):
-        AuthorizedSenderPolicy()
+def test_an_empty_policy_authorizes_nothing() -> None:
+    # A user who has not approved any sender yet is a normal state, not a
+    # misconfiguration. The rule fails closed instead of rejecting the value.
+    policy = AuthorizedSenderPolicy()
+
+    assert policy.is_authorized(EmailAddress("alerts@bank.com")) is False
 
 
 def test_sender_authorized_by_exact_address() -> None:

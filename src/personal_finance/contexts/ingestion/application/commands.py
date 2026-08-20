@@ -11,6 +11,10 @@ from personal_finance.shared.domain.value_objects import PosixTime
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class ReceiveBankNotificationCommand:
+    # The address the email was delivered to. This is what attributes the
+    # notification to a user: the sender identifies the bank, never the person,
+    # since every customer of the same bank shares it.
+    recipient: EmailAddress
     message_id: EmailMessageId
     sender: EmailAddress
     subject: str

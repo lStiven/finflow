@@ -6,10 +6,14 @@ import hashlib
 from typing import Self
 import uuid
 
-from personal_finance.shared.domain.value_objects import ValueObject
+from personal_finance.shared.domain.value_objects import UserId, ValueObject
 
 
 _NOTIFICATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "ingestion.finflow")
+
+
+def _scope(user_id: UserId, message_id: EmailMessageId) -> str:
+    return f"{user_id.value}:{message_id.value}"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -17,11 +21,18 @@ class NotificationId(ValueObject):
     value: uuid.UUID
 
     @classmethod
-    def for_message(cls, message_id: EmailMessageId) -> Self:
-        """Derive the identity deterministically from the email message id, so
-        a redelivery of the same email always resolves to the same aggregate.
+    def for_message(cls, *, user_id: UserId, message_id: EmailMessageId) -> Self:
+        """Derive the identity deterministically from the owner and the email
+        message id, so a redelivery of the same email always resolves to the
+        same aggregate.
+
+        The user is part of the derivation because a forwarded bank email keeps
+        its original `Message-ID`: two people on a shared account would
+        otherwise collapse into one notification.
         """
-        return cls(value=uuid.uuid5(_NOTIFICATION_NAMESPACE, message_id.value))
+        return cls(
+            value=uuid.uuid5(_NOTIFICATION_NAMESPACE, _scope(user_id, message_id)),
+        )
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -59,8 +70,11 @@ class IdempotencyKey(ValueObject):
     value: str
 
     @classmethod
-    def from_message_id(cls, message_id: EmailMessageId) -> Self:
-        digest = hashlib.sha256(message_id.value.encode("utf-8")).hexdigest()
+    def from_message(cls, *, user_id: UserId, message_id: EmailMessageId) -> Self:
+        """Scoped to the owner for the same reason `NotificationId` is: the
+        message id alone is not unique across users.
+        """
+        digest = hashlib.sha256(_scope(user_id, message_id).encode("utf-8")).hexdigest()
 
         return cls(value=digest)
 

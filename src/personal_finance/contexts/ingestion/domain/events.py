@@ -9,12 +9,13 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     NotificationIgnoredReason,
 )
 from personal_finance.shared.domain.events import Event
-from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class BankNotificationReceived(Event):
     notification_id: NotificationId
+    user_id: UserId
     message_id: EmailMessageId
     sender: EmailAddress
     received_at: PosixTime
@@ -23,12 +24,14 @@ class BankNotificationReceived(Event):
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class BankNotificationQueued(Event):
     notification_id: NotificationId
+    user_id: UserId
     message_id: EmailMessageId
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class BankNotificationIgnored(Event):
     notification_id: NotificationId
+    user_id: UserId
     message_id: EmailMessageId
     sender: EmailAddress
     reason: NotificationIgnoredReason

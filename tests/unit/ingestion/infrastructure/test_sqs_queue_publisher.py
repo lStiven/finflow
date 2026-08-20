@@ -14,7 +14,10 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
 from personal_finance.contexts.ingestion.infrastructure.messaging.sqs import (
     SQSQueuePublisher,
 )
-from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
 
 
 QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/000000000000/parse-notifications"
@@ -41,8 +44,13 @@ def test_message_body_matches_the_worker_contract() -> None:
 
     publisher.enqueue(
         ParseNotificationMessage(
-            notification_id=NotificationId.for_message(message_id),
-            idempotency_key=IdempotencyKey.from_message_id(message_id),
+            notification_id=NotificationId.for_message(
+                user_id=USER_ID, message_id=message_id
+            ),
+            user_id=USER_ID,
+            idempotency_key=IdempotencyKey.from_message(
+                user_id=USER_ID, message_id=message_id
+            ),
             message_id=message_id,
             received_at=PosixTime.from_epoch_seconds(RECEIVED_AT_EPOCH),
         ),
@@ -54,8 +62,13 @@ def test_message_body_matches_the_worker_contract() -> None:
     body = json.loads(client.sent[0]["MessageBody"])
     assert body == {
         "version": 1,
-        "notification_id": str(NotificationId.for_message(message_id).value),
-        "idempotency_key": IdempotencyKey.from_message_id(message_id).value,
+        "user_id": str(USER_ID.value),
+        "notification_id": str(
+            NotificationId.for_message(user_id=USER_ID, message_id=message_id).value
+        ),
+        "idempotency_key": IdempotencyKey.from_message(
+            user_id=USER_ID, message_id=message_id
+        ).value,
         "message_id": "message-1",
         "received_at": RECEIVED_AT_EPOCH,
     }
@@ -71,8 +84,13 @@ def test_body_never_carries_the_raw_email() -> None:
 
     publisher.enqueue(
         ParseNotificationMessage(
-            notification_id=NotificationId.for_message(message_id),
-            idempotency_key=IdempotencyKey.from_message_id(message_id),
+            notification_id=NotificationId.for_message(
+                user_id=USER_ID, message_id=message_id
+            ),
+            user_id=USER_ID,
+            idempotency_key=IdempotencyKey.from_message(
+                user_id=USER_ID, message_id=message_id
+            ),
             message_id=message_id,
             received_at=PosixTime.now(),
         ),

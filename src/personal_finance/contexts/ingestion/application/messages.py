@@ -7,7 +7,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     IdempotencyKey,
     NotificationId,
 )
-from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -20,6 +20,7 @@ class ParseNotificationMessage:
     """
 
     notification_id: NotificationId
+    user_id: UserId
     idempotency_key: IdempotencyKey
     message_id: EmailMessageId
     received_at: PosixTime

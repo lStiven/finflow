@@ -72,6 +72,56 @@ class ValueObject:
         return json.dumps(self.to_dict())
 
 
+class Currency(enum.Enum):
+    COP = "COP"
+    USD = "USD"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Money(ValueObject):
+    """An amount with its currency. Always `Decimal`: binary floats cannot
+    represent a cent exactly, and money that drifts is money that is wrong.
+
+    The amount is unsigned — direction belongs to the transaction, not to the
+    quantity.
+    """
+
+    amount: Decimal
+    currency: Currency
+
+    def __post_init__(self) -> None:
+        if self.amount < 0:
+            raise ValueError(f"Money cannot be negative: {self.amount}")
+
+    def to_dict(self) -> JsonValue:
+        return {"amount": str(self.amount), "currency": self.currency.value}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class UserId(ValueObject):
+    """Identifies the person a record belongs to.
+
+    Lives in `shared` because every context references it, but no context
+    stores user data here: each one keeps its own projection of what it needs.
+    """
+
+    value: uuid.UUID
+
+    @classmethod
+    def new(cls) -> Self:
+        return cls(value=uuid.uuid4())
+
+    @classmethod
+    def from_string(cls, value: str) -> Self:
+        try:
+            return cls(value=uuid.UUID(value))
+        except ValueError as error:
+            raise ValueError(f"Invalid user id: {value!r}") from error
+
+    def to_dict(self) -> JsonValue:
+        return str(self.value)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class PosixTime(ValueObject):
     value: datetime

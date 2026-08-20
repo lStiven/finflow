@@ -9,10 +9,13 @@ from personal_finance.shared.domain.value_objects import ValueObject
 @dataclasses.dataclass(frozen=True, slots=True)
 class AuthorizedSenderPolicy(ValueObject):
     """Decides whether an email sender is trusted to originate bank
-    notifications.
+    notifications for one user.
 
-    The allow-list itself is configuration (e.g. loaded from application
-    settings); this class only encodes the matching rule, not the data.
+    The allow-list itself is data owned by the user and loaded from storage;
+    this class only encodes the matching rule.
+
+    An empty policy is a valid state — a user who has not approved any sender
+    yet — and it authorizes nothing. The rule fails closed by construction.
     """
 
     allowed_addresses: frozenset[EmailAddress] = dataclasses.field(
@@ -23,12 +26,6 @@ class AuthorizedSenderPolicy(ValueObject):
     )
 
     def __post_init__(self) -> None:
-        if not self.allowed_addresses and not self.allowed_domains:
-            raise ValueError(
-                "AuthorizedSenderPolicy requires at least one allowed "
-                "address or domain",
-            )
-
         normalized_domains = frozenset(
             domain.strip().lower() for domain in self.allowed_domains
         )

@@ -31,6 +31,7 @@ class SQSQueuePublisher:
                 {
                     "version": MESSAGE_SCHEMA_VERSION,
                     "notification_id": str(message.notification_id.value),
+                    "user_id": str(message.user_id.value),
                     "idempotency_key": message.idempotency_key.value,
                     "message_id": message.message_id.value,
                     "received_at": message.received_at.as_epoch_seconds(),

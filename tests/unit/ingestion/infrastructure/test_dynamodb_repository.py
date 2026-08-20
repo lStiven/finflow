@@ -13,7 +13,10 @@ from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb imp
     to_entity,
     to_item,
 )
-from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
 
 
 RECEIVED_AT_EPOCH = 1_700_000_000
@@ -26,6 +29,7 @@ def _item(notification: BankNotification) -> dict[str, AttributeValueTypeDef]:
 
 def _notification() -> BankNotification:
     return BankNotification.receive(
+        user_id=USER_ID,
         message_id=EmailMessageId("message-1"),
         sender=EmailAddress("alerts@bank.com"),
         subject="Purchase notification",
@@ -40,6 +44,7 @@ def test_item_round_trip_preserves_the_aggregate() -> None:
     restored = to_entity(_item(notification))
 
     assert restored.id == notification.id
+    assert restored.user_id == notification.user_id
     assert restored.message_id == notification.message_id
     assert restored.idempotency_key == notification.idempotency_key
     assert restored.sender == notification.sender

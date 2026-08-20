@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 
 from personal_finance.contexts.ingestion.application.commands import (
     ReceiveBankNotificationCommand,
@@ -11,9 +12,12 @@ from personal_finance.contexts.ingestion.application.messages import (
 from personal_finance.contexts.ingestion.application.ports import (
     BankNotificationRepository,
     QueuePublisher,
+    UserInboxRepository,
 )
-from personal_finance.contexts.ingestion.domain.entities import BankNotification
-from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
+from personal_finance.contexts.ingestion.domain.entities import (
+    BankNotification,
+    UserInbox,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import (
     NotificationId,
     NotificationIgnoredReason,
@@ -22,29 +26,42 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
 from personal_finance.shared.application.ports import EventPublisher
 
 
+class ReceiveOutcome(enum.Enum):
+    """What happened to the intake, as opposed to what state the notification
+    ended up in — which `ProcessingStatus` already answers.
+    """
+
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"
+    UNKNOWN_RECIPIENT = "unknown_recipient"
+
+
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class ReceiveBankNotificationResult:
-    notification_id: NotificationId
-    status: ProcessingStatus
-    is_duplicate: bool
+    outcome: ReceiveOutcome
+    # Both are absent when the recipient is unknown: with no user to attribute
+    # the email to, no notification is ever created.
+    notification_id: NotificationId | None = None
+    status: ProcessingStatus | None = None
 
 
 class ReceiveBankNotificationUseCase:
-    """Handles an inbound bank email: filters it by authorized sender,
-    persists the notification idempotently, hands it to the parsing queue,
-    and publishes whatever domain events the aggregate raised.
+    """Handles an inbound bank email: attributes it to the user who owns the
+    recipient address, filters it against that user's approved senders,
+    persists it idempotently, hands it to the parsing queue, and publishes
+    whatever domain events the aggregate raised.
     """
 
     def __init__(
         self,
         *,
         repository: BankNotificationRepository,
-        sender_policy: AuthorizedSenderPolicy,
+        inbox_repository: UserInboxRepository,
         queue_publisher: QueuePublisher,
         event_publisher: EventPublisher,
     ) -> None:
         self._repository = repository
-        self._sender_policy = sender_policy
+        self._inbox_repository = inbox_repository
         self._queue_publisher = queue_publisher
         self._event_publisher = event_publisher
 
@@ -52,17 +69,16 @@ class ReceiveBankNotificationUseCase:
         self,
         command: ReceiveBankNotificationCommand,
     ) -> ReceiveBankNotificationResult:
-        notification = BankNotification.receive(
-            message_id=command.message_id,
-            sender=command.sender,
-            subject=command.subject,
-            raw_content=command.raw_content,
-            received_at=command.received_at,
-        )
+        inbox = self._inbox_repository.find_by_address(command.recipient)
 
-        if not self._sender_policy.is_authorized(command.sender):
-            notification.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+        if inbox is None:
+            # Nothing is stored: the webhook is reachable by anyone, and
+            # persisting unattributable email would be an unbounded write.
+            return ReceiveBankNotificationResult(
+                outcome=ReceiveOutcome.UNKNOWN_RECIPIENT,
+            )
 
+        notification = self._receive(command, inbox)
         stored = self._repository.add_if_new(notification)
 
         if stored is not None:
@@ -76,10 +92,31 @@ class ReceiveBankNotificationUseCase:
         self._event_publisher.publish(notification.pull_events())
 
         return ReceiveBankNotificationResult(
+            outcome=(ReceiveOutcome.DUPLICATE if stored else ReceiveOutcome.ACCEPTED),
             notification_id=notification.id,
             status=notification.status,
-            is_duplicate=stored is not None,
         )
+
+    def _receive(
+        self,
+        command: ReceiveBankNotificationCommand,
+        inbox: UserInbox,
+    ) -> BankNotification:
+        notification = BankNotification.receive(
+            user_id=inbox.user_id,
+            message_id=command.message_id,
+            sender=command.sender,
+            subject=command.subject,
+            raw_content=command.raw_content,
+            received_at=command.received_at,
+        )
+
+        # An unapproved sender is still recorded, so the user can see what
+        # arrived and approve it later, but it never reaches the parser.
+        if not inbox.sender_policy.is_authorized(command.sender):
+            notification.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+
+        return notification
 
     def _enqueue_if_pending(self, notification: BankNotification) -> None:
         """Queue the notification for parsing unless it was ignored or an
@@ -91,6 +128,7 @@ class ReceiveBankNotificationUseCase:
         self._queue_publisher.enqueue(
             ParseNotificationMessage(
                 notification_id=notification.id,
+                user_id=notification.user_id,
                 idempotency_key=notification.idempotency_key,
                 message_id=notification.message_id,
                 received_at=notification.received_at,

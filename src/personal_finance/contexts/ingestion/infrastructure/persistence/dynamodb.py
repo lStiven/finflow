@@ -13,7 +13,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     NotificationId,
     ProcessingStatus,
 )
-from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 _SECONDS_PER_DAY = 86_400
@@ -57,6 +57,7 @@ def to_item(
     return {
         PARTITION_KEY: {"S": notification.idempotency_key.value},
         "notification_id": {"S": str(notification.id.value)},
+        "user_id": {"S": str(notification.user_id.value)},
         "message_id": {"S": notification.message_id.value},
         "sender": {"S": notification.sender.value},
         "subject": {"S": notification.subject},
@@ -73,6 +74,7 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> BankNotification:
     """
     return BankNotification(
         id=NotificationId(value=uuid.UUID(_read_string(item, "notification_id"))),
+        user_id=UserId.from_string(_read_string(item, "user_id")),
         message_id=EmailMessageId(_read_string(item, "message_id")),
         idempotency_key=IdempotencyKey(_read_string(item, PARTITION_KEY)),
         sender=EmailAddress(_read_string(item, "sender")),

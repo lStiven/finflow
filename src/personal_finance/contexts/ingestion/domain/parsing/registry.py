@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Protocol
+
+from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
+    BANK_NAME as BANCOLOMBIA,
+    BancolombiaParser,
+)
+from personal_finance.contexts.ingestion.domain.transactions import ExtractedTransaction
+from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
+
+
+class DeterministicParser(Protocol):
+    """Reads a bank's own alert templates. Pure: no network, no I/O, no LLM."""
+
+    bank: str
+
+    def parse(self, text: str) -> ExtractedTransaction | None:
+        """Return the transaction the text describes, or None when no template
+        matches — which is the caller's signal to fall back to the LLM.
+        """
+        ...
+
+
+# Keyed by the sender's domain rather than the full address: banks rotate the
+# local part of their alert addresses far more often than the domain.
+BANK_DOMAINS: Mapping[str, str] = {
+    "an.notificacionesbancolombia.com": BANCOLOMBIA,
+    "notificacionesbancolombia.com": BANCOLOMBIA,
+    "bancolombia.com.co": BANCOLOMBIA,
+}
+
+
+class ParserRegistry:
+    """Selects the deterministic parser that knows a given sender's templates."""
+
+    def __init__(
+        self,
+        *,
+        parsers: Mapping[str, DeterministicParser] | None = None,
+        bank_domains: Mapping[str, str] | None = None,
+    ) -> None:
+        self._parsers = parsers if parsers is not None else default_parsers()
+        self._bank_domains = bank_domains if bank_domains is not None else BANK_DOMAINS
+
+    def for_sender(self, sender: EmailAddress) -> DeterministicParser | None:
+        bank = self._bank_domains.get(sender.domain)
+
+        return self._parsers.get(bank) if bank else None
+
+
+def default_parsers() -> Mapping[str, DeterministicParser]:
+    return {BANCOLOMBIA: BancolombiaParser()}

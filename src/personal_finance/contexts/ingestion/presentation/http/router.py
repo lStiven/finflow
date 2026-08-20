@@ -13,7 +13,6 @@ from personal_finance.contexts.ingestion.application.commands import (
 from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
 )
-from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
@@ -23,6 +22,9 @@ from personal_finance.contexts.ingestion.infrastructure.messaging.sqs import (
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     DynamoDBBankNotificationRepository,
+)
+from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
+    DynamoDBUserInboxRepository,
 )
 from personal_finance.shared.domain.value_objects import PosixTime
 from personal_finance.shared.infrastructure.aws.session import (
@@ -45,6 +47,8 @@ class BankNotificationWebhookPayload(BaseModel):
     checked here, and the domain value objects enforce the actual rules.
     """
 
+    # The address the email was delivered to; it is what identifies the user.
+    recipient: str = Field(min_length=3, max_length=320)
     message_id: str = Field(min_length=1, max_length=998)
     sender: str = Field(min_length=3, max_length=320)
     subject: str = Field(default="", max_length=2_000)
@@ -53,14 +57,21 @@ class BankNotificationWebhookPayload(BaseModel):
 
 
 class BankNotificationWebhookResponse(BaseModel):
-    notification_id: str
-    status: str
-    is_duplicate: bool
+    outcome: str
+    notification_id: str | None = None
+    status: str | None = None
 
 
 @functools.lru_cache(maxsize=1)
 def _build_use_case() -> ReceiveBankNotificationUseCase:
     settings = get_ingestion_settings()
+
+    if not settings.parse_queue_url:
+        raise ValueError(
+            "INGESTION_PARSE_QUEUE_URL is not set: every notification would be "
+            "accepted and then never parsed. Run `just aws-provision` and copy "
+            "the URL it prints.",
+        )
 
     return ReceiveBankNotificationUseCase(
         repository=DynamoDBBankNotificationRepository(
@@ -68,12 +79,9 @@ def _build_use_case() -> ReceiveBankNotificationUseCase:
             table_name=settings.notifications_table,
             retention_days=settings.retention_days,
         ),
-        sender_policy=AuthorizedSenderPolicy(
-            allowed_addresses=frozenset(
-                EmailAddress(address)
-                for address in settings.authorized_sender_addresses
-            ),
-            allowed_domains=settings.authorized_sender_domains,
+        inbox_repository=DynamoDBUserInboxRepository(
+            client=get_dynamodb_client(),
+            table_name=settings.user_inboxes_table,
         ),
         queue_publisher=SQSQueuePublisher(
             client=get_sqs_client(),
@@ -98,6 +106,7 @@ def receive_bank_notification(
 ) -> BankNotificationWebhookResponse:
     try:
         command = ReceiveBankNotificationCommand(
+            recipient=EmailAddress(payload.recipient),
             message_id=EmailMessageId(payload.message_id),
             sender=EmailAddress(payload.sender),
             subject=payload.subject,
@@ -116,8 +125,12 @@ def receive_bank_notification(
 
     result = use_case.execute(command)
 
+    # Always 202, including for an unknown recipient: the caller must not be
+    # able to probe which inbound addresses exist.
     return BankNotificationWebhookResponse(
-        notification_id=str(result.notification_id.value),
-        status=result.status.value,
-        is_duplicate=result.is_duplicate,
+        outcome=result.outcome.value,
+        notification_id=(
+            str(result.notification_id.value) if result.notification_id else None
+        ),
+        status=result.status.value if result.status else None,
     )
