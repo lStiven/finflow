@@ -81,6 +81,9 @@ class InMemoryBankNotificationRepository:
 
         return None
 
+    def get(self, idempotency_key: IdempotencyKey) -> BankNotification | None:
+        return self.saved.get(idempotency_key)
+
     def save(self, notification: BankNotification) -> None:
         self.saved[notification.idempotency_key] = _detached(notification)
 

@@ -15,7 +15,10 @@ from personal_finance.contexts.ingestion.domain.entities import (
     BankNotification,
     UserInbox,
 )
-from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
+from personal_finance.contexts.ingestion.domain.value_objects import (
+    EmailAddress,
+    IdempotencyKey,
+)
 
 
 class BankNotificationRepository(Protocol):
@@ -31,6 +34,10 @@ class BankNotificationRepository(Protocol):
         already taken, write nothing and return the stored record instead, so
         a retry can resume an intake that failed midway.
         """
+        ...
+
+    def get(self, idempotency_key: IdempotencyKey) -> BankNotification | None:
+        """Load the stored notification, or None if it is gone."""
         ...
 
     def save(self, notification: BankNotification) -> None:

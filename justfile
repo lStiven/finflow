@@ -92,6 +92,15 @@ register-inbox-prod *args: (_require-env ".env.production")
 # Running the API
 # --------------------------------------------------
 
+# Drain the parse queue: SQS -> DynamoDB -> deterministic parser.
+parse-worker: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_parse_worker
+
+parse-worker-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_parse_worker
+
 # Local: hot reload, against the emulator.
 dev: (_require-env ".env")
     {{local_env}} uv run fastapi dev src/personal_finance/api/main.py

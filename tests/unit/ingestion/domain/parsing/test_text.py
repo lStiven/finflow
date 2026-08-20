@@ -1,7 +1,7 @@
 from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BancolombiaParser,
 )
-from personal_finance.contexts.ingestion.infrastructure.email.text import extract_text
+from personal_finance.contexts.ingestion.domain.parsing.text import extract_text
 
 
 # Verbatim from a delivered Bancolombia alert: quoted-printable, with `=3D`

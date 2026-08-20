@@ -4,14 +4,20 @@ from dataclasses import dataclass
 from typing import Self
 
 from personal_finance.contexts.ingestion.domain.events import (
+    BankNotificationFailed,
     BankNotificationIgnored,
     BankNotificationQueued,
     BankNotificationReceived,
+    TransactionExtracted,
+    TransactionExtractionDeferred,
 )
 from personal_finance.contexts.ingestion.domain.exceptions import (
     InvalidNotificationStateError,
 )
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
+from personal_finance.contexts.ingestion.domain.transactions import (
+    ExtractedTransaction,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
@@ -22,6 +28,12 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
 )
 from personal_finance.shared.domain.entities import AggregateRoot
 from personal_finance.shared.domain.value_objects import PosixTime, UserId, ValueObject
+
+
+# States in which the email body has been deliberately discarded.
+_BODYLESS_STATUSES = frozenset(
+    {ProcessingStatus.IGNORED, ProcessingStatus.PROCESSED},
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,9 +61,9 @@ class BankNotification(AggregateRoot[NotificationId]):
     status: ProcessingStatus
 
     def __post_init__(self) -> None:
-        # An ignored notification is the one exception: `ignore` drops the body
-        # on purpose, and a record read back from storage must rebuild cleanly.
-        if self.status is not ProcessingStatus.IGNORED and not self.raw_content.strip():
+        # `ignore` and `complete` drop the body on purpose, and a record read
+        # back from storage in either state must rebuild cleanly.
+        if self.status not in _BODYLESS_STATUSES and not self.raw_content.strip():
             raise ValueError("Raw email content cannot be empty")
 
     @classmethod
@@ -103,6 +115,66 @@ class BankNotification(AggregateRoot[NotificationId]):
                 notification_id=self.id,
                 user_id=self.user_id,
                 message_id=self.message_id,
+            ),
+        )
+
+    def start_processing(self) -> None:
+        if self.status is not ProcessingStatus.QUEUED:
+            raise InvalidNotificationStateError(
+                f"Cannot start processing a notification with status {self.status}",
+            )
+
+        self.status = ProcessingStatus.PROCESSING
+
+    def complete(self, transaction: ExtractedTransaction) -> None:
+        if self.status is not ProcessingStatus.PROCESSING:
+            raise InvalidNotificationStateError(
+                f"Cannot complete a notification with status {self.status}",
+            )
+
+        self.status = ProcessingStatus.PROCESSED
+        # The body has served its purpose. Dropping it keeps the raw email out
+        # of storage for longer than the extraction actually needed it.
+        self.raw_content = ""
+        self.record_event(
+            TransactionExtracted(
+                notification_id=self.id,
+                user_id=self.user_id,
+                message_id=self.message_id,
+                transaction=transaction,
+            ),
+        )
+
+    def defer_to_fallback(self) -> None:
+        """No deterministic template matched. Keep the body: the LLM needs it."""
+        if self.status is not ProcessingStatus.PROCESSING:
+            raise InvalidNotificationStateError(
+                f"Cannot defer a notification with status {self.status}",
+            )
+
+        self.status = ProcessingStatus.PENDING_FALLBACK
+        self.record_event(
+            TransactionExtractionDeferred(
+                notification_id=self.id,
+                user_id=self.user_id,
+                message_id=self.message_id,
+                sender=self.sender,
+            ),
+        )
+
+    def fail(self, *, reason: str) -> None:
+        if self.status is not ProcessingStatus.PROCESSING:
+            raise InvalidNotificationStateError(
+                f"Cannot fail a notification with status {self.status}",
+            )
+
+        self.status = ProcessingStatus.FAILED
+        self.record_event(
+            BankNotificationFailed(
+                notification_id=self.id,
+                user_id=self.user_id,
+                message_id=self.message_id,
+                reason=reason,
             ),
         )
 

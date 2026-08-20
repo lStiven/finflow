@@ -88,6 +88,9 @@ class ProcessingStatus(enum.Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     PROCESSED = "processed"
+    # No deterministic template matched. The email is kept for the LLM
+    # fallback rather than discarded as a failure.
+    PENDING_FALLBACK = "pending_fallback"
     FAILED = "failed"
     IGNORED = "ignored"
 

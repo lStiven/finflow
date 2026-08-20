@@ -121,7 +121,7 @@ class DynamoDBBankNotificationRepository:
 
             # Endpoints that ignore `ReturnValuesOnConditionCheckFailure` still
             # tell us the key was taken; read the winner explicitly.
-            return self._get(notification.idempotency_key)
+            return self.get(notification.idempotency_key)
 
         return None
 
@@ -137,7 +137,7 @@ class DynamoDBBankNotificationRepository:
     ) -> dict[str, AttributeValueTypeDef]:
         return to_item(notification, retention_days=self._retention_days)
 
-    def _get(self, idempotency_key: IdempotencyKey) -> BankNotification | None:
+    def get(self, idempotency_key: IdempotencyKey) -> BankNotification | None:
         response = self._client.get_item(
             TableName=self._table_name,
             Key={PARTITION_KEY: {"S": idempotency_key.value}},
