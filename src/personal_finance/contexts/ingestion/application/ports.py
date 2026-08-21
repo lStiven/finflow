@@ -106,6 +106,10 @@ class MailboxReader(Protocol):
 class MailboxConnectionRepository(Protocol):
     """Stores which mailboxes to sync and how far each one got."""
 
+    def save(self, connection: MailboxConnection) -> None:
+        """Create or replace a connection, keyed by provider and address."""
+        ...
+
     def list_active(self) -> Sequence[MailboxConnection]: ...
 
     def find(
@@ -114,7 +118,16 @@ class MailboxConnectionRepository(Protocol):
         provider: MailboxProvider,
         address: EmailAddress,
     ) -> MailboxConnection | None:
-        """Return the connection a provider event refers to, if we hold one."""
+        """Return the connection a provider event refers to, if we hold one.
+
+        Returns revoked connections too: deciding what to do with one is the
+        caller's business, and silently hiding it here would make a revoked
+        mailbox indistinguishable from one we never knew about.
+        """
+        ...
+
+    def find_by_user(self, user_id: UserId) -> Sequence[MailboxConnection]:
+        """Return every mailbox this user connected, revoked ones included."""
         ...
 
     def save_cursor(self, connection: MailboxConnection, cursor: str | None) -> None:

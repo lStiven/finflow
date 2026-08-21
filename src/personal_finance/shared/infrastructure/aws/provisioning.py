@@ -12,6 +12,7 @@ import dataclasses
 import json
 
 from mypy_boto3_dynamodb.client import DynamoDBClient
+from mypy_boto3_dynamodb.literals import ScalarAttributeTypeType
 from mypy_boto3_dynamodb.type_defs import (
     AttributeDefinitionTypeDef,
     CreateGlobalSecondaryIndexActionTypeDef,
@@ -24,8 +25,17 @@ from mypy_boto3_sqs.client import SQSClient
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as USERS_PARTITION_KEY,
 )
+from personal_finance.contexts.ingestion.infrastructure.mailbox.simulated import (
+    MAILBOX_PARTITION_KEY,
+    MAILBOX_SORT_KEY,
+)
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     PARTITION_KEY,
+)
+from personal_finance.contexts.ingestion.infrastructure.persistence.mailbox_connection_dynamodb import (  # noqa: E501
+    CONNECTION_BY_USER_INDEX,
+    CONNECTION_PARTITION_KEY,
+    USER_ID_ATTRIBUTE as CONNECTION_USER_ID_ATTRIBUTE,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     INBOX_BY_USER_INDEX,
@@ -66,6 +76,8 @@ class ProvisionedResources:
     table_name: str
     inboxes_table_name: str
     users_table_name: str
+    mailbox_connections_table_name: str
+    simulated_mailbox_table_name: str
     queue_url: str
     dead_letter_queue_url: str
     event_bus_name: str
@@ -149,13 +161,15 @@ def provision_table(
     *,
     table_name: str,
     partition_key: str = PARTITION_KEY,
+    sort_key: str | None = None,
+    sort_key_type: ScalarAttributeTypeType = "N",
     billing_mode: BillingMode = "PROVISIONED",
     read_capacity: int = 5,
     write_capacity: int = 5,
     enable_ttl: bool = True,
     secondary_indexes: Sequence[SecondaryIndex] = (),
 ) -> None:
-    """Create a single-key table and, unless told otherwise, enable its TTL.
+    """Create a table and, unless told otherwise, enable its TTL.
 
     The two billing modes take different arguments — DynamoDB rejects a
     throughput specification on an on-demand table — so they are two distinct
@@ -167,6 +181,12 @@ def provision_table(
     key_schema: list[KeySchemaElementTypeDef] = [
         {"AttributeName": partition_key, "KeyType": "HASH"},
     ]
+
+    if sort_key is not None:
+        attribute_definitions.append(
+            {"AttributeName": sort_key, "AttributeType": sort_key_type},
+        )
+        key_schema.append({"AttributeName": sort_key, "KeyType": "RANGE"})
 
     with contextlib.suppress(client.exceptions.ResourceInUseException):
         if billing_mode == "PROVISIONED":
@@ -336,6 +356,31 @@ def provision() -> ProvisionedResources:
         write_capacity=settings.dynamodb_write_capacity,
         enable_ttl=False,
     )
+    provision_table(
+        get_dynamodb_client(),
+        table_name=settings.mailbox_connections_table,
+        partition_key=CONNECTION_PARTITION_KEY,
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        enable_ttl=False,
+        secondary_indexes=(
+            SecondaryIndex(
+                name=CONNECTION_BY_USER_INDEX,
+                partition_key=CONNECTION_USER_ID_ATTRIBUTE,
+            ),
+        ),
+    )
+    provision_table(
+        get_dynamodb_client(),
+        table_name=settings.simulated_mailbox_table,
+        partition_key=MAILBOX_PARTITION_KEY,
+        sort_key=MAILBOX_SORT_KEY,
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        enable_ttl=False,
+    )
     queue_url, dead_letter_url = provision_queue(
         get_sqs_client(),
         queue_name=settings.parse_queue_name,
@@ -355,6 +400,8 @@ def provision() -> ProvisionedResources:
         table_name=settings.notifications_table,
         inboxes_table_name=settings.user_inboxes_table,
         users_table_name=identity_settings.users_table,
+        mailbox_connections_table_name=settings.mailbox_connections_table,
+        simulated_mailbox_table_name=settings.simulated_mailbox_table,
         queue_url=queue_url,
         dead_letter_queue_url=dead_letter_url,
         event_bus_name=settings.event_bus_name,
@@ -383,6 +430,8 @@ def main() -> None:
     )
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
+    print(f"  DynamoDB table : {resources.mailbox_connections_table_name} ({capacity})")
+    print(f"  DynamoDB table : {resources.simulated_mailbox_table_name} ({capacity})")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")
     print(f"  Event bus      : {resources.event_bus_name}")

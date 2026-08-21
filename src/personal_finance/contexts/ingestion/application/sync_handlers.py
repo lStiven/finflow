@@ -139,7 +139,10 @@ class HandleMailboxEventUseCase:
             address=event.address,
         )
 
-        if connection is None:
+        # No connection: not ours to read. Revoked: it stopped being ours the
+        # moment the user said so, and a provider that keeps notifying us does
+        # not change that.
+        if connection is None or not connection.is_active:
             return SyncMailboxResult()
 
         return self._sync_use_case.execute(connection)

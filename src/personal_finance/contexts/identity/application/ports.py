@@ -115,3 +115,31 @@ class InboxReader(Protocol):
     """
 
     def list_for_user(self, user_id: UserId) -> Sequence[RegisteredInbox]: ...
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ConnectedMailbox:
+    """One mailbox as identity reports it back to its owner.
+
+    Plain strings again: this crosses a context boundary outwards. It carries
+    no token and no cursor — the first is a secret, the second is ingestion's
+    own bookkeeping and means nothing to the person reading it.
+    """
+
+    address: str
+    provider: str
+    status: str
+
+
+class MailboxConnector(Protocol):
+    """Identity's view of "let this user attach a mailbox we may read".
+
+    The real provider flow ends here: once an OAuth callback has a token, it
+    calls this with the address the user authorized.
+    """
+
+    def connect(self, *, user_id: UserId, address: str, provider: str) -> None: ...
+
+    def disconnect(self, *, user_id: UserId, address: str, provider: str) -> None: ...
+
+    def list_for_user(self, user_id: UserId) -> Sequence[ConnectedMailbox]: ...

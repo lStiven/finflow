@@ -23,6 +23,13 @@ from personal_finance.contexts.identity.application.inbox_handlers import (
 from personal_finance.contexts.identity.application.integration_events import (
     IdentityIntegrationEventTranslator,
 )
+from personal_finance.contexts.identity.application.mailbox_handlers import (
+    ConnectMailboxCommand,
+    ConnectMailboxUseCase,
+    DisconnectMailboxCommand,
+    DisconnectMailboxUseCase,
+    ListMailboxesUseCase,
+)
 from personal_finance.contexts.identity.application.ports import InboxRegistration
 from personal_finance.contexts.identity.domain.exceptions import (
     EmailAlreadyRegisteredError,
@@ -33,6 +40,9 @@ from personal_finance.contexts.identity.domain.policies import WeakPasswordError
 from personal_finance.contexts.identity.infrastructure.inbox.ingestion_inbox_registrar import (  # noqa: E501
     IngestionInboxRegistrar,
 )
+from personal_finance.contexts.identity.infrastructure.inbox.ingestion_mailbox_connector import (  # noqa: E501
+    IngestionMailboxConnector,
+)
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     DynamoDBUserRepository,
 )
@@ -42,9 +52,19 @@ from personal_finance.contexts.identity.infrastructure.security.jwt_tokens impor
 from personal_finance.contexts.identity.infrastructure.security.password_hashing import (  # noqa: E501
     BcryptPasswordHasher,
 )
+from personal_finance.contexts.ingestion.application.connection_handlers import (
+    ConnectMailboxUseCase as IngestionConnectMailboxUseCase,
+    DisconnectMailboxUseCase as IngestionDisconnectMailboxUseCase,
+    ListMailboxConnectionsUseCase,
+    MailboxAlreadyConnectedError,
+    MailboxNotConnectedError,
+)
 from personal_finance.contexts.ingestion.application.inbox_handlers import (
     ListUserInboxesUseCase,
     RegisterUserInboxUseCase,
+)
+from personal_finance.contexts.ingestion.infrastructure.persistence.mailbox_connection_dynamodb import (  # noqa: E501
+    DynamoDBMailboxConnectionRepository,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     DynamoDBUserInboxRepository,
@@ -127,6 +147,33 @@ class LoginPayload(BaseModel):
 
 class AddInboxesPayload(BaseModel):
     inboxes: list[InboxRegistrationPayload] = Field(min_length=1)
+
+
+class MailboxPayload(BaseModel):
+    """A mailbox the user authorizes us to read.
+
+    No token here, and there never will be: the real flow finishes an OAuth
+    exchange with the provider and only then calls this, so the secret stays
+    in the provider adapter's store.
+    """
+
+    address: str = Field(min_length=3, max_length=320)
+    provider: str = Field(min_length=1, max_length=32)
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, value: str) -> str:
+        return _looks_like_an_email(value)
+
+
+class ConnectedMailboxResponse(BaseModel):
+    address: str
+    provider: str
+    status: str
+
+
+class MailboxListResponse(BaseModel):
+    mailboxes: list[ConnectedMailboxResponse]
 
 
 class AccessTokenResponse(BaseModel):
@@ -242,6 +289,39 @@ def _build_list_inboxes_use_case() -> ListInboxesUseCase:
     return ListInboxesUseCase(inbox_reader=_build_inbox_registrar())
 
 
+@functools.lru_cache(maxsize=1)
+def _build_mailbox_connector() -> IngestionMailboxConnector:
+    repository = DynamoDBMailboxConnectionRepository(
+        client=get_dynamodb_client(),
+        table_name=get_ingestion_settings().mailbox_connections_table,
+    )
+
+    return IngestionMailboxConnector(
+        connect_use_case=IngestionConnectMailboxUseCase(
+            connection_repository=repository,
+        ),
+        disconnect_use_case=IngestionDisconnectMailboxUseCase(
+            connection_repository=repository,
+        ),
+        list_use_case=ListMailboxConnectionsUseCase(connection_repository=repository),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_connect_mailbox_use_case() -> ConnectMailboxUseCase:
+    return ConnectMailboxUseCase(connector=_build_mailbox_connector())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_disconnect_mailbox_use_case() -> DisconnectMailboxUseCase:
+    return DisconnectMailboxUseCase(connector=_build_mailbox_connector())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_mailboxes_use_case() -> ListMailboxesUseCase:
+    return ListMailboxesUseCase(connector=_build_mailbox_connector())
+
+
 def get_register_use_case() -> RegisterUserUseCase:
     return _build_register_use_case()
 
@@ -256,6 +336,18 @@ def get_add_inboxes_use_case() -> AddInboxesUseCase:
 
 def get_list_inboxes_use_case() -> ListInboxesUseCase:
     return _build_list_inboxes_use_case()
+
+
+def get_connect_mailbox_use_case() -> ConnectMailboxUseCase:
+    return _build_connect_mailbox_use_case()
+
+
+def get_disconnect_mailbox_use_case() -> DisconnectMailboxUseCase:
+    return _build_disconnect_mailbox_use_case()
+
+
+def get_list_mailboxes_use_case() -> ListMailboxesUseCase:
+    return _build_list_mailboxes_use_case()
 
 
 def get_token_issuer() -> JWTTokenIssuer:
@@ -394,6 +486,87 @@ def list_inboxes(
                 allowed_addresses=sorted(inbox.allowed_addresses),
             )
             for inbox in inboxes
+        ],
+    )
+
+
+@router.post("/mailboxes", status_code=status.HTTP_204_NO_CONTENT)
+def connect_mailbox(
+    payload: MailboxPayload,
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[ConnectMailboxUseCase, Depends(get_connect_mailbox_use_case)],
+) -> None:
+    """Authorize us to read one of your mailboxes.
+
+    From here on the provider notifies us when that mailbox changes, and we
+    read only the senders you approved. Approve some first, or a connected
+    mailbox is read for nothing.
+    """
+    try:
+        use_case.execute(
+            user_id=user_id,
+            command=ConnectMailboxCommand(
+                address=payload.address,
+                provider=payload.provider,
+            ),
+        )
+    except MailboxAlreadyConnectedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That mailbox is already connected",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+
+@router.delete("/mailboxes", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_mailbox(
+    payload: MailboxPayload,
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[
+        DisconnectMailboxUseCase,
+        Depends(get_disconnect_mailbox_use_case),
+    ],
+) -> None:
+    """Stop reading a mailbox. We keep the record so a later reconnect resumes
+    instead of re-reading everything, but nothing is read while it is off.
+    """
+    try:
+        use_case.execute(
+            user_id=user_id,
+            command=DisconnectMailboxCommand(
+                address=payload.address,
+                provider=payload.provider,
+            ),
+        )
+    except MailboxNotConnectedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That mailbox is not connected",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+
+@router.get("/mailboxes", response_model=MailboxListResponse)
+def list_mailboxes(
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[ListMailboxesUseCase, Depends(get_list_mailboxes_use_case)],
+) -> MailboxListResponse:
+    return MailboxListResponse(
+        mailboxes=[
+            ConnectedMailboxResponse(
+                address=mailbox.address,
+                provider=mailbox.provider,
+                status=mailbox.status,
+            )
+            for mailbox in use_case.execute(user_id=user_id)
         ],
     )
 

@@ -81,6 +81,12 @@ class IngestionSettings(BaseSettings):
     # Approved senders are per-user data, not configuration: they live in this
     # table, keyed by the inbound address the email was delivered to.
     user_inboxes_table: str = "user_inboxes"
+    # Which mailboxes a user authorized us to read, and how far we got in
+    # each. Never holds a credential.
+    mailbox_connections_table: str = "mailbox_connections"
+    # The mailbox the simulated provider hosts, so the notify-fetch-ingest
+    # path can be exercised without a real account. Local use only.
+    simulated_mailbox_table: str = "simulated_mailbox"
     # The queue has two identifiers on purpose. Provisioning only knows the
     # name, because the URL embeds an account id that does not exist yet the
     # first time the resources are created. The application only accepts the

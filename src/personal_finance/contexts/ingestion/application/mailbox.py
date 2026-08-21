@@ -14,6 +14,20 @@ class MailboxProvider(enum.Enum):
     GMAIL = "gmail"
     OUTLOOK = "outlook"
     IMAP = "imap"
+    # A mailbox the project itself hosts, so the whole notify-fetch-ingest
+    # path can be exercised without a real account or real credentials. It is
+    # a provider like any other: it goes through the same port, and nothing
+    # downstream can tell it apart from Gmail.
+    SIMULATED = "simulated"
+
+
+class MailboxConnectionStatus(enum.Enum):
+    """Explicit string values: this is persisted."""
+
+    ACTIVE = "active"
+    # The user disconnected the mailbox, or the provider stopped accepting our
+    # credentials. Either way we must not read it again.
+    REVOKED = "revoked"
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -48,6 +62,11 @@ class MailboxConnection:
     # Opaque provider position: Gmail's historyId, Graph's deltaLink, an IMAP
     # UIDVALIDITY/UID pair. Only the adapter that wrote it can read it.
     cursor: str | None = None
+    status: MailboxConnectionStatus = MailboxConnectionStatus.ACTIVE
+
+    @property
+    def is_active(self) -> bool:
+        return self.status is MailboxConnectionStatus.ACTIVE
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

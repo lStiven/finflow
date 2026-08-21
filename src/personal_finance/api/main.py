@@ -10,6 +10,9 @@ from personal_finance.contexts.identity.presentation.http.router import (
     get_register_use_case,
     router as identity_router,
 )
+from personal_finance.contexts.ingestion.presentation.http.mailbox_router import (
+    router as mailbox_router,
+)
 from personal_finance.contexts.ingestion.presentation.http.router import (
     get_use_case,
     router as ingestion_router,
@@ -29,6 +32,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
 
 app = FastAPI(title="Finflow", lifespan=lifespan)
 app.include_router(ingestion_router)
+app.include_router(mailbox_router)
 app.include_router(identity_router)
 
 

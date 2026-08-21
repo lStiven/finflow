@@ -97,6 +97,18 @@ inspect env_file=".env" *args: (_require-env env_file)
     @ENV_FILE={{env_file}} PYTHONPATH=src uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.show_status {{args}}
 
+# Put a message in the simulated provider's mailbox. Nothing is read until
+# the provider notifies us — see `mailbox-notify`.
+mailbox-deliver *args: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.seed_mailbox {{args}}
+
+# Ring the doorbell, as a real provider would. Needs the API running.
+mailbox-notify address api="http://localhost:8000":
+    @curl -s -X POST {{api}}/ingestion/mailbox-events/simulated \
+        -H 'Content-Type: application/json' \
+        -d '{"address":"{{address}}"}' && echo
+
 # Integration events that reached the bus. `--follow` keeps polling.
 events *args: (_require-env ".env")
     @{{local_env}} uv run python -m \

@@ -89,8 +89,15 @@ class FakeConnectionRepository:
             for connection in connections
         }
 
+    def save(self, connection: MailboxConnection) -> None:
+        self.connections[(connection.provider, connection.address)] = connection
+
     def list_active(self) -> Sequence[MailboxConnection]:
-        return tuple(self.connections.values())
+        return tuple(
+            connection
+            for connection in self.connections.values()
+            if connection.is_active
+        )
 
     def find(
         self,
@@ -99,6 +106,13 @@ class FakeConnectionRepository:
         address: EmailAddress,
     ) -> MailboxConnection | None:
         return self.connections.get((provider, address))
+
+    def find_by_user(self, user_id: UserId) -> Sequence[MailboxConnection]:
+        return tuple(
+            connection
+            for connection in self.connections.values()
+            if connection.user_id == user_id
+        )
 
     def save_cursor(self, connection: MailboxConnection, cursor: str | None) -> None:
         del connection
