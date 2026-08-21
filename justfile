@@ -92,6 +92,11 @@ register-inbox-prod *args: (_require-env ".env.production")
 # Running the API
 # --------------------------------------------------
 
+# What ingestion currently holds: inboxes, notifications, queue depth.
+inspect env_file=".env" *args: (_require-env env_file)
+    @ENV_FILE={{env_file}} PYTHONPATH=src uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.show_status {{args}}
+
 # Drain the parse queue: SQS -> DynamoDB -> deterministic parser.
 parse-worker: (_require-env ".env")
     {{local_env}} uv run python -m \

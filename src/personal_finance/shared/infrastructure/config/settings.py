@@ -101,6 +101,23 @@ class IngestionSettings(BaseSettings):
     dynamodb_write_capacity: int = 5
 
 
+class IdentitySettings(BaseSettings):
+    """Resources owned by the identity context."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="IDENTITY_",
+        env_file=ENV_FILE,
+        extra="ignore",
+    )
+
+    users_table: str = "users"
+    # Empty by default so a deployment that forgot to set it fails loudly at
+    # startup instead of signing every token with a well-known value.
+    jwt_secret: SecretStr = SecretStr("")
+    jwt_algorithm: str = "HS256"
+    access_token_ttl_minutes: int = 60 * 24
+
+
 @functools.lru_cache(maxsize=1)
 def get_aws_settings() -> AwsSettings:
     return AwsSettings()
@@ -111,9 +128,15 @@ def get_ingestion_settings() -> IngestionSettings:
     return IngestionSettings()
 
 
+@functools.lru_cache(maxsize=1)
+def get_identity_settings() -> IdentitySettings:
+    return IdentitySettings()
+
+
 def reset_settings() -> None:
     """Drop the cached settings. Only useful for tests that change the
     environment after something already read it.
     """
     get_aws_settings.cache_clear()
     get_ingestion_settings.cache_clear()
+    get_identity_settings.cache_clear()

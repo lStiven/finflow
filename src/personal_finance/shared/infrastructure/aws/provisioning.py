@@ -18,6 +18,9 @@ from mypy_boto3_dynamodb.type_defs import (
 from mypy_boto3_events.client import EventBridgeClient
 from mypy_boto3_sqs.client import SQSClient
 
+from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
+    PARTITION_KEY as USERS_PARTITION_KEY,
+)
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     PARTITION_KEY,
 )
@@ -33,6 +36,7 @@ from personal_finance.shared.infrastructure.config.settings import (
     ENV_FILE,
     BillingMode,
     get_aws_settings,
+    get_identity_settings,
     get_ingestion_settings,
 )
 
@@ -50,6 +54,7 @@ MESSAGE_RETENTION_SECONDS = 1_209_600  # 14 days, the SQS maximum.
 class ProvisionedResources:
     table_name: str
     inboxes_table_name: str
+    users_table_name: str
     queue_url: str
     dead_letter_queue_url: str
     event_bus_name: str
@@ -159,6 +164,7 @@ def provision_event_bus(client: EventBridgeClient, *, event_bus_name: str) -> No
 
 def provision() -> ProvisionedResources:
     settings = get_ingestion_settings()
+    identity_settings = get_identity_settings()
 
     provision_table(
         get_dynamodb_client(),
@@ -176,6 +182,15 @@ def provision() -> ProvisionedResources:
         write_capacity=settings.dynamodb_write_capacity,
         enable_ttl=False,
     )
+    provision_table(
+        get_dynamodb_client(),
+        table_name=identity_settings.users_table,
+        partition_key=USERS_PARTITION_KEY,
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        enable_ttl=False,
+    )
     queue_url, dead_letter_url = provision_queue(
         get_sqs_client(),
         queue_name=settings.parse_queue_name,
@@ -188,6 +203,7 @@ def provision() -> ProvisionedResources:
     return ProvisionedResources(
         table_name=settings.notifications_table,
         inboxes_table_name=settings.user_inboxes_table,
+        users_table_name=identity_settings.users_table,
         queue_url=queue_url,
         dead_letter_queue_url=dead_letter_url,
         event_bus_name=settings.event_bus_name,
@@ -214,6 +230,7 @@ def main() -> None:
         f"({capacity}, TTL on {TTL_ATTRIBUTE})",
     )
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
+    print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")
     print(f"  Event bus      : {resources.event_bus_name}")

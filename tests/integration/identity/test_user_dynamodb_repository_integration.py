@@ -1,0 +1,75 @@
+from mypy_boto3_dynamodb.client import DynamoDBClient
+import pytest
+
+from personal_finance.contexts.identity.domain.entities import User
+from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
+from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
+    PARTITION_KEY,
+    DynamoDBUserRepository,
+)
+from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.infrastructure.aws.provisioning import provision_table
+
+
+TABLE_NAME = "users"
+
+
+@pytest.fixture
+def repository(dynamodb_client: DynamoDBClient) -> DynamoDBUserRepository:
+    provision_table(
+        dynamodb_client,
+        table_name=TABLE_NAME,
+        partition_key=PARTITION_KEY,
+        enable_ttl=False,
+    )
+
+    return DynamoDBUserRepository(client=dynamodb_client, table_name=TABLE_NAME)
+
+
+def _user(*, email: str = "person@example.com") -> User:
+    return User.register(
+        email=Email(email),
+        password_hash=PasswordHash("$2b$12$abcdefg"),
+        registered_at=PosixTime.now(),
+    )
+
+
+def test_first_write_stores_the_user(repository: DynamoDBUserRepository) -> None:
+    assert repository.add_if_new(_user()) is None
+
+
+def test_conditional_write_rejects_a_duplicate_email(
+    repository: DynamoDBUserRepository,
+) -> None:
+    first = _user()
+    repository.add_if_new(first)
+
+    stored = repository.add_if_new(_user())
+
+    assert stored is not None
+    assert stored.id == first.id
+
+
+def test_different_emails_do_not_collide(
+    repository: DynamoDBUserRepository,
+) -> None:
+    assert repository.add_if_new(_user(email="one@example.com")) is None
+    assert repository.add_if_new(_user(email="two@example.com")) is None
+
+
+def test_find_by_email_returns_none_for_an_unregistered_address(
+    repository: DynamoDBUserRepository,
+) -> None:
+    assert repository.find_by_email(Email("nobody@example.com")) is None
+
+
+def test_find_by_email_returns_the_stored_user(
+    repository: DynamoDBUserRepository,
+) -> None:
+    user = _user()
+    repository.add_if_new(user)
+
+    found = repository.find_by_email(user.email)
+
+    assert found is not None
+    assert found.id == user.id

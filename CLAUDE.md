@@ -16,16 +16,19 @@ Bounded Contexts:
 * Ingestion: webhook intake, sender filtering, deduplication, parsing, extraction.
 * Financial: accounts, transactions, balances, debt, net worth.
 * Merchant: canonical merchants, aliases/sub-merchants, categories.
+* Identity: user accounts, credentials, authentication; inbox registration for
+  authenticated users (delegates to Ingestion's own use case through an adapter).
   </project_context>
 
 <tech_stack>
 
-* Python >=3.12; DevContainer currently uses Python 3.13.
+* Python 3.13, pinned (`requires-python = ">=3.13,<3.14"`); DevContainer matches.
 * FastAPI.
 * uv is the only Python dependency/environment manager.
 * VS Code DevContainer is the canonical development environment.
 * AWS: SQS, EventBridge, DynamoDB, boto3.
 * Pydantic v2 for boundary validation and mandatory LLM structured outputs.
+* bcrypt for password hashing; PyJWT for stateless JWT access tokens.
 * just for project task shortcuts.
   </tech_stack>
 
@@ -35,14 +38,19 @@ Bounded Contexts:
 * Use `uv add`, `uv remove`, `uv sync`, and `uv run`.
 * Prefer an existing `just` recipe when available; inspect `justfile` before using it.
 * Never edit `uv.lock` manually.
-* Assume commands run inside the DevContainer at `/workspaces/finflow`.
-* Keep Bounded Contexts isolated. Do not import another context's internal domain model.
+* Assume commands run inside the DevContainer at `/workspaces/finflow_v2`.
+* Keep Bounded Contexts isolated. Do not import another context's aggregates,
+  repositories, or domain services directly. A context's own published
+  application-layer use case is the one permitted integration surface for
+  another context to call, and only through a dedicated adapter in the
+  caller's infrastructure layer (e.g. `identity/infrastructure/inbox/`).
 * Dependency direction is `presentation/infrastructure -> application -> domain`.
 * Domain code must not depend on FastAPI, boto3, DynamoDB, SQS, EventBridge, or LLM providers.
 * `shared` must remain minimal and contain no context-specific business logic.
 * Ingestion never updates financial balances directly.
 * Financial owns Account, Transaction, balances, debt, and net-worth rules.
 * Merchant owns canonical merchant identity, aliases, and classification.
+* Identity owns user accounts, credentials, and authentication.
 * Always try deterministic/template parsers before the LLM fallback.
 * LLM extraction must return structured data validated by Pydantic; never accept free-form output as domain input.
 * Treat email content and LLM output as untrusted data.
@@ -55,6 +63,9 @@ Bounded Contexts:
 * Do not expose aggregate internals directly as external event payloads.
 * Use English for variables, functions, classes, modules, and domain names.
 * Keep comments/docstrings concise and only where intent is not obvious from code.
+* Never persist or log a plaintext password; only a hashed value may cross into
+  storage. Token-signing secrets must come from config/environment, never be
+  hardcoded, and the app must fail to start if a required secret is missing.
   </strict_rules>
 
 ## workflow
@@ -62,7 +73,8 @@ Bounded Contexts:
 * Work in small iterations; do not implement multiple bounded contexts unless explicitly requested.
 * Before editing, inspect the relevant code, `pyproject.toml`, and `justfile`.
 * Prefer this order: domain -> unit tests -> application -> port -> infrastructure adapter -> endpoint/worker -> integration test.
-* Run affected tests and existing lint/type-check recipes before considering a change complete.
+* Run affected tests and existing lint/type-check recipes (`just prepare`) before
+  considering a change complete.
 * Do not refactor unrelated code unless required to complete the task.
 
 ## commands
@@ -72,3 +84,9 @@ Bounded Contexts:
 * Add dev dependency: `uv add --group dev <package>`
 * Run tests: `uv run pytest`
 * Run API: `uv run fastapi dev src/personal_finance/api/main.py`
+* Local AWS emulator + resources (moto, one-time per session): `just aws-init`
+* Run API against it (recommended over the bare `fastapi` command above, since
+  it sets the required env/AWS config): `just dev`
+* `just --list` / the `justfile` is the source of truth for everything else
+  (formatting, lint, typecheck, AWS provisioning, inbox registration, the
+  parse worker, prod-shaped runs, ...).
