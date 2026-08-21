@@ -61,6 +61,12 @@ Bounded Contexts:
 * Do not record a temporary authorization and its later posted transaction as two final expenses.
 * Use SQS for asynchronous work queues and EventBridge for integration events between contexts.
 * Do not expose aggregate internals directly as external event payloads.
+* A domain event only reaches EventBridge if a context's own translator in
+  `<context>/application/integration_events.py` maps it to an `IntegrationEvent`,
+  building the payload field by field. Everything else stays inside the context.
+  Publish under `finflow.<context>`, carry `version` and `event_id` in the
+  payload, and serialize money as a string — delivery is at-least-once and a
+  JSON float loses cents.
 * Use English for variables, functions, classes, modules, and domain names.
 * Keep comments/docstrings concise and only where intent is not obvious from code.
 * Never persist or log a plaintext password; only a hashed value may cross into

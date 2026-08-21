@@ -88,6 +88,11 @@ class IngestionSettings(BaseSettings):
     parse_queue_name: str = "parse-notifications"
     parse_queue_url: str = ""
     event_bus_name: str = "default"
+    # The tap on the integration bus. Provisioning creates the queue and the
+    # rule that feeds it; only the inspection CLI reads from it, so an unset
+    # URL degrades that one tool rather than the application.
+    integration_events_queue_name: str = "integration-events"
+    integration_events_queue_url: str = ""
     # Raw email bodies are untrusted, bulky, and only useful while a
     # notification can still be reprocessed. DynamoDB TTL drops them after this.
     retention_days: int = 90

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
 
 from personal_finance.contexts.ingestion.application.ports import UserInboxRepository
@@ -48,3 +49,22 @@ class RegisterUserInboxUseCase:
         self._inbox_repository.save(inbox)
 
         return inbox
+
+
+class ListUserInboxesUseCase:
+    """Lists the inbound addresses a user owns and the senders each trusts.
+
+    Published for other contexts to call: identity exposes it to an
+    authenticated user through its own adapter, so nobody has to reach into
+    this context's repository to answer "which mailboxes do I have?".
+    """
+
+    def __init__(self, *, inbox_repository: UserInboxRepository) -> None:
+        self._inbox_repository = inbox_repository
+
+    def execute(self, user_id: UserId) -> Sequence[UserInbox]:
+        inboxes = self._inbox_repository.find_by_user(user_id)
+
+        # Sorted here rather than in the repository, so the order is part of
+        # the use case's contract instead of a storage accident.
+        return sorted(inboxes, key=lambda inbox: inbox.address.value)

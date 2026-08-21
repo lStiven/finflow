@@ -19,6 +19,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     IdempotencyKey,
 )
+from personal_finance.shared.domain.value_objects import UserId
 
 
 class BankNotificationRepository(Protocol):
@@ -52,6 +53,15 @@ class UserInboxRepository(Protocol):
 
     def find_by_address(self, address: EmailAddress) -> UserInbox | None:
         """Return the inbox registered for `address`, or None if no user owns
+        it.
+        """
+        ...
+
+    def find_by_user(self, user_id: UserId) -> Sequence[UserInbox]:
+        """Return every inbox `user_id` owns, empty when they have none.
+
+        This is a secondary access path: the hot path resolves one address at
+        a time, so an implementation must not scan the whole table to answer
         it.
         """
         ...

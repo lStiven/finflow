@@ -10,8 +10,12 @@ from personal_finance.contexts.identity.application.handlers import (
 )
 from personal_finance.contexts.identity.application.inbox_handlers import (
     AddInboxesUseCase,
+    ListInboxesUseCase,
 )
-from personal_finance.contexts.identity.application.ports import InboxRegistration
+from personal_finance.contexts.identity.application.ports import (
+    InboxRegistration,
+    RegisteredInbox,
+)
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
 from personal_finance.contexts.identity.infrastructure.security.jwt_tokens import (
@@ -19,6 +23,7 @@ from personal_finance.contexts.identity.infrastructure.security.jwt_tokens impor
 )
 from personal_finance.contexts.identity.presentation.http.router import (
     get_add_inboxes_use_case,
+    get_list_inboxes_use_case,
     get_login_use_case,
     get_register_use_case,
     get_token_issuer,
@@ -63,8 +68,13 @@ class BcryptLikeHasher:
 
 
 class RecordingInboxRegistrar:
+    """Records what was registered and can read it back, so a test can follow
+    an inbox from `POST /identity/inboxes` through to `GET /identity/inboxes`.
+    """
+
     def __init__(self) -> None:
         self.calls: list[tuple[UserId, tuple[InboxRegistration, ...]]] = []
+        self.stored: dict[UserId, dict[str, RegisteredInbox]] = {}
 
     def register(
         self,
@@ -73,6 +83,19 @@ class RecordingInboxRegistrar:
         inboxes: Sequence[InboxRegistration],
     ) -> None:
         self.calls.append((user_id, tuple(inboxes)))
+        owned = self.stored.setdefault(user_id, {})
+
+        for inbox in inboxes:
+            owned[inbox.address] = RegisteredInbox(
+                address=inbox.address,
+                allowed_domains=inbox.allowed_domains,
+                allowed_addresses=inbox.allowed_addresses,
+            )
+
+    def list_for_user(self, user_id: UserId) -> Sequence[RegisteredInbox]:
+        owned = self.stored.get(user_id, {})
+
+        return [owned[address] for address in sorted(owned)]
 
 
 class NullEventPublisher:
@@ -115,12 +138,14 @@ def authenticated_client(
         token_issuer=token_issuer,
     )
     add_inboxes_use_case = AddInboxesUseCase(inbox_registrar=inbox_registrar)
+    list_inboxes_use_case = ListInboxesUseCase(inbox_reader=inbox_registrar)
 
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_register_use_case] = lambda: register_use_case
     app.dependency_overrides[get_login_use_case] = lambda: login_use_case
     app.dependency_overrides[get_add_inboxes_use_case] = lambda: add_inboxes_use_case
+    app.dependency_overrides[get_list_inboxes_use_case] = lambda: list_inboxes_use_case
     app.dependency_overrides[get_token_issuer] = lambda: token_issuer
 
     return TestClient(app)
@@ -305,3 +330,109 @@ def test_malformed_inbox_address_is_rejected(authenticated_client: TestClient) -
     )
 
     assert response.status_code == 422
+
+
+def _register(client: TestClient, *, email: str, inboxes: object = None) -> str:
+    """Register an account and return its access token."""
+    payload: dict[str, object] = {"email": email, "password": PASSWORD}
+
+    if inboxes is not None:
+        payload["inboxes"] = inboxes
+
+    return client.post("/identity/register", json=payload).json()["access_token"]
+
+
+def test_listing_inboxes_without_a_token_is_unauthorized(
+    authenticated_client: TestClient,
+) -> None:
+    assert authenticated_client.get("/identity/inboxes").status_code == 401
+
+
+def test_a_new_account_without_inboxes_lists_none(
+    authenticated_client: TestClient,
+) -> None:
+    token = _register(authenticated_client, email="person@example.com")
+
+    response = authenticated_client.get(
+        "/identity/inboxes",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"inboxes": []}
+
+
+def test_listing_returns_the_inboxes_and_their_trusted_senders(
+    authenticated_client: TestClient,
+) -> None:
+    token = _register(
+        authenticated_client,
+        email="person@example.com",
+        inboxes=[
+            {
+                "address": "u-1@inbound.test",
+                "allowed_domains": ["bancolombia.com.co"],
+                "allowed_addresses": ["alertas@nequi.com.co"],
+            },
+        ],
+    )
+
+    response = authenticated_client.get(
+        "/identity/inboxes",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "inboxes": [
+            {
+                "address": "u-1@inbound.test",
+                "allowed_domains": ["bancolombia.com.co"],
+                "allowed_addresses": ["alertas@nequi.com.co"],
+            },
+        ],
+    }
+
+
+def test_an_inbox_added_after_registration_shows_up_in_the_listing(
+    authenticated_client: TestClient,
+) -> None:
+    token = _register(authenticated_client, email="person@example.com")
+    authenticated_client.post(
+        "/identity/inboxes",
+        json={"inboxes": [{"address": "u-2@inbound.test"}]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    response = authenticated_client.get(
+        "/identity/inboxes",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    addresses = [inbox["address"] for inbox in response.json()["inboxes"]]
+    assert addresses == ["u-2@inbound.test"]
+
+
+def test_a_user_never_sees_another_users_inboxes(
+    authenticated_client: TestClient,
+) -> None:
+    mine = _register(
+        authenticated_client,
+        email="mine@example.com",
+        inboxes=[{"address": "mine@inbound.test"}],
+    )
+    _register(
+        authenticated_client,
+        email="theirs@example.com",
+        inboxes=[{"address": "theirs@inbound.test"}],
+    )
+
+    response = authenticated_client.get(
+        "/identity/inboxes",
+        headers={"Authorization": f"Bearer {mine}"},
+    )
+
+    # Whose inboxes to read comes from the token, so there is no request shape
+    # that could ask for someone else's.
+    addresses = [inbox["address"] for inbox in response.json()["inboxes"]]
+    assert addresses == ["mine@inbound.test"]

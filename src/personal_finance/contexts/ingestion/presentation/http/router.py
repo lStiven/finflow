@@ -5,7 +5,7 @@ import functools
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from personal_finance.contexts.ingestion.application.commands import (
     ReceiveBankNotificationCommand,
@@ -16,6 +16,9 @@ from personal_finance.contexts.ingestion.application.handlers import (
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
+)
+from personal_finance.contexts.ingestion.infrastructure.events import (
+    build_ingestion_event_publisher,
 )
 from personal_finance.contexts.ingestion.infrastructure.messaging.sqs import (
     SQSQueuePublisher,
@@ -34,9 +37,6 @@ from personal_finance.shared.infrastructure.aws.session import (
 from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
 )
-from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
-    LoggingEventPublisher,
-)
 
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
@@ -54,6 +54,18 @@ class BankNotificationWebhookPayload(BaseModel):
     subject: str = Field(default="", max_length=2_000)
     raw_content: str = Field(min_length=1, max_length=256_000)
     received_at: datetime | None = None
+
+    @field_validator("raw_content")
+    @classmethod
+    def _reject_blank_content(cls, value: str) -> str:
+        # `min_length` counts whitespace, but the aggregate requires actual
+        # content. Caught here so a body of spaces is a 422 like any other
+        # malformed payload, instead of reaching the domain and surfacing as
+        # a 500.
+        if not value.strip():
+            raise ValueError("raw_content cannot be blank")
+
+        return value
 
 
 class BankNotificationWebhookResponse(BaseModel):
@@ -87,7 +99,7 @@ def _build_use_case() -> ReceiveBankNotificationUseCase:
             client=get_sqs_client(),
             queue_url=settings.parse_queue_url,
         ),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_ingestion_event_publisher(),
     )
 
 

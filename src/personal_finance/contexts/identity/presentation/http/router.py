@@ -18,6 +18,10 @@ from personal_finance.contexts.identity.application.handlers import (
 )
 from personal_finance.contexts.identity.application.inbox_handlers import (
     AddInboxesUseCase,
+    ListInboxesUseCase,
+)
+from personal_finance.contexts.identity.application.integration_events import (
+    IdentityIntegrationEventTranslator,
 )
 from personal_finance.contexts.identity.application.ports import InboxRegistration
 from personal_finance.contexts.identity.domain.exceptions import (
@@ -39,16 +43,27 @@ from personal_finance.contexts.identity.infrastructure.security.password_hashing
     BcryptPasswordHasher,
 )
 from personal_finance.contexts.ingestion.application.inbox_handlers import (
+    ListUserInboxesUseCase,
     RegisterUserInboxUseCase,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     DynamoDBUserInboxRepository,
 )
+from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import UserId
-from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
+from personal_finance.shared.infrastructure.aws.eventbridge import (
+    EventBridgeEventPublisher,
+)
+from personal_finance.shared.infrastructure.aws.session import (
+    get_dynamodb_client,
+    get_eventbridge_client,
+)
 from personal_finance.shared.infrastructure.config.settings import (
     get_identity_settings,
     get_ingestion_settings,
+)
+from personal_finance.shared.infrastructure.observability.composite_event_publisher import (  # noqa: E501
+    CompositeEventPublisher,
 )
 from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
     LoggingEventPublisher,
@@ -125,16 +140,41 @@ class CurrentUserResponse(BaseModel):
     user_id: str
 
 
+class RegisteredInboxResponse(BaseModel):
+    address: str
+    allowed_domains: list[str]
+    allowed_addresses: list[str]
+
+
+class InboxListResponse(BaseModel):
+    inboxes: list[RegisteredInboxResponse]
+
+
 @functools.lru_cache(maxsize=1)
 def _build_inbox_registrar() -> IngestionInboxRegistrar:
     ingestion_settings = get_ingestion_settings()
+    repository = DynamoDBUserInboxRepository(
+        client=get_dynamodb_client(),
+        table_name=ingestion_settings.user_inboxes_table,
+    )
 
     return IngestionInboxRegistrar(
-        use_case=RegisterUserInboxUseCase(
-            inbox_repository=DynamoDBUserInboxRepository(
-                client=get_dynamodb_client(),
-                table_name=ingestion_settings.user_inboxes_table,
-            ),
+        use_case=RegisterUserInboxUseCase(inbox_repository=repository),
+        list_use_case=ListUserInboxesUseCase(inbox_repository=repository),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_event_publisher() -> EventPublisher:
+    """Logging first, so the local audit trail is already written if the bus
+    rejects the publish.
+    """
+    return CompositeEventPublisher(
+        LoggingEventPublisher(),
+        EventBridgeEventPublisher(
+            client=get_eventbridge_client(),
+            event_bus_name=get_ingestion_settings().event_bus_name,
+            translator=IdentityIntegrationEventTranslator(),
         ),
     )
 
@@ -179,7 +219,7 @@ def _build_register_use_case() -> RegisterUserUseCase:
         hasher=_build_hasher(),
         token_issuer=_build_token_issuer(),
         inbox_registrar=_build_inbox_registrar(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=_build_event_publisher(),
     )
 
 
@@ -197,6 +237,11 @@ def _build_add_inboxes_use_case() -> AddInboxesUseCase:
     return AddInboxesUseCase(inbox_registrar=_build_inbox_registrar())
 
 
+@functools.lru_cache(maxsize=1)
+def _build_list_inboxes_use_case() -> ListInboxesUseCase:
+    return ListInboxesUseCase(inbox_reader=_build_inbox_registrar())
+
+
 def get_register_use_case() -> RegisterUserUseCase:
     return _build_register_use_case()
 
@@ -207,6 +252,10 @@ def get_login_use_case() -> LoginUseCase:
 
 def get_add_inboxes_use_case() -> AddInboxesUseCase:
     return _build_add_inboxes_use_case()
+
+
+def get_list_inboxes_use_case() -> ListInboxesUseCase:
+    return _build_list_inboxes_use_case()
 
 
 def get_token_issuer() -> JWTTokenIssuer:
@@ -323,6 +372,29 @@ def add_inboxes(
         command=AddInboxesCommand(
             inboxes=tuple(inbox.to_registration() for inbox in payload.inboxes),
         ),
+    )
+
+
+@router.get("/inboxes", response_model=InboxListResponse)
+def list_inboxes(
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[ListInboxesUseCase, Depends(get_list_inboxes_use_case)],
+) -> InboxListResponse:
+    """The caller's own inboxes. Whose inboxes to read comes from the verified
+    token, never from the request, so there is nothing to authorize beyond
+    being authenticated.
+    """
+    inboxes = use_case.execute(user_id=user_id)
+
+    return InboxListResponse(
+        inboxes=[
+            RegisteredInboxResponse(
+                address=inbox.address,
+                allowed_domains=sorted(inbox.allowed_domains),
+                allowed_addresses=sorted(inbox.allowed_addresses),
+            )
+            for inbox in inboxes
+        ],
     )
 
 

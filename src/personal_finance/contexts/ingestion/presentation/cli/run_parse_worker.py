@@ -13,6 +13,9 @@ from personal_finance.contexts.ingestion.application.parsing_handlers import (
     ParseNotificationUseCase,
 )
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
+from personal_finance.contexts.ingestion.infrastructure.events import (
+    build_ingestion_event_publisher,
+)
 from personal_finance.contexts.ingestion.infrastructure.messaging.sqs_worker import (
     SQSParseWorker,
 )
@@ -25,9 +28,6 @@ from personal_finance.shared.infrastructure.aws.session import (
 )
 from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
-)
-from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
-    LoggingEventPublisher,
 )
 
 
@@ -67,7 +67,7 @@ def build_worker() -> SQSParseWorker:
                 retention_days=settings.retention_days,
             ),
             registry=ParserRegistry(),
-            event_publisher=LoggingEventPublisher(),
+            event_publisher=build_ingestion_event_publisher(),
         ),
     )
 

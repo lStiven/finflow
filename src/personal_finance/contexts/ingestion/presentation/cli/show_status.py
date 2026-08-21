@@ -141,8 +141,8 @@ def main() -> None:
     _print_queues(settings.parse_queue_url)
 
     print(
-        "\nDomain events are not stored anywhere: LoggingEventPublisher only "
-        "writes them to the log. Nothing reaches EventBridge yet.",
+        "\nDomain events go to the log; the ones that are integration events "
+        "also reach EventBridge. Read them with `just events`.",
     )
 
 

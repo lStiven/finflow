@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
@@ -10,8 +12,15 @@ from personal_finance.shared.domain.value_objects import UserId
 
 
 INBOX_PARTITION_KEY = "address"
+USER_ID_ATTRIBUTE = "user_id"
 ALLOWED_ADDRESSES = "allowed_addresses"
 ALLOWED_DOMAINS = "allowed_domains"
+
+# Listing one user's inboxes is a secondary access path: the table is keyed by
+# address because that is what an arriving email carries. A scan would answer
+# it too, but its cost grows with every other user's data, so the reverse
+# lookup gets its own index.
+INBOX_BY_USER_INDEX = "by_user"
 
 
 class CorruptUserInboxItemError(Exception):
@@ -37,7 +46,7 @@ def to_item(inbox: UserInbox) -> dict[str, AttributeValueTypeDef]:
 
     return {
         INBOX_PARTITION_KEY: {"S": inbox.address.value},
-        "user_id": {"S": str(inbox.user_id.value)},
+        USER_ID_ATTRIBUTE: {"S": str(inbox.user_id.value)},
         ALLOWED_ADDRESSES: {
             "L": [
                 {"S": value}
@@ -53,7 +62,7 @@ def to_item(inbox: UserInbox) -> dict[str, AttributeValueTypeDef]:
 
 
 def to_entity(item: dict[str, AttributeValueTypeDef]) -> UserInbox:
-    user_id = item.get("user_id", {}).get("S")
+    user_id = item.get(USER_ID_ATTRIBUTE, {}).get("S")
     address = item.get(INBOX_PARTITION_KEY, {}).get("S")
 
     if user_id is None or address is None:
@@ -95,6 +104,39 @@ class DynamoDBUserInboxRepository:
         item = response.get("Item")
 
         return to_entity(item) if item else None
+
+    def find_by_user(self, user_id: UserId) -> Sequence[UserInbox]:
+        """Query the `by_user` index rather than scanning the table.
+
+        Paginated because a query returns at most 1 MB: a personal account
+        never reaches that, but a truncated list here would silently hide a
+        user's own mailboxes from them.
+        """
+        inboxes: list[UserInbox] = []
+        start_key: dict[str, AttributeValueTypeDef] | None = None
+
+        while True:
+            response = (
+                self._client.query(
+                    TableName=self._table_name,
+                    IndexName=INBOX_BY_USER_INDEX,
+                    KeyConditionExpression=f"{USER_ID_ATTRIBUTE} = :user_id",
+                    ExpressionAttributeValues={":user_id": {"S": str(user_id.value)}},
+                    ExclusiveStartKey=start_key,
+                )
+                if start_key is not None
+                else self._client.query(
+                    TableName=self._table_name,
+                    IndexName=INBOX_BY_USER_INDEX,
+                    KeyConditionExpression=f"{USER_ID_ATTRIBUTE} = :user_id",
+                    ExpressionAttributeValues={":user_id": {"S": str(user_id.value)}},
+                )
+            )
+            inboxes.extend(to_entity(item) for item in response.get("Items", []))
+            start_key = response.get("LastEvaluatedKey") or None
+
+            if start_key is None:
+                return inboxes
 
     def save(self, inbox: UserInbox) -> None:
         self._client.put_item(TableName=self._table_name, Item=to_item(inbox))

@@ -91,3 +91,27 @@ class InboxRegistrar(Protocol):
         user_id: UserId,
         inboxes: Sequence[InboxRegistration],
     ) -> None: ...
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RegisteredInbox:
+    """One inbox as identity reports it back to its owner.
+
+    Deliberately plain strings rather than ingestion's value objects: this
+    crosses a context boundary outwards, so it carries data, not another
+    context's domain types.
+    """
+
+    address: str
+    allowed_domains: frozenset[str]
+    allowed_addresses: frozenset[str]
+
+
+class InboxReader(Protocol):
+    """Reads back the inboxes a user owns.
+
+    Separate from `InboxRegistrar` so a caller that only lists cannot also
+    modify; one adapter happens to satisfy both.
+    """
+
+    def list_for_user(self, user_id: UserId) -> Sequence[RegisteredInbox]: ...

@@ -112,6 +112,9 @@ class InMemoryUserInboxRepository:
     def find_by_address(self, address: EmailAddress) -> UserInbox | None:
         return self.inboxes.get(address)
 
+    def find_by_user(self, user_id: UserId) -> list[UserInbox]:
+        return [inbox for inbox in self.inboxes.values() if inbox.user_id == user_id]
+
     def save(self, inbox: UserInbox) -> None:
         self.inboxes[inbox.address] = inbox
 
