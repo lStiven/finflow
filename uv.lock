@@ -159,6 +159,9 @@ dynamodb = [
 events = [
     { name = "mypy-boto3-events" },
 ]
+secretsmanager = [
+    { name = "mypy-boto3-secretsmanager" },
+]
 sqs = [
     { name = "mypy-boto3-sqs" },
 ]
@@ -521,7 +524,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "boto3-stubs", extra = ["dynamodb", "events", "sqs"] },
+    { name = "boto3-stubs", extra = ["dynamodb", "events", "secretsmanager", "sqs"] },
     { name = "httpx2" },
     { name = "moto", extra = ["dynamodb", "events", "server"] },
     { name = "poethepoet" },
@@ -543,9 +546,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "boto3-stubs", extras = ["dynamodb", "events", "sqs"], specifier = ">=1.43.75" },
+    { name = "boto3-stubs", extras = ["dynamodb", "events", "secretsmanager", "sqs"], specifier = ">=1.43.75" },
     { name = "httpx2", specifier = ">=2.12.0" },
-    { name = "moto", extras = ["dynamodb", "events", "server", "sqs"], specifier = ">=5.2.2" },
+    { name = "moto", extras = ["dynamodb", "events", "secretsmanager", "server", "sqs"], specifier = ">=5.2.2" },
     { name = "poethepoet", specifier = ">=0.48.0" },
     { name = "pre-commit" },
     { name = "pyright" },
@@ -962,6 +965,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/09/20/a95e6d66d2d181cfc7f6a4b450f80e5a7369edc6de4ab8dcbf00c0c3dee4/mypy_boto3_events-1.43.0.tar.gz", hash = "sha256:215b8d686e9b745a864090931d1dfcda2e49bec32383f887d580a2c46492dc26", size = 33709, upload-time = "2026-04-29T23:00:37.044Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/33/1e/0064c6964fe54c40fe7d2cd5b3c6c485e44d62a51766beb6a5f84ceff8e0/mypy_boto3_events-1.43.0-py3-none-any.whl", hash = "sha256:f7f5cd246be4d54f6982d42c8f30da47ef78cd2aea53311d251dc09c3f556f97", size = 37588, upload-time = "2026-04-29T23:00:34.723Z" },
+]
+
+[[package]]
+name = "mypy-boto3-secretsmanager"
+version = "1.43.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/e0/3b9f954dcce063407224e6601ed5af2d684185387b0572901c5f984fc8f6/mypy_boto3_secretsmanager-1.43.0.tar.gz", hash = "sha256:265ee2fddf9d3e42ae39685625fb7861a539110d8e324372847c0e1cbd666b20", size = 19967, upload-time = "2026-04-29T23:05:45.139Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/93/ae939d61eed240972553395b5e31f780825685b99f0ab4ebe5767430f103/mypy_boto3_secretsmanager-1.43.0-py3-none-any.whl", hash = "sha256:38415cdecb73dd20e485707a7cf456f6dde54ff4b155e7fb255eb001eb47d5bc", size = 27335, upload-time = "2026-04-29T23:05:43.152Z" },
 ]
 
 [[package]]

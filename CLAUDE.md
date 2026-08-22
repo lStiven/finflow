@@ -7,17 +7,32 @@ Goal: process bank-email events automatically, extract financial transactions,
 normalize merchants, update account balances, and maintain real-time net worth
 without manual user input.
 
+Delivery: a web application, reachable from a phone's browser; deliberately not
+a native mobile app, so there is no app-store review in the way. When the user
+says "the app" they mean this software, not a mobile app.
+
+Scale: a private deployment for the author and a handful of friends, each
+seeing only their own finances. Design for that — free-tier AWS, no
+multi-tenant sharding — while keeping per-user isolation strict.
+
+Intake model: the user connects their own mailbox and the provider notifies us
+when it changes; we then read only the senders that user approved. Users are
+not asked to set up email forwarding.
+
 Main flow:
-Email webhook -> SQS -> deterministic parser -> LLM fallback -> Pydantic validation
--> Merchant/Classification -> Financial/Account -> integration events.
+Provider notification -> filtered mailbox read -> SQS -> deterministic parser
+-> LLM fallback -> Pydantic validation -> Merchant/Classification
+-> Financial/Account -> integration events.
 
 Bounded Contexts:
 
-* Ingestion: webhook intake, sender filtering, deduplication, parsing, extraction.
+* Ingestion: mailbox connections, provider notifications, sender filtering,
+  deduplication, parsing, extraction.
 * Financial: accounts, transactions, balances, debt, net worth.
 * Merchant: canonical merchants, aliases/sub-merchants, categories.
-* Identity: user accounts, credentials, authentication; inbox registration for
-  authenticated users (delegates to Ingestion's own use case through an adapter).
+* Identity: user accounts, credentials, authentication; mailbox and inbox
+  registration for authenticated users (delegates to Ingestion's own use cases
+  through an adapter).
   </project_context>
 
 <tech_stack>
@@ -51,6 +66,13 @@ Bounded Contexts:
 * Financial owns Account, Transaction, balances, debt, and net-worth rules.
 * Merchant owns canonical merchant identity, aliases, and classification.
 * Identity owns user accounts, credentials, and authentication.
+* A mailbox is private correspondence. Read it only with read-only scopes,
+  only for the senders that user approved, and never without that filter — an
+  empty allow-list means fetch nothing, not fetch everything. Leave every
+  message exactly as the user left it, unread ones included.
+* The bank-notification webhook is a local testing seam, not a product path:
+  users connect a mailbox instead of forwarding mail. It stays unmounted
+  outside `ENVIRONMENT=local`.
 * Always try deterministic/template parsers before the LLM fallback.
 * LLM extraction must return structured data validated by Pydantic; never accept free-form output as domain input.
 * Treat email content and LLM output as untrusted data.

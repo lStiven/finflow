@@ -20,7 +20,11 @@ from personal_finance.contexts.ingestion.application.ports import (
     MailboxReader,
     UserInboxRepository,
 )
+from personal_finance.contexts.ingestion.application.subscription_handlers import (
+    KeepSubscriptionAliveUseCase,
+)
 from personal_finance.contexts.ingestion.domain.entities import UserInbox
+from personal_finance.shared.domain.value_objects import PosixTime
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -97,7 +101,17 @@ class SyncMailboxUseCase:
         # Only now, with every message ingested, does the cursor move. A crash
         # mid-batch re-fetches on the next pass, which is safe precisely
         # because the conditional write makes ingestion idempotent.
-        self._connection_repository.save_cursor(connection, batch.cursor)
+        #
+        # `last_synced_at` moves with it: a subscription that dies without
+        # erroring leaves no trace except a mailbox that stopped being read,
+        # and that is only visible if we write down when we last did.
+        self._connection_repository.save(
+            dataclasses.replace(
+                connection,
+                cursor=batch.cursor,
+                last_synced_at=PosixTime.now(),
+            ),
+        )
 
         return SyncMailboxResult(
             fetched=len(batch.emails),
@@ -129,9 +143,11 @@ class HandleMailboxEventUseCase:
         *,
         connection_repository: MailboxConnectionRepository,
         sync_use_case: SyncMailboxUseCase,
+        keep_alive: KeepSubscriptionAliveUseCase | None = None,
     ) -> None:
         self._connection_repository = connection_repository
         self._sync_use_case = sync_use_case
+        self._keep_alive = keep_alive
 
     def execute(self, event: MailboxEvent) -> SyncMailboxResult:
         connection = self._connection_repository.find(
@@ -139,10 +155,24 @@ class HandleMailboxEventUseCase:
             address=event.address,
         )
 
-        # No connection: not ours to read. Revoked: it stopped being ours the
-        # moment the user said so, and a provider that keeps notifying us does
-        # not change that.
+        # No connection: not ours to read. Revoked or awaiting
+        # reauthorization: it stopped being ours to read, and a provider that
+        # keeps notifying us does not change that.
         if connection is None or not connection.is_active:
             return SyncMailboxResult()
 
-        return self._sync_use_case.execute(connection)
+        result = self._sync_use_case.execute(connection)
+
+        if self._keep_alive is not None:
+            # Free renewal: the provider just proved it is still talking to
+            # us, so a busy mailbox keeps its own subscription alive and the
+            # scheduled sweep only ever has to cover the quiet ones.
+            self._keep_alive.execute(
+                self._connection_repository.find(
+                    provider=event.provider,
+                    address=event.address,
+                )
+                or connection,
+            )
+
+        return result

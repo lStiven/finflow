@@ -10,6 +10,22 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
+class MailboxAccessRevokedError(Exception):
+    """The provider will not accept our credentials any more.
+
+    Permanent until the user authorizes again: retrying is useless, and
+    hammering a revoked grant is how an application gets rate-limited or
+    flagged. Adapters must raise this — and only this — for that case, so the
+    application layer can tell it apart from a provider having a bad minute.
+    """
+
+
+class MailboxTemporarilyUnavailableError(Exception):
+    """The provider failed in a way that is worth retrying: a timeout, a 5xx,
+    a rate limit.
+    """
+
+
 class MailboxProvider(enum.Enum):
     GMAIL = "gmail"
     OUTLOOK = "outlook"
@@ -25,8 +41,12 @@ class MailboxConnectionStatus(enum.Enum):
     """Explicit string values: this is persisted."""
 
     ACTIVE = "active"
-    # The user disconnected the mailbox, or the provider stopped accepting our
-    # credentials. Either way we must not read it again.
+    # The provider stopped accepting our credentials — the user revoked
+    # access, or the grant simply aged out. Distinct from REVOKED because the
+    # user did not ask for this and needs to be told: one click puts it back.
+    NEEDS_REAUTH = "needs_reauth"
+    # The user disconnected the mailbox themselves. We must not read it, and
+    # must not nag them about it either.
     REVOKED = "revoked"
 
 
@@ -63,10 +83,37 @@ class MailboxConnection:
     # UIDVALIDITY/UID pair. Only the adapter that wrote it can read it.
     cursor: str | None = None
     status: MailboxConnectionStatus = MailboxConnectionStatus.ACTIVE
+    # When the provider stops notifying us unless we renew. Gmail caps a watch
+    # at 7 days, Graph at about 3. None means nothing is subscribed yet.
+    subscription_expires_at: PosixTime | None = None
+    # When a sync last completed. A mailbox that has been quiet far longer
+    # than usual is the only visible symptom of a subscription that died
+    # without erroring.
+    last_synced_at: PosixTime | None = None
 
     @property
     def is_active(self) -> bool:
         return self.status is MailboxConnectionStatus.ACTIVE
+
+    def subscription_expires_within(
+        self,
+        *,
+        now: PosixTime,
+        seconds: int,
+    ) -> bool:
+        """Whether the subscription needs renewing already.
+
+        An unsubscribed connection always answers yes: never having had a
+        subscription is more urgent than having one about to lapse.
+        """
+        if self.subscription_expires_at is None:
+            return True
+
+        remaining = (
+            self.subscription_expires_at.as_epoch_seconds() - now.as_epoch_seconds()
+        )
+
+        return remaining <= seconds
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -75,6 +122,29 @@ class MailboxBatch:
 
     emails: tuple[InboundEmail, ...] = ()
     cursor: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class Subscription:
+    """What a provider gives back when we ask it to notify us.
+
+    The cursor matters as much as the expiry: Gmail's `watch` answers with the
+    history id current at that moment, which is where a first sync must start
+    from. Without it a fresh connection has no idea how far back "new" goes.
+    """
+
+    expires_at: PosixTime
+    cursor: str | None = None
+
+
+class MailboxEventDelivery(enum.Enum):
+    """How a provider tells us a mailbox changed."""
+
+    # The provider calls us. What we want everywhere it is offered.
+    PUSH = "push"
+    # Nobody calls; the only way to notice is to look. The simulated provider
+    # and plain IMAP work this way.
+    POLL = "poll"
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

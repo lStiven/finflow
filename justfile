@@ -109,6 +109,16 @@ mailbox-notify address api="http://localhost:8000":
         -H 'Content-Type: application/json' \
         -d '{"address":"{{address}}"}' && echo
 
+# Renew the mailbox subscriptions that are due. Run at least twice per
+# subscription lifetime; `--watch` keeps it running.
+subscriptions *args: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.keep_subscriptions {{args}}
+
+subscriptions-prod *args: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.keep_subscriptions {{args}}
+
 # Integration events that reached the bus. `--follow` keeps polling.
 events *args: (_require-env ".env")
     @{{local_env}} uv run python -m \

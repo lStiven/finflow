@@ -129,6 +129,19 @@ class ConnectedMailbox:
     address: str
     provider: str
     status: str
+    # True when the user has to authorize again before anything is read. The
+    # front end turns this into the one thing they need to act on.
+    needs_attention: bool = False
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MailboxRefreshSummary:
+    """What an on-demand catch-up found."""
+
+    mailboxes: int = 0
+    fetched: int = 0
+    accepted: int = 0
+    needs_reauth: int = 0
 
 
 class MailboxConnector(Protocol):
@@ -143,3 +156,7 @@ class MailboxConnector(Protocol):
     def disconnect(self, *, user_id: UserId, address: str, provider: str) -> None: ...
 
     def list_for_user(self, user_id: UserId) -> Sequence[ConnectedMailbox]: ...
+
+    def refresh_for_user(self, user_id: UserId) -> MailboxRefreshSummary:
+        """Catch this user's mailboxes up now, renewing along the way."""
+        ...

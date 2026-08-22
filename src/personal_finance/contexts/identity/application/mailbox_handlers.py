@@ -5,7 +5,10 @@ import dataclasses
 
 from personal_finance.contexts.identity.application.ports import (
     ConnectedMailbox,
+    InboxRegistrar,
+    InboxRegistration,
     MailboxConnector,
+    MailboxRefreshSummary,
 )
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -14,6 +17,15 @@ from personal_finance.shared.domain.value_objects import UserId
 class ConnectMailboxCommand:
     address: str
     provider: str
+    # Who this mailbox is allowed to be read for. Optional, because a user may
+    # connect first and choose senders after — but until there is at least
+    # one, connecting reads nothing at all.
+    allowed_domains: frozenset[str] = dataclasses.field(
+        default_factory=lambda: frozenset[str](),
+    )
+    allowed_addresses: frozenset[str] = dataclasses.field(
+        default_factory=lambda: frozenset[str](),
+    )
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -23,17 +35,40 @@ class DisconnectMailboxCommand:
 
 
 class ConnectMailboxUseCase:
-    """Attaches a mailbox to the authenticated user.
+    """Attaches a mailbox to the authenticated user, with the senders we may
+    read it for.
+
+    One action on purpose: a connection without a sender filter reads nothing,
+    so splitting them into two calls only creates a state where the user
+    believes they are set up and no mail arrives.
 
     Whose mailbox it becomes comes from the verified token, never from the
     request body: naming someone else's id must not be a way to point their
     mail at your own account.
     """
 
-    def __init__(self, *, connector: MailboxConnector) -> None:
+    def __init__(
+        self,
+        *,
+        connector: MailboxConnector,
+        inbox_registrar: InboxRegistrar,
+    ) -> None:
         self._connector = connector
+        self._inbox_registrar = inbox_registrar
 
     def execute(self, *, user_id: UserId, command: ConnectMailboxCommand) -> None:
+        # Senders first: the moment the connection goes active, the filter
+        # that limits what we may read already exists.
+        self._inbox_registrar.register(
+            user_id=user_id,
+            inboxes=(
+                InboxRegistration(
+                    address=command.address,
+                    allowed_domains=command.allowed_domains,
+                    allowed_addresses=command.allowed_addresses,
+                ),
+            ),
+        )
         self._connector.connect(
             user_id=user_id,
             address=command.address,
@@ -63,3 +98,20 @@ class ListMailboxesUseCase:
 
     def execute(self, *, user_id: UserId) -> Sequence[ConnectedMailbox]:
         return self._connector.list_for_user(user_id)
+
+
+class RefreshMailboxesUseCase:
+    """Catches this user's mailboxes up, on demand.
+
+    The point of a web application: someone opening it is the one moment
+    their data most needs to be current, and it costs a cursor-based read
+    that finds nothing when nothing changed. It also renews subscriptions on
+    the way past, which means a user simply using the application keeps their
+    own mailboxes alive even if every scheduled job is dead.
+    """
+
+    def __init__(self, *, connector: MailboxConnector) -> None:
+        self._connector = connector
+
+    def execute(self, *, user_id: UserId) -> MailboxRefreshSummary:
+        return self._connector.refresh_for_user(user_id)

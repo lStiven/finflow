@@ -90,6 +90,7 @@ class FakeConnectionRepository:
         }
 
     def save(self, connection: MailboxConnection) -> None:
+        self.saved_cursors.append(connection.cursor)
         self.connections[(connection.provider, connection.address)] = connection
 
     def list_active(self) -> Sequence[MailboxConnection]:
@@ -113,10 +114,6 @@ class FakeConnectionRepository:
             for connection in self.connections.values()
             if connection.user_id == user_id
         )
-
-    def save_cursor(self, connection: MailboxConnection, cursor: str | None) -> None:
-        del connection
-        self.saved_cursors.append(cursor)
 
 
 class InMemoryUserInboxRepository:

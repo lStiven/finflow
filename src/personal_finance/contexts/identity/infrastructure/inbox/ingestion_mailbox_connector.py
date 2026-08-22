@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from personal_finance.contexts.identity.application.ports import ConnectedMailbox
+from personal_finance.contexts.identity.application.ports import (
+    ConnectedMailbox,
+    MailboxRefreshSummary,
+)
 from personal_finance.contexts.ingestion.application.connection_handlers import (
     ConnectMailboxCommand,
     ConnectMailboxUseCase,
@@ -10,7 +13,13 @@ from personal_finance.contexts.ingestion.application.connection_handlers import 
     DisconnectMailboxUseCase,
     ListMailboxConnectionsUseCase,
 )
-from personal_finance.contexts.ingestion.application.mailbox import MailboxProvider
+from personal_finance.contexts.ingestion.application.mailbox import (
+    MailboxConnectionStatus,
+    MailboxProvider,
+)
+from personal_finance.contexts.ingestion.application.subscription_handlers import (
+    RefreshUserMailboxesUseCase,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -45,10 +54,12 @@ class IngestionMailboxConnector:
         connect_use_case: ConnectMailboxUseCase,
         disconnect_use_case: DisconnectMailboxUseCase,
         list_use_case: ListMailboxConnectionsUseCase,
+        refresh_use_case: RefreshUserMailboxesUseCase,
     ) -> None:
         self._connect_use_case = connect_use_case
         self._disconnect_use_case = disconnect_use_case
         self._list_use_case = list_use_case
+        self._refresh_use_case = refresh_use_case
 
     def connect(self, *, user_id: UserId, address: str, provider: str) -> None:
         self._connect_use_case.execute(
@@ -74,6 +85,19 @@ class IngestionMailboxConnector:
                 address=connection.address.value,
                 provider=connection.provider.value,
                 status=connection.status.value,
+                needs_attention=(
+                    connection.status is MailboxConnectionStatus.NEEDS_REAUTH
+                ),
             )
             for connection in self._list_use_case.execute(user_id)
         ]
+
+    def refresh_for_user(self, user_id: UserId) -> MailboxRefreshSummary:
+        summary = self._refresh_use_case.execute(user_id)
+
+        return MailboxRefreshSummary(
+            mailboxes=summary.mailboxes,
+            fetched=summary.fetched,
+            accepted=summary.accepted,
+            needs_reauth=summary.needs_reauth,
+        )

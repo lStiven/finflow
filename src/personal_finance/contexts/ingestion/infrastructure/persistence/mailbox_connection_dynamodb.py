@@ -11,7 +11,7 @@ from personal_finance.contexts.ingestion.application.mailbox import (
     MailboxProvider,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 CONNECTION_PARTITION_KEY = "connection_id"
@@ -67,7 +67,26 @@ def to_item(connection: MailboxConnection) -> dict[str, AttributeValueTypeDef]:
     if connection.cursor is not None:
         item["cursor"] = {"S": connection.cursor}
 
+    if connection.subscription_expires_at is not None:
+        item["subscription_expires_at"] = {
+            "N": str(connection.subscription_expires_at.as_epoch_seconds()),
+        }
+
+    if connection.last_synced_at is not None:
+        item["last_synced_at"] = {
+            "N": str(connection.last_synced_at.as_epoch_seconds()),
+        }
+
     return item
+
+
+def _read_time(
+    item: dict[str, AttributeValueTypeDef],
+    key: str,
+) -> PosixTime | None:
+    raw = item.get(key, {}).get("N")
+
+    return PosixTime.from_epoch_seconds(int(raw)) if raw else None
 
 
 def to_entity(item: dict[str, AttributeValueTypeDef]) -> MailboxConnection:
@@ -77,6 +96,8 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> MailboxConnection:
         provider=MailboxProvider(_read_string(item, "provider")),
         cursor=item.get("cursor", {}).get("S"),
         status=MailboxConnectionStatus(_read_string(item, STATUS_ATTRIBUTE)),
+        subscription_expires_at=_read_time(item, "subscription_expires_at"),
+        last_synced_at=_read_time(item, "last_synced_at"),
     )
 
 
@@ -178,17 +199,3 @@ class DynamoDBMailboxConnectionRepository:
 
             if start_key is None:
                 return connections
-
-    def save_cursor(self, connection: MailboxConnection, cursor: str | None) -> None:
-        self._client.put_item(
-            TableName=self._table_name,
-            Item=to_item(
-                MailboxConnection(
-                    user_id=connection.user_id,
-                    address=connection.address,
-                    provider=connection.provider,
-                    cursor=cursor,
-                    status=connection.status,
-                ),
-            ),
-        )

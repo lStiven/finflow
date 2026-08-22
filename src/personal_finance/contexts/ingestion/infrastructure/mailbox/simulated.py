@@ -25,7 +25,9 @@ from personal_finance.contexts.ingestion.application.mailbox import (
     InboundEmail,
     MailboxBatch,
     MailboxConnection,
+    MailboxEventDelivery,
     MailboxProvider,
+    Subscription,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -36,6 +38,10 @@ from personal_finance.shared.domain.value_objects import PosixTime
 
 MAILBOX_PARTITION_KEY = "address"
 MAILBOX_SORT_KEY = "sequence"
+
+# Two hours: long enough not to churn while somebody is testing by hand,
+# short enough that the renewal path is reachable in one sitting.
+SIMULATED_LIFETIME_SECONDS = 7_200
 
 
 class CorruptSimulatedEmailError(Exception):
@@ -108,6 +114,38 @@ class SimulatedMailboxStore:
         )
 
         return sequence
+
+
+class SimulatedMailboxSubscriber:
+    """A subscription that behaves like a real one: it expires.
+
+    Short-lived on purpose — the renewal policy is the part worth exercising,
+    and a subscription that lasted seven days would make every test either
+    slow or fictional.
+    """
+
+    provider = MailboxProvider.SIMULATED
+    delivery = MailboxEventDelivery.PUSH
+
+    def __init__(self, *, lifetime_seconds: int = SIMULATED_LIFETIME_SECONDS) -> None:
+        self.lifetime_seconds = lifetime_seconds
+        self.subscribe_calls = 0
+
+    def subscribe(self, connection: MailboxConnection) -> Subscription:
+        del connection
+        self.subscribe_calls += 1
+
+        return Subscription(
+            expires_at=PosixTime.from_epoch_seconds(
+                PosixTime.now().as_epoch_seconds() + self.lifetime_seconds,
+            ),
+            # A brand-new connection starts at the beginning of the mailbox;
+            # the reader treats "0" as "nothing read yet".
+            cursor=None,
+        )
+
+    def unsubscribe(self, connection: MailboxConnection) -> None:
+        del connection
 
 
 class SimulatedMailboxReader:

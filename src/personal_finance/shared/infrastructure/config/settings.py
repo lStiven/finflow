@@ -111,6 +111,29 @@ class IngestionSettings(BaseSettings):
     dynamodb_read_capacity: int = 5
     dynamodb_write_capacity: int = 5
 
+    # Gmail. All empty by default so a deployment that has not set Google up
+    # simply has no Gmail provider, rather than a half-configured one that
+    # fails on the first notification.
+    gmail_client_id: str = ""
+    gmail_client_secret: SecretStr = SecretStr("")
+    # Where Google sends the user back. Must match the Cloud console exactly.
+    gmail_redirect_uri: str = ""
+    # The Pub/Sub topic Gmail publishes change notifications to, as
+    # `projects/<project>/topics/<topic>`.
+    gmail_pubsub_topic: str = ""
+    # Signs the `state` that ties an OAuth callback to the user who started
+    # it. Without it the callback would accept anyone's code.
+    oauth_state_secret: SecretStr = SecretStr("")
+
+    @property
+    def gmail_configured(self) -> bool:
+        return bool(
+            self.gmail_client_id
+            and self.gmail_client_secret.get_secret_value()
+            and self.gmail_redirect_uri
+            and self.gmail_pubsub_topic,
+        )
+
 
 class IdentitySettings(BaseSettings):
     """Resources owned by the identity context."""

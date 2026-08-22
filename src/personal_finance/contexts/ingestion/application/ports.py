@@ -6,7 +6,9 @@ from typing import Protocol
 from personal_finance.contexts.ingestion.application.mailbox import (
     MailboxBatch,
     MailboxConnection,
+    MailboxEventDelivery,
     MailboxProvider,
+    Subscription,
 )
 from personal_finance.contexts.ingestion.application.messages import (
     ParseNotificationMessage,
@@ -103,6 +105,41 @@ class MailboxReader(Protocol):
         ...
 
 
+class MailboxSubscriber(Protocol):
+    """Asks a provider to keep telling us when a mailbox changes.
+
+    Every provider expires its subscription — Gmail caps a watch at 7 days,
+    Graph at about 3 — so this is not a one-time setup call. `subscribe` is
+    written to be safe to call again at any moment: providers treat a repeat
+    as a renewal, and renewing early is the whole strategy.
+    """
+
+    provider: MailboxProvider
+    # How this provider delivers. A polling provider is never renewed, because
+    # there is nothing on the other side holding a subscription open.
+    delivery: MailboxEventDelivery
+    # How long this provider's subscriptions last when freshly created. Comes
+    # from the provider rather than being inferred from an existing expiry:
+    # time *remaining* is always more than half of itself, so a policy built
+    # on it would postpone renewal forever and never fire.
+    lifetime_seconds: int
+
+    def subscribe(self, connection: MailboxConnection) -> Subscription:
+        """Start or renew notifications. Returns the new expiry, and the
+        position to read from when the connection has none yet.
+
+        Raises `MailboxAccessRevokedError` when the grant is gone, and
+        `MailboxTemporarilyUnavailableError` when it is worth trying again.
+        """
+        ...
+
+    def unsubscribe(self, connection: MailboxConnection) -> None:
+        """Ask the provider to stop. Best-effort: a subscription nobody
+        renews expires on its own anyway.
+        """
+        ...
+
+
 class MailboxConnectionRepository(Protocol):
     """Stores which mailboxes to sync and how far each one got."""
 
@@ -128,10 +165,6 @@ class MailboxConnectionRepository(Protocol):
 
     def find_by_user(self, user_id: UserId) -> Sequence[MailboxConnection]:
         """Return every mailbox this user connected, revoked ones included."""
-        ...
-
-    def save_cursor(self, connection: MailboxConnection, cursor: str | None) -> None:
-        """Record where the last completed sync stopped."""
         ...
 
 

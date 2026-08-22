@@ -29,6 +29,7 @@ from personal_finance.contexts.identity.application.mailbox_handlers import (
     DisconnectMailboxCommand,
     DisconnectMailboxUseCase,
     ListMailboxesUseCase,
+    RefreshMailboxesUseCase,
 )
 from personal_finance.contexts.identity.application.ports import InboxRegistration
 from personal_finance.contexts.identity.domain.exceptions import (
@@ -63,11 +64,16 @@ from personal_finance.contexts.ingestion.application.inbox_handlers import (
     ListUserInboxesUseCase,
     RegisterUserInboxUseCase,
 )
-from personal_finance.contexts.ingestion.infrastructure.persistence.mailbox_connection_dynamodb import (  # noqa: E501
-    DynamoDBMailboxConnectionRepository,
+from personal_finance.contexts.ingestion.application.subscription_handlers import (
+    RefreshUserMailboxesUseCase,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     DynamoDBUserInboxRepository,
+)
+from personal_finance.contexts.ingestion.presentation.http.mailbox_router import (
+    build_connection_repository,
+    build_sync_use_case,
+    get_keep_alive_use_case,
 )
 from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import UserId
@@ -166,14 +172,42 @@ class MailboxPayload(BaseModel):
         return _looks_like_an_email(value)
 
 
+class ConnectMailboxPayload(MailboxPayload):
+    """Connecting also says who we may read the mailbox for.
+
+    Both lists may be empty — the mailbox is then connected but read for
+    nobody, which is the safe default rather than a broken one.
+    """
+
+    allowed_domains: list[str] = Field(
+        default_factory=lambda: list[str](),
+    )
+    allowed_addresses: list[str] = Field(
+        default_factory=lambda: list[str](),
+    )
+
+    @field_validator("allowed_addresses")
+    @classmethod
+    def _validate_allowed_addresses(cls, value: list[str]) -> list[str]:
+        return [_looks_like_an_email(address) for address in value]
+
+
 class ConnectedMailboxResponse(BaseModel):
     address: str
     provider: str
     status: str
+    needs_attention: bool
 
 
 class MailboxListResponse(BaseModel):
     mailboxes: list[ConnectedMailboxResponse]
+
+
+class MailboxRefreshResponse(BaseModel):
+    mailboxes: int
+    fetched: int
+    accepted: int
+    needs_reauth: int
 
 
 class AccessTokenResponse(BaseModel):
@@ -291,10 +325,7 @@ def _build_list_inboxes_use_case() -> ListInboxesUseCase:
 
 @functools.lru_cache(maxsize=1)
 def _build_mailbox_connector() -> IngestionMailboxConnector:
-    repository = DynamoDBMailboxConnectionRepository(
-        client=get_dynamodb_client(),
-        table_name=get_ingestion_settings().mailbox_connections_table,
-    )
+    repository = build_connection_repository()
 
     return IngestionMailboxConnector(
         connect_use_case=IngestionConnectMailboxUseCase(
@@ -304,12 +335,20 @@ def _build_mailbox_connector() -> IngestionMailboxConnector:
             connection_repository=repository,
         ),
         list_use_case=ListMailboxConnectionsUseCase(connection_repository=repository),
+        refresh_use_case=RefreshUserMailboxesUseCase(
+            connection_repository=repository,
+            sync_use_case=build_sync_use_case(),
+            keep_alive=get_keep_alive_use_case(),
+        ),
     )
 
 
 @functools.lru_cache(maxsize=1)
 def _build_connect_mailbox_use_case() -> ConnectMailboxUseCase:
-    return ConnectMailboxUseCase(connector=_build_mailbox_connector())
+    return ConnectMailboxUseCase(
+        connector=_build_mailbox_connector(),
+        inbox_registrar=_build_inbox_registrar(),
+    )
 
 
 @functools.lru_cache(maxsize=1)
@@ -348,6 +387,15 @@ def get_disconnect_mailbox_use_case() -> DisconnectMailboxUseCase:
 
 def get_list_mailboxes_use_case() -> ListMailboxesUseCase:
     return _build_list_mailboxes_use_case()
+
+
+@functools.lru_cache(maxsize=1)
+def _build_refresh_mailboxes_use_case() -> RefreshMailboxesUseCase:
+    return RefreshMailboxesUseCase(connector=_build_mailbox_connector())
+
+
+def get_refresh_mailboxes_use_case() -> RefreshMailboxesUseCase:
+    return _build_refresh_mailboxes_use_case()
 
 
 def get_token_issuer() -> JWTTokenIssuer:
@@ -492,15 +540,15 @@ def list_inboxes(
 
 @router.post("/mailboxes", status_code=status.HTTP_204_NO_CONTENT)
 def connect_mailbox(
-    payload: MailboxPayload,
+    payload: ConnectMailboxPayload,
     user_id: Annotated[UserId, Depends(get_current_user_id)],
     use_case: Annotated[ConnectMailboxUseCase, Depends(get_connect_mailbox_use_case)],
 ) -> None:
-    """Authorize us to read one of your mailboxes.
+    """Authorize us to read one of your mailboxes, and say who for.
 
     From here on the provider notifies us when that mailbox changes, and we
-    read only the senders you approved. Approve some first, or a connected
-    mailbox is read for nothing.
+    read only the senders listed here — nothing else in it is ever fetched.
+    Leave the lists empty and the mailbox is connected but read for nobody.
     """
     try:
         use_case.execute(
@@ -508,6 +556,8 @@ def connect_mailbox(
             command=ConnectMailboxCommand(
                 address=payload.address,
                 provider=payload.provider,
+                allowed_domains=frozenset(payload.allowed_domains),
+                allowed_addresses=frozenset(payload.allowed_addresses),
             ),
         )
     except MailboxAlreadyConnectedError as error:
@@ -565,9 +615,34 @@ def list_mailboxes(
                 address=mailbox.address,
                 provider=mailbox.provider,
                 status=mailbox.status,
+                needs_attention=mailbox.needs_attention,
             )
             for mailbox in use_case.execute(user_id=user_id)
         ],
+    )
+
+
+@router.post("/mailboxes/refresh", response_model=MailboxRefreshResponse)
+def refresh_mailboxes(
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[
+        RefreshMailboxesUseCase,
+        Depends(get_refresh_mailboxes_use_case),
+    ],
+) -> MailboxRefreshResponse:
+    """Catch this user's mailboxes up right now.
+
+    Meant to be called when someone opens the application. It renews
+    subscriptions on the way past, so a user simply using the product keeps
+    their own mailboxes alive even if nothing scheduled is running.
+    """
+    summary = use_case.execute(user_id=user_id)
+
+    return MailboxRefreshResponse(
+        mailboxes=summary.mailboxes,
+        fetched=summary.fetched,
+        accepted=summary.accepted,
+        needs_reauth=summary.needs_reauth,
     )
 
 
