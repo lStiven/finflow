@@ -80,6 +80,18 @@ class FakeReader:
 
         return self._batches.pop(0) if self._batches else MailboxBatch()
 
+    def fetch_range(
+        self,
+        *,
+        connection: MailboxConnection,
+        senders: Sequence[str],
+        since: PosixTime,
+        until: PosixTime,
+    ) -> MailboxBatch:
+        del connection, senders, since, until
+
+        return MailboxBatch()
+
 
 class FakeConnectionRepository:
     def __init__(self, *connections: MailboxConnection) -> None:

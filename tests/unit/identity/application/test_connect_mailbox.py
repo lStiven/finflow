@@ -7,6 +7,7 @@ from personal_finance.contexts.identity.application.mailbox_handlers import (
 from personal_finance.contexts.identity.application.ports import (
     ConnectedMailbox,
     InboxRegistration,
+    MailboxBackfillSummary,
     MailboxRefreshSummary,
 )
 from personal_finance.shared.domain.value_objects import UserId
@@ -47,6 +48,12 @@ class RecordingConnector:
         raise NotImplementedError
 
     def refresh_for_user(self, user_id: UserId) -> MailboxRefreshSummary:
+        raise NotImplementedError
+
+    def backfill_current_month_for_user(
+        self,
+        user_id: UserId,
+    ) -> MailboxBackfillSummary:
         raise NotImplementedError
 
 

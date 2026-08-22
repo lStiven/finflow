@@ -28,6 +28,10 @@ Esto no es un detalle de implementación, es la decisión central del producto:
   nada*, nunca *leerlo todo*.
 - **Los mensajes se dejan como estaban**, los no leídos incluidos.
 
+El contrato de API con el que un cliente lleva a un usuario a autorizar su
+buzón —qué endpoints llamar, en qué orden, qué esperar— está en
+[mailbox-connection.md](mailbox-connection.md).
+
 ## El flujo principal
 
 ```mermaid

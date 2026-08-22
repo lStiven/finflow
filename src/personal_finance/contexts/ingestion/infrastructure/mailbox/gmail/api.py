@@ -1,9 +1,11 @@
-"""The three Gmail calls this project makes.
+"""The Gmail calls this project makes.
 
 `watch` asks Google to keep telling us when the mailbox changes, `history`
-says what changed since a position, and `messages.get` fetches one message.
-Nothing else: the narrower the surface, the less of someone's mailbox this
-code is even capable of touching.
+says what changed since a position, `messages.get` fetches one message, and
+`messages.list` searches directly — the one exception to "only ever read
+forward", used solely for a one-time, user-requested backfill. Nothing else:
+the narrower the surface, the less of someone's mailbox this code is even
+capable of touching.
 """
 
 from __future__ import annotations
@@ -60,6 +62,12 @@ class RawMessage:
     id: str
     raw: str
     internal_date_epoch_millis: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MessagesPage:
+    message_ids: tuple[str, ...]
+    next_page_token: str | None
 
 
 class GmailApiClient:
@@ -138,6 +146,41 @@ class GmailApiClient:
         return HistoryPage(
             message_ids=_message_ids(payload),
             history_id=read_string(payload, "historyId"),
+            next_page_token=read_string(payload, "nextPageToken"),
+        )
+
+    def list_messages(
+        self,
+        *,
+        access_token: str,
+        query: str,
+        page_token: str | None = None,
+    ) -> MessagesPage:
+        """Search the mailbox directly, by Gmail's own query syntax.
+
+        Only ever used for a bounded, one-time backfill: the history window
+        (`list_history`) does not reach back a whole calendar month, so this
+        is the one place this project searches instead of resuming from a
+        position.
+        """
+        params: dict[str, str] = {"q": query}
+
+        if page_token is not None:
+            params["pageToken"] = page_token
+
+        payload = self._request(
+            "GET",
+            "/messages",
+            access_token=access_token,
+            params=params,
+        )
+
+        return MessagesPage(
+            message_ids=tuple(
+                message_id
+                for entry in as_json_array(payload.get("messages"))
+                if (message_id := read_string(as_json_object(entry), "id")) is not None
+            ),
             next_page_token=read_string(payload, "nextPageToken"),
         )
 

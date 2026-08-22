@@ -24,6 +24,7 @@ from personal_finance.contexts.identity.application.integration_events import (
     IdentityIntegrationEventTranslator,
 )
 from personal_finance.contexts.identity.application.mailbox_handlers import (
+    BackfillMailboxesUseCase,
     ConnectMailboxCommand,
     ConnectMailboxUseCase,
     DisconnectMailboxCommand,
@@ -71,6 +72,7 @@ from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_d
     DynamoDBUserInboxRepository,
 )
 from personal_finance.contexts.ingestion.presentation.http.mailbox_router import (
+    build_backfill_use_case,
     build_connection_repository,
     build_sync_use_case,
     get_keep_alive_use_case,
@@ -210,6 +212,15 @@ class MailboxRefreshResponse(BaseModel):
     needs_reauth: int
 
 
+class MailboxBackfillResponse(BaseModel):
+    mailboxes: int
+    fetched: int
+    accepted: int
+    duplicates: int
+    needs_reauth: int
+    since: str
+
+
 class AccessTokenResponse(BaseModel):
     user_id: str
     access_token: str
@@ -340,6 +351,7 @@ def _build_mailbox_connector() -> IngestionMailboxConnector:
             sync_use_case=build_sync_use_case(),
             keep_alive=get_keep_alive_use_case(),
         ),
+        backfill_use_case=build_backfill_use_case(),
     )
 
 
@@ -396,6 +408,15 @@ def _build_refresh_mailboxes_use_case() -> RefreshMailboxesUseCase:
 
 def get_refresh_mailboxes_use_case() -> RefreshMailboxesUseCase:
     return _build_refresh_mailboxes_use_case()
+
+
+@functools.lru_cache(maxsize=1)
+def _build_backfill_mailboxes_use_case() -> BackfillMailboxesUseCase:
+    return BackfillMailboxesUseCase(connector=_build_mailbox_connector())
+
+
+def get_backfill_mailboxes_use_case() -> BackfillMailboxesUseCase:
+    return _build_backfill_mailboxes_use_case()
 
 
 def get_token_issuer() -> JWTTokenIssuer:
@@ -643,6 +664,34 @@ def refresh_mailboxes(
         fetched=summary.fetched,
         accepted=summary.accepted,
         needs_reauth=summary.needs_reauth,
+    )
+
+
+@router.post("/mailboxes/backfill", response_model=MailboxBackfillResponse)
+def backfill_mailboxes(
+    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    use_case: Annotated[
+        BackfillMailboxesUseCase,
+        Depends(get_backfill_mailboxes_use_case),
+    ],
+) -> MailboxBackfillResponse:
+    """Read this month's mail from the first of the month onward, once.
+
+    Meant to be offered right after connecting a mailbox: someone who signs up
+    on any day but the first would otherwise have a first month of history
+    missing whatever arrived before they connected — the ordinary sync only
+    ever reads forward. Safe to call more than once; anything already
+    ingested comes back as a duplicate, never twice.
+    """
+    summary = use_case.execute(user_id=user_id)
+
+    return MailboxBackfillResponse(
+        mailboxes=summary.mailboxes,
+        fetched=summary.fetched,
+        accepted=summary.accepted,
+        duplicates=summary.duplicates,
+        needs_reauth=summary.needs_reauth,
+        since=summary.since,
     )
 
 

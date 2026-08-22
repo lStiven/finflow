@@ -7,6 +7,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
+from personal_finance.contexts.ingestion.application.backfill_handlers import (
+    BackfillMailboxUseCase,
+    BackfillUserMailboxesUseCase,
+)
 from personal_finance.contexts.ingestion.application.mailbox import (
     MailboxEvent,
     MailboxProvider,
@@ -99,6 +103,26 @@ def build_sync_use_case() -> SyncMailboxUseCase:
         ),
         connection_repository=build_connection_repository(),
         receive_use_case=get_use_case(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def build_backfill_use_case() -> BackfillUserMailboxesUseCase:
+    """Shared with identity's onboarding endpoint, so a backfill goes through
+    exactly the same filtered read as the doorbell and the on-demand refresh.
+    """
+    settings = get_ingestion_settings()
+
+    return BackfillUserMailboxesUseCase(
+        connection_repository=build_connection_repository(),
+        backfill_use_case=BackfillMailboxUseCase(
+            readers=get_readers(),
+            inbox_repository=DynamoDBUserInboxRepository(
+                client=get_dynamodb_client(),
+                table_name=settings.user_inboxes_table,
+            ),
+            receive_use_case=get_use_case(),
+        ),
     )
 
 

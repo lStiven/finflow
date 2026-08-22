@@ -4,7 +4,11 @@ from collections.abc import Sequence
 
 from personal_finance.contexts.identity.application.ports import (
     ConnectedMailbox,
+    MailboxBackfillSummary,
     MailboxRefreshSummary,
+)
+from personal_finance.contexts.ingestion.application.backfill_handlers import (
+    BackfillUserMailboxesUseCase,
 )
 from personal_finance.contexts.ingestion.application.connection_handlers import (
     ConnectMailboxCommand,
@@ -55,11 +59,13 @@ class IngestionMailboxConnector:
         disconnect_use_case: DisconnectMailboxUseCase,
         list_use_case: ListMailboxConnectionsUseCase,
         refresh_use_case: RefreshUserMailboxesUseCase,
+        backfill_use_case: BackfillUserMailboxesUseCase,
     ) -> None:
         self._connect_use_case = connect_use_case
         self._disconnect_use_case = disconnect_use_case
         self._list_use_case = list_use_case
         self._refresh_use_case = refresh_use_case
+        self._backfill_use_case = backfill_use_case
 
     def connect(self, *, user_id: UserId, address: str, provider: str) -> None:
         self._connect_use_case.execute(
@@ -100,4 +106,19 @@ class IngestionMailboxConnector:
             fetched=summary.fetched,
             accepted=summary.accepted,
             needs_reauth=summary.needs_reauth,
+        )
+
+    def backfill_current_month_for_user(
+        self,
+        user_id: UserId,
+    ) -> MailboxBackfillSummary:
+        summary = self._backfill_use_case.execute(user_id)
+
+        return MailboxBackfillSummary(
+            mailboxes=summary.mailboxes,
+            fetched=summary.fetched,
+            accepted=summary.accepted,
+            duplicates=summary.duplicates,
+            needs_reauth=summary.needs_reauth,
+            since=summary.since.to_datetime().date().isoformat(),
         )

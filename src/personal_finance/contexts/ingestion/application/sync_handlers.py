@@ -69,7 +69,7 @@ class SyncMailboxUseCase:
             )
 
         inbox = self._inbox_repository.find_by_address(connection.address)
-        senders = _approved_senders(inbox) if inbox else ()
+        senders = approved_senders(inbox) if inbox else ()
 
         if not senders:
             # Never fetch without a sender filter. The mailbox is someone's
@@ -120,7 +120,12 @@ class SyncMailboxUseCase:
         )
 
 
-def _approved_senders(inbox: UserInbox) -> tuple[str, ...]:
+def approved_senders(inbox: UserInbox) -> tuple[str, ...]:
+    """Flattens a user's sender policy into what a `MailboxReader` expects:
+    addresses and domains in one list, matched the same way regardless of
+    which kind an entry is. Shared with `backfill_handlers`, which restricts
+    a mailbox to exactly the same senders for its one-time catch-up.
+    """
     policy = inbox.sender_policy
 
     return (

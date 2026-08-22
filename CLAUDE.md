@@ -98,6 +98,19 @@ Bounded Contexts:
 
 ## workflow
 
+* Session continuity: read `PROGRESS.md` at the start of a session to see
+  where things stand. After finishing a task or a meaningful chunk of work,
+  update `PROGRESS.md` (current focus, what just got done, next steps, open
+  questions/blockers) before ending the turn — this replaces relying on
+  `/compact` or long-lived conversation history to track state.
+* Whenever an endpoint is added, changed, or removed, update
+  `docs/postman/finflow_v2.postman_collection.json` (Postman Collection
+  v2.1 format — importable by both Postman and Bruno) in the same change.
+  Keep requests grouped by bounded context, matching the existing folder
+  structure. If a new endpoint needs a variable beyond the environment's
+  `base_url` / `fetch_token` / `token` / `user_id`
+  (`docs/postman/finflow_v2.postman_environment.json`), add it there too.
+  See `docs/postman/README.md`.
 * Work in small iterations; do not implement multiple bounded contexts unless explicitly requested.
 * Before editing, inspect the relevant code, `pyproject.toml`, and `justfile`.
 * Prefer this order: domain -> unit tests -> application -> port -> infrastructure adapter -> endpoint/worker -> integration test.

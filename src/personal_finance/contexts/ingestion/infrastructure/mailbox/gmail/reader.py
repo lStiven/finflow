@@ -34,6 +34,12 @@ _logger = logging.getLogger(__name__)
 # rest arrives on the next notification.
 MAX_MESSAGES_PER_SYNC = 100
 
+# A backfill has no cursor to resume from on a later call — Gmail returns
+# search results newest-first, so calling it again would just re-fetch the
+# same most recent messages. The cap is generous instead: a personal mailbox's
+# approved bank senders do not send hundreds of alerts in one month.
+MAX_BACKFILL_MESSAGES = 500
+
 
 class GmailAccessTokenProviderProtocol(Protocol):
     """Anything that can produce a usable access token for a mailbox."""
@@ -153,6 +159,81 @@ class GmailMailboxReader:
 
         return MailboxBatch(emails=emails, cursor=latest or connection.cursor)
 
+    def fetch_range(
+        self,
+        *,
+        connection: MailboxConnection,
+        senders: Sequence[str],
+        since: PosixTime,
+        until: PosixTime,
+    ) -> MailboxBatch:
+        """A one-time bounded read, independent of the history cursor.
+
+        Gmail keeps history for about a week — far short of "since the first
+        of the month" — so this searches directly with `messages.list` rather
+        than resuming from a position. The query narrows by sender as an
+        optimisation only; every message is still re-checked against
+        `senders` after fetching, exactly as `fetch_new` does, so the actual
+        enforcement never depends on how Gmail parsed the query.
+        """
+        if not senders:
+            return MailboxBatch()
+
+        access_token = self._token_provider.access_token(connection.address)
+        normalized = tuple(sender.lower() for sender in senders)
+        message_ids = self._collect_message_ids_by_query(
+            access_token=access_token,
+            query=_range_query(senders=normalized, since=since, until=until),
+        )
+
+        if len(message_ids) >= MAX_BACKFILL_MESSAGES:
+            _logger.warning(
+                "gmail backfill hit its cap; some mail in range was not read",
+                extra={
+                    "user_id": str(connection.user_id.value),
+                    "cap": MAX_BACKFILL_MESSAGES,
+                },
+            )
+
+        emails = tuple(
+            email
+            for message_id in message_ids[:MAX_BACKFILL_MESSAGES]
+            if (
+                email := self._fetch_if_approved(
+                    access_token=access_token,
+                    message_id=message_id,
+                    connection=connection,
+                    senders=normalized,
+                )
+            )
+            is not None
+        )
+
+        # Not a real position: a backfill is not resumable the way an
+        # incremental sync is, and the caller never persists this.
+        return MailboxBatch(emails=emails, cursor=connection.cursor)
+
+    def _collect_message_ids_by_query(
+        self,
+        *,
+        access_token: str,
+        query: str,
+    ) -> tuple[str, ...]:
+        message_ids: list[str] = []
+        page_token: str | None = None
+
+        while True:
+            page = self._api.list_messages(
+                access_token=access_token,
+                query=query,
+                page_token=page_token,
+            )
+            message_ids.extend(page.message_ids)
+            page_token = page.next_page_token
+
+            if page_token is None or len(message_ids) >= MAX_BACKFILL_MESSAGES:
+                return tuple(message_ids)
+
     def _collect_message_ids(
         self,
         *,
@@ -217,6 +298,27 @@ class GmailMailboxReader:
             if message.internal_date_epoch_millis
             else PosixTime.now(),
         )
+
+
+def _range_query(
+    *,
+    senders: Sequence[str],
+    since: PosixTime,
+    until: PosixTime,
+) -> str:
+    """Gmail's search syntax for "this date range, from one of these
+    senders". `after:`/`before:` accept Unix seconds directly; `from:@domain`
+    matches any address at that domain, which is why a bare domain entry gets
+    the `@` prefix and an exact address does not.
+    """
+    sender_clause = " OR ".join(
+        f"from:{sender}" if "@" in sender else f"from:@{sender}" for sender in senders
+    )
+
+    return (
+        f"in:inbox after:{since.as_epoch_seconds()} "
+        f"before:{until.as_epoch_seconds()} ({sender_clause})"
+    )
 
 
 def _sender_address(message: EmailMessage) -> str | None:

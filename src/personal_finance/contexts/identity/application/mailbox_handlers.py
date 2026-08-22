@@ -7,6 +7,7 @@ from personal_finance.contexts.identity.application.ports import (
     ConnectedMailbox,
     InboxRegistrar,
     InboxRegistration,
+    MailboxBackfillSummary,
     MailboxConnector,
     MailboxRefreshSummary,
 )
@@ -115,3 +116,20 @@ class RefreshMailboxesUseCase:
 
     def execute(self, *, user_id: UserId) -> MailboxRefreshSummary:
         return self._connector.refresh_for_user(user_id)
+
+
+class BackfillMailboxesUseCase:
+    """Reads this user's mailboxes from the first of the current month, once.
+
+    Meant to be offered right after someone connects a mailbox: without it,
+    signing up on any day but the first of the month means the ordinary sync
+    only ever sees mail from that moment forward, and this month's earlier
+    history is simply missing. Safe to call more than once — anything already
+    ingested comes back as a duplicate, never twice.
+    """
+
+    def __init__(self, *, connector: MailboxConnector) -> None:
+        self._connector = connector
+
+    def execute(self, *, user_id: UserId) -> MailboxBackfillSummary:
+        return self._connector.backfill_current_month_for_user(user_id)

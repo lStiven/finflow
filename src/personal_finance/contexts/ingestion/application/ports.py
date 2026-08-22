@@ -107,6 +107,24 @@ class MailboxReader(Protocol):
         """
         ...
 
+    def fetch_range(
+        self,
+        *,
+        connection: MailboxConnection,
+        senders: Sequence[str],
+        since: PosixTime,
+        until: PosixTime,
+    ) -> MailboxBatch:
+        """Return messages received between `since` and `until`, ignoring the
+        cursor entirely.
+
+        A one-time bounded catch-up — someone connecting mid-month asking to
+        also see what this month already holds — not part of the ongoing sync.
+        `senders` means exactly what it means in `fetch_new`: nothing outside
+        the approved list is ever fetched.
+        """
+        ...
+
 
 class MailboxSubscriber(Protocol):
     """Asks a provider to keep telling us when a mailbox changes.

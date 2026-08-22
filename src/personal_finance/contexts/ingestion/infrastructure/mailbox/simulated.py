@@ -200,6 +200,49 @@ class SimulatedMailboxReader:
             cursor=str(highest) if highest else None,
         )
 
+    def fetch_range(
+        self,
+        *,
+        connection: MailboxConnection,
+        senders: Sequence[str],
+        since: PosixTime,
+        until: PosixTime,
+    ) -> MailboxBatch:
+        """A one-time bounded read, independent of `connection.cursor` —
+        mirrors what a real provider's search-based backfill would return.
+        """
+        if not senders:
+            return MailboxBatch()
+
+        since_epoch = since.as_epoch_seconds()
+        until_epoch = until.as_epoch_seconds()
+        emails: list[InboundEmail] = []
+
+        for item in self._query_after(connection.address, after=0):
+            received_at = int(item.get("received_at", {}).get("N", "0"))
+
+            if not since_epoch <= received_at <= until_epoch:
+                continue
+
+            sender = _read_string(item, "sender")
+
+            if not _matches(sender, senders):
+                continue
+
+            emails.append(
+                InboundEmail(
+                    message_id=EmailMessageId(_read_string(item, "message_id")),
+                    recipient=connection.address,
+                    sender=EmailAddress(sender),
+                    subject=_read_string(item, "subject"),
+                    raw_content=_read_string(item, "raw_content"),
+                    received_at=PosixTime.from_epoch_seconds(received_at),
+                ),
+            )
+
+        # Not a real position: this method is never used to resume from.
+        return MailboxBatch(emails=tuple(emails), cursor=connection.cursor)
+
     def _query_after(
         self,
         address: EmailAddress,

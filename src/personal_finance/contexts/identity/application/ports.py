@@ -144,6 +144,20 @@ class MailboxRefreshSummary:
     needs_reauth: int = 0
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MailboxBackfillSummary:
+    """What a one-time backfill of the current month found."""
+
+    mailboxes: int = 0
+    fetched: int = 0
+    accepted: int = 0
+    duplicates: int = 0
+    needs_reauth: int = 0
+    # ISO date (YYYY-MM-DD): the first day this backfill searched from, so the
+    # caller can tell someone what range was actually covered.
+    since: str = ""
+
+
 class MailboxConnector(Protocol):
     """Identity's view of "let this user attach a mailbox we may read".
 
@@ -159,4 +173,16 @@ class MailboxConnector(Protocol):
 
     def refresh_for_user(self, user_id: UserId) -> MailboxRefreshSummary:
         """Catch this user's mailboxes up now, renewing along the way."""
+        ...
+
+    def backfill_current_month_for_user(
+        self,
+        user_id: UserId,
+    ) -> MailboxBackfillSummary:
+        """Read this month's mail from the first of the month onward, once.
+
+        For someone who connects mid-month: without this, the ordinary sync
+        would only ever see what arrives from the moment they connected
+        forward. Safe to call more than once.
+        """
         ...

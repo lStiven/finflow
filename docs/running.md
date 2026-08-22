@@ -1,7 +1,9 @@
 # Levantar, probar y desplegar Finflow
 
 Guía operativa. Para entender **qué** hace el sistema, ver
-[overview.md](overview.md).
+[overview.md](overview.md). Para probar la API a mano sin `curl`, hay una
+colección de Postman/Bruno lista para importar en
+[postman/](postman/README.md).
 
 Todos los comandos se ejecutan dentro del DevContainer, en
 `/workspaces/finflow_v2`. `just --list` es la fuente de verdad de las tareas
@@ -250,6 +252,9 @@ GET  /identity/mailboxes/gmail/authorize   -> devuelve la URL de consentimiento
 GET  /identity/mailboxes/gmail/callback    -> Google redirige aquí
 ```
 
+Contrato completo, paso a paso y con los códigos de error, en
+[mailbox-connection.md](mailbox-connection.md).
+
 > **App en modo Testing**: mientras la aplicación OAuth siga sin verificar —lo
 > que permite a un despliegue pequeño saltarse la evaluación de seguridad de
 > pago de Google— los *refresh tokens* caducan cada 7 días y cada usuario tiene
@@ -288,6 +293,7 @@ las colas `*-dlq` si algo desaparece sin explicación.
 | `GET /identity/mailboxes` | Buzones y cuáles necesitan atención |
 | `DELETE /identity/mailboxes` | Desconectar (conserva la posición de lectura) |
 | `POST /identity/mailboxes/refresh` | Renovar y sincronizar al abrir la app |
+| `POST /identity/mailboxes/backfill` | Leer el mes en curso desde el día 1, una vez |
 | `GET /identity/mailboxes/gmail/authorize` · `/callback` | Flujo OAuth |
 | `POST /ingestion/mailbox-events/gmail` · `/simulated` | El timbre del proveedor |
 | `GET /merchants` | Listado con búsqueda, filtros y contador de revisión |
