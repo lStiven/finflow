@@ -126,6 +126,13 @@ class StructuredModel:
                     response_schema=schema,
                     temperature=TEMPERATURE,
                     max_output_tokens=self._settings.max_output_tokens,
+                    # Nothing here declares tools, and nothing should ever
+                    # execute one on our behalf: the content being examined is
+                    # an untrusted email. Disabling it explicitly also silences
+                    # the SDK's advisory warning on every single call.
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                        disable=True,
+                    ),
                     http_options=types.HttpOptions(
                         timeout=self._settings.timeout_seconds * 1000,
                     ),

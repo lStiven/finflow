@@ -135,6 +135,15 @@ def test_the_request_demands_json_matching_the_schema() -> None:
     assert config.temperature == 0.0
 
 
+def test_the_model_is_never_allowed_to_execute_a_function() -> None:
+    model, models = _model(parsed=Answer(verdict="yes"))
+
+    _complete(model)
+
+    # The content being examined is an untrusted email.
+    assert models.calls[0]["config"].automatic_function_calling.disable is True
+
+
 def test_an_oversized_document_is_cut_rather_than_refused() -> None:
     assert truncate_for_prompt("x" * 100, limit=10) == "x" * 10
 

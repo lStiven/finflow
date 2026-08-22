@@ -88,7 +88,7 @@ def main() -> None:
     print(
         "\nNothing has been read yet — the mailbox is not ours to look into "
         "until the provider says so. Ring it with:\n"
-        f"  just mailbox-notify --address {args.address}",
+        f"  just mailbox-notify {args.address}",
     )
 
 
