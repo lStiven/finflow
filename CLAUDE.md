@@ -100,9 +100,11 @@ Bounded Contexts:
 
 * Session continuity: read `PROGRESS.md` at the start of a session to see
   where things stand. After finishing a task or a meaningful chunk of work,
-  update `PROGRESS.md` (current focus, what just got done, next steps, open
-  questions/blockers) before ending the turn — this replaces relying on
-  `/compact` or long-lived conversation history to track state.
+  update `PROGRESS.md` before ending the turn — this replaces relying on
+  `/compact` or long-lived conversation history to track state. Keep
+  `Last completed` to the single most recent item only, short — it is not an
+  accumulating log; append one compact line per finished item to
+  `Session log` instead, which is where full history belongs.
 * Whenever an endpoint is added, changed, or removed, update
   `docs/postman/finflow_v2.postman_collection.json` (Postman Collection
   v2.1 format — importable by both Postman and Bruno) in the same change.

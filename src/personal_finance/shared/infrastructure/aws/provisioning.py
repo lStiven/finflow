@@ -10,6 +10,7 @@ from collections.abc import Sequence
 import contextlib
 import dataclasses
 import json
+import time
 
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_dynamodb.literals import ScalarAttributeTypeType
@@ -402,11 +403,27 @@ def provision_event_bus(client: EventBridgeClient, *, event_bus_name: str) -> No
         client.create_event_bus(Name=event_bus_name)
 
 
+def _step(label: str) -> float:
+    """Announce a step before it blocks on the network, and return when it
+    started. Table creation in particular waits on a real `table_exists`
+    poll — without this, a run against real AWS looks hung for the ten-plus
+    seconds that takes, instead of visibly in progress.
+    """
+    print(f"  {label} ...", flush=True)
+
+    return time.monotonic()
+
+
+def _done(started_at: float) -> None:
+    print(f"    done ({time.monotonic() - started_at:.1f}s)", flush=True)
+
+
 def provision() -> ProvisionedResources:
     settings = get_ingestion_settings()
     identity_settings = get_identity_settings()
     merchant_settings = get_merchant_settings()
 
+    started = _step(f"table {settings.notifications_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=settings.notifications_table,
@@ -414,6 +431,9 @@ def provision() -> ProvisionedResources:
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
     )
+    _done(started)
+
+    started = _step(f"table {settings.user_inboxes_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=settings.user_inboxes_table,
@@ -429,6 +449,9 @@ def provision() -> ProvisionedResources:
             ),
         ),
     )
+    _done(started)
+
+    started = _step(f"table {identity_settings.users_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=identity_settings.users_table,
@@ -438,6 +461,9 @@ def provision() -> ProvisionedResources:
         write_capacity=settings.dynamodb_write_capacity,
         enable_ttl=False,
     )
+    _done(started)
+
+    started = _step(f"table {settings.mailbox_connections_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=settings.mailbox_connections_table,
@@ -453,6 +479,9 @@ def provision() -> ProvisionedResources:
             ),
         ),
     )
+    _done(started)
+
+    started = _step(f"table {settings.simulated_mailbox_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=settings.simulated_mailbox_table,
@@ -463,6 +492,9 @@ def provision() -> ProvisionedResources:
         write_capacity=settings.dynamodb_write_capacity,
         enable_ttl=False,
     )
+    _done(started)
+
+    started = _step(f"table {merchant_settings.merchants_table}")
     provision_table(
         get_dynamodb_client(),
         table_name=merchant_settings.merchants_table,
@@ -476,14 +508,23 @@ def provision() -> ProvisionedResources:
         # in that table carrying an expiry. Merchants have none and stay.
         enable_ttl=True,
     )
+    _done(started)
+
+    started = _step(f"queue {settings.parse_queue_name} (+ dead-letter queue)")
     queue_url, dead_letter_url = provision_queue(
         get_sqs_client(),
         queue_name=settings.parse_queue_name,
     )
+    _done(started)
+
+    started = _step(f"event bus {settings.event_bus_name}")
     provision_event_bus(
         get_eventbridge_client(),
         event_bus_name=settings.event_bus_name,
     )
+    _done(started)
+
+    started = _step(f"merchant subscription ({merchant_settings.events_queue_name})")
     merchant_events_url, _ = provision_context_subscription(
         get_eventbridge_client(),
         get_sqs_client(),
@@ -496,12 +537,18 @@ def provision() -> ProvisionedResources:
             "detail-type": [TRANSACTION_EXTRACTED],
         },
     )
+    _done(started)
+
+    started = _step(
+        f"integration-events tap ({settings.integration_events_queue_name})",
+    )
     integration_events_url = provision_integration_event_subscription(
         get_eventbridge_client(),
         get_sqs_client(),
         event_bus_name=settings.event_bus_name,
         queue_name=settings.integration_events_queue_name,
     )
+    _done(started)
 
     return ProvisionedResources(
         table_name=settings.notifications_table,
@@ -522,6 +569,7 @@ def main() -> None:
     aws_settings = get_aws_settings()
     ingestion_settings = get_ingestion_settings()
     endpoint = aws_settings.endpoint_url or "real AWS"
+    print(f"Provisioning against {endpoint} ({aws_settings.region})...", flush=True)
     resources = provision()
 
     if ingestion_settings.dynamodb_billing_mode == "PROVISIONED":
