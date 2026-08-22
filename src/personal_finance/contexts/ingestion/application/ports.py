@@ -17,11 +17,14 @@ from personal_finance.contexts.ingestion.domain.entities import (
     BankNotification,
     UserInbox,
 )
+from personal_finance.contexts.ingestion.domain.transactions import (
+    ExtractedTransaction,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     IdempotencyKey,
 )
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 class BankNotificationRepository(Protocol):
@@ -165,6 +168,39 @@ class MailboxConnectionRepository(Protocol):
 
     def find_by_user(self, user_id: UserId) -> Sequence[MailboxConnection]:
         """Return every mailbox this user connected, revoked ones included."""
+        ...
+
+
+class TransactionExtractor(Protocol):
+    """Plan B: reads an alert no deterministic template understood.
+
+    Only ever consulted after every template has missed, which is what keeps
+    the cheap, repeatable, auditable path in charge of the common case. An
+    implementation returns None when it cannot read the message — that is a
+    normal answer, and far better than a plausible invention, because nothing
+    downstream can tell a guessed amount from a real one.
+
+    Whatever produces the result is untrusted: the returned value object is
+    the contract, not the text some model wrote.
+    """
+
+    def extract(
+        self,
+        *,
+        sender: EmailAddress,
+        subject: str,
+        body: str,
+        received_at: PosixTime,
+    ) -> ExtractedTransaction | None:
+        """Return what the alert says, or None if it cannot be read.
+
+        `received_at` is context, not data: an alert that writes a date with
+        no year is resolved against when it arrived.
+
+        Raises `LLMTemporarilyUnavailableError` when the model is rate limited
+        or down, so the caller can leave the email for another attempt instead
+        of recording a failure that was never the email's fault.
+        """
         ...
 
 

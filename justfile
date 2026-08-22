@@ -137,6 +137,15 @@ parse-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.run_parse_worker
 
+# Drain merchant's queue: TransactionExtracted -> canonical merchants.
+merchant-worker: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.merchant.presentation.cli.run_merchant_worker
+
+merchant-worker-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.merchant.presentation.cli.run_merchant_worker
+
 # Local: hot reload, against the emulator.
 dev: (_require-env ".env")
     {{local_env}} uv run fastapi dev src/personal_finance/api/main.py

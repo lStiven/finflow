@@ -16,6 +16,9 @@ from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRe
 from personal_finance.contexts.ingestion.infrastructure.events import (
     build_ingestion_event_publisher,
 )
+from personal_finance.contexts.ingestion.infrastructure.llm.transaction_extractor import (  # noqa: E501
+    build_transaction_extractor,
+)
 from personal_finance.contexts.ingestion.infrastructure.messaging.sqs_worker import (
     SQSParseWorker,
 )
@@ -57,6 +60,14 @@ def build_worker() -> SQSParseWorker:
             "Run `just aws-provision` and copy the URL it prints.",
         )
 
+    extractor = build_transaction_extractor()
+
+    if extractor is None:
+        _logger.warning(
+            "no model configured: alerts no template matches will be kept "
+            "unparsed. Set LLM_API_KEY to turn the fallback on.",
+        )
+
     return SQSParseWorker(
         client=get_sqs_client(),
         queue_url=settings.parse_queue_url,
@@ -68,6 +79,7 @@ def build_worker() -> SQSParseWorker:
             ),
             registry=ParserRegistry(),
             event_publisher=build_ingestion_event_publisher(),
+            fallback_extractor=extractor,
         ),
     )
 

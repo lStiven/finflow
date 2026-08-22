@@ -20,6 +20,9 @@ from personal_finance.contexts.ingestion.presentation.http.router import (
     get_use_case,
     router as ingestion_router,
 )
+from personal_finance.contexts.merchant.presentation.http.router import (
+    router as merchant_router,
+)
 from personal_finance.shared.infrastructure.config.settings import get_aws_settings
 
 
@@ -54,6 +57,7 @@ def create_app(*, expose_local_only_routes: bool) -> FastAPI:
     app.include_router(mailbox_router)
     app.include_router(identity_router)
     app.include_router(mailbox_oauth_router)
+    app.include_router(merchant_router)
 
     if expose_local_only_routes:
         # Users connect a mailbox; nobody forwards mail here. That leaves the

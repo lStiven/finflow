@@ -47,3 +47,11 @@ def test_identity_survives_in_a_real_deployment() -> None:
 
 def test_health_is_always_available() -> None:
     assert "/health" in _routes(expose_local_only_routes=False)
+
+
+def test_merchants_survive_in_a_real_deployment() -> None:
+    paths = _routes(expose_local_only_routes=False)
+
+    assert "/merchants" in paths
+    assert "/merchants/{merchant_id}" in paths
+    assert "/merchants/categories" in paths

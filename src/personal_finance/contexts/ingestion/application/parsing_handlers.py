@@ -8,6 +8,7 @@ from personal_finance.contexts.ingestion.application.messages import (
 )
 from personal_finance.contexts.ingestion.application.ports import (
     BankNotificationRepository,
+    TransactionExtractor,
 )
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
@@ -18,7 +19,12 @@ from personal_finance.shared.application.ports import EventPublisher
 
 class ParseOutcome(enum.Enum):
     EXTRACTED = "extracted"
-    # No deterministic template matched; the LLM fallback owns it now.
+    # A template missed and the model read it instead. Kept distinct from
+    # `EXTRACTED` because the two cost very different amounts and a rise in
+    # this one is the signal that a bank changed its wording.
+    EXTRACTED_BY_FALLBACK = "extracted_by_fallback"
+    # Neither a template nor the model could read it — or there is no model
+    # configured at all. The email is kept, not discarded.
     DEFERRED = "deferred"
     # The message pointed at a notification that is not waiting to be parsed:
     # already done, ignored, or gone. Redelivery lands here.
@@ -38,6 +44,11 @@ class ParseNotificationUseCase:
     Tries the bank's own templates first and only defers to the LLM fallback
     when none of them matches, which is the order the whole pipeline depends
     on: a deterministic read is cheap, repeatable and auditable.
+
+    The fallback is optional. Without one — no API key, or a deployment that
+    wants none — an unrecognised alert is kept as `PENDING_FALLBACK` exactly
+    as before, so turning the model off degrades coverage instead of losing
+    email.
     """
 
     def __init__(
@@ -46,10 +57,12 @@ class ParseNotificationUseCase:
         repository: BankNotificationRepository,
         registry: ParserRegistry,
         event_publisher: EventPublisher,
+        fallback_extractor: TransactionExtractor | None = None,
     ) -> None:
         self._repository = repository
         self._registry = registry
         self._event_publisher = event_publisher
+        self._fallback_extractor = fallback_extractor
 
     def execute(self, message: ParseNotificationMessage) -> ParseNotificationResult:
         notification = self._repository.get(message.idempotency_key)
@@ -69,9 +82,7 @@ class ParseNotificationUseCase:
         if parser is None:
             # Nobody knows this bank's templates yet. Not a failure: the
             # fallback can still read it.
-            notification.defer_to_fallback()
-
-            return self._finish(notification, ParseOutcome.DEFERRED)
+            return self._fall_back(notification)
 
         try:
             transaction = parser.parse(extract_text(notification.raw_content))
@@ -83,13 +94,43 @@ class ParseNotificationUseCase:
             return self._finish(notification, ParseOutcome.FAILED)
 
         if transaction is None:
+            # The bank is known but this particular alert is not one of its
+            # templates — a new wording, or a kind of movement nobody has
+            # written a pattern for.
+            return self._fall_back(notification)
+
+        notification.complete(transaction)
+
+        return self._finish(notification, ParseOutcome.EXTRACTED)
+
+    def _fall_back(self, notification: BankNotification) -> ParseNotificationResult:
+        """Ask the model, if there is one, and keep the email either way.
+
+        A model that is rate limited or down raises out of here on purpose:
+        nothing has been persisted yet, so the stored notification is still
+        `QUEUED` and the redelivered message tries again. Recording a
+        permanent outcome for a temporary outage would quietly drop a real
+        transaction.
+        """
+        transaction = (
+            self._fallback_extractor.extract(
+                sender=notification.sender,
+                subject=notification.subject,
+                body=notification.raw_content,
+                received_at=notification.received_at,
+            )
+            if self._fallback_extractor is not None
+            else None
+        )
+
+        if transaction is None:
             notification.defer_to_fallback()
 
             return self._finish(notification, ParseOutcome.DEFERRED)
 
         notification.complete(transaction)
 
-        return self._finish(notification, ParseOutcome.EXTRACTED)
+        return self._finish(notification, ParseOutcome.EXTRACTED_BY_FALLBACK)
 
     def _finish(
         self,

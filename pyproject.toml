@@ -7,6 +7,7 @@ dependencies = [
     "bcrypt>=5.0.0",
     "boto3>=1.43.75",
     "fastapi[standard]>=0.141.1",
+    "google-genai>=2.19.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.13.0",

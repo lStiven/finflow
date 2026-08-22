@@ -42,6 +42,17 @@ from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_d
     INBOX_PARTITION_KEY,
     USER_ID_ATTRIBUTE as INBOX_USER_ID_ATTRIBUTE,
 )
+from personal_finance.contexts.merchant.application.integration_events import (
+    SOURCE as MERCHANT_SOURCE,
+)
+from personal_finance.contexts.merchant.infrastructure.messaging.sqs_worker import (
+    INGESTION_SOURCE,
+    TRANSACTION_EXTRACTED,
+)
+from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb import (
+    PARTITION_KEY as MERCHANT_PARTITION_KEY,
+    SORT_KEY as MERCHANT_SORT_KEY,
+)
 from personal_finance.shared.infrastructure.aws.session import (
     get_dynamodb_client,
     get_eventbridge_client,
@@ -53,6 +64,7 @@ from personal_finance.shared.infrastructure.config.settings import (
     get_aws_settings,
     get_identity_settings,
     get_ingestion_settings,
+    get_merchant_settings,
 )
 
 
@@ -64,6 +76,10 @@ DEAD_LETTER_SUFFIX = "-dlq"
 SOURCE_PREFIX = "finflow"
 INTEGRATION_EVENTS_RULE = "finflow-integration-events"
 INTEGRATION_EVENTS_TARGET_ID = "integration-events-queue"
+# Merchant's own subscription: only the one event it acts on, so its queue
+# never fills with other contexts' traffic.
+MERCHANT_EVENTS_RULE = "finflow-merchant-transactions"
+MERCHANT_EVENTS_TARGET_ID = "merchant-events-queue"
 MAX_RECEIVE_COUNT = 5
 # Long enough for a parse plus the LLM fallback, short enough that a crashed
 # worker releases the message quickly.
@@ -78,8 +94,10 @@ class ProvisionedResources:
     users_table_name: str
     mailbox_connections_table_name: str
     simulated_mailbox_table_name: str
+    merchants_table_name: str
     queue_url: str
     dead_letter_queue_url: str
+    merchant_events_queue_url: str
     event_bus_name: str
     integration_events_queue_url: str
 
@@ -312,6 +330,69 @@ def provision_integration_event_subscription(
     return queue_url
 
 
+def provision_context_subscription(
+    events_client: EventBridgeClient,
+    sqs_client: SQSClient,
+    *,
+    event_bus_name: str,
+    queue_name: str,
+    rule_name: str,
+    target_id: str,
+    event_pattern: dict[str, list[str]],
+) -> tuple[str, str]:
+    """Give one context its own queue, fed by the events it subscribes to.
+
+    Returns the queue URL and its dead-letter queue URL. Unlike the bus tap,
+    this is a working path: the queue gets a redrive policy so a message that
+    keeps failing stops cycling, and a resource policy so EventBridge is
+    actually allowed to write to it. Without that policy the rule matches, the
+    delivery is refused, and nothing anywhere reports an error.
+    """
+    queue_url, dead_letter_url = provision_queue(sqs_client, queue_name=queue_name)
+    queue_arn = sqs_client.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=["QueueArn"],
+    )["Attributes"]["QueueArn"]
+
+    rule_arn = events_client.put_rule(
+        Name=rule_name,
+        EventBusName=event_bus_name,
+        EventPattern=json.dumps(event_pattern),
+        State="ENABLED",
+        Description=f"Events {queue_name} subscribes to.",
+    )["RuleArn"]
+
+    sqs_client.set_queue_attributes(
+        QueueUrl=queue_url,
+        Attributes={
+            "Policy": json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowEventBridgeDelivery",
+                            "Effect": "Allow",
+                            "Principal": {"Service": "events.amazonaws.com"},
+                            "Action": "sqs:SendMessage",
+                            "Resource": queue_arn,
+                            # Scoped to this one rule: the queue is not a
+                            # drop box for anything else on the bus.
+                            "Condition": {"ArnEquals": {"aws:SourceArn": rule_arn}},
+                        },
+                    ],
+                },
+            ),
+        },
+    )
+    events_client.put_targets(
+        Rule=rule_name,
+        EventBusName=event_bus_name,
+        Targets=[{"Id": target_id, "Arn": queue_arn}],
+    )
+
+    return queue_url, dead_letter_url
+
+
 def provision_event_bus(client: EventBridgeClient, *, event_bus_name: str) -> None:
     if event_bus_name == "default":
         # The default bus always exists and cannot be created.
@@ -324,6 +405,7 @@ def provision_event_bus(client: EventBridgeClient, *, event_bus_name: str) -> No
 def provision() -> ProvisionedResources:
     settings = get_ingestion_settings()
     identity_settings = get_identity_settings()
+    merchant_settings = get_merchant_settings()
 
     provision_table(
         get_dynamodb_client(),
@@ -381,6 +463,19 @@ def provision() -> ProvisionedResources:
         write_capacity=settings.dynamodb_write_capacity,
         enable_ttl=False,
     )
+    provision_table(
+        get_dynamodb_client(),
+        table_name=merchant_settings.merchants_table,
+        partition_key=MERCHANT_PARTITION_KEY,
+        sort_key=MERCHANT_SORT_KEY,
+        sort_key_type="S",
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        # TTL is on for the handled-event markers, which are the only records
+        # in that table carrying an expiry. Merchants have none and stay.
+        enable_ttl=True,
+    )
     queue_url, dead_letter_url = provision_queue(
         get_sqs_client(),
         queue_name=settings.parse_queue_name,
@@ -388,6 +483,18 @@ def provision() -> ProvisionedResources:
     provision_event_bus(
         get_eventbridge_client(),
         event_bus_name=settings.event_bus_name,
+    )
+    merchant_events_url, _ = provision_context_subscription(
+        get_eventbridge_client(),
+        get_sqs_client(),
+        event_bus_name=settings.event_bus_name,
+        queue_name=merchant_settings.events_queue_name,
+        rule_name=MERCHANT_EVENTS_RULE,
+        target_id=MERCHANT_EVENTS_TARGET_ID,
+        event_pattern={
+            "source": [INGESTION_SOURCE],
+            "detail-type": [TRANSACTION_EXTRACTED],
+        },
     )
     integration_events_url = provision_integration_event_subscription(
         get_eventbridge_client(),
@@ -402,8 +509,10 @@ def provision() -> ProvisionedResources:
         users_table_name=identity_settings.users_table,
         mailbox_connections_table_name=settings.mailbox_connections_table,
         simulated_mailbox_table_name=settings.simulated_mailbox_table,
+        merchants_table_name=merchant_settings.merchants_table,
         queue_url=queue_url,
         dead_letter_queue_url=dead_letter_url,
+        merchant_events_queue_url=merchant_events_url,
         event_bus_name=settings.event_bus_name,
         integration_events_queue_url=integration_events_url,
     )
@@ -432,8 +541,14 @@ def main() -> None:
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.mailbox_connections_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.simulated_mailbox_table_name} ({capacity})")
+    print(f"  DynamoDB table : {resources.merchants_table_name} ({capacity})")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")
+    print(
+        f"  Merchant queue : {resources.merchant_events_queue_url}\n"
+        f"                   (rule {MERCHANT_EVENTS_RULE}, "
+        f"{INGESTION_SOURCE} {TRANSACTION_EXTRACTED} -> {MERCHANT_SOURCE})",
+    )
     print(f"  Event bus      : {resources.event_bus_name}")
     print(
         f"  Bus tap        : {resources.integration_events_queue_url}\n"
@@ -453,6 +568,11 @@ def main() -> None:
                 "INGESTION_INTEGRATION_EVENTS_QUEUE_URL",
                 resources.integration_events_queue_url,
                 ingestion_settings.integration_events_queue_url,
+            ),
+            (
+                "MERCHANT_EVENTS_QUEUE_URL",
+                resources.merchant_events_queue_url,
+                get_merchant_settings().events_queue_url,
             ),
         )
         if current != value
