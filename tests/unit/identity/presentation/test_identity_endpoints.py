@@ -9,8 +9,8 @@ from personal_finance.contexts.identity.application.handlers import (
     RegisterUserUseCase,
 )
 from personal_finance.contexts.identity.application.inbox_handlers import (
-    AddInboxesUseCase,
-    ListInboxesUseCase,
+    GetInboxUseCase,
+    UpdateApprovedSendersUseCase,
 )
 from personal_finance.contexts.identity.application.ports import (
     InboxRegistration,
@@ -22,11 +22,11 @@ from personal_finance.contexts.identity.infrastructure.security.jwt_tokens impor
     JWTTokenIssuer,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
-    get_add_inboxes_use_case,
-    get_list_inboxes_use_case,
+    get_inbox_use_case,
     get_login_use_case,
     get_register_use_case,
     get_token_issuer,
+    get_update_approved_senders_use_case,
     router,
 )
 from personal_finance.shared.domain.events import Event
@@ -69,33 +69,35 @@ class BcryptLikeHasher:
 
 class RecordingInboxRegistrar:
     """Records what was registered and can read it back, so a test can follow
-    an inbox from `POST /identity/inboxes` through to `GET /identity/inboxes`.
+    an inbox from registration through to `GET /identity/inbox`.
+
+    Assigns each user a deterministic fake address, standing in for what
+    ingestion's own address derivation would produce — this layer's tests
+    only need it to be stable and unique per user, not the real scheme.
     """
 
     def __init__(self) -> None:
-        self.calls: list[tuple[UserId, tuple[InboxRegistration, ...]]] = []
-        self.stored: dict[UserId, dict[str, RegisteredInbox]] = {}
+        self.calls: list[tuple[UserId, InboxRegistration]] = []
+        self.stored: dict[UserId, RegisteredInbox] = {}
 
     def register(
         self,
         *,
         user_id: UserId,
-        inboxes: Sequence[InboxRegistration],
-    ) -> None:
-        self.calls.append((user_id, tuple(inboxes)))
-        owned = self.stored.setdefault(user_id, {})
+        inbox: InboxRegistration,
+    ) -> RegisteredInbox:
+        self.calls.append((user_id, inbox))
+        registered = RegisteredInbox(
+            address=f"inbox+{user_id.value}@test",
+            allowed_domains=inbox.allowed_domains,
+            allowed_addresses=inbox.allowed_addresses,
+        )
+        self.stored[user_id] = registered
 
-        for inbox in inboxes:
-            owned[inbox.address] = RegisteredInbox(
-                address=inbox.address,
-                allowed_domains=inbox.allowed_domains,
-                allowed_addresses=inbox.allowed_addresses,
-            )
+        return registered
 
-    def list_for_user(self, user_id: UserId) -> Sequence[RegisteredInbox]:
-        owned = self.stored.get(user_id, {})
-
-        return [owned[address] for address in sorted(owned)]
+    def get_for_user(self, user_id: UserId) -> RegisteredInbox | None:
+        return self.stored.get(user_id)
 
 
 class NullEventPublisher:
@@ -137,15 +139,19 @@ def authenticated_client(
         hasher=hasher,
         token_issuer=token_issuer,
     )
-    add_inboxes_use_case = AddInboxesUseCase(inbox_registrar=inbox_registrar)
-    list_inboxes_use_case = ListInboxesUseCase(inbox_reader=inbox_registrar)
+    update_senders_use_case = UpdateApprovedSendersUseCase(
+        inbox_registrar=inbox_registrar,
+    )
+    get_inbox_use_case_instance = GetInboxUseCase(inbox_reader=inbox_registrar)
 
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_register_use_case] = lambda: register_use_case
     app.dependency_overrides[get_login_use_case] = lambda: login_use_case
-    app.dependency_overrides[get_add_inboxes_use_case] = lambda: add_inboxes_use_case
-    app.dependency_overrides[get_list_inboxes_use_case] = lambda: list_inboxes_use_case
+    app.dependency_overrides[get_update_approved_senders_use_case] = lambda: (
+        update_senders_use_case
+    )
+    app.dependency_overrides[get_inbox_use_case] = lambda: get_inbox_use_case_instance
     app.dependency_overrides[get_token_issuer] = lambda: token_issuer
 
     return TestClient(app)
@@ -193,7 +199,22 @@ def test_registering_the_same_email_twice_is_rejected(
     assert response.status_code == 409
 
 
-def test_register_can_attach_inboxes_in_the_same_call(
+def test_registering_assigns_a_forwarding_address_even_with_no_senders_named(
+    authenticated_client: TestClient,
+    inbox_registrar: RecordingInboxRegistrar,
+) -> None:
+    response = authenticated_client.post(
+        "/identity/register",
+        json={"email": "person@example.com", "password": PASSWORD},
+    )
+
+    assert response.status_code == 201
+    assert len(inbox_registrar.calls) == 1
+    _, inbox = inbox_registrar.calls[0]
+    assert inbox == InboxRegistration()
+
+
+def test_register_can_approve_senders_in_the_same_call(
     authenticated_client: TestClient,
     inbox_registrar: RecordingInboxRegistrar,
 ) -> None:
@@ -202,19 +223,13 @@ def test_register_can_attach_inboxes_in_the_same_call(
         json={
             "email": "person@example.com",
             "password": PASSWORD,
-            "inboxes": [
-                {
-                    "address": "u-1@inbound.test",
-                    "allowed_domains": ["bank.com"],
-                },
-            ],
+            "allowed_domains": ["bank.com"],
         },
     )
 
     assert response.status_code == 201
-    assert len(inbox_registrar.calls) == 1
-    _, inboxes = inbox_registrar.calls[0]
-    assert inboxes[0].address == "u-1@inbound.test"
+    _, inbox = inbox_registrar.calls[0]
+    assert inbox.allowed_domains == frozenset({"bank.com"})
 
 
 def test_login_with_correct_credentials_returns_a_token(
@@ -276,7 +291,50 @@ def test_me_with_a_malformed_token_is_unauthorized(
     assert response.status_code == 401
 
 
-def test_add_inboxes_registers_them_for_the_authenticated_user_only(
+def test_malformed_sender_address_is_rejected(authenticated_client: TestClient) -> None:
+    response = authenticated_client.post(
+        "/identity/register",
+        json={
+            "email": "person@example.com",
+            "password": PASSWORD,
+            "allowed_addresses": ["not-an-email"],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def _register(client: TestClient, *, email: str) -> str:
+    """Register an account and return its access token."""
+    payload = {"email": email, "password": PASSWORD}
+
+    return client.post("/identity/register", json=payload).json()["access_token"]
+
+
+def test_getting_the_inbox_without_a_token_is_unauthorized(
+    authenticated_client: TestClient,
+) -> None:
+    assert authenticated_client.get("/identity/inbox").status_code == 401
+
+
+def test_a_new_account_already_has_a_forwarding_address(
+    authenticated_client: TestClient,
+) -> None:
+    token = _register(authenticated_client, email="person@example.com")
+
+    response = authenticated_client.get(
+        "/identity/inbox",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["address"]
+    assert body["allowed_domains"] == []
+    assert body["allowed_addresses"] == []
+
+
+def test_updating_approved_senders_replaces_them_for_the_authenticated_user_only(
     authenticated_client: TestClient,
     inbox_registrar: RecordingInboxRegistrar,
 ) -> None:
@@ -288,151 +346,68 @@ def test_add_inboxes_registers_them_for_the_authenticated_user_only(
     user_id = registered.json()["user_id"]
     inbox_registrar.calls.clear()
 
-    response = authenticated_client.post(
-        "/identity/inboxes",
-        json={
-            "inboxes": [
-                {
-                    "address": "u-2@inbound.test",
-                    "allowed_addresses": ["alerts@bank.com"],
-                },
-            ],
-        },
+    response = authenticated_client.patch(
+        "/identity/inbox",
+        json={"allowed_addresses": ["alerts@bank.com"]},
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 204
+    assert response.status_code == 200
+    assert response.json()["allowed_addresses"] == ["alerts@bank.com"]
     assert len(inbox_registrar.calls) == 1
-    called_user_id, inboxes = inbox_registrar.calls[0]
+    called_user_id, inbox = inbox_registrar.calls[0]
     assert str(called_user_id.value) == user_id
-    assert inboxes[0].allowed_addresses == frozenset({"alerts@bank.com"})
+    assert inbox.allowed_addresses == frozenset({"alerts@bank.com"})
 
 
-def test_add_inboxes_without_a_token_is_unauthorized(
+def test_updating_approved_senders_without_a_token_is_unauthorized(
     authenticated_client: TestClient,
 ) -> None:
-    response = authenticated_client.post(
-        "/identity/inboxes",
-        json={"inboxes": [{"address": "u-2@inbound.test"}]},
+    response = authenticated_client.patch(
+        "/identity/inbox",
+        json={"allowed_addresses": ["alerts@bank.com"]},
     )
 
     assert response.status_code == 401
 
 
-def test_malformed_inbox_address_is_rejected(authenticated_client: TestClient) -> None:
-    response = authenticated_client.post(
-        "/identity/register",
-        json={
-            "email": "person@example.com",
-            "password": PASSWORD,
-            "inboxes": [{"address": "not-an-email"}],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def _register(client: TestClient, *, email: str, inboxes: object = None) -> str:
-    """Register an account and return its access token."""
-    payload: dict[str, object] = {"email": email, "password": PASSWORD}
-
-    if inboxes is not None:
-        payload["inboxes"] = inboxes
-
-    return client.post("/identity/register", json=payload).json()["access_token"]
-
-
-def test_listing_inboxes_without_a_token_is_unauthorized(
-    authenticated_client: TestClient,
-) -> None:
-    assert authenticated_client.get("/identity/inboxes").status_code == 401
-
-
-def test_a_new_account_without_inboxes_lists_none(
+def test_the_forwarding_address_does_not_change_when_senders_are_updated(
     authenticated_client: TestClient,
 ) -> None:
     token = _register(authenticated_client, email="person@example.com")
+    before = authenticated_client.get(
+        "/identity/inbox",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["address"]
 
-    response = authenticated_client.get(
-        "/identity/inboxes",
+    authenticated_client.patch(
+        "/identity/inbox",
+        json={"allowed_domains": ["bank.com"]},
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert response.status_code == 200
-    assert response.json() == {"inboxes": []}
+    after = authenticated_client.get(
+        "/identity/inbox",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["address"]
+
+    assert before == after
 
 
-def test_listing_returns_the_inboxes_and_their_trusted_senders(
+def test_a_user_never_sees_another_users_inbox(
     authenticated_client: TestClient,
 ) -> None:
-    token = _register(
-        authenticated_client,
-        email="person@example.com",
-        inboxes=[
-            {
-                "address": "u-1@inbound.test",
-                "allowed_domains": ["bancolombia.com.co"],
-                "allowed_addresses": ["alertas@nequi.com.co"],
-            },
-        ],
-    )
+    mine = _register(authenticated_client, email="mine@example.com")
+    theirs = _register(authenticated_client, email="theirs@example.com")
 
-    response = authenticated_client.get(
-        "/identity/inboxes",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    def _address(token: str) -> str:
+        response = authenticated_client.get(
+            "/identity/inbox",
+            headers={"Authorization": f"Bearer {token}"},
+        )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "inboxes": [
-            {
-                "address": "u-1@inbound.test",
-                "allowed_domains": ["bancolombia.com.co"],
-                "allowed_addresses": ["alertas@nequi.com.co"],
-            },
-        ],
-    }
+        return str(response.json()["address"])
 
-
-def test_an_inbox_added_after_registration_shows_up_in_the_listing(
-    authenticated_client: TestClient,
-) -> None:
-    token = _register(authenticated_client, email="person@example.com")
-    authenticated_client.post(
-        "/identity/inboxes",
-        json={"inboxes": [{"address": "u-2@inbound.test"}]},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    response = authenticated_client.get(
-        "/identity/inboxes",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    addresses = [inbox["address"] for inbox in response.json()["inboxes"]]
-    assert addresses == ["u-2@inbound.test"]
-
-
-def test_a_user_never_sees_another_users_inboxes(
-    authenticated_client: TestClient,
-) -> None:
-    mine = _register(
-        authenticated_client,
-        email="mine@example.com",
-        inboxes=[{"address": "mine@inbound.test"}],
-    )
-    _register(
-        authenticated_client,
-        email="theirs@example.com",
-        inboxes=[{"address": "theirs@inbound.test"}],
-    )
-
-    response = authenticated_client.get(
-        "/identity/inboxes",
-        headers={"Authorization": f"Bearer {mine}"},
-    )
-
-    # Whose inboxes to read comes from the token, so there is no request shape
+    # Whose inbox to read comes from the token, so there is no request shape
     # that could ask for someone else's.
-    addresses = [inbox["address"] for inbox in response.json()["inboxes"]]
-    assert addresses == ["mine@inbound.test"]
+    assert _address(mine) != _address(theirs)

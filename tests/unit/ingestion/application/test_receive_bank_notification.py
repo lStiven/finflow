@@ -9,10 +9,6 @@ from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
     ReceiveOutcome,
 )
-from personal_finance.contexts.ingestion.application.inbox_handlers import (
-    RegisterUserInboxCommand,
-    RegisterUserInboxUseCase,
-)
 from personal_finance.contexts.ingestion.application.messages import (
     ParseNotificationMessage,
 )
@@ -308,36 +304,3 @@ def test_retry_queues_a_notification_left_unqueued_by_a_failed_attempt() -> None
     # The first attempt died before publishing, so only the resumed attempt's
     # queued event reaches the publisher.
     assert _published_types(event_publisher) == ["BankNotificationQueued"]
-
-
-def test_registering_an_inbox_creates_a_user() -> None:
-    repository = InMemoryUserInboxRepository()
-    use_case = RegisterUserInboxUseCase(inbox_repository=repository)
-
-    inbox = use_case.execute(
-        RegisterUserInboxCommand(
-            address=EmailAddress(INBOX_ADDRESS),
-            allowed_domains=frozenset({"bank.com"}),
-        ),
-    )
-
-    assert inbox.address == EmailAddress(INBOX_ADDRESS)
-    assert repository.inboxes[inbox.address].sender_policy.is_authorized(
-        EmailAddress("alerts@bank.com"),
-    )
-
-
-def test_re_registering_an_address_keeps_its_owner() -> None:
-    repository = InMemoryUserInboxRepository(_inbox())
-    use_case = RegisterUserInboxUseCase(inbox_repository=repository)
-
-    updated = use_case.execute(
-        RegisterUserInboxCommand(
-            address=EmailAddress(INBOX_ADDRESS),
-            allowed_domains=frozenset({"other-bank.com"}),
-        ),
-    )
-
-    # Reassigning the address to a new user would hand one person's incoming
-    # email to another.
-    assert updated.user_id == USER_ID

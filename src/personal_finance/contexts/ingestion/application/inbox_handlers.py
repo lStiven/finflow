@@ -5,6 +5,7 @@ import dataclasses
 
 from personal_finance.contexts.ingestion.application.ports import UserInboxRepository
 from personal_finance.contexts.ingestion.domain.entities import UserInbox
+from personal_finance.contexts.ingestion.domain.forwarding import forwarding_address
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.shared.domain.value_objects import UserId
@@ -12,10 +13,7 @@ from personal_finance.shared.domain.value_objects import UserId
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class RegisterUserInboxCommand:
-    address: EmailAddress
-    # Omitted when registering a brand-new user; supplied to re-register or to
-    # attach a second inbound address to someone who already exists.
-    user_id: UserId | None = None
+    user_id: UserId
     allowed_domains: frozenset[str] = dataclasses.field(
         default_factory=lambda: frozenset[str](),
     )
@@ -25,22 +23,31 @@ class RegisterUserInboxCommand:
 
 
 class RegisterUserInboxUseCase:
-    """Registers the inbound address a user forwards their bank email to,
-    together with the senders that user trusts.
+    """Assigns a user their forwarding address and the senders they trust.
+
+    The address is never chosen by a caller: it is derived deterministically
+    from `user_id` against this deployment's one ingest mailbox, so there is
+    nothing to allocate and nothing that can collide. Calling this again for
+    the same user replaces the sender list rather than adding to it — there is
+    exactly one inbox per user, not a growing collection of them.
     """
 
-    def __init__(self, *, inbox_repository: UserInboxRepository) -> None:
+    def __init__(
+        self,
+        *,
+        inbox_repository: UserInboxRepository,
+        base_address: EmailAddress,
+    ) -> None:
         self._inbox_repository = inbox_repository
+        self._base_address = base_address
 
     def execute(self, command: RegisterUserInboxCommand) -> UserInbox:
-        existing = self._inbox_repository.find_by_address(command.address)
-        # Re-registering an address keeps its owner: reassigning it silently
-        # would hand one person's incoming email to another.
-        user_id = command.user_id or (existing.user_id if existing else UserId.new())
-
         inbox = UserInbox(
-            user_id=user_id,
-            address=command.address,
+            user_id=command.user_id,
+            address=forwarding_address(
+                base=self._base_address,
+                user_id=command.user_id,
+            ),
             sender_policy=AuthorizedSenderPolicy(
                 allowed_addresses=command.allowed_addresses,
                 allowed_domains=command.allowed_domains,
@@ -52,19 +59,15 @@ class RegisterUserInboxUseCase:
 
 
 class ListUserInboxesUseCase:
-    """Lists the inbound addresses a user owns and the senders each trusts.
+    """Reports the inbox a user owns and the senders it trusts.
 
     Published for other contexts to call: identity exposes it to an
     authenticated user through its own adapter, so nobody has to reach into
-    this context's repository to answer "which mailboxes do I have?".
+    this context's repository to answer "what's my forwarding address?".
     """
 
     def __init__(self, *, inbox_repository: UserInboxRepository) -> None:
         self._inbox_repository = inbox_repository
 
     def execute(self, user_id: UserId) -> Sequence[UserInbox]:
-        inboxes = self._inbox_repository.find_by_user(user_id)
-
-        # Sorted here rather than in the repository, so the order is part of
-        # the use case's contract instead of a storage accident.
-        return sorted(inboxes, key=lambda inbox: inbox.address.value)
+        return self._inbox_repository.find_by_user(user_id)

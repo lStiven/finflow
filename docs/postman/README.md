@@ -33,12 +33,9 @@ requests autenticados (`Authorization: {{token}}`) ya funcionan.
 
 ## Qué no está pensado para llamarse a mano
 
-- **Gmail OAuth callback**: lo llama el navegador siguiendo el redirect de
-  Google, no lleva token — está documentado, no para ejecutar directo.
-- **Gmail push notification**: la llama Pub/Sub en producción. Útil para
-  reproducir un payload real mientras se depura, nada más.
 - **Bank notification webhook**: solo existe con `ENVIRONMENT=local` — es una
-  costura de pruebas, no un camino de producto (ver
+  costura de pruebas, no un camino de producto. En producción nada llama esto
+  por HTTP: el `ingest worker` lee el buzón compartido directamente (ver
   [../overview.md](../overview.md)).
 
 ## Mantenimiento

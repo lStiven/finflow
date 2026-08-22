@@ -9,9 +9,10 @@ from personal_finance.contexts.identity.application.ports import InboxRegistrati
 class RegisterUserCommand:
     email: str
     password: str
-    # Optional on purpose: an account can be created bare and inboxes
-    # attached later through `AddInboxesCommand`.
-    inboxes: tuple[InboxRegistration, ...] = ()
+    # Optional: an account can be created with nothing approved yet, and the
+    # sender list set later through `UpdateApprovedSendersCommand`. The
+    # forwarding address itself is always assigned, regardless.
+    inbox: InboxRegistration = dataclasses.field(default_factory=InboxRegistration)
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -21,5 +22,5 @@ class LoginCommand:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class AddInboxesCommand:
-    inboxes: tuple[InboxRegistration, ...]
+class UpdateApprovedSendersCommand:
+    inbox: InboxRegistration

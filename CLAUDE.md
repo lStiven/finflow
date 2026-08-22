@@ -15,24 +15,26 @@ Scale: a private deployment for the author and a handful of friends, each
 seeing only their own finances. Design for that — free-tier AWS, no
 multi-tenant sharding — while keeping per-user isolation strict.
 
-Intake model: the user connects their own mailbox and the provider notifies us
-when it changes; we then read only the senders that user approved. Users are
-not asked to set up email forwarding.
+Intake model: every user forwards their bank email to their own address on
+the one Gmail account this deployment owns (`user+alias@gmail.com`), which an
+ingest worker polls over IMAP. Nobody's personal mailbox is ever read, and
+there is no OAuth consent flow — the sender-approval filter that used to gate
+what could be read still gates what is accepted.
 
 Main flow:
-Provider notification -> filtered mailbox read -> SQS -> deterministic parser
--> LLM fallback -> Pydantic validation -> Merchant/Classification
--> Financial/Account -> integration events.
+User's bank forwards to their alias -> ingest worker polls the shared mailbox
+-> SQS -> deterministic parser -> LLM fallback -> Pydantic validation ->
+Merchant/Classification -> Financial/Account -> integration events.
 
 Bounded Contexts:
 
-* Ingestion: mailbox connections, provider notifications, sender filtering,
-  deduplication, parsing, extraction.
+* Ingestion: the shared ingest mailbox, forwarding-address assignment, sender
+  filtering, deduplication, parsing, extraction.
 * Financial: accounts, transactions, balances, debt, net worth.
 * Merchant: canonical merchants, aliases/sub-merchants, categories.
-* Identity: user accounts, credentials, authentication; mailbox and inbox
-  registration for authenticated users (delegates to Ingestion's own use cases
-  through an adapter).
+* Identity: user accounts, credentials, authentication; inbox (forwarding
+  address + approved senders) registration for authenticated users (delegates
+  to Ingestion's own use cases through an adapter).
   </project_context>
 
 <tech_stack>
@@ -66,13 +68,16 @@ Bounded Contexts:
 * Financial owns Account, Transaction, balances, debt, and net-worth rules.
 * Merchant owns canonical merchant identity, aliases, and classification.
 * Identity owns user accounts, credentials, and authentication.
-* A mailbox is private correspondence. Read it only with read-only scopes,
-  only for the senders that user approved, and never without that filter — an
-  empty allow-list means fetch nothing, not fetch everything. Leave every
-  message exactly as the user left it, unread ones included.
+* Nobody's personal mailbox is ever read. The only mailbox this system reads
+  is the one it owns for exactly this purpose (IMAP, App Password, read-only
+  in practice though not credential-scoped the way OAuth was) — a user only
+  ever forwards mail to their own address on it. A forwarded message is
+  accepted only for the senders that user approved, and never without that
+  filter — an empty allow-list means accept nothing, not accept everything.
 * The bank-notification webhook is a local testing seam, not a product path:
-  users connect a mailbox instead of forwarding mail. It stays unmounted
-  outside `ENVIRONMENT=local`.
+  the ingest worker reads the shared mailbox directly, in-process — nothing
+  in production ever calls this webhook over HTTP. It stays unmounted outside
+  `ENVIRONMENT=local`.
 * Always try deterministic/template parsers before the LLM fallback.
 * LLM extraction must return structured data validated by Pydantic; never accept free-form output as domain input.
 * Treat email content and LLM output as untrusted data.
@@ -132,4 +137,4 @@ Bounded Contexts:
   it sets the required env/AWS config): `just dev`
 * `just --list` / the `justfile` is the source of truth for everything else
   (formatting, lint, typecheck, AWS provisioning, inbox registration, the
-  parse worker, prod-shaped runs, ...).
+  ingest/parse/merchant workers, prod-shaped runs, ...).

@@ -7,6 +7,7 @@ from personal_finance.contexts.identity.application.handlers import RegisterUser
 from personal_finance.contexts.identity.application.ports import (
     AccessToken,
     InboxRegistration,
+    RegisteredInbox,
 )
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.events import UserRegistered
@@ -64,15 +65,21 @@ class FakeTokenIssuer:
 
 class RecordingInboxRegistrar:
     def __init__(self) -> None:
-        self.calls: list[tuple[UserId, tuple[InboxRegistration, ...]]] = []
+        self.calls: list[tuple[UserId, InboxRegistration]] = []
 
     def register(
         self,
         *,
         user_id: UserId,
-        inboxes: Sequence[InboxRegistration],
-    ) -> None:
-        self.calls.append((user_id, tuple(inboxes)))
+        inbox: InboxRegistration,
+    ) -> RegisteredInbox:
+        self.calls.append((user_id, inbox))
+
+        return RegisteredInbox(
+            address=f"inbox+{user_id.value}@test",
+            allowed_domains=inbox.allowed_domains,
+            allowed_addresses=inbox.allowed_addresses,
+        )
 
 
 class RecordingEventPublisher:
@@ -153,25 +160,20 @@ def test_registering_an_email_that_already_exists_is_rejected() -> None:
     assert len(event_publisher.published) == 1
 
 
-def test_inboxes_are_optional() -> None:
+def test_the_forwarding_address_is_assigned_even_with_no_senders_named() -> None:
     use_case, _, inbox_registrar, _ = _use_case()
 
-    use_case.execute(RegisterUserCommand(email=EMAIL, password=PASSWORD))
+    result = use_case.execute(RegisterUserCommand(email=EMAIL, password=PASSWORD))
 
-    assert inbox_registrar.calls == []
+    assert inbox_registrar.calls == [(result.user_id, InboxRegistration())]
 
 
-def test_inboxes_supplied_at_registration_are_attached_to_the_new_user() -> None:
+def test_senders_named_at_registration_are_attached_to_the_new_user() -> None:
     use_case, _, inbox_registrar, _ = _use_case()
-    inboxes = (
-        InboxRegistration(
-            address="u-1@inbound.test",
-            allowed_domains=frozenset({"bank.com"}),
-        ),
-    )
+    inbox = InboxRegistration(allowed_domains=frozenset({"bank.com"}))
 
     result = use_case.execute(
-        RegisterUserCommand(email=EMAIL, password=PASSWORD, inboxes=inboxes),
+        RegisterUserCommand(email=EMAIL, password=PASSWORD, inbox=inbox),
     )
 
-    assert inbox_registrar.calls == [(result.user_id, inboxes)]
+    assert inbox_registrar.calls == [(result.user_id, inbox)]

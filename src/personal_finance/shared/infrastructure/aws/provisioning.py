@@ -26,17 +26,8 @@ from mypy_boto3_sqs.client import SQSClient
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as USERS_PARTITION_KEY,
 )
-from personal_finance.contexts.ingestion.infrastructure.mailbox.simulated import (
-    MAILBOX_PARTITION_KEY,
-    MAILBOX_SORT_KEY,
-)
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     PARTITION_KEY,
-)
-from personal_finance.contexts.ingestion.infrastructure.persistence.mailbox_connection_dynamodb import (  # noqa: E501
-    CONNECTION_BY_USER_INDEX,
-    CONNECTION_PARTITION_KEY,
-    USER_ID_ATTRIBUTE as CONNECTION_USER_ID_ATTRIBUTE,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     INBOX_BY_USER_INDEX,
@@ -93,8 +84,6 @@ class ProvisionedResources:
     table_name: str
     inboxes_table_name: str
     users_table_name: str
-    mailbox_connections_table_name: str
-    simulated_mailbox_table_name: str
     merchants_table_name: str
     queue_url: str
     dead_letter_queue_url: str
@@ -463,37 +452,6 @@ def provision() -> ProvisionedResources:
     )
     _done(started)
 
-    started = _step(f"table {settings.mailbox_connections_table}")
-    provision_table(
-        get_dynamodb_client(),
-        table_name=settings.mailbox_connections_table,
-        partition_key=CONNECTION_PARTITION_KEY,
-        billing_mode=settings.dynamodb_billing_mode,
-        read_capacity=settings.dynamodb_read_capacity,
-        write_capacity=settings.dynamodb_write_capacity,
-        enable_ttl=False,
-        secondary_indexes=(
-            SecondaryIndex(
-                name=CONNECTION_BY_USER_INDEX,
-                partition_key=CONNECTION_USER_ID_ATTRIBUTE,
-            ),
-        ),
-    )
-    _done(started)
-
-    started = _step(f"table {settings.simulated_mailbox_table}")
-    provision_table(
-        get_dynamodb_client(),
-        table_name=settings.simulated_mailbox_table,
-        partition_key=MAILBOX_PARTITION_KEY,
-        sort_key=MAILBOX_SORT_KEY,
-        billing_mode=settings.dynamodb_billing_mode,
-        read_capacity=settings.dynamodb_read_capacity,
-        write_capacity=settings.dynamodb_write_capacity,
-        enable_ttl=False,
-    )
-    _done(started)
-
     started = _step(f"table {merchant_settings.merchants_table}")
     provision_table(
         get_dynamodb_client(),
@@ -554,8 +512,6 @@ def provision() -> ProvisionedResources:
         table_name=settings.notifications_table,
         inboxes_table_name=settings.user_inboxes_table,
         users_table_name=identity_settings.users_table,
-        mailbox_connections_table_name=settings.mailbox_connections_table,
-        simulated_mailbox_table_name=settings.simulated_mailbox_table,
         merchants_table_name=merchant_settings.merchants_table,
         queue_url=queue_url,
         dead_letter_queue_url=dead_letter_url,
@@ -587,8 +543,6 @@ def main() -> None:
     )
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
-    print(f"  DynamoDB table : {resources.mailbox_connections_table_name} ({capacity})")
-    print(f"  DynamoDB table : {resources.simulated_mailbox_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.merchants_table_name} ({capacity})")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")

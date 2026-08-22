@@ -41,12 +41,12 @@ class LoginResult:
 
 
 class RegisterUserUseCase:
-    """Creates an account, optionally attaches the inboxes the caller wants
-    listened to, and logs the new user in.
+    """Creates an account, assigns its forwarding address, and logs the new
+    user in.
 
     Registration and login are kept as one round trip on purpose: the whole
-    point of this context is to get a usable account fast enough to start
-    exercising the ingestion webhook with.
+    point of this context is to get a usable account — and the address to
+    start forwarding bank email to — fast enough to act on immediately.
     """
 
     def __init__(
@@ -82,8 +82,9 @@ class RegisterUserUseCase:
 
         self._event_publisher.publish(user.pull_events())
 
-        if command.inboxes:
-            self._inbox_registrar.register(user_id=user.id, inboxes=command.inboxes)
+        # Unconditional: every account gets its forwarding address the moment
+        # it exists, whether or not the caller named any senders yet.
+        self._inbox_registrar.register(user_id=user.id, inbox=command.inbox)
 
         return RegisterUserResult(
             user_id=user.id,

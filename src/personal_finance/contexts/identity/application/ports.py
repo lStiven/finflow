@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import dataclasses
 from typing import Protocol
 
@@ -61,14 +60,14 @@ class TokenIssuer(Protocol):
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class InboxRegistration:
-    """One inbound address to listen on, plus the senders trusted for it.
+    """The senders trusted for a user's forwarding address.
 
-    Registering a user does not require any of this — an account can be
-    created bare and inboxes attached later — so every field beyond the
-    address itself is optional.
+    No address here: every user gets exactly one, derived from their own id
+    by ingestion, never chosen by identity or by the caller. This is nothing
+    but the sender policy — empty by default, which reads nothing until the
+    user approves at least one sender.
     """
 
-    address: str
     allowed_domains: frozenset[str] = dataclasses.field(
         default_factory=lambda: frozenset[str](),
     )
@@ -78,7 +77,7 @@ class InboxRegistration:
 
 
 class InboxRegistrar(Protocol):
-    """Identity's own view of "attach an inbound address to a user".
+    """Identity's own view of "set this user's approved senders".
 
     This is identity's port, not ingestion's: it depends on nothing from
     ingestion's domain or application layer. The adapter that implements it
@@ -89,17 +88,18 @@ class InboxRegistrar(Protocol):
         self,
         *,
         user_id: UserId,
-        inboxes: Sequence[InboxRegistration],
-    ) -> None: ...
+        inbox: InboxRegistration,
+    ) -> RegisteredInbox: ...
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class RegisteredInbox:
-    """One inbox as identity reports it back to its owner.
+    """A user's forwarding address and the senders approved for it, as
+    identity reports it back to its owner.
 
-    Deliberately plain strings rather than ingestion's value objects: this
-    crosses a context boundary outwards, so it carries data, not another
-    context's domain types.
+    Deliberately a plain string address rather than ingestion's value
+    objects: this crosses a context boundary outwards, so it carries data,
+    not another context's domain types.
     """
 
     address: str
@@ -108,81 +108,10 @@ class RegisteredInbox:
 
 
 class InboxReader(Protocol):
-    """Reads back the inboxes a user owns.
+    """Reads back the inbox a user owns.
 
-    Separate from `InboxRegistrar` so a caller that only lists cannot also
+    Separate from `InboxRegistrar` so a caller that only reads cannot also
     modify; one adapter happens to satisfy both.
     """
 
-    def list_for_user(self, user_id: UserId) -> Sequence[RegisteredInbox]: ...
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class ConnectedMailbox:
-    """One mailbox as identity reports it back to its owner.
-
-    Plain strings again: this crosses a context boundary outwards. It carries
-    no token and no cursor — the first is a secret, the second is ingestion's
-    own bookkeeping and means nothing to the person reading it.
-    """
-
-    address: str
-    provider: str
-    status: str
-    # True when the user has to authorize again before anything is read. The
-    # front end turns this into the one thing they need to act on.
-    needs_attention: bool = False
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class MailboxRefreshSummary:
-    """What an on-demand catch-up found."""
-
-    mailboxes: int = 0
-    fetched: int = 0
-    accepted: int = 0
-    needs_reauth: int = 0
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class MailboxBackfillSummary:
-    """What a one-time backfill of the current month found."""
-
-    mailboxes: int = 0
-    fetched: int = 0
-    accepted: int = 0
-    duplicates: int = 0
-    needs_reauth: int = 0
-    # ISO date (YYYY-MM-DD): the first day this backfill searched from, so the
-    # caller can tell someone what range was actually covered.
-    since: str = ""
-
-
-class MailboxConnector(Protocol):
-    """Identity's view of "let this user attach a mailbox we may read".
-
-    The real provider flow ends here: once an OAuth callback has a token, it
-    calls this with the address the user authorized.
-    """
-
-    def connect(self, *, user_id: UserId, address: str, provider: str) -> None: ...
-
-    def disconnect(self, *, user_id: UserId, address: str, provider: str) -> None: ...
-
-    def list_for_user(self, user_id: UserId) -> Sequence[ConnectedMailbox]: ...
-
-    def refresh_for_user(self, user_id: UserId) -> MailboxRefreshSummary:
-        """Catch this user's mailboxes up now, renewing along the way."""
-        ...
-
-    def backfill_current_month_for_user(
-        self,
-        user_id: UserId,
-    ) -> MailboxBackfillSummary:
-        """Read this month's mail from the first of the month onward, once.
-
-        For someone who connects mid-month: without this, the ordinary sync
-        would only ever see what arrives from the moment they connected
-        forward. Safe to call more than once.
-        """
-        ...
+    def get_for_user(self, user_id: UserId) -> RegisteredInbox | None: ...

@@ -31,10 +31,11 @@ disponibles.
 |---|---|
 | **Cuenta AWS + perfil** | Solo puedes correr en local contra el emulador. |
 | **API key de Gemini** | Sin plan B: un correo que ninguna plantilla reconozca se conserva sin parsear, y los comercios se agrupan solo con las reglas deterministas. |
-| **Proyecto de Google Cloud** (cliente OAuth + tema de Pub/Sub) | Sin Gmail. Queda el proveedor simulado, suficiente para desarrollo. |
+| **Cuenta de Gmail dedicada + App Password** (ver [email-forwarding.md](email-forwarding.md)) | Sin `ingest worker` real: se puede seguir probando el resto de la cadena con el webhook local (`POST /ingestion/bank-notifications`). |
 
-Nada de esto rompe el arranque: cada pieza ausente apaga su función y lo dice
-en el log.
+Nada de esto rompe el arranque de la API — excepto la dirección de ingesta
+misma, que es obligatoria: sin ella nadie podría registrarse, porque cada
+cuenta nueva necesita una dirección de reenvío que derivar.
 
 ---
 
@@ -49,15 +50,20 @@ aparte, ni credenciales reales, ni cobros.
 cp .env.example .env
 ```
 
-Genera los dos secretos que la app exige:
+Genera el secreto que la app exige:
 
 ```bash
 python3 -c "import secrets; print('IDENTITY_JWT_SECRET=' + secrets.token_hex(32))"
-python3 -c "import secrets; print('INGESTION_OAUTH_STATE_SECRET=' + secrets.token_hex(32))"
 ```
 
-Pega ambos en `.env`. Sin el primero la API **se niega a arrancar** — a
-propósito: firmar tokens con un valor conocido es peor que no arrancar.
+Pégalo en `.env`. Sin él la API **se niega a arrancar** — a propósito: firmar
+tokens con un valor conocido es peor que no arrancar.
+
+Pon también una dirección en `INGESTION_INGEST_MAILBOX_ADDRESS` — cualquier
+dirección con forma de correo sirve para desarrollar (registro, login,
+`GET/PATCH /identity/inbox`); solo hace falta que sea una cuenta real con su
+App Password cuando quieras correr `just ingest-worker` de verdad. Ver
+[email-forwarding.md](email-forwarding.md).
 
 Si tienes key de Gemini, añádela también (`LLM_API_KEY=...`). Se obtiene en
 [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
@@ -68,7 +74,7 @@ Si tienes key de Gemini, añádela también (`LLM_API_KEY=...`). Se obtiene en
 just aws-init
 ```
 
-Arranca moto y crea todo: seis tablas de DynamoDB, las colas con sus DLQ, el
+Arranca moto y crea todo: cuatro tablas de DynamoDB, las colas con sus DLQ, el
 bus de eventos y las reglas que lo conectan. Es idempotente, se puede repetir.
 
 Las URLs que imprime ya están en `.env.example` — el id de cuenta de moto es
@@ -76,66 +82,71 @@ siempre `123456789012`, así que son predecibles y no hay que copiar nada.
 
 Para ver qué existe realmente en cualquier momento: `just aws-status`.
 
-### 3. Los tres procesos
+### 3. Los cuatro procesos
 
 Cada uno en su terminal:
 
 ```bash
 just dev              # API en http://localhost:8000 con recarga en caliente
+just ingest-worker    # IMAP -> filtrado por remitente -> SQS
 just parse-worker     # SQS -> parser determinista -> Gemini -> EventBridge
 just merchant-worker  # EventBridge -> comercios canónicos
 ```
 
-Los workers avisan al arrancar si no hay modelo configurado. La API expone su
-documentación interactiva en `http://localhost:8000/docs`.
+`ingest-worker` y `parse-worker` avisan al arrancar si les falta configurar
+algo. La API expone su documentación interactiva en
+`http://localhost:8000/docs`.
 
 > En local se monta además `POST /ingestion/bank-notifications`, un webhook sin
-> autenticar que acepta un correo entero. Es una costura de pruebas y **no
-> existe fuera de `ENVIRONMENT=local`**.
+> autenticar que acepta un correo entero directamente, sin pasar por ningún
+> buzón. Es una costura de pruebas y **no existe fuera de `ENVIRONMENT=local`**
+> — en producción nada llama a este webhook por HTTP; el `ingest worker` lee
+> el buzón compartido directamente.
 
 ### 4. Probar el camino completo
 
-Con el proveedor simulado se recorre la cadena entera sin OAuth ni Google.
+Sin una cuenta de Gmail real configurada, el webhook local hace las veces del
+`ingest worker`: reemplaza "el usuario reenvía y el worker lo recoge" por una
+llamada directa, sin tocar IMAP.
 
-**Crear una cuenta y guardar el token:**
+**Crear una cuenta y guardar el token.** El registro ya asigna la dirección de
+reenvío del usuario — no hace falta ningún paso adicional para eso:
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8000/identity/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"yo@example.com","password":"una frase larga de verdad"}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+ADDRESS=$(curl -s http://localhost:8000/identity/inbox \
+  -H "Authorization: Bearer $TOKEN" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['address'])")
 ```
 
-**Conectar un buzón simulado**, con la lista de remitentes aprobados. Es una
-sola llamada a propósito: conectar sin filtro dejaría un buzón conectado del
-que nunca llegaría nada.
+**Aprobar el remitente del banco.** Es una sola llamada a propósito: sin
+remitentes aprobados, la dirección existe pero no acepta nada.
 
 ```bash
-curl -X POST http://localhost:8000/identity/mailboxes \
+curl -X PATCH http://localhost:8000/identity/inbox \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"address":"yo@gmail.test","provider":"simulated",
-       "allowed_domains":["an.notificacionesbancolombia.com"]}'
+  -d '{"allowed_domains":["an.notificacionesbancolombia.com"]}'
 ```
 
-**Dejar un correo en el buzón** (no se lee todavía — el buzón no es nuestro
-hasta que el proveedor avise):
+**Simular la llegada de un correo reenviado**, directo al webhook local:
 
 ```bash
-just mailbox-deliver --address yo@gmail.test \
-  --sender alertasynotificaciones@an.notificacionesbancolombia.com
+curl -X POST http://localhost:8000/ingestion/bank-notifications \
+  -H 'Content-Type: application/json' \
+  -d "{\"recipient\":\"$ADDRESS\",
+       \"message_id\":\"<demo-1@example.com>\",
+       \"sender\":\"alertasynotificaciones@an.notificacionesbancolombia.com\",
+       \"subject\":\"Notificación\",
+       \"raw_content\":\"Bancolombia: Compraste \$45.000 en EXITO CALI con tu T.Cred *1234, el 20/08/2026 a las 10:15\"}"
 ```
 
-`--body` permite escribir la alerta a mano; sin él usa una compra de ejemplo.
-Repetir `--message-id` sirve para ejercitar la deduplicación.
-
-**Tocar el timbre**, como haría un proveedor real:
-
-```bash
-just mailbox-notify yo@gmail.test
-```
-
-Responde `{"fetched":1,"accepted":1,"duplicates":0}`. A partir de ahí los dos
-workers hacen el resto.
+Responde `{"outcome":"accepted",...}`. A partir de ahí los workers de parseo y
+comercios hacen el resto — corre `just parse-worker` y `just merchant-worker`
+en sus terminales para verlo avanzar.
 
 **Ver el resultado:**
 
@@ -184,8 +195,8 @@ del perfil de `~/.aws`, y desplegado del rol de la instancia o la tarea (deja
 `AWS_PROFILE` sin valor en ese caso).
 
 Los secretos de la aplicación —`IDENTITY_JWT_SECRET`,
-`INGESTION_OAUTH_STATE_SECRET`, `LLM_API_KEY`— deberían venir de un gestor de
-secretos, no del fichero.
+`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— deberían venir de un
+gestor de secretos, no del fichero.
 
 ### 2. Crear los recursos
 
@@ -213,53 +224,32 @@ Comprueba con `just aws-status .env.production`.
 
 ```bash
 just run-prod              # uvicorn, sin recarga, puerto 8000
+just ingest-worker-prod
 just parse-worker-prod
 just merchant-worker-prod
 ```
 
-### 4. Renovar suscripciones — no es opcional
+### 4. Configurar la cuenta de ingesta
 
-Una suscripción de Gmail caduca a los 7 días **en silencio**: nada falla, los
-correos simplemente dejan de llegar. Hay tres disparadores de renovación, y el
-barrido programado es el suelo que cubre los buzones sin actividad:
+Esto el código no puede hacerlo por ti — es un paso manual, una sola vez, y no
+depende de un usuario en particular:
 
-```bash
-just subscriptions-prod --watch
-```
+1. Crea una cuenta de Gmail dedicada a esto (no la tuya personal).
+2. Actívale verificación en dos pasos.
+3. Genera una **App Password** para ella (Cuenta de Google → Seguridad → Verificación en dos pasos → Contraseñas de aplicaciones).
+4. Rellena en `.env.production`:
+   ```
+   INGESTION_INGEST_MAILBOX_ADDRESS=tu-cuenta-de-ingesta@gmail.com
+   INGESTION_INGEST_MAILBOX_APP_PASSWORD=la-app-password-generada
+   ```
 
-Déjalo corriendo como servicio, o programa `just subscriptions-prod` al menos
-dos veces por ventana de suscripción (con Gmail, a diario sobra).
+Con la dirección vacía, la API se niega a arrancar — cada registro nuevo
+necesita derivar una dirección de reenvío, así que no hay modo degradado
+posible. Con la App Password vacía, la API arranca pero el `ingest worker`
+se niega a arrancar él solo.
 
-### 5. Conectar Gmail
-
-Del lado de Google, y esto el código no puede hacerlo por ti:
-
-1. **Cliente OAuth** de tipo *Aplicación web*, con la URI de redirección
-   **exactamente** igual a `INGESTION_GMAIL_REDIRECT_URI`.
-2. **Tema de Pub/Sub**, otorgando el rol *Publisher* a
-   `gmail-api-push@system.gserviceaccount.com`.
-3. **Suscripción push** de ese tema apuntando a
-   `https://tu-dominio/ingestion/mailbox-events/gmail`.
-
-Rellena los cuatro `INGESTION_GMAIL_*`. Con uno vacío el proveedor Gmail
-sencillamente no existe, en lugar de existir a medias y fallar en la primera
-notificación.
-
-Del lado del usuario, el flujo son dos pantallas:
-
-```
-GET  /identity/mailboxes/gmail/authorize   -> devuelve la URL de consentimiento
-GET  /identity/mailboxes/gmail/callback    -> Google redirige aquí
-```
-
-Contrato completo, paso a paso y con los códigos de error, en
-[mailbox-connection.md](mailbox-connection.md).
-
-> **App en modo Testing**: mientras la aplicación OAuth siga sin verificar —lo
-> que permite a un despliegue pequeño saltarse la evaluación de seguridad de
-> pago de Google— los *refresh tokens* caducan cada 7 días y cada usuario tiene
-> que volver a autorizar. La API lo expone como `needs_attention: true` en
-> `GET /identity/mailboxes`.
+Paso a paso de cómo cada usuario conecta su banco a esa cuenta, en
+[email-forwarding.md](email-forwarding.md).
 
 ---
 
@@ -271,11 +261,12 @@ degradarse en silencio. Estos son los mensajes que verás y qué significan:
 | Mensaje | Qué hacer |
 |---|---|
 | `IDENTITY_JWT_SECRET is not set` | Genera y pega el secreto. Todo token sería falsificable. |
+| `INGESTION_INGEST_MAILBOX_ADDRESS is not set` | Sin ella nadie puede registrarse: cada cuenta nueva deriva su dirección de reenvío de esta. |
+| `INGESTION_INGEST_MAILBOX_ADDRESS / ..._APP_PASSWORD are not set` (solo el `ingest worker`) | El worker no tiene qué buzón revisar. Configura la cuenta dedicada — ver arriba. |
 | `INGESTION_PARSE_QUEUE_URL is not set` | Corre el aprovisionamiento y pega la URL. Si no, se aceptarían notificaciones que nunca se parsearían. |
 | `MERCHANT_EVENTS_QUEUE_URL is not set` | Igual, para el worker de comercios. |
 | `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
 | `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
-| `501 No mailbox adapter for provider ...` | Una suscripción apunta a un proveedor sin adaptador. Falla a la vista en vez de tragar correos en silencio. |
 
 Un mensaje que no se puede parsear se borra de la cola; uno que quizá entienda
 un despliegue más nuevo se deja, y acaba en la DLQ tras cinco intentos. Revisa
@@ -287,15 +278,10 @@ las colas `*-dlq` si algo desaparece sin explicación.
 
 | | |
 |---|---|
-| `POST /identity/register`, `POST /identity/login` | Cuenta y token |
+| `POST /identity/register`, `POST /identity/login` | Cuenta y token — el registro ya asigna la dirección de reenvío |
 | `GET /identity/me` | Quién soy |
-| `POST /identity/mailboxes` | Conectar un buzón + remitentes aprobados |
-| `GET /identity/mailboxes` | Buzones y cuáles necesitan atención |
-| `DELETE /identity/mailboxes` | Desconectar (conserva la posición de lectura) |
-| `POST /identity/mailboxes/refresh` | Renovar y sincronizar al abrir la app |
-| `POST /identity/mailboxes/backfill` | Leer el mes en curso desde el día 1, una vez |
-| `GET /identity/mailboxes/gmail/authorize` · `/callback` | Flujo OAuth |
-| `POST /ingestion/mailbox-events/gmail` · `/simulated` | El timbre del proveedor |
+| `GET /identity/inbox` | Mi dirección de reenvío y quién está aprobado |
+| `PATCH /identity/inbox` | Reemplazar los remitentes aprobados |
 | `GET /merchants` | Listado con búsqueda, filtros y contador de revisión |
 | `GET /merchants/{id}` | Detalle con todos los alias |
 | `PATCH /merchants/{id}` | Renombrar y/o recategorizar |

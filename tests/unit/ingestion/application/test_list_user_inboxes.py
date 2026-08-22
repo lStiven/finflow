@@ -38,28 +38,22 @@ def _inbox(
     )
 
 
-def test_a_user_with_no_inboxes_gets_an_empty_list() -> None:
+def test_a_user_with_no_inbox_gets_an_empty_list() -> None:
     use_case = ListUserInboxesUseCase(inbox_repository=InMemoryUserInboxRepository())
 
     assert use_case.execute(USER_ID) == []
 
 
-def test_every_inbox_the_user_owns_is_returned() -> None:
-    repository = InMemoryUserInboxRepository(
-        _inbox(address="b@inbound.test"),
-        _inbox(address="a@inbound.test"),
-    )
+def test_the_users_inbox_is_returned() -> None:
+    repository = InMemoryUserInboxRepository(_inbox(address="mine@inbound.test"))
     use_case = ListUserInboxesUseCase(inbox_repository=repository)
 
     inboxes = use_case.execute(USER_ID)
 
-    assert [inbox.address.value for inbox in inboxes] == [
-        "a@inbound.test",
-        "b@inbound.test",
-    ]
+    assert [inbox.address.value for inbox in inboxes] == ["mine@inbound.test"]
 
 
-def test_another_users_inboxes_are_never_returned() -> None:
+def test_another_users_inbox_is_never_returned() -> None:
     repository = InMemoryUserInboxRepository(
         _inbox(address="mine@inbound.test"),
         _inbox(address="theirs@inbound.test", user_id=OTHER_USER_ID),
@@ -71,7 +65,7 @@ def test_another_users_inboxes_are_never_returned() -> None:
     assert [inbox.address.value for inbox in inboxes] == ["mine@inbound.test"]
 
 
-def test_the_trusted_senders_travel_with_each_inbox() -> None:
+def test_the_trusted_senders_travel_with_the_inbox() -> None:
     repository = InMemoryUserInboxRepository(
         _inbox(address="a@inbound.test", domains=frozenset({"bancolombia.com.co"})),
     )

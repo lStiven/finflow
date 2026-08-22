@@ -1,8 +1,12 @@
-"""Registers an inbound address and the senders its owner trusts.
+"""Sets the senders trusted for an existing user's forwarding address.
 
     uv run python -m personal_finance.contexts.ingestion.presentation.cli\\
-        .register_inbox --address u-7f3a9c@inbound.example.com \\
+        .register_inbox --user-id 11111111-... \\
         --domain bancolombia.com.co --sender alertas@nequi.com.co
+
+Every account already has its forwarding address from the moment it
+registers; this only ever updates who may send to it. It replaces the
+approved-sender list rather than adding to it.
 """
 
 from __future__ import annotations
@@ -26,16 +30,7 @@ from personal_finance.shared.infrastructure.config.settings import (
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--address",
-        required=True,
-        help="the inbound address the user forwards their bank email to",
-    )
-    parser.add_argument(
-        "--user-id",
-        default=None,
-        help="existing user to attach this address to (default: a new user)",
-    )
+    parser.add_argument("--user-id", required=True, help="an existing user's id")
     parser.add_argument(
         "--domain",
         action="append",
@@ -63,11 +58,11 @@ def main() -> None:
             client=get_dynamodb_client(),
             table_name=settings.user_inboxes_table,
         ),
+        base_address=EmailAddress(settings.ingest_mailbox_address),
     )
     inbox = use_case.execute(
         RegisterUserInboxCommand(
-            address=EmailAddress(args.address),
-            user_id=UserId.from_string(args.user_id) if args.user_id else None,
+            user_id=UserId.from_string(args.user_id),
             allowed_domains=frozenset(args.domains),
             allowed_addresses=frozenset(
                 EmailAddress(sender) for sender in args.senders
@@ -76,7 +71,7 @@ def main() -> None:
     )
 
     policy = inbox.sender_policy
-    print(f"Registered {inbox.address.value}")
+    print(f"Forwarding address: {inbox.address.value}")
     print(f"  user id : {inbox.user_id.value}")
     print(f"  domains : {sorted(policy.allowed_domains) or '(none)'}")
     print(

@@ -78,8 +78,8 @@ aws-status env_file=".env": (_require-env env_file)
     print('queues:', s.get_sqs_client().list_queues().get('QueueUrls', [])); \
     print('buses :', [b['Name'] for b in s.get_eventbridge_client().list_event_buses()['EventBuses']])"
 
-# Register an inbound address and the senders its owner trusts, e.g.
-#   just register-inbox --address me@inbound.test --domain bank.com
+# Set the senders an existing user trusts, e.g.
+#   just register-inbox --user-id 11111111-... --domain bank.com
 register-inbox *args: (_require-env ".env")
     {{local_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
@@ -97,28 +97,6 @@ inspect env_file=".env" *args: (_require-env env_file)
     @ENV_FILE={{env_file}} PYTHONPATH=src uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.show_status {{args}}
 
-# Put a message in the simulated provider's mailbox. Nothing is read until
-# the provider notifies us — see `mailbox-notify`.
-mailbox-deliver *args: (_require-env ".env")
-    {{local_env}} uv run python -m \
-        personal_finance.contexts.ingestion.presentation.cli.seed_mailbox {{args}}
-
-# Ring the doorbell, as a real provider would. Needs the API running.
-mailbox-notify address api="http://localhost:8000":
-    @curl -s -X POST {{api}}/ingestion/mailbox-events/simulated \
-        -H 'Content-Type: application/json' \
-        -d '{"address":"{{address}}"}' && echo
-
-# Renew the mailbox subscriptions that are due. Run at least twice per
-# subscription lifetime; `--watch` keeps it running.
-subscriptions *args: (_require-env ".env")
-    {{local_env}} uv run python -m \
-        personal_finance.contexts.ingestion.presentation.cli.keep_subscriptions {{args}}
-
-subscriptions-prod *args: (_require-env ".env.production")
-    {{prod_env}} uv run python -m \
-        personal_finance.contexts.ingestion.presentation.cli.keep_subscriptions {{args}}
-
 # Integration events that reached the bus. `--follow` keeps polling.
 events *args: (_require-env ".env")
     @{{local_env}} uv run python -m \
@@ -127,6 +105,15 @@ events *args: (_require-env ".env")
 events-prod *args: (_require-env ".env.production")
     @{{prod_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.show_events {{args}}
+
+# Poll the ingest mailbox: IMAP -> ReceiveBankNotificationUseCase -> SQS.
+ingest-worker: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_ingest_worker
+
+ingest-worker-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_ingest_worker
 
 # Drain the parse queue: SQS -> DynamoDB -> deterministic parser.
 parse-worker: (_require-env ".env")

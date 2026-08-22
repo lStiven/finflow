@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "finflow_v2",
-    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant — Financial is not implemented yet). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/mailbox-connection.md and docs/running.md for the narrative version of this API.",
+    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant — Financial is not implemented yet). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/email-forwarding.md and docs/running.md for the narrative version of this API.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -54,7 +54,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"inboxes\": []\n}",
+                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
                   "options": { "raw": { "language": "json" } }
                 },
                 "url": {
@@ -62,7 +62,7 @@
                   "host": ["{{base_url}}"],
                   "path": ["identity", "register"]
                 },
-                "description": "Creates an account and returns a usable access token. `inboxes` is optional — an account can be created bare and inboxes attached later via `POST /identity/inboxes`. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
+                "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. `allowed_domains`/`allowed_addresses` are optional — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
               },
               "response": []
             },
@@ -122,179 +122,43 @@
           ]
         },
         {
-          "name": "Inboxes",
+          "name": "Inbox",
           "item": [
             {
-              "name": "Add inboxes",
+              "name": "Get inbox",
               "request": {
-                "method": "POST",
+                "method": "GET",
+                "header": [
+                  { "key": "Authorization", "value": "{{token}}" }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/inbox",
+                  "host": ["{{base_url}}"],
+                  "path": ["identity", "inbox"]
+                },
+                "description": "The caller's forwarding address (assigned automatically at registration) and who is currently approved to send to it."
+              },
+              "response": []
+            },
+            {
+              "name": "Update approved senders",
+              "request": {
+                "method": "PATCH",
                 "header": [
                   { "key": "Authorization", "value": "{{token}}" },
                   { "key": "Content-Type", "value": "application/json" }
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"inboxes\": [\n    {\n      \"address\": \"you@gmail.com\",\n      \"allowed_domains\": [\"an.notificacionesbancolombia.com\"],\n      \"allowed_addresses\": []\n    }\n  ]\n}",
+                  "raw": "{\n  \"allowed_domains\": [\"an.notificacionesbancolombia.com\"],\n  \"allowed_addresses\": []\n}",
                   "options": { "raw": { "language": "json" } }
                 },
                 "url": {
-                  "raw": "{{base_url}}/identity/inboxes",
+                  "raw": "{{base_url}}/identity/inbox",
                   "host": ["{{base_url}}"],
-                  "path": ["identity", "inboxes"]
+                  "path": ["identity", "inbox"]
                 },
-                "description": "Registers an inbound address and the senders trusted for it, for the authenticated user. This is the sender-filter half of a mailbox connection — see Mailboxes > Connect mailbox, which does both in one call for the common case."
-              },
-              "response": []
-            },
-            {
-              "name": "List inboxes",
-              "request": {
-                "method": "GET",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
-                ],
-                "url": {
-                  "raw": "{{base_url}}/identity/inboxes",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "inboxes"]
-                },
-                "description": "The caller's own inboxes. Whose inboxes to read comes from the verified token, never from the request."
-              },
-              "response": []
-            }
-          ]
-        },
-        {
-          "name": "Mailboxes",
-          "item": [
-            {
-              "name": "Connect mailbox (simulated)",
-              "request": {
-                "method": "POST",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" },
-                  { "key": "Content-Type", "value": "application/json" }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"address\": \"you@gmail.test\",\n  \"provider\": \"simulated\",\n  \"allowed_domains\": [\"an.notificacionesbancolombia.com\"],\n  \"allowed_addresses\": []\n}",
-                  "options": { "raw": { "language": "json" } }
-                },
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes"]
-                },
-                "description": "One call on purpose: connects the mailbox AND registers the sender filter, so a connection is never left reading nothing without the caller knowing. For the real Gmail provider the address is never sent here directly — see Gmail OAuth below; this same endpoint is called again afterwards with the address Google confirmed."
-              },
-              "response": []
-            },
-            {
-              "name": "List mailboxes",
-              "request": {
-                "method": "GET",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
-                ],
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes"]
-                },
-                "description": "Connected mailboxes and their status (active / needs_reauth / revoked). `needs_attention: true` means the user has to redo the Gmail OAuth flow."
-              },
-              "response": []
-            },
-            {
-              "name": "Disconnect mailbox",
-              "request": {
-                "method": "DELETE",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" },
-                  { "key": "Content-Type", "value": "application/json" }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"address\": \"you@gmail.test\",\n  \"provider\": \"simulated\"\n}",
-                  "options": { "raw": { "language": "json" } }
-                },
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes"]
-                },
-                "description": "Stops reading a mailbox. The record and its read cursor are kept, so a later reconnect resumes instead of re-reading everything."
-              },
-              "response": []
-            },
-            {
-              "name": "Refresh mailboxes",
-              "request": {
-                "method": "POST",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
-                ],
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes/refresh",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes", "refresh"]
-                },
-                "description": "Catches every one of the caller's mailboxes up right now and renews subscriptions on the way past. Meant to be called when someone opens the app; also the manual stand-in for a push notification when there is no public webhook URL to receive one (e.g. plain localhost)."
-              },
-              "response": []
-            },
-            {
-              "name": "Backfill current month",
-              "request": {
-                "method": "POST",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
-                ],
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes/backfill",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes", "backfill"]
-                },
-                "description": "Opt-in, one-time catch-up: reads every active mailbox from midnight UTC on the first of the current month up to now, independent of the incremental sync cursor. Meant to be offered right after connecting a mailbox, so signing up mid-month does not mean losing that month's earlier history. Safe to call more than once — anything already ingested comes back as `duplicates`, never twice."
-              },
-              "response": []
-            }
-          ]
-        },
-        {
-          "name": "Gmail OAuth",
-          "item": [
-            {
-              "name": "Start Gmail authorization",
-              "request": {
-                "method": "GET",
-                "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
-                ],
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes/gmail/authorize",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes", "gmail", "authorize"]
-                },
-                "description": "Returns the Google consent URL rather than redirecting to it — open `authorization_url` in an actual browser (Postman/Bruno cannot complete Google's login+consent flow). 503 if this deployment has no Gmail client configured."
-              },
-              "response": []
-            },
-            {
-              "name": "Gmail OAuth callback",
-              "request": {
-                "method": "GET",
-                "header": [],
-                "url": {
-                  "raw": "{{base_url}}/identity/mailboxes/gmail/callback?code=REPLACE_WITH_CODE&state=REPLACE_WITH_STATE",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "mailboxes", "gmail", "callback"],
-                  "query": [
-                    { "key": "code", "value": "REPLACE_WITH_CODE" },
-                    { "key": "state", "value": "REPLACE_WITH_STATE" }
-                  ]
-                },
-                "description": "Where Google redirects the user's browser back to — not meant to be called directly from Postman/Bruno. Documented here for reference: no Authorization header (the browser carries none on a redirect), identity comes entirely from the signed `state` issued by Start Gmail authorization."
+                "description": "Replaces — not merges — who may send to the caller's forwarding address. Leave both lists empty and the address is approved for nobody, the safe default. See docs/email-forwarding.md for the full flow, including how the user then sets up the actual forwarding rule in their own mail client."
               },
               "response": []
             }
@@ -305,53 +169,6 @@
     {
       "name": "Ingestion",
       "item": [
-        {
-          "name": "Mailbox events (provider doorbell)",
-          "item": [
-            {
-              "name": "Simulated mailbox event",
-              "request": {
-                "method": "POST",
-                "header": [
-                  { "key": "Content-Type", "value": "application/json" }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"address\": \"you@gmail.test\"\n}",
-                  "options": { "raw": { "language": "json" } }
-                },
-                "url": {
-                  "raw": "{{base_url}}/ingestion/mailbox-events/simulated",
-                  "host": ["{{base_url}}"],
-                  "path": ["ingestion", "mailbox-events", "simulated"]
-                },
-                "description": "The doorbell for the simulated provider, standing in for a real push notification — this is what `just mailbox-notify` calls. Unauthenticated by design: a provider notification names no user, only a mailbox address, and carries no message content."
-              },
-              "response": []
-            },
-            {
-              "name": "Gmail push notification (Pub/Sub)",
-              "request": {
-                "method": "POST",
-                "header": [
-                  { "key": "Content-Type", "value": "application/json" }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"message\": {\n    \"data\": \"eyJlbWFpbEFkZHJlc3MiOiAieW91QGdtYWlsLmNvbSIsICJoaXN0b3J5SWQiOiAiMTIzNDU2In0=\",\n    \"messageId\": \"1234567890\"\n  },\n  \"subscription\": \"projects/your-project/subscriptions/your-subscription\"\n}",
-                  "options": { "raw": { "language": "json" } }
-                },
-                "url": {
-                  "raw": "{{base_url}}/ingestion/mailbox-events/gmail",
-                  "host": ["{{base_url}}"],
-                  "path": ["ingestion", "mailbox-events", "gmail"]
-                },
-                "description": "Google Pub/Sub calls this in production — not meant to be called by hand. Kept here for reference and for replaying a real payload while debugging. `data` is base64 JSON `{\"emailAddress\": \"...\"}`; the example decodes to `you@gmail.com`. Always answers 204, even for an unreadable envelope (Pub/Sub retries anything else for days)."
-              },
-              "response": []
-            }
-          ]
-        },
         {
           "name": "Local testing",
           "item": [
@@ -364,7 +181,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"recipient\": \"you@gmail.test\",\n  \"message_id\": \"<unique-message-id@example.com>\",\n  \"sender\": \"alertasynotificaciones@an.notificacionesbancolombia.com\",\n  \"subject\": \"Aviso de transacción\",\n  \"raw_content\": \"Bancolombia: Compraste $45.000 en EXITO CALI con tu T.Cred *1234, el 20/08/2026 a las 10:15\",\n  \"received_at\": null\n}",
+                  "raw": "{\n  \"recipient\": \"REPLACE_WITH_ADDRESS_FROM_GET_INBOX\",\n  \"message_id\": \"<unique-message-id@example.com>\",\n  \"sender\": \"alertasynotificaciones@an.notificacionesbancolombia.com\",\n  \"subject\": \"Aviso de transacción\",\n  \"raw_content\": \"Bancolombia: Compraste $45.000 en EXITO CALI con tu T.Cred *1234, el 20/08/2026 a las 10:15\",\n  \"received_at\": null\n}",
                   "options": { "raw": { "language": "json" } }
                 },
                 "url": {
@@ -372,7 +189,7 @@
                   "host": ["{{base_url}}"],
                   "path": ["ingestion", "bank-notifications"]
                 },
-                "description": "A local testing seam, not a product path — only mounted when ENVIRONMENT=local. Accepts one raw email body directly, bypassing any mailbox provider entirely. Always 202, even for an unknown recipient."
+                "description": "A local testing seam, not a product path — only mounted when ENVIRONMENT=local. Stands in for the ingest worker: accepts one raw email body directly, bypassing IMAP and the shared ingest mailbox entirely. `recipient` must be a real forwarding address from Get inbox. Always 202, even for an unknown recipient."
               },
               "response": []
             }

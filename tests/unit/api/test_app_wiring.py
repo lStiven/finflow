@@ -1,15 +1,16 @@
 """Which routes the app exposes depends on the environment.
 
-The bank-notification webhook is unauthenticated and, now that users connect a
-mailbox instead of forwarding mail, has no caller outside local testing. These
-guard against it drifting back into a real deployment.
+The bank-notification webhook is unauthenticated and, now that a user
+forwards bank email to their own address instead of us reading their real
+mailbox, has no HTTP caller at all outside local testing — the ingest worker
+reads the ingest mailbox directly, in-process, no webhook involved. This
+guards against it drifting back into a real deployment.
 """
 
 from personal_finance.api.main import create_app
 
 
 WEBHOOK = "/ingestion/bank-notifications"
-MAILBOX_EVENTS = "/ingestion/mailbox-events/simulated"
 
 
 def _routes(*, expose_local_only_routes: bool) -> set[str]:
@@ -33,15 +34,10 @@ def test_the_webhook_is_not_exposed_in_a_real_deployment() -> None:
     assert WEBHOOK not in _routes(expose_local_only_routes=False)
 
 
-def test_the_provider_doorbell_survives_in_a_real_deployment() -> None:
-    # This one is the actual intake path.
-    assert MAILBOX_EVENTS in _routes(expose_local_only_routes=False)
-
-
 def test_identity_survives_in_a_real_deployment() -> None:
     paths = _routes(expose_local_only_routes=False)
 
-    assert "/identity/mailboxes" in paths
+    assert "/identity/inbox" in paths
     assert "/identity/login" in paths
 
 

@@ -5,16 +5,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from personal_finance.contexts.identity.presentation.http.oauth_router import (
-    router as mailbox_oauth_router,
-)
 from personal_finance.contexts.identity.presentation.http.router import (
     get_login_use_case,
     get_register_use_case,
     router as identity_router,
-)
-from personal_finance.contexts.ingestion.presentation.http.mailbox_router import (
-    router as mailbox_router,
 )
 from personal_finance.contexts.ingestion.presentation.http.router import (
     get_use_case,
@@ -54,17 +48,16 @@ def create_app(*, expose_local_only_routes: bool) -> FastAPI:
     """
     app = FastAPI(title="Finflow", lifespan=lifespan)
     app.include_router(health_router)
-    app.include_router(mailbox_router)
     app.include_router(identity_router)
-    app.include_router(mailbox_oauth_router)
     app.include_router(merchant_router)
 
     if expose_local_only_routes:
-        # Users connect a mailbox; nobody forwards mail here. That leaves the
-        # bank-notification webhook with no caller in a real deployment, and
-        # an unauthenticated public write surface with no caller is only a
-        # liability. It stays for local testing, where it is the cheapest way
-        # to replay one email.
+        # Real intake never calls this: a user forwards bank email to their
+        # own address, and the ingest worker reads it directly — nothing HTTP
+        # in between. That leaves this webhook with no caller in a real
+        # deployment, and an unauthenticated public write surface with no
+        # caller is only a liability. It stays for local testing, where it is
+        # the cheapest way to replay one email without touching a mailbox.
         app.include_router(ingestion_router)
 
     return app

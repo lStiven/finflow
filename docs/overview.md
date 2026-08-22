@@ -16,39 +16,43 @@ usuario es estricto de todos modos.
 
 ## El modelo de entrada
 
-El usuario **conecta su propio buzón**. El proveedor (Gmail) nos avisa cuando
-algo cambia, y solo entonces leemos, y solo los remitentes que ese usuario
-aprobó.
+Cada usuario **reenvía** las alertas de su banco a una dirección propia
+(`algo+alias@gmail.com`) sobre **una sola cuenta de Gmail que la app misma
+posee**. Un worker la revisa por IMAP; nunca se lee el buzón personal de
+nadie, y no hay pantalla de consentimiento de por medio.
 
 Esto no es un detalle de implementación, es la decisión central del producto:
 
-- **Nadie configura reenvíos de correo.** Se descartó explícitamente.
-- **Un buzón es correspondencia privada.** Se lee con permisos de solo lectura,
-  filtrado por remitente, y una lista de remitentes vacía significa *no leer
-  nada*, nunca *leerlo todo*.
-- **Los mensajes se dejan como estaban**, los no leídos incluidos.
+- **El usuario configura el reenvío en su propio cliente de correo.** Es una
+  regla de filtro ("todo lo que venga de mi banco, reenvíalo"), no algo que
+  nosotros gestionamos por él.
+- **La aprobación de remitentes sigue mandando.** Un correo reenviado solo se
+  acepta si viene de un remitente que ese usuario aprobó explícitamente; una
+  lista vacía significa *no aceptar nada*, nunca *aceptarlo todo*.
+- **Nunca se lee un buzón ajeno.** La única bandeja que este sistema abre es
+  la que él mismo controla, y solo para esto.
 
-El contrato de API con el que un cliente lleva a un usuario a autorizar su
-buzón —qué endpoints llamar, en qué orden, qué esperar— está en
-[mailbox-connection.md](mailbox-connection.md).
+El contrato de API — cómo un usuario obtiene su dirección de reenvío y aprueba
+remitentes — está en [email-forwarding.md](email-forwarding.md).
 
 ## El flujo principal
 
 ```mermaid
 flowchart TD
-    A["Gmail avisa que el buzón cambió"] --> B["POST /ingestion/mailbox-events/gmail"]
-    B --> C["Lectura filtrada<br/>solo remitentes aprobados"]
-    C --> D["Deduplicación<br/>escritura condicional en DynamoDB"]
-    D --> E["Cola SQS"]
-    E --> F["Parse worker"]
-    F -->|"plantilla determinista"| G["Transacción extraída"]
-    F -->|"ninguna plantilla<br/>coincidió"| H["Gemini (plan B)"]
-    H --> G
-    H -.->|"no pudo leerlo"| I["Se conserva<br/>pending_fallback"]
-    G --> J["EventBridge<br/>TransactionExtracted"]
-    J --> K["Merchant worker"]
-    K --> L["Comercio canónico<br/>+ categoría"]
-    J -.-> M["Financial<br/>(aún no existe)"]
+    A["El banco envía la alerta<br/>al correo del usuario"] --> B["El cliente de correo del usuario<br/>la reenvía a su alias"]
+    B --> C["Ingest worker<br/>revisa el buzón compartido por IMAP"]
+    C --> D["Filtrado<br/>solo remitentes aprobados"]
+    D --> E["Deduplicación<br/>escritura condicional en DynamoDB"]
+    E --> F["Cola SQS"]
+    F --> G["Parse worker"]
+    G -->|"plantilla determinista"| H["Transacción extraída"]
+    G -->|"ninguna plantilla<br/>coincidió"| I["Gemini (plan B)"]
+    I --> H
+    I -.->|"no pudo leerlo"| J["Se conserva<br/>pending_fallback"]
+    H --> K["EventBridge<br/>TransactionExtracted"]
+    K --> L["Merchant worker"]
+    L --> M["Comercio canónico<br/>+ categoría"]
+    K -.-> N["Financial<br/>(aún no existe)"]
 ```
 
 Dos propiedades gobiernan toda la cadena:
@@ -75,16 +79,17 @@ integración en EventBridge.
 
 ### Ingestion
 
-Conexiones de buzón, notificaciones del proveedor, filtrado por remitente,
-deduplicación, parseo y extracción. Publica un único evento hacia afuera:
-`TransactionExtracted`. Todo su ciclo de vida interno (recibido, encolado,
-ignorado, fallido) se queda dentro.
+El buzón de ingesta compartido, la asignación de direcciones de reenvío,
+filtrado por remitente, deduplicación, parseo y extracción. Publica un único
+evento hacia afuera: `TransactionExtracted`. Todo su ciclo de vida interno
+(recibido, encolado, ignorado, fallido) se queda dentro.
 
-Incluye la maquinaria que mantiene viva la suscripción con Gmail: un `watch`
-caduca a los 7 días **sin avisar a nadie** — no falla nada, simplemente dejan
-de llegar correos — así que se renueva desde la mitad de la ventana por tres
-vías independientes: cada notificación recibida, cada vez que el usuario abre
-la app, y un barrido programado para los buzones silenciosos.
+La dirección de reenvío de un usuario (`finflowingest+<id>@gmail.com`) es una
+función pura de su `user_id` — no hay nada que asignar ni que pueda colisionar.
+El `ingest worker` revisa esa única cuenta por IMAP en un bucle con espera
+entre pasadas (no hay equivalente a *long polling* en IMAP), y marca cada
+correo como leído solo después de haberlo entregado de forma durable — un
+reintento tras una caída vuelve a leerlo, nunca lo pierde.
 
 ### Merchant
 
@@ -110,9 +115,10 @@ usuario le gana a cualquier regla de forma permanente.
 
 ### Identity
 
-Cuentas, credenciales y autenticación. También registra buzones y bandejas para
-usuarios autenticados, delegando en los casos de uso de Ingestion a través de un
-adaptador propio.
+Cuentas, credenciales y autenticación. También expone la bandeja (dirección de
+reenvío + remitentes aprobados) de cada usuario autenticado, delegando en los
+casos de uso de Ingestion a través de un adaptador propio — nunca calcula la
+dirección ella misma.
 
 ### Financial
 
@@ -137,10 +143,11 @@ lo que otros contextos reciben.
 **El contenido de un correo y la salida del modelo son datos no confiables.**
 Ambos se validan en el borde y se vuelven a validar en el dominio.
 
-**Un secreto nunca se escribe en código ni en un log.** Los tokens de OAuth van
-a Secrets Manager, nunca a la tabla de conexiones; las contraseñas solo cruzan
-hacia el almacenamiento ya hasheadas; y la app se niega a arrancar si falta un
-secreto obligatorio.
+**Un secreto nunca se escribe en código ni en un log.** La contraseña de
+aplicación de la cuenta de ingesta vive en variables de entorno, nunca en
+código; las contraseñas de usuario solo cruzan hacia el almacenamiento ya
+hasheadas; y la app se niega a arrancar si falta un secreto obligatorio —
+incluida la dirección de ingesta misma, sin la cual nadie podría registrarse.
 
 **El webhook de notificaciones bancarias es una costura de pruebas**, no un
 camino de producto. Está montado únicamente cuando `ENVIRONMENT=local`.

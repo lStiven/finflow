@@ -81,12 +81,6 @@ class IngestionSettings(BaseSettings):
     # Approved senders are per-user data, not configuration: they live in this
     # table, keyed by the inbound address the email was delivered to.
     user_inboxes_table: str = "user_inboxes"
-    # Which mailboxes a user authorized us to read, and how far we got in
-    # each. Never holds a credential.
-    mailbox_connections_table: str = "mailbox_connections"
-    # The mailbox the simulated provider hosts, so the notify-fetch-ingest
-    # path can be exercised without a real account. Local use only.
-    simulated_mailbox_table: str = "simulated_mailbox"
     # The queue has two identifiers on purpose. Provisioning only knows the
     # name, because the URL embeds an account id that does not exist yet the
     # first time the resources are created. The application only accepts the
@@ -111,27 +105,22 @@ class IngestionSettings(BaseSettings):
     dynamodb_read_capacity: int = 5
     dynamodb_write_capacity: int = 5
 
-    # Gmail. All empty by default so a deployment that has not set Google up
-    # simply has no Gmail provider, rather than a half-configured one that
-    # fails on the first notification.
-    gmail_client_id: str = ""
-    gmail_client_secret: SecretStr = SecretStr("")
-    # Where Google sends the user back. Must match the Cloud console exactly.
-    gmail_redirect_uri: str = ""
-    # The Pub/Sub topic Gmail publishes change notifications to, as
-    # `projects/<project>/topics/<topic>`.
-    gmail_pubsub_topic: str = ""
-    # Signs the `state` that ties an OAuth callback to the user who started
-    # it. Without it the callback would accept anyone's code.
-    oauth_state_secret: SecretStr = SecretStr("")
+    # The one Gmail account every user forwards their bank email to, read over
+    # plain IMAP with an App Password. Empty by default so a deployment that
+    # has not set this up yet fails loudly and specifically — "the ingest
+    # worker has nothing to read" — rather than starting half-configured.
+    ingest_mailbox_address: str = ""
+    ingest_mailbox_app_password: SecretStr = SecretStr("")
+    ingest_mailbox_host: str = "imap.gmail.com"
+    ingest_mailbox_port: int = 993
+    # How often the ingest worker polls, in seconds.
+    ingest_poll_interval_seconds: int = 60
 
     @property
-    def gmail_configured(self) -> bool:
+    def ingest_mailbox_configured(self) -> bool:
         return bool(
-            self.gmail_client_id
-            and self.gmail_client_secret.get_secret_value()
-            and self.gmail_redirect_uri
-            and self.gmail_pubsub_topic,
+            self.ingest_mailbox_address
+            and self.ingest_mailbox_app_password.get_secret_value(),
         )
 
 
