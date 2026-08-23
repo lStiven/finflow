@@ -18,6 +18,9 @@ from personal_finance.contexts.merchant.presentation.http.router import (
     router as merchant_router,
 )
 from personal_finance.shared.infrastructure.config.settings import get_aws_settings
+from personal_finance.shared.infrastructure.observability.logging_config import (
+    configure_logging,
+)
 
 
 health_router = APIRouter(tags=["health"])
@@ -30,6 +33,11 @@ def health() -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
+    # Same as every worker's `main()`: without this, INFO logs raised while
+    # handling a request (domain events, use-case outcomes, ...) have no
+    # handler and are silently dropped.
+    configure_logging()
+
     # Build the dependency graph eagerly so a missing queue URL, secret or
     # sender allow-list stops the boot instead of failing the first request.
     get_use_case()

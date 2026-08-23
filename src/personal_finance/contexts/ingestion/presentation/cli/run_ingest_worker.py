@@ -41,6 +41,9 @@ from personal_finance.shared.infrastructure.aws.session import (
 from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
 )
+from personal_finance.shared.infrastructure.observability.logging_config import (
+    configure_logging,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -106,7 +109,7 @@ def build_use_case() -> PollIngestMailboxUseCase:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     use_case = build_use_case()
     interval = get_ingestion_settings().ingest_poll_interval_seconds
     stopper = _Stopper()

@@ -8,6 +8,8 @@ contexts receive.
 
 from __future__ import annotations
 
+import logging
+
 from personal_finance.contexts.ingestion.domain.events import TransactionExtracted
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
@@ -16,6 +18,8 @@ from personal_finance.shared.application.integration import IntegrationEvent
 from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import JsonValue
 
+
+_logger = logging.getLogger(__name__)
 
 SOURCE = "finflow.ingestion"
 
@@ -61,6 +65,10 @@ class IngestionIntegrationEventTranslator:
             "user_id": str(event.user_id.value),
             "transaction": _transaction_payload(event.transaction),
         }
+
+        # Financial has nothing to consume this yet, so this is the only
+        # place to see the exact shape it will receive once it does.
+        _logger.info("transaction_extracted_payload", extra={"payload": payload})
 
         # Deliberately absent: `message_id` and `sender`. They identify the
         # email, not the movement of money, and no downstream context should

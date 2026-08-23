@@ -10,32 +10,40 @@ that's the point. Full history lives in `Session log`, one line per entry.
 
 ## Current focus
 
-Nothing in-flight — email-forwarding migration + its review pass are done,
-`just prepare` green (383 tests).
+Nothing in-flight — real end-to-end mailbox smoke test done, `just prepare`
+green (383 tests). Financial is the natural next context to build (see Next
+steps): it is still 100% empty scaffolding, so the pipeline currently stops
+at Merchant — no account balance or net worth is ever produced yet.
 
 ## Last completed
 
-- 2026-08-22 — Ran a code-review + security-review pass over the
-  email-forwarding rewrite (see Session log), fixed the real findings
-  (IMAP PEEK data-loss bug, batched `ack`, per-message error isolation,
-  stale double-read on `PATCH /identity/inbox`, a few small DRY cleanups).
-  `just prepare` green.
+- 2026-08-23 — Real IMAP smoke test against the live `finflowingest@gmail.com`
+  account: a manually-forwarded email correctly got `ignored` (sender header
+  rewritten to the personal address by Gmail's manual "Forward", not the
+  bank's — expected, matches `docs/email-forwarding.md`); a properly
+  auto-forwarded/approved-sender email went all the way through and created
+  merchants + aliases. Added `logging.basicConfig` to the API's `lifespan`
+  (main.py) so request-triggered INFO logs are no longer silently dropped,
+  matching the three workers. `just prepare` green.
 
 ## Next steps
 
-- [ ] Build a logs/observability module: centralize the ~20 scattered
-      `logging.getLogger(__name__)` + `extra={...}` call sites into one
-      shared setup in `shared/infrastructure/observability/`, shipping
-      structured logs to CloudWatch, with CloudWatch Alarms/metric filters as
-      the follow-on for alerting. **Blocked on where the app runs** — that
-      decides the delivery mechanism. Don't start until that's decided.
-- [ ] Configure a real dedicated Gmail ingest account (App Password) once
-      ready to test actual forwarding end to end — today only a placeholder
-      address is set locally, see `docs/email-forwarding.md`.
-- [ ] The real AWS account still has the now-orphaned `mailbox_connections`
-      and `simulated_mailbox` tables from before this migration —
-      provisioning only ever creates, never deletes. Ask the user before
-      removing them from the real account.
+- [ ] **Build the Financial bounded context** (Account, Transaction,
+      balances, debt, net worth) — currently every file under
+      `contexts/financial/` is an empty stub, no tests. This is the missing
+      link that turns an extracted+classified transaction into an actual
+      balance/net-worth change, i.e. the app's core stated goal. Follow the
+      usual order: domain -> unit tests -> application -> port ->
+      infrastructure adapter -> endpoint/worker -> integration test. Needs a
+      design pass first on how it sources data: subscribe to Ingestion's
+      `TransactionExtracted` (has amount/account/date) and/or Merchant's
+      events (has canonical merchant_id/category).
+- [ ] CloudWatch log shipping: deferred by explicit product decision
+      (2026-08-23) — for now, add plain `logging.getLogger(__name__)` +
+      `extra={...}` calls by hand wherever useful (existing pattern, see any
+      `sqs_worker.py`), no dedicated shipping module. Revisit once hosting
+      (ECS/EC2/Lambda) is decided — see the shelved plan in git history if
+      picked back up.
 
 ## Open questions / blockers
 
@@ -102,3 +110,32 @@ Nothing in-flight — email-forwarding migration + its review pass are done,
   who already knows a user's forwarding address and an approved sender
   address could in theory forge a fake bank alert — already called out in
   `docs/email-forwarding.md`.
+
+### 2026-08-23
+
+- Real mailbox smoke test with the user, live against `finflowingest@gmail.com`
+  (App Password now set). First attempt: user manually clicked "Forward" in
+  Gmail, which rewrites `From` to the forwarder's own address — correctly
+  landed as `ignored` (sender not approved), `raw_content` empty by design
+  (`ignore()`/`complete()` both discard the body on purpose, confirmed not a
+  bug). Second attempt with a proper approved sender went end to end:
+  notification -> parse -> `TransactionExtracted` -> merchant created with its
+  alias. Explained the existing logging story (stdlib `logging` +
+  `extra={}`, already present in ~20 call sites, but only workers called
+  `logging.basicConfig`); added the same call to the API's `lifespan` so
+  request-triggered logs stop being silently dropped. Discussed shipping to
+  CloudWatch (watchtower vs. platform-native capture) — user's decision:
+  defer the dedicated module, add manual log lines where useful instead.
+  Updated this file's Next steps accordingly and flagged Financial (still an
+  empty scaffold) as the natural next context.
+- Added test-visibility logging: fixed `logging.basicConfig`'s default
+  formatter silently dropping every `extra={...}` field (all ~20 existing
+  call sites were affected, invisible until now) via a shared
+  `configure_logging()` in `shared/infrastructure/observability/`, wired
+  into the API's `lifespan` and all three workers. Added a
+  `transaction_extracted_payload` log in ingestion's integration-event
+  translator so the exact payload Financial will eventually consume is
+  visible now, ahead of that context existing. `just prepare` green.
+- Deleted the orphaned `mailbox_connections` and `simulated_mailbox` tables
+  from the real AWS account (confirmed empty first) — the OAuth->forwarding
+  cleanup item from 2026-08-22 is done.

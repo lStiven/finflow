@@ -30,6 +30,9 @@ from personal_finance.shared.infrastructure.aws.session import (
     get_sqs_client,
 )
 from personal_finance.shared.infrastructure.config.settings import get_merchant_settings
+from personal_finance.shared.infrastructure.observability.logging_config import (
+    configure_logging,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -88,7 +91,7 @@ def build_worker() -> SQSMerchantWorker:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_logging()
     worker = build_worker()
     stopper = _Stopper()
     signal.signal(signal.SIGINT, stopper)
