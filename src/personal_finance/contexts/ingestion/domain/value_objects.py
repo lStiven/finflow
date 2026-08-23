@@ -88,8 +88,11 @@ class ProcessingStatus(enum.Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     PROCESSED = "processed"
-    # No deterministic template matched. The email is kept for the LLM
-    # fallback rather than discarded as a failure.
+    # No deterministic template matched, and no transaction came out of the
+    # LLM fallback either — whether because it ran and found nothing, or
+    # because there is none configured. Which one is `deferred_reason`, on
+    # the notification itself: the name says "not extracted", not "still to
+    # be tried".
     PENDING_FALLBACK = "pending_fallback"
     FAILED = "failed"
     IGNORED = "ignored"
@@ -97,3 +100,15 @@ class ProcessingStatus(enum.Enum):
 
 class NotificationIgnoredReason(enum.Enum):
     UNAUTHORIZED_SENDER = "unauthorized_sender"
+
+
+class NotificationDeferredReason(enum.Enum):
+    """Why a notification sits in `PENDING_FALLBACK`. Both members are
+    final for this attempt — neither means "still in progress".
+    """
+
+    # No LLM configured for this deployment; the fallback never ran.
+    NO_FALLBACK_CONFIGURED = "no_fallback_configured"
+    # The fallback ran — declined the email, or produced something that
+    # failed validation — and still came back with nothing.
+    FALLBACK_FOUND_NOTHING = "fallback_found_nothing"

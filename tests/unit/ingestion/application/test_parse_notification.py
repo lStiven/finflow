@@ -15,6 +15,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     NotificationIgnoredReason,
     ProcessingStatus,
 )
@@ -165,6 +166,7 @@ def test_an_unknown_bank_is_deferred_to_the_fallback() -> None:
     assert stored is not None
     # The body survives: the LLM fallback still needs to read it.
     assert stored.raw_content != ""
+    assert stored.deferred_reason is NotificationDeferredReason.NO_FALLBACK_CONFIGURED
 
 
 def test_an_unrecognised_template_from_a_known_bank_is_deferred() -> None:

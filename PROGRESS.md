@@ -139,3 +139,12 @@ at Merchant — no account balance or net worth is ever produced yet.
 - Deleted the orphaned `mailbox_connections` and `simulated_mailbox` tables
   from the real AWS account (confirmed empty first) — the OAuth->forwarding
   cleanup item from 2026-08-22 is done.
+- Split what `PENDING_FALLBACK` could mean: added `NotificationDeferredReason`
+  (`NO_FALLBACK_CONFIGURED` / `FALLBACK_FOUND_NOTHING`), threaded through
+  `defer_to_fallback(reason=...)`, `TransactionExtractionDeferred`, persisted
+  on `BankNotification` (optional column, old items without it still load),
+  and surfaced in `just inspect`. Fixes the exact confusion hit live: a
+  `pending_fallback` notification whose fallback had actually already run
+  and declined the email looked identical to one that was never attempted.
+  4 new tests (domain, application x2, persistence round-trip + legacy-item
+  compat). `just prepare` green, 387 tests.

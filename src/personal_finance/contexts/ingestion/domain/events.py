@@ -8,6 +8,7 @@ from personal_finance.contexts.ingestion.domain.transactions import (
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
+    NotificationDeferredReason,
     NotificationId,
     NotificationIgnoredReason,
 )
@@ -52,12 +53,13 @@ class TransactionExtracted(Event):
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionExtractionDeferred(Event):
-    """No deterministic template matched; the LLM fallback owns it now."""
+    """Neither a template nor the fallback produced a transaction."""
 
     notification_id: NotificationId
     user_id: UserId
     message_id: EmailMessageId
     sender: EmailAddress
+    reason: NotificationDeferredReason
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

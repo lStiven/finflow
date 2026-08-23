@@ -92,9 +92,14 @@ def _print_notifications(table_name: str, *, limit: int) -> None:
     for item in recent[:limit]:
         body = item.get("raw_content", {}).get("S") or ""
         kept = f"{len(body)} chars" if body else "discarded"
-        print(
-            f"    {_text(item, 'status'):<18} {_text(item, 'sender'):<52} body: {kept}",
-        )
+        status = _text(item, "status")
+        deferred_reason = item.get("deferred_reason", {}).get("S")
+        # Only ever set alongside `pending_fallback` — spelled out here so
+        # the state never has to be read as "still to be tried" when it
+        # is not.
+        if status == "pending_fallback" and deferred_reason:
+            status = f"{status} ({deferred_reason})"
+        print(f"    {status:<38} {_text(item, 'sender'):<52} body: {kept}")
         print(f"      {_text(item, 'message_id')}")
 
 

@@ -4,6 +4,7 @@ from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.events import (
     BankNotificationIgnored,
     BankNotificationReceived,
+    TransactionExtractionDeferred,
 )
 from personal_finance.contexts.ingestion.domain.exceptions import (
     InvalidNotificationStateError,
@@ -12,6 +13,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     NotificationId,
     NotificationIgnoredReason,
     ProcessingStatus,
@@ -277,6 +279,59 @@ def test_ignoring_a_notification_discards_the_email_body() -> None:
     # The metadata survives so the user can approve that sender later.
     assert notification.sender == EmailAddress("stranger@example.com")
     assert notification.message_id == EmailMessageId("message-1")
+
+
+def test_defer_to_fallback_transitions_status_and_records_event() -> None:
+    notification = BankNotification.receive(
+        user_id=USER_ID,
+        message_id=EmailMessageId("message-1"),
+        sender=EmailAddress("bank@example.com"),
+        subject="Purchase",
+        raw_content="Purchase information",
+        received_at=PosixTime.now(),
+    )
+    notification.mark_as_queued()
+    notification.start_processing()
+    notification.pull_events()
+
+    notification.defer_to_fallback(
+        reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
+    )
+
+    assert notification.status is ProcessingStatus.PENDING_FALLBACK
+    assert (
+        notification.deferred_reason
+        is NotificationDeferredReason.FALLBACK_FOUND_NOTHING
+    )
+    events = notification.pull_events()
+    assert events == [
+        TransactionExtractionDeferred(
+            event_id=events[0].event_id,
+            occurred_at=events[0].occurred_at,
+            notification_id=notification.id,
+            user_id=notification.user_id,
+            message_id=notification.message_id,
+            sender=notification.sender,
+            reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
+        ),
+    ]
+
+
+def test_a_queued_notification_cannot_be_deferred() -> None:
+    notification = BankNotification.receive(
+        user_id=USER_ID,
+        message_id=EmailMessageId("message-1"),
+        sender=EmailAddress("bank@example.com"),
+        subject="Purchase",
+        raw_content="Purchase information",
+        received_at=PosixTime.now(),
+    )
+    notification.mark_as_queued()
+
+    with pytest.raises(InvalidNotificationStateError):
+        notification.defer_to_fallback(
+            reason=NotificationDeferredReason.NO_FALLBACK_CONFIGURED,
+        )
 
 
 def test_an_ignored_notification_rebuilds_without_a_body() -> None:

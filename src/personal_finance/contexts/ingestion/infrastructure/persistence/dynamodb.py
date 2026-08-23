@@ -10,6 +10,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     NotificationId,
     ProcessingStatus,
 )
@@ -36,6 +37,12 @@ def _read_string(item: dict[str, AttributeValueTypeDef], key: str) -> str:
     return value
 
 
+def _read_optional_string(
+    item: dict[str, AttributeValueTypeDef], key: str
+) -> str | None:
+    return item.get(key, {}).get("S")
+
+
 def _read_int(item: dict[str, AttributeValueTypeDef], key: str) -> int:
     value = item.get(key, {}).get("N")
 
@@ -54,7 +61,7 @@ def to_item(
 ) -> dict[str, AttributeValueTypeDef]:
     received_at = notification.received_at.as_epoch_seconds()
 
-    return {
+    item: dict[str, AttributeValueTypeDef] = {
         PARTITION_KEY: {"S": notification.idempotency_key.value},
         "notification_id": {"S": str(notification.id.value)},
         "user_id": {"S": str(notification.user_id.value)},
@@ -67,11 +74,18 @@ def to_item(
         "expires_at": {"N": str(received_at + retention_days * _SECONDS_PER_DAY)},
     }
 
+    if notification.deferred_reason is not None:
+        item["deferred_reason"] = {"S": notification.deferred_reason.value}
+
+    return item
+
 
 def to_entity(item: dict[str, AttributeValueTypeDef]) -> BankNotification:
     """Rebuild the aggregate from a stored item, with no pending events: what
     a previous attempt already published must never be replayed.
     """
+    deferred_reason = _read_optional_string(item, "deferred_reason")
+
     return BankNotification(
         id=NotificationId(value=uuid.UUID(_read_string(item, "notification_id"))),
         user_id=UserId.from_string(_read_string(item, "user_id")),
@@ -82,6 +96,11 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> BankNotification:
         raw_content=_read_string(item, "raw_content"),
         received_at=PosixTime.from_epoch_seconds(_read_int(item, "received_at")),
         status=ProcessingStatus(_read_string(item, "status")),
+        deferred_reason=(
+            NotificationDeferredReason(deferred_reason)
+            if deferred_reason is not None
+            else None
+        ),
     )
 
 

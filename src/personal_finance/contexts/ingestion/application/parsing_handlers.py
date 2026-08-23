@@ -13,7 +13,10 @@ from personal_finance.contexts.ingestion.application.ports import (
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.parsing.text import extract_text
-from personal_finance.contexts.ingestion.domain.value_objects import ProcessingStatus
+from personal_finance.contexts.ingestion.domain.value_objects import (
+    NotificationDeferredReason,
+    ProcessingStatus,
+)
 from personal_finance.shared.application.ports import EventPublisher
 
 
@@ -112,19 +115,24 @@ class ParseNotificationUseCase:
         permanent outcome for a temporary outage would quietly drop a real
         transaction.
         """
-        transaction = (
-            self._fallback_extractor.extract(
-                sender=notification.sender,
-                subject=notification.subject,
-                body=notification.raw_content,
-                received_at=notification.received_at,
+        if self._fallback_extractor is None:
+            notification.defer_to_fallback(
+                reason=NotificationDeferredReason.NO_FALLBACK_CONFIGURED,
             )
-            if self._fallback_extractor is not None
-            else None
+
+            return self._finish(notification, ParseOutcome.DEFERRED)
+
+        transaction = self._fallback_extractor.extract(
+            sender=notification.sender,
+            subject=notification.subject,
+            body=notification.raw_content,
+            received_at=notification.received_at,
         )
 
         if transaction is None:
-            notification.defer_to_fallback()
+            notification.defer_to_fallback(
+                reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
+            )
 
             return self._finish(notification, ParseOutcome.DEFERRED)
 

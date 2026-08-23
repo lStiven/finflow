@@ -22,6 +22,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     NotificationId,
     NotificationIgnoredReason,
     ProcessingStatus,
@@ -59,6 +60,8 @@ class BankNotification(AggregateRoot[NotificationId]):
     raw_content: str
     received_at: PosixTime
     status: ProcessingStatus
+    # Only meaningful (and only ever set) alongside `PENDING_FALLBACK`.
+    deferred_reason: NotificationDeferredReason | None = None
 
     def __post_init__(self) -> None:
         # `ignore` and `complete` drop the body on purpose, and a record read
@@ -145,20 +148,25 @@ class BankNotification(AggregateRoot[NotificationId]):
             ),
         )
 
-    def defer_to_fallback(self) -> None:
-        """No deterministic template matched. Keep the body: the LLM needs it."""
+    def defer_to_fallback(self, *, reason: NotificationDeferredReason) -> None:
+        """Nothing usable came out of parsing. Keep the body: whichever
+        avenue produced `reason` may still be worth another look later, and a
+        dropped body cannot be re-read.
+        """
         if self.status is not ProcessingStatus.PROCESSING:
             raise InvalidNotificationStateError(
                 f"Cannot defer a notification with status {self.status}",
             )
 
         self.status = ProcessingStatus.PENDING_FALLBACK
+        self.deferred_reason = reason
         self.record_event(
             TransactionExtractionDeferred(
                 notification_id=self.id,
                 user_id=self.user_id,
                 message_id=self.message_id,
                 sender=self.sender,
+                reason=reason,
             ),
         )
 

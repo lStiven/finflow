@@ -5,6 +5,7 @@ from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
+    NotificationDeferredReason,
     ProcessingStatus,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
@@ -81,6 +82,36 @@ def test_status_is_stored_as_a_stable_string() -> None:
     notification.mark_as_queued()
 
     assert _item(notification)["status"] == {"S": "queued"}
+
+
+def test_deferred_reason_round_trips_with_the_status() -> None:
+    notification = _notification()
+    notification.mark_as_queued()
+    notification.start_processing()
+    notification.defer_to_fallback(
+        reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
+    )
+
+    restored = to_entity(_item(notification))
+
+    assert restored.status is ProcessingStatus.PENDING_FALLBACK
+    assert restored.deferred_reason is NotificationDeferredReason.FALLBACK_FOUND_NOTHING
+
+
+def test_a_legacy_pending_fallback_item_without_a_reason_still_loads() -> None:
+    notification = _notification()
+    notification.mark_as_queued()
+    notification.start_processing()
+    notification.defer_to_fallback(
+        reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
+    )
+    item = _item(notification)
+    del item["deferred_reason"]  # what an older deploy would have written
+
+    restored = to_entity(item)
+
+    assert restored.status is ProcessingStatus.PENDING_FALLBACK
+    assert restored.deferred_reason is None
 
 
 def test_corrupt_item_is_rejected_with_a_named_error() -> None:

@@ -22,6 +22,7 @@ from personal_finance.contexts.ingestion.domain.transactions import (
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
+    NotificationDeferredReason,
     NotificationId,
     NotificationIgnoredReason,
 )
@@ -170,6 +171,7 @@ def test_ingestions_internal_lifecycle_events_are_not_published() -> None:
             user_id=USER_ID,
             message_id=MESSAGE_ID,
             sender=EmailAddress("alertas@bancolombia.com.co"),
+            reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
         ),
         BankNotificationFailed(
             notification_id=NOTIFICATION_ID,

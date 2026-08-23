@@ -29,6 +29,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     ProcessingStatus,
 )
 from personal_finance.shared.domain.events import Event
@@ -188,6 +189,7 @@ def test_without_a_model_an_unrecognised_alert_is_kept_for_later() -> None:
     stored = repository.get(notification.idempotency_key)
     assert stored is not None
     assert stored.status is ProcessingStatus.PENDING_FALLBACK
+    assert stored.deferred_reason is NotificationDeferredReason.NO_FALLBACK_CONFIGURED
 
 
 def test_the_model_reads_an_alert_no_template_matched() -> None:
@@ -244,6 +246,7 @@ def test_a_model_that_declines_the_email_keeps_it_rather_than_failing_it() -> No
     stored = repository.get(notification.idempotency_key)
     assert stored is not None
     assert stored.status is ProcessingStatus.PENDING_FALLBACK
+    assert stored.deferred_reason is NotificationDeferredReason.FALLBACK_FOUND_NOTHING
 
 
 def test_a_model_outage_leaves_the_email_exactly_where_it_was() -> None:
