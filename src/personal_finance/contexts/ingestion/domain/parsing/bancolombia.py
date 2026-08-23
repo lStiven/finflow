@@ -104,6 +104,7 @@ class BancolombiaParser:
             direction=TransactionDirection.OUTGOING,
             amount=parse_amount(match.group("amount")),
             occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
             counterparty=match.group("merchant").strip(),
             instrument=Instrument(
                 kind=_CARD_KINDS[match.group("instrument").lower()],
@@ -122,6 +123,7 @@ class BancolombiaParser:
             direction=TransactionDirection.OUTGOING,
             amount=parse_amount(match.group("amount")),
             occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
             # The transfer key is the only identifier of who was paid: the
             # alert never names the recipient.
             counterparty=match.group("key").strip(),
@@ -142,6 +144,7 @@ class BancolombiaParser:
             direction=TransactionDirection.OUTGOING,
             amount=parse_amount(match.group("amount")),
             occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
             counterparty=match.group("destination").strip(),
             instrument=Instrument(
                 kind=InstrumentKind.ACCOUNT,
@@ -162,6 +165,7 @@ class BancolombiaParser:
             direction=TransactionDirection.INCOMING,
             amount=parse_amount(match.group("amount")),
             occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
             counterparty=match.group("payer").strip(),
             instrument=Instrument(
                 kind=_ACCOUNT_KINDS.get(account_type, InstrumentKind.ACCOUNT),

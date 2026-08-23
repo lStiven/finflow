@@ -90,6 +90,7 @@ def _transaction() -> ExtractedTransaction:
         amount=Money(amount=Decimal("45000"), currency=Currency.COP),
         occurred_at=PosixTime.from_epoch_seconds(1_700_000_000),
         counterparty="EXITO CALI",
+        bank="bancolombia",
         instrument=Instrument(kind=InstrumentKind.CREDIT_CARD, last_four="1234"),
     )
 

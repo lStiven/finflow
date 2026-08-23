@@ -47,6 +47,7 @@ def _transaction(*, instrument: Instrument | None = None) -> ExtractedTransactio
         amount=Money(amount=Decimal("45000.50"), currency=Currency.COP),
         occurred_at=OCCURRED_AT,
         counterparty="EXITO CALI",
+        bank="bancolombia",
         instrument=instrument,
     )
 
@@ -90,6 +91,7 @@ def test_the_payload_carries_what_downstream_contexts_need() -> None:
             "currency": "COP",
             "occurred_at": 1_700_000_000,
             "counterparty": "EXITO CALI",
+            "bank": "bancolombia",
             "instrument": {"kind": "credit_card", "last_four": "1234"},
         },
     }

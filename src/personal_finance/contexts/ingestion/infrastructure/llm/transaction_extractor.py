@@ -92,6 +92,10 @@ class ExtractedTransactionSchema(BaseModel):
     currency: Literal["COP", "USD"]
     occurred_at_local: str = Field(default="", max_length=32)
     counterparty: str = Field(default="", max_length=512)
+    # Which institution sent the alert — a template parser already knows its
+    # own bank, but the fallback has to name it, since it is the only signal
+    # Financial gets to tell two banks' otherwise-identical instruments apart.
+    bank: str = Field(default="", max_length=128)
     instrument_kind: ExtractedInstrument
     instrument_last_four: str = Field(default="", max_length=8)
 
@@ -173,6 +177,7 @@ def _to_transaction(
             amount=Money(amount=amount, currency=Currency(answer.currency)),
             occurred_at=occurred_at,
             counterparty=answer.counterparty.strip(),
+            bank=answer.bank.strip(),
             instrument=_to_instrument(answer),
         )
     except ValueError:

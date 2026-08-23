@@ -148,3 +148,19 @@ at Merchant — no account balance or net worth is ever produced yet.
   and declined the email looked identical to one that was never attempted.
   4 new tests (domain, application x2, persistence round-trip + legacy-item
   compat). `just prepare` green, 387 tests.
+- Prerequisite for Financial: added `bank: str` to `ExtractedTransaction`
+  (required, non-empty) — deterministic parsers already knew their own bank
+  (`parser.bank`), threaded through; LLM fallback schema gained a `bank`
+  field + prompt instruction. Flows through `TransactionExtracted`'s
+  integration-event payload. Needed because account-matching in Financial
+  must key on (bank, instrument.kind, instrument.last_four) — two banks can
+  coincidentally reuse the same last four digits. `just prepare` green, 388
+  tests.
+- Gathered Financial v1 requirements with the user (see chat): `Account`
+  (kind + ASSET/LIABILITY category, balance as unsigned `Money` matching the
+  existing pattern), auto-created on first sighting of a new
+  (bank, instrument) pair, plus manual account creation (mortgages/loans
+  that don't email per-movement). A transaction with no matching account (or
+  no instrument at all) is kept "unassigned" rather than guessed, same
+  pending-fallback philosophy. Multi-user/household shared view explicitly
+  deferred out of v1 — not designed yet, not blocking.

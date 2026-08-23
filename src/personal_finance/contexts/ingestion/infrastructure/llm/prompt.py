@@ -62,6 +62,10 @@ depends on the kind:
 included
   incoming_payment who the money came from
 
+bank: the financial institution that sent this alert, e.g. "Bancolombia" or \
+"Nu" — read from the "from" address above, or how the email signs itself or \
+refers to itself in the body.
+
 instrument_kind: what the money moved through — credit_card, debit_card, \
 savings_account, checking_account, or account when the email says only \
 "cuenta". Use none when the email names nothing.

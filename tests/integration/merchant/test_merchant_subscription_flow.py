@@ -143,6 +143,7 @@ def _extracted(counterparty: str) -> TransactionExtracted:
             amount=Money(amount=Decimal("29259.00"), currency=Currency.COP),
             occurred_at=PosixTime.from_epoch_seconds(1_700_000_000),
             counterparty=counterparty,
+            bank="bancolombia",
         ),
     )
 

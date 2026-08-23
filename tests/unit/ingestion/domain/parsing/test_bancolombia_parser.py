@@ -61,6 +61,7 @@ def test_card_purchase(parser: BancolombiaParser) -> None:
     assert transaction.amount.amount == Decimal("29259.00")
     assert transaction.amount.currency is Currency.COP
     assert transaction.counterparty == "TIENDAS ARA"
+    assert transaction.bank == "bancolombia"
     assert transaction.instrument is not None
     assert transaction.instrument.kind is InstrumentKind.CREDIT_CARD
     assert transaction.instrument.last_four == "7653"

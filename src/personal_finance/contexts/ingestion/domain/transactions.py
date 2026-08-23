@@ -61,8 +61,16 @@ class ExtractedTransaction(ValueObject):
     # The other side of the movement as the bank wrote it: a merchant name, a
     # payer, a transfer key, or a masked destination account.
     counterparty: str
+    # Which institution this moved money at — a template parser already knows
+    # its own bank; the LLM fallback has to read it. Financial needs this to
+    # tell "Bancolombia *7653" apart from "Nu *7653": the account an alert
+    # belongs to is never just the instrument.
+    bank: str
     instrument: Instrument | None = None
 
     def __post_init__(self) -> None:
         if not self.counterparty.strip():
             raise ValueError("Extracted transaction requires a counterparty")
+
+        if not self.bank.strip():
+            raise ValueError("Extracted transaction requires a bank")

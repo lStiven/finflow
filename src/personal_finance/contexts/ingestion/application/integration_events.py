@@ -39,6 +39,7 @@ def _transaction_payload(transaction: ExtractedTransaction) -> dict[str, JsonVal
         "currency": transaction.amount.currency.value,
         "occurred_at": transaction.occurred_at.as_epoch_seconds(),
         "counterparty": transaction.counterparty,
+        "bank": transaction.bank,
         "instrument": (
             None
             if instrument is None

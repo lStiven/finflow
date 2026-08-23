@@ -79,6 +79,7 @@ def _answer(**overrides: object) -> ExtractedTransactionSchema:
         "currency": "COP",
         "occurred_at_local": "2026-08-20 12:00",
         "counterparty": "TIENDAS ARA 123",
+        "bank": "Otro Banco",
         "instrument_kind": "credit_card",
         "instrument_last_four": "7653",
     }
@@ -136,6 +137,7 @@ def test_a_read_alert_becomes_a_transaction() -> None:
     assert str(transaction.amount.amount) == "29259.50"
     assert transaction.amount.currency is Currency.COP
     assert transaction.counterparty == "TIENDAS ARA 123"
+    assert transaction.bank == "Otro Banco"
     assert transaction.instrument is not None
     assert transaction.instrument.kind is InstrumentKind.CREDIT_CARD
     assert transaction.instrument.last_four == "7653"
@@ -164,6 +166,7 @@ def test_a_declined_email_produces_nothing() -> None:
         ("amount", "-100"),
         ("occurred_at_local", "yesterday"),
         ("counterparty", "   "),
+        ("bank", "   "),
     ],
 )
 def test_an_answer_the_domain_refuses_is_not_a_transaction(
