@@ -6,161 +6,165 @@ read this first, and update it after finishing a task or a meaningful chunk
 of work, instead of relying on conversation history to carry it forward.
 
 `Last completed` holds only the single most recent item — keep it short,
-that's the point. Full history lives in `Session log`, one line per entry.
+that's the point.
+
+`Decisions` is the durable half of this file: **why** things are the way they
+are, what was rejected and what risk was knowingly accepted. Git already
+records *what* changed and when, so this file must not narrate diffs —
+one compact entry per decision that a fresh session could not recover by
+reading the code.
 
 ## Current focus
 
-Nothing in-flight — real end-to-end mailbox smoke test done, `just prepare`
-green (383 tests). Financial is the natural next context to build (see Next
-steps): it is still 100% empty scaffolding, so the pipeline currently stops
-at Merchant — no account balance or net worth is ever produced yet.
+Building Financial, starting from its domain. `Account` exists with unit
+tests; nothing else in the context does — no ledger, no application layer, no
+persistence, no endpoints — so the pipeline still stops at Merchant and no
+balance or net worth is produced yet. `just prepare` green (421 tests).
 
 ## Last completed
 
-- 2026-08-23 — Real IMAP smoke test against the live `finflowingest@gmail.com`
-  account: a manually-forwarded email correctly got `ignored` (sender header
-  rewritten to the personal address by Gmail's manual "Forward", not the
-  bank's — expected, matches `docs/email-forwarding.md`); a properly
-  auto-forwarded/approved-sender email went all the way through and created
-  merchants + aliases. Added `logging.basicConfig` to the API's `lifespan`
-  (main.py) so request-triggered INFO logs are no longer silently dropped,
-  matching the three workers. `just prepare` green.
+- 2026-08-23 — Financial's `Account` aggregate (derived ASSET/LIABILITY
+  category, signed `Balance`, fingerprint matching, automatic and manual
+  opening, movement application, ledger replay), plus the two ingestion fixes
+  its review turned up.
 
 ## Next steps
 
-- [ ] **Build the Financial bounded context** (Account, Transaction,
-      balances, debt, net worth) — currently every file under
-      `contexts/financial/` is an empty stub, no tests. This is the missing
-      link that turns an extracted+classified transaction into an actual
-      balance/net-worth change, i.e. the app's core stated goal. Follow the
-      usual order: domain -> unit tests -> application -> port ->
-      infrastructure adapter -> endpoint/worker -> integration test. Needs a
-      design pass first on how it sources data: subscribe to Ingestion's
-      `TransactionExtracted` (has amount/account/date) and/or Merchant's
-      events (has canonical merchant_id/category).
-- [ ] CloudWatch log shipping: deferred by explicit product decision
-      (2026-08-23) — for now, add plain `logging.getLogger(__name__)` +
-      `extra={...}` calls by hand wherever useful (existing pattern, see any
-      `sqs_worker.py`), no dedicated shipping module. Revisit once hosting
-      (ECS/EC2/Lambda) is decided — see the shelved plan in git history if
-      picked back up.
+- [ ] **Next: Financial's `Transaction` aggregate and its movement
+      fingerprint.** This is what `Account` is waiting on — `apply` trusts
+      that somebody already decided the movement is new, and nothing does
+      that yet. In order:
+      1. The fingerprint that decides when two `TransactionExtracted` events
+         are the same movement. Not the email's `message_id`: one purchase
+         can arrive twice, and a temporary authorization plus its later
+         posting must not both become final expenses.
+      2. The `Transaction` aggregate around it, with **unassigned** as a
+         first-class state — a movement whose instrument matches no account,
+         or that carries no last four, is kept, never guessed at.
+      3. The boundary mapping: the `finflow.ingestion` payload is strings, so
+         Financial reads them into its own `MovementDirection`, `AccountKind`
+         and `AccountFingerprint`. Ingestion's enums are never imported.
+      4. Then application → port → DynamoDB adapter (conditional write on the
+         fingerprint, and the ledger row + balance update in one atomic
+         write, per the Decisions below) → worker → integration test.
+      Endpoints and the Postman collection come with the read side (account
+      list, net worth), not with this step.
+- [ ] **Decide how a bank-reported balance is treated** (TODO left in
+      `financial/domain/entities.py`). Some alerts state the resulting
+      balance; unknown which local banks do. Either it reconciles the running
+      total — which needs a way to tell a stale alert from a current one,
+      since they arrive out of order — or it is kept for reference only.
+- [ ] CloudWatch log shipping — deferred, see Decisions.
 
 ## Open questions / blockers
 
 - none
 
-## Session log
+## Decisions
 
-### 2026-08-22
+### Intake
 
-- Set up `PROGRESS.md` + `CLAUDE.md` workflow rule for session continuity.
-- Wrote `docs/mailbox-connection.md`, a backend-only guide to the mailbox
-  OAuth/simulated connection flow.
-- Connected the real Gmail account `stiven.ddh@gmail.com` end to end locally
-  (no public tunnel — OAuth via `localhost` redirect, `/mailboxes/refresh`
-  stands in for the push webhook). Caught and fixed a Client ID/Secret that
-  briefly landed in the tracked `.env.production.example`.
-- Built the current-month mailbox backfill feature end to end (ports, Gmail +
-  simulated adapters, `POST /identity/mailboxes/backfill`, tests, docs).
-- Added the Postman/Bruno collection (`docs/postman/`) covering every
-  endpoint, plus the `CLAUDE.md` rule to keep it updated on every future
-  endpoint change. Untracked `.vscode/settings.json`.
-- Diagnosed real-AWS prod infra was stale (only one table existed); added
-  progress logging to `provisioning.py`, re-provisioned, fixed
-  `.env.production`'s missing Merchant section.
-- Replaced Gmail-OAuth mailbox-connection with email forwarding, per explicit
-  product decision to revert to the original plan: every user now forwards
-  bank mail to `finflowingest+<user_id>@gmail.com`, one shared Gmail account
-  read over IMAP + App Password — no OAuth, no Google Cloud project, no push
-  subscriptions to renew. Deleted wholesale: Gmail OAuth (`oauth_router.py`,
-  `oauth_handlers.py`, the whole `mailbox/gmail/` dir), `MailboxConnection` +
-  its table, the simulated-provider test double, subscription renewal/sweep,
-  and the current-month backfill (no OAuth mailbox access to backfill from
-  anymore). Added `ingestion/domain/forwarding.py` (deterministic address
-  derivation), `PollIngestMailboxUseCase` + `ImapIngestMailboxReader`,
-  `just ingest-worker`. Identity's mailbox endpoints collapsed to
-  `GET/PATCH /identity/inbox`; every registration now auto-assigns one inbox
-  (was optional/list-shaped, now unconditional and singular). Rewrote
-  `docs/overview.md`, `docs/running.md`; replaced `docs/mailbox-connection.md`
-  with `docs/email-forwarding.md`; updated `CLAUDE.md`, the Postman
-  collection, all four `.env*` files (also removed a leaked Gmail Client
-  Secret sitting in the real `.env` files from the earlier OAuth setup).
-  Live-smoke-tested register → assigned address → approve senders →
-  `just inspect` end to end against local moto.
-- Ran a code-review pass (6 parallel finder subagents) + a security-review
-  pass over the full diff (`git diff HEAD`, 69 files — had to fix the
-  security-review skill's own diff command first, it defaulted to
-  `origin/HEAD...` and missed everything uncommitted). Confirmed and fixed:
-  IMAP `FETCH (RFC822)` marks a message `\Seen` on read, before `ack()` ever
-  runs — defeated the "ack only after durable write" design and could
-  silently drop bank alerts on a mid-batch crash; switched to
-  `BODY.PEEK[]`. Added per-message exception isolation in the poll loop
-  (one bad message no longer abandons the rest of the batch) and batched
-  `ack()` into one IMAP round trip per poll instead of one per message.
-  Fixed a login-before-`try` socket leak, swapped hand-rolled address
-  parsing for `email.utils.getaddresses`, and removed a stale/possibly-inconsistent
-  DynamoDB re-read on `PATCH /identity/inbox` by threading the write's own
-  result back instead. Small DRY fixes: `RegisterPayload` now inherits
-  `InboxSendersPayload`, a shared `_inbox_response()`/`_to_registered()`
-  helper replaced duplicated response-building. Declined (validated,
-  not bugs): the "checks only address not app_password" and "only fails at
-  first request not startup" findings — both false positives, the API
-  already eager-validates at boot via `lifespan()`. Left as documented,
-  accepted residual risk: forwarded mail has no SPF/DKIM signal, so a sender
-  who already knows a user's forwarding address and an approved sender
-  address could in theory forge a fake bank alert — already called out in
-  `docs/email-forwarding.md`.
+- **Email forwarding, not Gmail OAuth** (2026-08-22, reversal to the original
+  plan). Every user forwards bank mail to `finflowingest+<user_id>@gmail.com`,
+  one shared account read over IMAP + App Password. Killed the entire OAuth
+  path: no Google Cloud project, no consent screen, no push subscriptions to
+  renew, no per-user tokens to refresh. Cost: the current-month backfill
+  feature was deleted with it — there is no mailbox access to backfill from
+  anymore.
+- **Accepted risk: forwarded mail has no usable SPF/DKIM signal.** Someone who
+  already knew a user's forwarding address *and* their bank's exact sender
+  address could forge an alert. Documented in `docs/email-forwarding.md`; the
+  address derives from a full UUID, which is the only thing making it hard to
+  guess. Not solved.
+- **Gmail's manual "Forward" button rewrites `From`** to the forwarder's own
+  address, so such mail is correctly rejected as an unapproved sender. Only
+  Gmail's *automatic* forwarding (filter-based) preserves the bank's `From`.
+  Hit this live during testing — it is expected behaviour, not a bug.
 
-### 2026-08-23
+### Parsing
 
-- Real mailbox smoke test with the user, live against `finflowingest@gmail.com`
-  (App Password now set). First attempt: user manually clicked "Forward" in
-  Gmail, which rewrites `From` to the forwarder's own address — correctly
-  landed as `ignored` (sender not approved), `raw_content` empty by design
-  (`ignore()`/`complete()` both discard the body on purpose, confirmed not a
-  bug). Second attempt with a proper approved sender went end to end:
-  notification -> parse -> `TransactionExtracted` -> merchant created with its
-  alias. Explained the existing logging story (stdlib `logging` +
-  `extra={}`, already present in ~20 call sites, but only workers called
-  `logging.basicConfig`); added the same call to the API's `lifespan` so
-  request-triggered logs stop being silently dropped. Discussed shipping to
-  CloudWatch (watchtower vs. platform-native capture) — user's decision:
-  defer the dedicated module, add manual log lines where useful instead.
-  Updated this file's Next steps accordingly and flagged Financial (still an
-  empty scaffold) as the natural next context.
-- Added test-visibility logging: fixed `logging.basicConfig`'s default
-  formatter silently dropping every `extra={...}` field (all ~20 existing
-  call sites were affected, invisible until now) via a shared
-  `configure_logging()` in `shared/infrastructure/observability/`, wired
-  into the API's `lifespan` and all three workers. Added a
-  `transaction_extracted_payload` log in ingestion's integration-event
-  translator so the exact payload Financial will eventually consume is
-  visible now, ahead of that context existing. `just prepare` green.
-- Deleted the orphaned `mailbox_connections` and `simulated_mailbox` tables
-  from the real AWS account (confirmed empty first) — the OAuth->forwarding
-  cleanup item from 2026-08-22 is done.
-- Split what `PENDING_FALLBACK` could mean: added `NotificationDeferredReason`
-  (`NO_FALLBACK_CONFIGURED` / `FALLBACK_FOUND_NOTHING`), threaded through
-  `defer_to_fallback(reason=...)`, `TransactionExtractionDeferred`, persisted
-  on `BankNotification` (optional column, old items without it still load),
-  and surfaced in `just inspect`. Fixes the exact confusion hit live: a
-  `pending_fallback` notification whose fallback had actually already run
-  and declined the email looked identical to one that was never attempted.
-  4 new tests (domain, application x2, persistence round-trip + legacy-item
-  compat). `just prepare` green, 387 tests.
-- Prerequisite for Financial: added `bank: str` to `ExtractedTransaction`
-  (required, non-empty) — deterministic parsers already knew their own bank
-  (`parser.bank`), threaded through; LLM fallback schema gained a `bank`
-  field + prompt instruction. Flows through `TransactionExtracted`'s
-  integration-event payload. Needed because account-matching in Financial
-  must key on (bank, instrument.kind, instrument.last_four) — two banks can
-  coincidentally reuse the same last four digits. `just prepare` green, 388
-  tests.
-- Gathered Financial v1 requirements with the user (see chat): `Account`
-  (kind + ASSET/LIABILITY category, balance as unsigned `Money` matching the
-  existing pattern), auto-created on first sighting of a new
-  (bank, instrument) pair, plus manual account creation (mortgages/loans
-  that don't email per-movement). A transaction with no matching account (or
-  no instrument at all) is kept "unassigned" rather than guessed, same
-  pending-fallback philosophy. Multi-user/household shared view explicitly
-  deferred out of v1 — not designed yet, not blocking.
+- **`bank` is part of `ExtractedTransaction`** and is normalized (strip +
+  lowercase) in the value object itself, not trusted from each producer. A
+  template parser knows its own bank; the LLM fallback has to read it and
+  answered with different casing. Financial keys account-matching on
+  (bank, instrument.kind, instrument.last_four) — two banks can reuse the same
+  last four digits, and a casing mismatch would split one real account in two.
+  It is therefore the one string field the LLM schema requires rather than
+  defaults to `""`, and an answer that still names no bank is refused whole:
+  a placeholder institution would merge two banks' cards that share their
+  last four into one account holding somebody's money twice. The email keeps
+  its body as `pending_fallback`, so a refusal costs a re-read, not the data.
+- **`PENDING_FALLBACK` carries a `NotificationDeferredReason`**
+  (`NO_FALLBACK_CONFIGURED` / `FALLBACK_FOUND_NOTHING`). Without it, an email
+  the LLM had already read and declined looked identical to one never
+  attempted — the state name reads as "still queued" when it is final.
+
+### Financial (v1 requirements, agreed 2026-08-23)
+
+- `Account` has a kind (savings, checking, credit card, loan, mortgage, …) and
+  an ASSET/LIABILITY category. Net worth = Σ assets − Σ liabilities.
+- **`Balance` keeps `Money` unsigned and carries the sign beside it**, so
+  direction stays outside the quantity as everywhere else. A credit card
+  holding 1.2M means "you owe 1.2M"; its `category` is what makes it
+  subtract. The sign exists because an account discovered from an alert
+  starts at zero with its real opening balance unknown, so an asset's running
+  total legitimately goes below zero — a known-incomplete history, where
+  refusing to represent it would mean inventing a starting number.
+- **Accounts auto-create** on first sighting of a new (bank, instrument) pair,
+  with a generic renameable name — same spirit as Merchant's auto-grouping.
+- **Manual account creation also required**, for mortgages/loans that never
+  email per-movement.
+- A transaction with no matching account, or no instrument at all, is kept
+  **unassigned** rather than guessed at — same philosophy as
+  `pending_fallback`.
+- **The ledger is the authority; the balance is a running total.**
+  `Account.apply` never asks whether it has seen a movement before — that
+  answer cannot be reached from memory when the queue is at-least-once and
+  processes restart. Novelty is the ledger's job (conditional write on the
+  movement fingerprint), and the ledger row and the balance update must land
+  in one atomic write so a balance can never move without a row behind it.
+  `Account.rebuild` replays the ledger, so drift is repairable instead of
+  permanent. Rejected: keeping applied movement ids inside the aggregate (it
+  grows without bound) and a "last movement applied" guard (it only catches
+  an immediate redelivery, while reading as if it caught everything).
+- **An account is matched by (bank, instrument kind, last four), and an
+  alert with no last four stays unassigned.** Matching on bank + kind alone
+  would merge every savings account a user holds at one bank into a single
+  wrong balance. The digits are normalized to the trailing four: the LLM
+  fallback can return more of the number than a template parser does.
+- **One account holds many fingerprints.** A single checking account emails
+  as a debit card for purchases and as an account number for transfers.
+- **Multi-user / household shared view is explicitly out of v1.** The intended
+  shape (each `Account` stays owned by one user; a mutually-accepted link in
+  Identity; the combined view is a query, not new data) is recorded here so
+  the door stays open, but nothing is designed or built.
+
+### Operations
+
+- **CloudWatch log shipping deferred** (2026-08-23). Options weighed:
+  app-level (`watchtower`) vs. platform-native capture (awslogs driver /
+  CloudWatch Agent / Lambda). The latter depends on where the app runs, which
+  is undecided. For now: plain `logging.getLogger(__name__)` + `extra={...}`
+  by hand where useful.
+- **`configure_logging()` exists because `logging.basicConfig`'s default
+  formatter silently drops every `extra={...}` field.** All ~20 existing call
+  sites were affected and invisible. Wired into the API's `lifespan` and all
+  three workers.
+- Orphaned `mailbox_connections` / `simulated_mailbox` tables removed from the
+  real AWS account (2026-08-23). Provisioning only ever creates, never
+  deletes, so leftovers from a removed feature need deleting by hand.
+
+### Review findings worth remembering
+
+- **IMAP `FETCH (RFC822)` marks a message `\Seen` on read**, before `ack()`
+  runs — it defeated the "ack only after a durable write" design and could
+  drop bank alerts on a mid-batch crash. Must stay `BODY.PEEK[]`.
+- **The `TransactionExtracted` integration payload must never be logged.** It
+  is a line of somebody's spending history — amount, counterparty, bank and
+  card digits in one record — and an INFO log of it was shipping exactly that
+  to wherever logs land, ungated by environment. `LoggingEventPublisher`
+  records that an event happened, by type and id; that is what an audit trail
+  needs.
+- Rejected as false positives in that same review: "only validates address,
+  not app_password" and "fails at first request, not startup" — the API
+  already eager-validates at boot via `lifespan()`.

@@ -107,9 +107,12 @@ Bounded Contexts:
   where things stand. After finishing a task or a meaningful chunk of work,
   update `PROGRESS.md` before ending the turn — this replaces relying on
   `/compact` or long-lived conversation history to track state. Keep
-  `Last completed` to the single most recent item only, short — it is not an
-  accumulating log; append one compact line per finished item to
-  `Session log` instead, which is where full history belongs.
+  `Last completed` to the single most recent item only, short. Do not narrate
+  diffs there or anywhere else in the file: git already records what changed.
+  Record in `Decisions` only what a fresh session could not recover by
+  reading the code — why something is the way it is, what was rejected, what
+  risk was knowingly accepted — and edit an existing entry in place rather
+  than appending a new one about the same thing.
 * Whenever an endpoint is added, changed, or removed, update
   `docs/postman/finflow_v2.postman_collection.json` (Postman Collection
   v2.1 format — importable by both Postman and Bruno) in the same change.
@@ -123,6 +126,16 @@ Bounded Contexts:
 * Prefer this order: domain -> unit tests -> application -> port -> infrastructure adapter -> endpoint/worker -> integration test.
 * Run affected tests and existing lint/type-check recipes (`just prepare`) before
   considering a change complete.
+* When a change affects a business rule or a flow — a new domain state or
+  transition, how money/balances/matching work, a new cross-context
+  interaction, anything auth- or security-relevant — run one `/code-review`
+  pass before considering it done (add `/security-review` too when the
+  change touches auth, money, or untrusted input). One pass per change is
+  enough; this is a single iteration, not a loop chasing every finding.
+  Report findings with concrete, justifiable reasons grounded in
+  functionality or security — never flag something because it merely
+  differs from a preference. Purely mechanical changes (formatting, renames,
+  config, docs, logging setup) do not need this pass.
 * Do not refactor unrelated code unless required to complete the task.
 
 ## commands

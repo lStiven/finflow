@@ -78,9 +78,13 @@ type ExtractedInstrument = Literal[
 class ExtractedTransactionSchema(BaseModel):
     """The only shape the model is allowed to answer in.
 
-    Every field is required, including on a refusal: a partially filled object
-    would leave the caller deciding which halves to trust, and `understood` is
-    the single flag that settles it.
+    The model is told to fill every field, including on a refusal: a partially
+    filled object would leave the caller deciding which halves to trust, and
+    `understood` is the single flag that settles it. The string fields carry a
+    default so an answer that skips one still parses and is judged on its
+    content — `bank` does not, because the domain refuses a transaction
+    without it, and an omitted field would throw away an email the model had
+    otherwise read correctly.
     """
 
     understood: bool
@@ -95,7 +99,7 @@ class ExtractedTransactionSchema(BaseModel):
     # Which institution sent the alert — a template parser already knows its
     # own bank, but the fallback has to name it, since it is the only signal
     # Financial gets to tell two banks' otherwise-identical instruments apart.
-    bank: str = Field(default="", max_length=128)
+    bank: str = Field(max_length=128)
     instrument_kind: ExtractedInstrument
     instrument_last_four: str = Field(default="", max_length=8)
 
@@ -166,8 +170,18 @@ def _to_transaction(
     """
     amount = _to_decimal(answer.amount)
     occurred_at = _to_instant(answer.occurred_at_local)
+    bank = answer.bank.strip()
 
     if amount is None or occurred_at is None:
+        return None
+
+    if not bank:
+        # Refused rather than filled in: an institution we cannot name cannot
+        # be matched to an account, and a placeholder would merge two banks'
+        # cards that happen to share their last four digits into one account
+        # holding somebody's money twice.
+        _logger.warning("fallback extraction named no bank")
+
         return None
 
     try:
@@ -177,7 +191,7 @@ def _to_transaction(
             amount=Money(amount=amount, currency=Currency(answer.currency)),
             occurred_at=occurred_at,
             counterparty=answer.counterparty.strip(),
-            bank=answer.bank.strip(),
+            bank=bank,
             instrument=_to_instrument(answer),
         )
     except ValueError:

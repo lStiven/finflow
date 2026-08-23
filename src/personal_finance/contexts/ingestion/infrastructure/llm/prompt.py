@@ -64,7 +64,9 @@ included
 
 bank: the financial institution that sent this alert, e.g. "Bancolombia" or \
 "Nu" — read from the "from" address above, or how the email signs itself or \
-refers to itself in the body.
+refers to itself in the body. Never leave this empty when understood=true: \
+without it the movement cannot be attached to an account. If you cannot tell \
+which institution sent the alert, set understood=false instead.
 
 instrument_kind: what the money moved through — credit_card, debit_card, \
 savings_account, checking_account, or account when the email says only \

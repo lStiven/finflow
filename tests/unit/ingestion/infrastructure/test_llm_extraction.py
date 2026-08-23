@@ -7,7 +7,7 @@ shape but not the rules is dropped rather than believed.
 
 from typing import cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import pytest
 
 from personal_finance.contexts.ingestion.domain.transactions import (
@@ -137,7 +137,10 @@ def test_a_read_alert_becomes_a_transaction() -> None:
     assert str(transaction.amount.amount) == "29259.50"
     assert transaction.amount.currency is Currency.COP
     assert transaction.counterparty == "TIENDAS ARA 123"
-    assert transaction.bank == "Otro Banco"
+    # Normalized to lowercase, same as a template parser's own `bank`
+    # constant — the two paths must agree so Financial's account-matching
+    # never splits one real bank into two.
+    assert transaction.bank == "otro banco"
     assert transaction.instrument is not None
     assert transaction.instrument.kind is InstrumentKind.CREDIT_CARD
     assert transaction.instrument.last_four == "7653"
@@ -176,6 +179,25 @@ def test_an_answer_the_domain_refuses_is_not_a_transaction(
     transaction, _ = _extract(_answer(**{field: value}))
 
     assert transaction is None
+
+
+def test_an_answer_that_names_no_bank_is_not_a_valid_shape() -> None:
+    # Required in the schema, unlike its sibling strings: an omitted field
+    # would otherwise throw away an email the model had read correctly.
+    with pytest.raises(ValidationError):
+        ExtractedTransactionSchema.model_validate(
+            {
+                "understood": True,
+                "kind": "card_purchase",
+                "direction": "outgoing",
+                "amount": "29259.50",
+                "currency": "COP",
+                "occurred_at_local": "2026-08-20 12:00",
+                "counterparty": "TIENDAS ARA 123",
+                "instrument_kind": "credit_card",
+                "instrument_last_four": "7653",
+            },
+        )
 
 
 def test_an_instrument_the_email_did_not_name_is_simply_absent() -> None:

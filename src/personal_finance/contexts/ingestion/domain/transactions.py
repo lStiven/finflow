@@ -72,5 +72,14 @@ class ExtractedTransaction(ValueObject):
         if not self.counterparty.strip():
             raise ValueError("Extracted transaction requires a counterparty")
 
-        if not self.bank.strip():
+        bank = self.bank.strip().lower()
+
+        if not bank:
             raise ValueError("Extracted transaction requires a bank")
+
+        # Normalized so the same bank always compares equal regardless of
+        # which path named it: a template parser's own constant, or whatever
+        # casing the LLM fallback happened to answer with. Financial keys
+        # account-matching on this value, and a casing mismatch would split
+        # one real account into two.
+        object.__setattr__(self, "bank", bank)
