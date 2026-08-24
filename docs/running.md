@@ -3,7 +3,9 @@
 Guía operativa. Para entender **qué** hace el sistema, ver
 [overview.md](overview.md). Para probar la API a mano sin `curl`, hay una
 colección de Postman/Bruno lista para importar en
-[postman/](postman/README.md).
+[postman/](postman/README.md). Para integrar un cliente contra este backend
+—qué llamar, en qué orden y con qué reglas— está
+[frontend-integration.md](frontend-integration.md).
 
 Todos los comandos se ejecutan dentro del DevContainer, en
 `/workspaces/finflow_v2`. `just --list` es la fuente de verdad de las tareas
@@ -86,7 +88,50 @@ siempre `123456789012`, así que son predecibles y no hay que copiar nada.
 
 Para ver qué existe realmente en cualquier momento: `just aws-status`.
 
-### 3. Los cinco procesos
+### 3. Datos de prueba
+
+moto guarda todo en memoria: cuando el emulador se para —`just aws-down`, un
+reinicio del contenedor, un reinicio de la máquina— desaparecen las tablas, las
+colas y todos los registros. **Nada de lo que crees en local se conserva.**
+
+En vez de hacer ese dato duradero, `just seed` lo hace barato de recrear:
+
+```bash
+just seed
+```
+
+Recorre la cadena entera —registra al usuario demo, aprueba el dominio del
+banco, reenvía seis alertas de Bancolombia, drena los tres workers y declara
+las cuentas que las adoptan— y deja una cuenta en la que hay algo que mirar. No
+necesita `just dev` ni los workers levantados: monta la aplicación en su propio
+proceso.
+
+Repetirlo es seguro. Las alertas llevan un `message_id` fijo y las deduplica la
+ingesta; las cuentas y los movimientos manuales se consultan antes de
+escribirlos, porque un movimiento manual tiene identidad aleatoria y si no se
+duplicaría en cada pasada. Dos ejecuciones seguidas dejan los mismos saldos.
+
+El modelo queda **sin conectar** a propósito —`--with-llm` lo deja puesto—:
+las seis alertas son de las que el parser determinista lee, así que sembrar no
+cuesta nada ni necesita red. Por eso los workers avisan `no model configured`
+al arrancar; aquí es lo esperado.
+
+Lo que deja sembrado:
+
+| | |
+|---|---|
+| `demo@finflow.local` / `una frase larga de verdad` | La cuenta. El token sale impreso al final, listo para pegar en Postman. |
+| 3 cuentas declaradas | Tarjeta de crédito, ahorros —con la tarjeta débito enlazada como segundo instrumento— y efectivo. |
+| 8 movimientos | Seis venidos de alertas y dos a mano. Uno queda **sin asignar**: la nómina, porque esa alerta no nombra los últimos cuatro dígitos de ninguna cuenta. |
+| 6 comercios | Todos en revisión, agrupados solo con las reglas deterministas. |
+
+Las cuentas se declaran **después** de que llegan las alertas, a propósito: la
+adopción es retroactiva y así queda ejercitada.
+
+`--email` y `--password` cambian la cuenta que crea, por si quieres sembrar dos
+usuarios y comprobar que cada uno solo ve lo suyo.
+
+### 4. Los cinco procesos
 
 Cada uno en su terminal:
 
@@ -110,11 +155,14 @@ La API expone su documentación interactiva en `http://localhost:8000/docs`.
 > — en producción nada llama a este webhook por HTTP; el `ingest worker` lee
 > el buzón compartido directamente.
 
-### 4. Probar el camino completo
+### 5. Probar el camino completo
 
 Sin una cuenta de Gmail real configurada, el webhook local hace las veces del
 `ingest worker`: reemplaza "el usuario reenvía y el worker lo recoge" por una
 llamada directa, sin tocar IMAP.
+
+Esto es, request a request, lo mismo que hace `just seed`. Vale la pena hacerlo
+a mano una vez para ver dónde se detiene cada pieza; después, sembrar.
 
 **Crear una cuenta y guardar el token.** El registro ya asigna la dirección de
 reenvío del usuario — no hace falta ningún paso adicional para eso:
@@ -223,7 +271,7 @@ Los `domain_event` de arriba son la otra mitad de la historia. Deliberadamente
 **no se registra ni el monto, ni la contraparte, ni los dígitos** — juntos son una línea del historial de gastos de alguien, y un log
 no es sitio para eso.
 
-### 5. Herramientas de inspección
+### 6. Herramientas de inspección
 
 ```bash
 just inspect     # bandejas, notificaciones y profundidad de la cola
@@ -235,7 +283,7 @@ just aws-status  # tablas, colas y buses que existen ahora mismo
 no entrega nada, así que es la única forma de comprobar que un evento salió de
 verdad.
 
-### 6. Antes de dar por terminado un cambio
+### 7. Antes de dar por terminado un cambio
 
 ```bash
 just prepare   # formato + lint + tipos + tests

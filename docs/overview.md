@@ -238,4 +238,5 @@ clasificación. El DevContainer de VS Code es el entorno de desarrollo canónico
 
 ---
 
-Para levantar y probar todo esto, ver [running.md](running.md).
+Para levantar y probar todo esto, ver [running.md](running.md). Para
+construir un cliente encima, [frontend-integration.md](frontend-integration.md).

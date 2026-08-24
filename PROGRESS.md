@@ -32,9 +32,9 @@ observability and backups — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-24 — Financial's read/write surface: user-declared accounts with
-  retroactive adoption, manual transactions, editing, eleven endpoints, the
-  Postman folder, and secrets resolved from SSM Parameter Store.
+- 2026-08-24 — `docs/frontend-integration.md`: the whole flow as a client
+  has to integrate it, the business rules a UI must not break, and what the
+  backend does not expose yet (CORS, notifications, movement↔merchant).
 
 ## Next steps
 
@@ -47,6 +47,11 @@ observability and backups — see **Next steps**.
          workers alive. `just run-prod` is uvicorn on whatever machine runs
          it.
       3. **The frontend**, deliberately deferred until the backend settles.
+         Its integration contract is written up in
+         `docs/frontend-integration.md`, which also lists what it cannot build
+         yet: no CORS middleware, no way to see received emails, and no
+         movement↔merchant link, so spending by category is not reachable
+         from a client.
 - [ ] **Only Bancolombia has a parser**, with three sender domains mapped.
       Every other bank falls through to the LLM, which costs money per email
       and refuses when unsure. More banks get added over time; this is
@@ -276,6 +281,21 @@ observability and backups — see **Next steps**.
   new work to any subscriber deduping on it.
 
 ### Operations
+
+- **Local data is ephemeral on purpose; `just seed` is what makes that cheap**
+  (2026-08-24). moto holds everything in memory, so `just aws-down`, a
+  container rebuild or a reboot leaves an empty environment — nothing created
+  in local development survives. Rejected: DynamoDB Local with `-dbPath`
+  (durable, but only DynamoDB — SQS and EventBridge would still be moto, so
+  two emulators for half the surface), LocalStack persistence (Pro only), and
+  a real AWS dev environment (production's five tables and one index already
+  spend 24 of the 25 always-free provisioned units, so a parallel set would
+  have to be on-demand; worth it when the frontend needs durable staging, not
+  before). The seed drives the ASGI app in process and the workers' own
+  `build_worker()`, so it exercises the whole chain rather than writing rows:
+  alerts in, queues drained, accounts declared *after* they arrive so
+  retroactive adoption is covered. Idempotent, and the model stays unwired
+  unless `--with-llm` so it neither bills nor needs the network.
 
 - **Point-in-time recovery is on for every table** (2026-08-24), applied on
   each provisioning run rather than only at creation, so an environment that

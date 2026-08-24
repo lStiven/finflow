@@ -65,7 +65,7 @@ docstring-code-format = true
 docstring-code-line-length = 88
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
 exclude = [
     "**/__pycache__",
     ".venv",

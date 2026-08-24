@@ -78,6 +78,12 @@ aws-status env_file=".env": (_require-env env_file)
     print('queues:', s.get_sqs_client().list_queues().get('QueueUrls', [])); \
     print('buses :', [b['Name'] for b in s.get_eventbridge_client().list_event_buses()['EventBuses']])"
 
+# Fill the emulator with the demo user, its alerts and its accounts. moto
+# holds everything in memory, so this is what makes a restart cheap rather
+# than expensive. Safe to re-run.
+seed *args: (_require-env ".env")
+    {{local_env}} uv run python scripts/seed_local.py {{args}}
+
 # Set the senders an existing user trusts, e.g.
 #   just register-inbox --user-id 11111111-... --domain bank.com
 register-inbox *args: (_require-env ".env")
