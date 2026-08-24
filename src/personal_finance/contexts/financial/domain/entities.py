@@ -8,12 +8,13 @@ from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
     AccountBalanceRebuilt,
     AccountClosed,
-    AccountConfirmed,
     AccountFingerprintLinked,
     AccountOpened,
     AccountRenamed,
     TransactionAssigned,
+    TransactionEdited,
     TransactionRecorded,
+    TransactionUnassigned,
 )
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
@@ -25,14 +26,14 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
     AccountKind,
-    AccountStatus,
     Balance,
     LedgerMovement,
     MovementDirection,
     MovementFingerprint,
     MovementId,
+    StatedMovement,
+    TransactionOrigin,
     TransactionStatus,
-    normalize_last_four,
 )
 from personal_finance.shared.domain.entities import AggregateRoot
 from personal_finance.shared.domain.value_objects import (
@@ -50,26 +51,29 @@ MAX_ACCOUNT_NAME_LENGTH = 120
 class Account(AggregateRoot[AccountId]):
     """One place a user's money sits, and what it holds right now.
 
-    The balance is a running total, not the authority. The authority is the
-    ledger of movements that were accepted as new; this aggregate never
-    decides whether it has seen a movement before — that answer cannot be
-    reached from memory when the queue is at-least-once and processes
-    restart. The application layer writes the ledger row and this balance in
-    one atomic write, so a balance can never move without a row behind it,
-    and `rebuild` recomputes the total from those rows whenever the two are
-    suspected of having drifted apart.
+    **Declared by its owner, never discovered.** Finflow works without a
+    single account — every alert is still recorded, so what came in and what
+    went out is visible on its own. An account is what somebody adds when
+    they want more than that: a running state for one savings account, one
+    card, one investment, without opening the bank's app to see it.
 
-    An account is found by its fingerprints — the (bank, instrument, last
-    four) pairs its alerts arrive under. It can hold several: one real
-    checking account emails as a debit card for purchases and as an account
-    number for transfers.
+    Adding one is also what starts the association. An account carries the
+    fingerprints its alerts arrive under — bank, instrument, last four — and
+    every movement matching one of them lands on it, including the ones that
+    already arrived before it existed.
+
+    The balance is a running total, not the authority. The authority is the
+    ledger of movements; this aggregate never decides whether it has seen a
+    movement before, because that answer cannot be reached from memory when
+    the queue is at-least-once and processes restart. `rebuild` recomputes the
+    total from those rows, which is what makes both drift and a late
+    adoption repairable.
     """
 
     user_id: UserId
     name: str
     kind: AccountKind
     currency: Currency
-    status: AccountStatus
     opening_balance: Balance
     balance: Balance
     opened_at: PosixTime
@@ -84,50 +88,7 @@ class Account(AggregateRoot[AccountId]):
         self.name = _valid_name(self.name)
 
     @classmethod
-    def open_automatically(
-        cls,
-        *,
-        user_id: UserId,
-        bank: str,
-        instrument_kind: str,
-        last_four: str,
-        kind: AccountKind,
-        currency: Currency,
-        opened_at: PosixTime,
-    ) -> Self:
-        """Create the account a first sighting implies, named generically.
-
-        The opening balance is zero because it is unknown: this account was
-        discovered by an alert, not declared by its owner, and nothing tells
-        us what it held before. The running total is therefore movement since
-        discovery until the user says otherwise — which is why it may go
-        negative on an asset.
-        """
-        institution = bank.strip().lower()
-        fingerprint = AccountFingerprint.from_parts(
-            bank=institution,
-            instrument_kind=instrument_kind,
-            last_four=last_four,
-        )
-        account = cls(
-            id=AccountId.new(),
-            user_id=user_id,
-            name=_suggest_name(institution, normalize_last_four(last_four)),
-            kind=kind,
-            currency=currency,
-            status=AccountStatus.AUTOMATIC,
-            opening_balance=Balance.zero(currency),
-            balance=Balance.zero(currency),
-            opened_at=opened_at,
-            bank=institution or None,
-        )
-        account._announce_opening()
-        account.link_fingerprint(fingerprint)
-
-        return account
-
-    @classmethod
-    def open_manually(
+    def open(
         cls,
         *,
         user_id: UserId,
@@ -137,12 +98,20 @@ class Account(AggregateRoot[AccountId]):
         opened_at: PosixTime,
         opening_balance: Money | None = None,
         bank: str | None = None,
+        instrument_kind: str | None = None,
+        last_four: str | None = None,
     ) -> Self:
-        """Create an account the user declared, with the balance they stated.
+        """Create the account its owner declared.
 
-        This is the path for what never emails a movement: a mortgage, a
-        student loan, cash in a drawer. On a liability the opening balance is
-        what is owed.
+        The opening balance is what they say it holds today — zero when they
+        do not know or do not care, which simply means the running total is
+        movement since this moment. On a liability it is what is owed.
+
+        The instrument is optional: cash in a drawer and a mortgage that never
+        emails have none, and an account without a fingerprint simply never
+        matches an alert. Given one, all three parts are required — matching
+        on bank and kind alone would merge every savings account somebody
+        holds at one bank into a single wrong balance.
         """
         institution = (bank or "").strip().lower()
         opening = (
@@ -163,13 +132,28 @@ class Account(AggregateRoot[AccountId]):
             name=name,
             kind=kind,
             currency=currency,
-            status=AccountStatus.CONFIRMED,
             opening_balance=opening,
             balance=opening,
             opened_at=opened_at,
             bank=institution or None,
         )
         account._announce_opening()
+
+        if (instrument_kind is None) != (last_four is None):
+            raise ValueError(
+                "An instrument needs both its kind and its last four digits: "
+                "half of one matches nothing, and the owner would only find "
+                "out when their movements kept arriving unassigned",
+            )
+
+        if instrument_kind is not None and last_four is not None:
+            account.link_fingerprint(
+                AccountFingerprint.from_parts(
+                    bank=institution,
+                    instrument_kind=instrument_kind,
+                    last_four=last_four,
+                ),
+            )
 
         return account
 
@@ -180,10 +164,6 @@ class Account(AggregateRoot[AccountId]):
     @property
     def is_closed(self) -> bool:
         return self.closed_at is not None
-
-    @property
-    def needs_review(self) -> bool:
-        return self.status is AccountStatus.AUTOMATIC
 
     def matches(self, fingerprint: AccountFingerprint) -> bool:
         return fingerprint in self.fingerprints
@@ -265,22 +245,12 @@ class Account(AggregateRoot[AccountId]):
 
     def rename(self, name: str) -> None:
         self.name = _valid_name(name)
-        # Naming it is reviewing it: the user looked at this account and said
-        # what it is.
-        self.status = AccountStatus.CONFIRMED
         self.record_event(
             AccountRenamed(
                 account_id=self.id,
                 user_id=self.user_id,
                 name=self.name,
             ),
-        )
-
-    def confirm(self) -> None:
-        """Accept the account as it stands, generic name included."""
-        self.status = AccountStatus.CONFIRMED
-        self.record_event(
-            AccountConfirmed(account_id=self.id, user_id=self.user_id),
         )
 
     def close(self, closed_at: PosixTime) -> None:
@@ -319,6 +289,7 @@ class Account(AggregateRoot[AccountId]):
                 category=self.category,
                 currency=self.currency,
                 opening_balance=self.opening_balance,
+                bank=self.bank,
             ),
         )
 
@@ -327,21 +298,23 @@ class Account(AggregateRoot[AccountId]):
 class Transaction(AggregateRoot[MovementId]):
     """One movement of money, as Financial understands it.
 
-    Its identity is derived from its content, so the same bank alert read
-    twice is the same transaction — which is what lets the ledger reject a
-    redelivery with a plain conditional insert instead of remembering what it
-    has already seen.
+    Two things produce one. A **bank alert**, whose identity is derived from
+    its own content, so the same alert read twice is the same transaction —
+    that is what lets the ledger reject a redelivery with a plain conditional
+    insert. And a **manual entry**, for the money that never emails: an
+    automatic payment, cash, a transfer the bank stayed quiet about. A manual
+    entry gets a random identity, because two identical ones are two entries
+    somebody meant to record.
 
-    A transaction that matches no account is **unassigned**, not discarded and
-    not guessed at. That happens when the alert named no instrument, named one
-    without its last four digits, or named one Financial cannot read — and
-    also when the digits are real but no account answers to them yet. The
-    money moved either way; refusing to keep the record would lose it, while
-    keeping it costs a row somebody can assign later.
+    A transaction that matches no account is **unassigned**, not discarded
+    and not guessed at. That is the ordinary state for anyone using Finflow
+    only to watch what comes in and goes out: with no accounts declared,
+    every movement is unassigned and the record is still complete.
 
-    Assignment is what puts it on a balance, and the two must land in one
-    atomic write: `assign_to` records the link, and `as_movement` hands
-    `Account.apply` the row behind the number.
+    Editing keeps `stated`, what the bank originally said. The identity never
+    moves with it — it is derived from the bank's own words, so a redelivery
+    of an alert somebody has since corrected still lands on the same row
+    instead of becoming a second expense.
     """
 
     user_id: UserId
@@ -350,12 +323,14 @@ class Transaction(AggregateRoot[MovementId]):
     occurred_at: PosixTime
     counterparty: str
     bank: str
-    # Both set together or neither: an account is found by its fingerprint and
-    # opened as its kind, and a movement carrying one without the other could
-    # do only half of that.
+    origin: TransactionOrigin = TransactionOrigin.BANK_ALERT
     account_fingerprint: AccountFingerprint | None = None
-    account_kind: AccountKind | None = None
     account_id: AccountId | None = None
+    # What the bank stated, kept from the first edit onwards. Absent while
+    # nothing has been corrected, and on anything entered by hand — there is
+    # no earlier version of a claim its author just made.
+    stated: StatedMovement | None = None
+    note: str | None = None
 
     @classmethod
     def from_alert(
@@ -373,9 +348,10 @@ class Transaction(AggregateRoot[MovementId]):
         """Build the movement one bank alert describes.
 
         Takes what the boundary already read into Financial's vocabulary. An
-        instrument this cannot use costs the routing, never the movement: the
-        transaction is still recorded, unassigned, where the alternative is
-        losing somebody's money because a bank abbreviated a card.
+        instrument this cannot use costs the movement its routing, never the
+        movement itself: it is still recorded, unassigned, where the
+        alternative is losing somebody's money because a bank abbreviated a
+        card.
         """
         institution = bank.strip().lower()
 
@@ -392,11 +368,6 @@ class Transaction(AggregateRoot[MovementId]):
             instrument_kind=instrument_kind,
             last_four=last_four,
         )
-        account_fingerprint, account_kind = _read_instrument(
-            bank=institution,
-            instrument_kind=instrument_kind,
-            last_four=last_four,
-        )
         transaction = cls(
             id=MovementId.from_fingerprint(fingerprint),
             user_id=user_id,
@@ -405,32 +376,52 @@ class Transaction(AggregateRoot[MovementId]):
             occurred_at=occurred_at,
             counterparty=counterparty.strip(),
             bank=institution,
-            account_fingerprint=account_fingerprint,
-            account_kind=account_kind,
-        )
-        transaction.record_event(
-            TransactionRecorded(
-                movement_id=transaction.id,
-                user_id=user_id,
-                direction=direction,
-                amount=amount,
-                movement_occurred_at=occurred_at,
-                counterparty=transaction.counterparty,
+            origin=TransactionOrigin.BANK_ALERT,
+            account_fingerprint=_account_fingerprint(
                 bank=institution,
-                account_fingerprint=account_fingerprint,
+                instrument_kind=instrument_kind,
+                last_four=last_four,
             ),
         )
+        transaction._announce()
 
         return transaction
 
-    @property
-    def fingerprint(self) -> MovementFingerprint:
-        """The key the ledger writes conditionally.
+    @classmethod
+    def enter_manually(
+        cls,
+        *,
+        user_id: UserId,
+        direction: MovementDirection,
+        amount: Money,
+        occurred_at: PosixTime,
+        counterparty: str,
+        account_id: AccountId | None = None,
+        bank: str = "",
+        note: str | None = None,
+    ) -> Self:
+        """Record money the user says moved, that no alert announced.
 
-        Derived, not stored beside the id: they are the same string, and two
-        fields that cannot legally disagree are two fields to keep in step.
+        This is the path for an automatic payment the bank never emails, for
+        cash, for anything the parser could not be expected to see. The
+        account is optional: somebody watching only what comes in and goes out
+        has no accounts at all, and the movement is worth recording anyway.
         """
-        return MovementFingerprint(value=self.id.value)
+        transaction = cls(
+            id=MovementId.new(),
+            user_id=user_id,
+            direction=direction,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(counterparty),
+            bank=bank.strip().lower(),
+            origin=TransactionOrigin.MANUAL,
+            account_id=account_id,
+            note=note,
+        )
+        transaction._announce()
+
+        return transaction
 
     @property
     def status(self) -> TransactionStatus:
@@ -443,10 +434,11 @@ class Transaction(AggregateRoot[MovementId]):
 
     @property
     def is_routable(self) -> bool:
-        """Whether this movement can find or open an account at all.
+        """Whether an account could ever claim this movement by matching.
 
-        False means no instrument worth matching, so the movement waits for a
-        person rather than for another alert.
+        False means the alert named no instrument worth matching, so it waits
+        for somebody to place it by hand rather than for an account to be
+        declared.
         """
         return self.account_fingerprint is not None
 
@@ -454,13 +446,81 @@ class Transaction(AggregateRoot[MovementId]):
     def needs_assignment(self) -> bool:
         return self.account_id is None
 
+    def edit(
+        self,
+        *,
+        amount: Money | None = None,
+        occurred_at: PosixTime | None = None,
+        counterparty: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        """Correct what this movement says, keeping what the bank said.
+
+        A parser reads a merchant wrong, a date lands in the wrong month, an
+        amount is off. Correcting it must not lose the original: the bank's
+        own words are the only way to tell later whether the balance or the
+        alert was wrong. Whatever is left as None is left alone, and an empty
+        note clears the one that is there.
+
+        Never touches identity. The id came from the bank's statement, so a
+        redelivery of a corrected alert still writes the same row rather than
+        arriving as a second expense.
+        """
+        replacement_amount = self.amount if amount is None else amount
+        replacement_time = self.occurred_at if occurred_at is None else occurred_at
+        replacement_party = (
+            self.counterparty
+            if counterparty is None
+            else _valid_counterparty(counterparty)
+        )
+        # A note is an annotation, not a claim about the movement, so it is
+        # tracked apart: writing one must not fabricate a "the bank said
+        # something different" record whose values match the live ones.
+        corrects_the_statement = (
+            replacement_amount != self.amount
+            or replacement_time != self.occurred_at
+            or replacement_party != self.counterparty
+        )
+        replacement_note = self.note if note is None else (note.strip() or None)
+
+        if not corrects_the_statement and replacement_note == self.note:
+            return
+
+        if (
+            corrects_the_statement
+            and self.stated is None
+            and self.origin is TransactionOrigin.BANK_ALERT
+        ):
+            # Captured once, on the first correction: later edits correct a
+            # correction, and what matters is still what the bank stated.
+            self.stated = StatedMovement(
+                amount=self.amount,
+                occurred_at=self.occurred_at,
+                counterparty=self.counterparty,
+            )
+
+        self.amount = replacement_amount
+        self.occurred_at = replacement_time
+        self.counterparty = replacement_party
+        self.note = replacement_note
+
+        self.record_event(
+            TransactionEdited(
+                movement_id=self.id,
+                user_id=self.user_id,
+                amount=self.amount,
+                movement_occurred_at=self.occurred_at,
+                counterparty=self.counterparty,
+            ),
+        )
+
     def assign_to(self, account_id: AccountId) -> None:
         """Put this movement on an account.
 
         Idempotent for the account it already sits on — a redelivery must not
         record the same assignment twice — and refused for any other, because
         moving it means first taking the amount back off the balance that
-        holds it.
+        holds it. `unassign` is that step.
         """
         if self.account_id == account_id:
             return
@@ -480,6 +540,27 @@ class Transaction(AggregateRoot[MovementId]):
             ),
         )
 
+    def unassign(self) -> None:
+        """Take this movement off the account holding it.
+
+        The caller has to reverse the amount on that balance in the same
+        write. Nothing here can do it: the aggregate does not know the
+        balance, which is exactly what keeps a balance from moving without a
+        ledger row behind it.
+        """
+        if self.account_id is None:
+            return
+
+        previous = self.account_id
+        self.account_id = None
+        self.record_event(
+            TransactionUnassigned(
+                movement_id=self.id,
+                user_id=self.user_id,
+                account_id=previous,
+            ),
+        )
+
     def as_movement(self) -> LedgerMovement:
         """The ledger row `Account.apply` moves a balance by."""
         return LedgerMovement(
@@ -489,56 +570,56 @@ class Transaction(AggregateRoot[MovementId]):
             occurred_at=self.occurred_at,
         )
 
+    def _announce(self) -> None:
+        self.record_event(
+            TransactionRecorded(
+                movement_id=self.id,
+                user_id=self.user_id,
+                direction=self.direction,
+                amount=self.amount,
+                movement_occurred_at=self.occurred_at,
+                counterparty=self.counterparty,
+                bank=self.bank,
+                origin=self.origin,
+                account_fingerprint=self.account_fingerprint,
+            ),
+        )
 
-def _read_instrument(
+
+def _account_fingerprint(
     *,
     bank: str,
     instrument_kind: str | None,
     last_four: str | None,
-) -> tuple[AccountFingerprint | None, AccountKind | None]:
-    """What an alert's instrument is worth for routing, if anything.
+) -> AccountFingerprint | None:
+    """The key an account would have to answer to for this movement.
 
-    Both halves or neither. A kind Financial does not recognise yields no
-    fingerprint even when the digits are perfectly good: the only account it
-    could match was opened under a kind that *is* recognised, so the strings
-    would not meet anyway, and opening a new one would mean guessing whether
-    it holds money or owes it.
+    None when the alert named no instrument, or named one without digits, or
+    carried digits no account key can use. All three mean the same thing: no
+    account can claim this movement by matching, so it waits for a person.
     """
     if instrument_kind is None or last_four is None:
-        return None, None
-
-    account_kind = AccountKind.from_instrument(instrument_kind)
-
-    if account_kind is None:
-        return None, None
+        return None
 
     try:
-        fingerprint = AccountFingerprint.from_parts(
+        return AccountFingerprint.from_parts(
             bank=bank,
             instrument_kind=instrument_kind,
             last_four=last_four,
         )
     except ValueError:
-        # Digits this cannot read. Ingestion gates them on bare `str.isdigit`,
-        # so an alert can carry numerals no account key can use.
-        return None, None
-
-    return fingerprint, account_kind
+        # Ingestion gates digits on bare `str.isdigit`, so an alert can carry
+        # numerals no account key can use.
+        return None
 
 
-def _suggest_name(bank: str, last_four: str) -> str:
-    """A placeholder the user will recognise and can rename.
+def _valid_counterparty(value: str) -> str:
+    stripped = value.strip()
 
-    Trimmed to fit the name limit rather than allowed to breach it: the bank
-    is whatever an email said it was, and a long one must not stop an account
-    from being created for a real transaction.
-    """
-    suffix = f" ••{last_four}"
-    institution = (bank.title() if bank else "Account")[
-        : MAX_ACCOUNT_NAME_LENGTH - len(suffix)
-    ].strip()
+    if not stripped:
+        raise ValueError("A transaction requires a counterparty")
 
-    return f"{institution}{suffix}"
+    return stripped
 
 
 def _valid_name(name: str) -> str:

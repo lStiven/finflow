@@ -15,8 +15,12 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/health",
-              "host": ["{{base_url}}"],
-              "path": ["health"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
             }
           },
           "response": []
@@ -50,17 +54,29 @@
               "request": {
                 "method": "POST",
                 "header": [
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
-                  "options": { "raw": { "language": "json" } }
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 },
                 "url": {
                   "raw": "{{base_url}}/identity/register",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "register"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "register"
+                  ]
                 },
                 "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. `allowed_domains`/`allowed_addresses` are optional — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
               },
@@ -87,17 +103,29 @@
               "request": {
                 "method": "POST",
                 "header": [
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\"\n}",
-                  "options": { "raw": { "language": "json" } }
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 },
                 "url": {
                   "raw": "{{base_url}}/identity/login",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "login"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "login"
+                  ]
                 },
                 "description": "Same response as Register for an existing account. Same error for an unknown email and a wrong password on purpose. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
               },
@@ -108,12 +136,20 @@
               "request": {
                 "method": "GET",
                 "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  }
                 ],
                 "url": {
                   "raw": "{{base_url}}/identity/me",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "me"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "me"
+                  ]
                 },
                 "description": "Whoever the bearer token verifies as."
               },
@@ -129,12 +165,20 @@
               "request": {
                 "method": "GET",
                 "header": [
-                  { "key": "Authorization", "value": "{{token}}" }
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  }
                 ],
                 "url": {
                   "raw": "{{base_url}}/identity/inbox",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "inbox"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "inbox"
+                  ]
                 },
                 "description": "The caller's forwarding address (assigned automatically at registration) and who is currently approved to send to it."
               },
@@ -145,18 +189,33 @@
               "request": {
                 "method": "PATCH",
                 "header": [
-                  { "key": "Authorization", "value": "{{token}}" },
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"allowed_domains\": [\"an.notificacionesbancolombia.com\"],\n  \"allowed_addresses\": []\n}",
-                  "options": { "raw": { "language": "json" } }
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 },
                 "url": {
                   "raw": "{{base_url}}/identity/inbox",
-                  "host": ["{{base_url}}"],
-                  "path": ["identity", "inbox"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "inbox"
+                  ]
                 },
                 "description": "Replaces — not merges — who may send to the caller's forwarding address. Leave both lists empty and the address is approved for nobody, the safe default. See docs/email-forwarding.md for the full flow, including how the user then sets up the actual forwarding rule in their own mail client."
               },
@@ -177,17 +236,29 @@
               "request": {
                 "method": "POST",
                 "header": [
-                  { "key": "Content-Type", "value": "application/json" }
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
                 ],
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"recipient\": \"REPLACE_WITH_ADDRESS_FROM_GET_INBOX\",\n  \"message_id\": \"<unique-message-id@example.com>\",\n  \"sender\": \"alertasynotificaciones@an.notificacionesbancolombia.com\",\n  \"subject\": \"Aviso de transacción\",\n  \"raw_content\": \"Bancolombia: Compraste $45.000 en EXITO CALI con tu T.Cred *1234, el 20/08/2026 a las 10:15\",\n  \"received_at\": null\n}",
-                  "options": { "raw": { "language": "json" } }
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 },
                 "url": {
                   "raw": "{{base_url}}/ingestion/bank-notifications",
-                  "host": ["{{base_url}}"],
-                  "path": ["ingestion", "bank-notifications"]
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "ingestion",
+                    "bank-notifications"
+                  ]
                 },
                 "description": "A local testing seam, not a product path — only mounted when ENVIRONMENT=local. Stands in for the ingest worker: accepts one raw email body directly, bypassing IMAP and the shared ingest mailbox entirely. `recipient` must be a real forwarding address from Get inbox. Always 202, even for an unknown recipient."
               },
@@ -205,12 +276,20 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
             ],
             "url": {
               "raw": "{{base_url}}/merchants/categories",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", "categories"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                "categories"
+              ]
             },
             "description": "The fixed category vocabulary, for a dropdown that cannot drift from it."
           },
@@ -221,19 +300,48 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
             ],
             "url": {
               "raw": "{{base_url}}/merchants?search=&category=&needs_review=&sort=last_seen&limit=20&offset=0",
-              "host": ["{{base_url}}"],
-              "path": ["merchants"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants"
+              ],
               "query": [
-                { "key": "search", "value": "", "description": "Free text, matched against merchant/alias names" },
-                { "key": "category", "value": "", "description": "One of the Categories values, e.g. groceries" },
-                { "key": "needs_review", "value": "", "description": "true / false" },
-                { "key": "sort", "value": "last_seen", "description": "name | last_seen | times_seen" },
-                { "key": "limit", "value": "20" },
-                { "key": "offset", "value": "0" }
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Free text, matched against merchant/alias names"
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "One of the Categories values, e.g. groceries"
+                },
+                {
+                  "key": "needs_review",
+                  "value": "",
+                  "description": "true / false"
+                },
+                {
+                  "key": "sort",
+                  "value": "last_seen",
+                  "description": "name | last_seen | times_seen"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
               ]
             },
             "description": "Scoped to the authenticated caller only. `needs_review` in the response counts across everything the user owns, not just this page, so a badge does not move while typing in the search box."
@@ -245,14 +353,25 @@
           "request": {
             "method": "GET",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
             ],
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Full detail, including every alias (child spelling). 404 both when the id never existed and when it belongs to another user."
@@ -264,20 +383,38 @@
           "request": {
             "method": "PATCH",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"display_name\": \"Éxito\",\n  \"category\": \"groceries\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Rename, recategorize, or both — at least one of the two fields is required. Either counts as reviewing it, so it leaves the review queue."
@@ -289,14 +426,26 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
             ],
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId/confirm",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId", "confirm"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId",
+                "confirm"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Accepts the merchant as it stands, guessed children (aliases) included."
@@ -308,20 +457,40 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"fingerprint\": \"REPLACE_WITH_FINGERPRINT\",\n  \"target_merchant_id\": \"REPLACE_WITH_TARGET_MERCHANT_ID\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId/aliases/move",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId", "aliases", "move"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId",
+                "aliases",
+                "move"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Reattaches one spelling (alias) from the merchant in the path to `target_merchant_id`. Permanent: from here on that spelling resolves by exact match, never re-derived by a rule."
@@ -333,20 +502,40 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"fingerprint\": \"REPLACE_WITH_FINGERPRINT\",\n  \"display_name\": \"New Merchant Name\",\n  \"category\": \"uncategorized\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId/aliases/split",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId", "aliases", "split"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId",
+                "aliases",
+                "split"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Pulls one spelling out of the merchant in the path into a brand-new merchant of its own, and returns that new merchant. 201 on success."
@@ -358,23 +547,458 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Authorization", "value": "{{token}}" },
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"absorbed_merchant_id\": \"REPLACE_WITH_ABSORBED_MERCHANT_ID\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/merchants/:merchantId/merge",
-              "host": ["{{base_url}}"],
-              "path": ["merchants", ":merchantId", "merge"],
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                ":merchantId",
+                "merge"
+              ],
               "variable": [
-                { "key": "merchantId", "value": "" }
+                {
+                  "key": "merchantId",
+                  "value": ""
+                }
               ]
             },
             "description": "Folds `absorbed_merchant_id` into the merchant named in the path, which survives with everything the absorbed one had."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Financial",
+      "description": "Accounts are declared, never discovered. Finflow works with none at all — every alert is recorded and every movement stays unassigned, which is a complete answer for somebody who only wants to see what came in and what went out. Declaring an account is what starts the association, and it is retroactive: the alerts that already arrived under that card are adopted and the balance replays from them.",
+      "item": [
+        {
+          "name": "List accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts?scope=open",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts"
+              ],
+              "query": [
+                {
+                  "key": "scope",
+                  "value": "open",
+                  "description": "open | closed | all"
+                }
+              ]
+            },
+            "description": "Every account the caller declared, with what each holds now, plus net worth per currency. Balances are signed: an asset legitimately goes below zero when no opening balance was stated, and a liability's positive amount is what is owed."
+          },
+          "response": []
+        },
+        {
+          "name": "Open account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tarjeta Bancolombia\",\n  \"kind\": \"credit_card\",\n  \"currency\": \"COP\",\n  \"opening_balance\": null,\n  \"bank\": \"Bancolombia\",\n  \"instrument_kind\": \"credit_card\",\n  \"last_four\": \"7653\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts"
+              ]
+            },
+            "description": "kind: savings | checking | cash | investment | credit_card | loan | mortgage. The category (asset or liability) is derived from it — nobody gets to declare a mortgage an asset.\n\nbank, instrument_kind and last_four go together or not at all: matching on fewer would merge two real accounts into one wrong balance. Omit all three for what never emails a movement (cash, a mortgage).\n\nRetroactive: movements already waiting under that key are adopted and the balance replays from them."
+          },
+          "response": []
+        },
+        {
+          "name": "Get account",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "An account belonging to somebody else reads as missing rather than forbidden."
+          },
+          "response": []
+        },
+        {
+          "name": "Rename account",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tarjeta principal\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Renaming changes nothing else — balance and instruments stay."
+          },
+          "response": []
+        },
+        {
+          "name": "Link instrument",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bank\": \"Bancolombia\",\n  \"instrument_kind\": \"savings_account\",\n  \"last_four\": \"1234\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/instruments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "instruments"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "One real account emails under several names: a checking account as a debit card for purchases and as an account number for transfers. Always the owner's call — inferring it would be guessing about somebody's money — and it adopts the movements already waiting under that key."
+          },
+          "response": []
+        },
+        {
+          "name": "Close account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/close",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "close"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Stops taking movements, keeping the history and the balance. Not a delete: a closed account still explains past spending, and a paid-off loan closing at zero is exactly what should stay visible. List it again with ?scope=closed or ?scope=all."
+          },
+          "response": []
+        },
+        {
+          "name": "Net worth",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/net-worth",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "net-worth"
+              ]
+            },
+            "description": "Assets minus liabilities, one figure per currency held — never summed across them, because that would need an exchange rate nobody recorded. Empty for somebody who declared no accounts, which is an ordinary answer."
+          },
+          "response": []
+        },
+        {
+          "name": "List transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions?account_id=&unassigned=&origin=&search=&limit=50&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "account_id",
+                  "value": "",
+                  "description": "Only this account's movements"
+                },
+                {
+                  "key": "unassigned",
+                  "value": "",
+                  "description": "true lists only what no account claimed"
+                },
+                {
+                  "key": "origin",
+                  "value": "",
+                  "description": "bank_alert | manual"
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Matched against the counterparty"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Newest first. `unassigned=true` is the queue somebody works through after declaring an account — or the whole ledger, for somebody who declared none."
+          },
+          "response": []
+        },
+        {
+          "name": "Enter transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"direction\": \"outgoing\",\n  \"amount\": \"89900\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1787500000,\n  \"counterparty\": \"NETFLIX\",\n  \"account_id\": null,\n  \"bank\": \"\",\n  \"note\": \"cobro automático\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/transactions",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions"
+              ]
+            },
+            "description": "Money that moved without an alert to announce it: an automatic payment the bank stays quiet about, cash, a transfer that produced no email.\n\ndirection: outgoing | incoming. amount is a string, never a JSON number — a float loses cents. occurred_at is epoch seconds. account_id is optional: somebody watching only what comes in and goes out has no accounts."
+          },
+          "response": []
+        },
+        {
+          "name": "Get transaction",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "`stated` is present only once somebody corrected this movement, and holds what the bank originally said."
+          },
+          "response": []
+        },
+        {
+          "name": "Edit transaction",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"50000\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1787500000,\n  \"counterparty\": \"EXITO EXPRESS CALI\",\n  \"note\": null,\n  \"account_id\": null,\n  \"detach\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Everything omitted is left alone; at least one field is required. Changing the amount needs its currency too.\n\nOn a movement that came from a bank alert, the first correction keeps what the bank said in `stated` — that is how a balance that looks wrong can be traced back to whether the alert or the correction was the mistake. The identity never moves with an edit, so a redelivery of a corrected alert still lands on the same row.\n\naccount_id moves it to another account; detach takes it off whatever holds it. Not both. Either way the affected balances replay from the ledger."
           },
           "response": []
         }

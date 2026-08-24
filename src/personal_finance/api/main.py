@@ -5,6 +5,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
+from personal_finance.contexts.financial.presentation.http.router import (
+    router as financial_router,
+)
 from personal_finance.contexts.identity.presentation.http.router import (
     get_login_use_case,
     get_register_use_case,
@@ -58,6 +61,7 @@ def create_app(*, expose_local_only_routes: bool) -> FastAPI:
     app.include_router(health_router)
     app.include_router(identity_router)
     app.include_router(merchant_router)
+    app.include_router(financial_router)
 
     if expose_local_only_routes:
         # Real intake never calls this: a user forwards bank email to their

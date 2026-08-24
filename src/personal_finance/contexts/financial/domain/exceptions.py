@@ -21,9 +21,8 @@ class CurrencyMismatchError(FinancialDomainError):
 class TransactionAlreadyAssignedError(FinancialDomainError):
     """Raised when a movement already on one account is offered to another.
 
-    Reassignment is deferred, not supported and refused: moving a movement
-    means first taking its amount back off the balance that holds it, and no
-    operation does that yet. Until one does, a movement auto-assigned to the
-    wrong account stays there — which matters, because reading a debit card
-    as a savings account is a guess the user may need to correct.
+    Not a refusal to reassign — that is a real operation — but a refusal to do
+    it by overwriting the link, which would leave the amount counted on a
+    balance that never gave it up. `Transaction.unassign` is the step that has
+    to come first, and it is what the edit path uses.
     """

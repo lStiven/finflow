@@ -41,10 +41,11 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
     AccountKind,
-    AccountStatus,
     Balance,
     MovementDirection,
     MovementId,
+    StatedMovement,
+    TransactionOrigin,
 )
 from personal_finance.shared.domain.value_objects import (
     Currency,
@@ -136,7 +137,6 @@ def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
         "name": {"S": account.name},
         "kind": {"S": account.kind.value},
         "currency": {"S": account.currency.value},
-        "status": {"S": account.status.value},
         "opening_balance": {"N": str(account.opening_balance.signed_amount)},
         BALANCE_ATTRIBUTE: {"N": str(account.balance.signed_amount)},
         MOVEMENTS_APPLIED_ATTRIBUTE: {"N": str(account.movements_applied)},
@@ -180,11 +180,6 @@ def account_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Account:
         name=name,
         kind=_enum(AccountKind, kind, "account kind"),
         currency=money,
-        status=_enum(
-            AccountStatus,
-            _string(item, "status") or AccountStatus.AUTOMATIC.value,
-            "account status",
-        ),
         opening_balance=Balance.from_signed(_number(item, "opening_balance"), money),
         balance=Balance.from_signed(_number(item, BALANCE_ATTRIBUTE), money),
         opened_at=PosixTime.from_epoch_seconds(int(_number(item, "opened_at"))),
@@ -220,6 +215,7 @@ def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDe
         "counterparty": {"S": transaction.counterparty},
         "bank": {"S": transaction.bank},
         "status": {"S": transaction.status.value},
+        "origin": {"S": transaction.origin.value},
         **(
             {ACCOUNT_ID_ATTRIBUTE: {"S": str(account_id.value)}}
             if account_id is not None
@@ -230,9 +226,21 @@ def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDe
             if account_fingerprint is not None
             else {}
         ),
+        **({"note": {"S": transaction.note}} if transaction.note else {}),
         **(
-            {"account_kind": {"S": transaction.account_kind.value}}
-            if transaction.account_kind is not None
+            {
+                "stated": {
+                    "M": {
+                        "amount": {"S": str(stated.amount.amount)},
+                        "currency": {"S": stated.amount.currency.value},
+                        "occurred_at": {
+                            "N": str(stated.occurred_at.as_epoch_seconds())
+                        },
+                        "counterparty": {"S": stated.counterparty},
+                    },
+                },
+            }
+            if (stated := transaction.stated) is not None
             else {}
         ),
     }
@@ -260,7 +268,6 @@ def movement_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Transaction
 
     account_id = _string(item, ACCOUNT_ID_ATTRIBUTE)
     fingerprint = _string(item, "account_fingerprint")
-    account_kind = _string(item, "account_kind")
     occurred_at = item.get("occurred_at", {}).get("N")
 
     if occurred_at is None:
@@ -282,14 +289,45 @@ def movement_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Transaction
         account_fingerprint=(
             AccountFingerprint(value=fingerprint) if fingerprint is not None else None
         ),
-        account_kind=(
-            _enum(AccountKind, account_kind, "movement account kind")
-            if account_kind is not None
-            else None
+        origin=_enum(
+            TransactionOrigin,
+            _string(item, "origin") or TransactionOrigin.BANK_ALERT.value,
+            "movement origin",
         ),
         account_id=(
             AccountId.from_string(account_id) if account_id is not None else None
         ),
+        stated=_stated_to_entity(item.get("stated", {}).get("M")),
+        note=_string(item, "note"),
+    )
+
+
+def _stated_to_entity(
+    item: Mapping[str, AttributeValueTypeDef] | None,
+) -> StatedMovement | None:
+    if item is None:
+        return None
+
+    amount = _string(item, "amount")
+    currency = _string(item, "currency")
+    counterparty = _string(item, "counterparty")
+    occurred_at = item.get("occurred_at", {}).get("N")
+
+    if (
+        amount is None
+        or currency is None
+        or counterparty is None
+        or occurred_at is None
+    ):
+        raise CorruptFinancialItemError("Stored original movement is incomplete")
+
+    return StatedMovement(
+        amount=Money(
+            amount=Decimal(amount),
+            currency=_enum(Currency, currency, "original movement currency"),
+        ),
+        occurred_at=PosixTime.from_epoch_seconds(int(occurred_at)),
+        counterparty=counterparty,
     )
 
 
@@ -342,18 +380,65 @@ class DynamoDBAccountRepository:
         ]
 
     def save(self, account: Account) -> None:
-        """Overwrite the account and re-point every fingerprint at it.
+        """Update what the owner changed, and leave the balance alone.
 
-        Unconditional, unlike `add`: the caller already holds the account and
-        is changing it. The balance goes out as written, which is why nothing
-        that moves money comes through here — `TransactionLedger.record` owns
-        that, and it adds rather than overwrites.
+        Deliberately *not* a whole-item put. The balance is moved by the
+        ledger's atomic `ADD`, and a read-modify-write here would silently
+        discard any movement that landed between the read and this write —
+        with a ledger row still on record and nothing to trigger a repair.
+        A rename must not be able to lose an expense.
+
+        `overwrite_balance` is the one path allowed to write that number, and
+        it recomputes it from the rows first.
         """
-        self._client.put_item(
+        item = account_to_item(account)
+        assignments = {
+            name: value
+            for name, value in item.items()
+            if name
+            not in (
+                PARTITION_KEY,
+                SORT_KEY,
+                BALANCE_ATTRIBUTE,
+                MOVEMENTS_APPLIED_ATTRIBUTE,
+            )
+        }
+        names = {f"#{index}": name for index, name in enumerate(assignments)}
+        values = {
+            f":{index}": value for index, value in enumerate(assignments.values())
+        }
+        self._client.update_item(
             TableName=self._table_name,
-            Item=account_to_item(account),
+            Key=_key(account.user_id, f"{ACCOUNT_PREFIX}{account.id.value}"),
+            UpdateExpression="SET "
+            + ", ".join(f"{name} = :{index}" for index, name in enumerate(names)),
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+        self._put_fingerprints(account)
+
+    def overwrite_balance(self, account: Account) -> None:
+        """Write a balance that was recomputed from the ledger.
+
+        The repair path, and the only writer of this number other than the
+        ledger's atomic add. Racing a movement that lands mid-replay is still
+        possible; unlike a lost update it is self-correcting, because the next
+        replay reads the row that was missed.
+        """
+        self._client.update_item(
+            TableName=self._table_name,
+            Key=_key(account.user_id, f"{ACCOUNT_PREFIX}{account.id.value}"),
+            UpdateExpression=(
+                f"SET {BALANCE_ATTRIBUTE} = :balance, "
+                f"{MOVEMENTS_APPLIED_ATTRIBUTE} = :applied"
+            ),
+            ExpressionAttributeValues={
+                ":balance": {"N": str(account.balance.signed_amount)},
+                ":applied": {"N": str(account.movements_applied)},
+            },
         )
 
+    def _put_fingerprints(self, account: Account) -> None:
         for value in sorted(print_.value for print_ in account.fingerprints):
             self._client.put_item(
                 TableName=self._table_name,
@@ -495,6 +580,52 @@ class DynamoDBTransactionLedger:
             raise
 
         return True
+
+    def save(self, transaction: Transaction) -> None:
+        """Overwrite a movement that already exists.
+
+        Unconditional, unlike `record`: the caller holds the row and is
+        changing it, not deciding whether it is new. The balance it may affect
+        is recomputed from the ledger afterwards rather than nudged here — a
+        correction is rare, and replaying the rows is the one path that cannot
+        drift from them.
+        """
+        self._client.put_item(
+            TableName=self._table_name,
+            Item=movement_to_item(transaction),
+        )
+
+    def list_unassigned_matching(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Sequence[Transaction]:
+        return [
+            movement_to_entity(item)
+            for item in _query_prefix(
+                self._client,
+                table_name=self._table_name,
+                user_id=user_id,
+                prefix=MOVEMENT_PREFIX,
+                filter_expression=(
+                    f"attribute_not_exists({ACCOUNT_ID_ATTRIBUTE}) "
+                    "AND account_fingerprint = :fingerprint"
+                ),
+                filter_values={":fingerprint": {"S": fingerprint.value}},
+            )
+        ]
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        return [
+            movement_to_entity(item)
+            for item in _query_prefix(
+                self._client,
+                table_name=self._table_name,
+                user_id=user_id,
+                prefix=MOVEMENT_PREFIX,
+            )
+        ]
 
     def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
         response = self._client.get_item(

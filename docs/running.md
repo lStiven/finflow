@@ -157,13 +157,44 @@ resto — corre `just parse-worker`, `just merchant-worker` y
 curl -s http://localhost:8000/merchants -H "Authorization: Bearer $TOKEN"
 ```
 
-Eso muestra el comercio. **El saldo todavía no tiene endpoint**: Financial
-escribe la cuenta, la fila del ledger y el saldo, pero el lado de lectura
-—listado de cuentas, patrimonio neto— es el siguiente paso del proyecto, y con
-él llegará también una tarea de inspección como las de abajo.
+Eso muestra el comercio. Para el dinero, el movimiento está registrado pero
+**sin asignar**: nadie ha declarado todavía una cuenta para esa tarjeta, y eso
+es correcto — Finflow funciona así para quien solo quiere ver qué entra y qué
+sale.
 
-Por ahora lo que se ve es la salida del propio `financial-worker`. Esta es una
-pasada real con la misma compra entregada dos veces:
+```bash
+curl -s "http://localhost:8000/financial/transactions?unassigned=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Declara la cuenta y adopta lo que ya llegó.** Es retroactivo: el saldo se
+recalcula con las alertas que estaban esperando.
+
+```bash
+curl -X POST http://localhost:8000/financial/accounts \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Tarjeta Bancolombia","kind":"credit_card","currency":"COP",
+       "bank":"Bancolombia","instrument_kind":"credit_card","last_four":"1234"}'
+
+curl -s http://localhost:8000/financial/accounts -H "Authorization: Bearer $TOKEN"
+curl -s http://localhost:8000/financial/net-worth -H "Authorization: Bearer $TOKEN"
+```
+
+**Registra a mano lo que el banco no anuncia** —un pago automático, efectivo—
+y corrígelo si hace falta:
+
+```bash
+curl -X POST http://localhost:8000/financial/transactions \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"direction":"outgoing","amount":"89900","currency":"COP",
+       "occurred_at":1787500000,"counterparty":"NETFLIX","note":"cobro automatico"}'
+```
+
+La colección de [Postman](postman/README.md) trae los once requests de la
+carpeta *Financial* con sus descripciones.
+
+Y esta es la salida del propio `financial-worker` en una pasada real, con la
+misma compra entregada dos veces:
 
 ```
 INFO:...logging_event_publisher:domain_event | event_type='AccountOpened' …
@@ -180,14 +211,12 @@ del correo— y la segunda no aplicó nada. `outcome` es lo que hay que mirar:
 
 | | |
 |---|---|
-| `applied` | Cayó en una cuenta y movió su saldo. |
-| `unassigned` | La alerta no nombró una tarjeta que Financial pudiera usar. El movimiento se guarda igual, esperando a que alguien lo coloque. Es lo esperado, no un fallo. |
+| `applied` | Cayó en una cuenta declarada y movió su saldo. |
+| `unassigned` | Nadie ha declarado una cuenta para esa tarjeta, o la alerta no nombró una que Financial pudiera usar. El movimiento se guarda igual y se adopta en cuanto exista la cuenta. Es lo esperado, no un fallo. |
 | `duplicate` | Ese movimiento ya estaba en el ledger. No se aplicó nada: ni fila, ni saldo — por eso `account_id` viene vacío. |
 
-Los `domain_event` de arriba son la otra mitad de la historia: `AccountOpened`
-solo aparece la primera vez que se ve una tarjeta, porque la cuenta se abre
-sola. Deliberadamente **no se registra ni el monto, ni la contraparte, ni los
-dígitos** — juntos son una línea del historial de gastos de alguien, y un log
+Los `domain_event` de arriba son la otra mitad de la historia. Deliberadamente
+**no se registra ni el monto, ni la contraparte, ni los dígitos** — juntos son una línea del historial de gastos de alguien, y un log
 no es sitio para eso.
 
 ### 5. Herramientas de inspección
@@ -231,8 +260,28 @@ del perfil de `~/.aws`, y desplegado del rol de la instancia o la tarea (deja
 `AWS_PROFILE` sin valor en ese caso).
 
 Los secretos de la aplicación —`IDENTITY_JWT_SECRET`,
-`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— deberían venir de un
-gestor de secretos, no del fichero.
+`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— no van en el fichero:
+van en **SSM Parameter Store**, y el fichero solo guarda una referencia.
+
+```bash
+just secret-put /finflow/production/jwt-secret "$(python3 -c 'import secrets;print(secrets.token_hex(32))')"
+```
+
+Imprime la línea que hay que pegar en `.env.production`:
+
+```
+IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret
+```
+
+Cualquier valor que **no** empiece por `ssm:` se toma como el secreto mismo,
+que es lo que mantiene el desarrollo local con valores planos. La conversión es
+por secreto, no global, así que `grep ssm: .env.production` responde cuáles ya
+están fuera del fichero. Se leen una vez por proceso: rotar uno exige
+reiniciar.
+
+Los parámetros estándar son gratuitos (hasta diez mil) y se cifran con KMS —
+por eso Parameter Store y no Secrets Manager, que cobra por secreto y mes a
+cambio de una rotación automática que aquí nadie usa todavía.
 
 ### 2. Crear los recursos
 
@@ -304,6 +353,7 @@ degradarse en silencio. Estos son los mensajes que verás y qué significan:
 | `INGESTION_PARSE_QUEUE_URL is not set` | Corre el aprovisionamiento y pega la URL. Si no, se aceptarían notificaciones que nunca se parsearían. |
 | `MERCHANT_EVENTS_QUEUE_URL is not set` | Igual, para el worker de comercios. |
 | `FINANCIAL_EVENTS_QUEUE_URL is not set` | Igual, para el worker de saldos: sin él ningún movimiento tocaría una cuenta. |
+| `Could not read the secret at '/...' from Parameter Store` | La referencia `ssm:` apunta a un parámetro que no existe o al que el rol no tiene acceso. Nunca se degrada a vacío: un secreto de firma ausente tiene que parar el arranque. |
 | `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
 | `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
 
@@ -330,4 +380,11 @@ movimiento real. Revisa las colas `*-dlq` si algo desaparece sin explicación.
 | `POST /merchants/{id}/confirm` | Aceptar la agrupación tal como está |
 | `POST /merchants/{id}/aliases/move` · `/split` · `/merge` | Corregir agrupaciones |
 | `GET /merchants/categories` | Vocabulario de categorías |
+| `GET /financial/accounts` · `POST` | Listar cuentas con patrimonio neto · declarar una |
+| `GET /financial/accounts/{id}` · `PATCH` | Detalle · renombrar |
+| `POST /financial/accounts/{id}/instruments` | Enlazar otra tarjeta o número de cuenta |
+| `POST /financial/accounts/{id}/close` | Cerrar, conservando historial y saldo |
+| `GET /financial/net-worth` | Activos − pasivos, por moneda |
+| `GET /financial/transactions` · `POST` | Movimientos con filtros · registrar uno a mano |
+| `GET /financial/transactions/{id}` · `PATCH` | Detalle · corregir, mover o desasignar |
 | `GET /health` | Sonda de salud |

@@ -12,11 +12,11 @@ from personal_finance.contexts.financial.domain.exceptions import (
     TransactionAlreadyAssignedError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
-    AccountCategory,
     AccountId,
     AccountKind,
     BalanceSign,
     MovementDirection,
+    TransactionOrigin,
     TransactionStatus,
 )
 from personal_finance.shared.domain.value_objects import (
@@ -54,7 +54,7 @@ def _transaction(**overrides: object) -> Transaction:
 def test_the_same_alert_read_twice_is_the_same_transaction() -> None:
     # Identity from content, so a redelivery writes the same ledger row.
     assert _transaction().id == _transaction().id
-    assert _transaction().fingerprint == _transaction().fingerprint
+    assert _transaction().account_fingerprint == _transaction().account_fingerprint
 
 
 def test_two_different_movements_are_two_transactions() -> None:
@@ -74,7 +74,6 @@ def test_an_alert_naming_no_instrument_is_kept_and_waits_for_a_person() -> None:
 
     assert not transaction.is_routable
     assert transaction.account_fingerprint is None
-    assert transaction.account_kind is None
     # Still a real movement: the money moved, and refusing the record loses it.
     assert transaction.amount == _cop("50000")
 
@@ -85,13 +84,14 @@ def test_a_card_without_its_digits_cannot_pick_an_account() -> None:
     assert not _transaction(last_four=None).is_routable
 
 
-def test_an_instrument_nobody_recognises_leaves_the_movement_unassigned() -> None:
-    # The digits are fine; the kind is not. Opening an account for it would
-    # mean guessing whether it holds money or owes it.
+def test_an_instrument_nobody_declared_still_gets_a_key_to_wait_under() -> None:
+    # An instrument Financial has no opinion about is still a key an account
+    # could be declared for later. What decides routing is whether somebody
+    # declared an account answering to it, not whether the name is familiar.
     transaction = _transaction(instrument_kind="prepaid_wallet")
 
-    assert not transaction.is_routable
-    assert transaction.account_kind is None
+    assert transaction.is_routable
+    assert transaction.account_fingerprint is not None
 
 
 def test_digits_no_account_key_can_use_cost_the_routing_not_the_movement() -> None:
@@ -107,8 +107,7 @@ def test_a_readable_alert_knows_which_account_to_look_for() -> None:
     transaction = _transaction()
 
     assert transaction.is_routable
-    assert transaction.account_kind is AccountKind.CREDIT_CARD
-    assert transaction.account_kind.category is AccountCategory.LIABILITY
+    assert transaction.origin is TransactionOrigin.BANK_ALERT
 
 
 def test_the_account_a_movement_looks_for_is_the_one_a_sighting_opens() -> None:
@@ -116,8 +115,9 @@ def test_the_account_a_movement_looks_for_is_the_one_a_sighting_opens() -> None:
     # fingerprint differently, every auto-opened account is invisible to the
     # movements that opened it, and every balance stays at zero.
     transaction = _transaction()
-    account = Account.open_automatically(
+    account = Account.open(
         user_id=USER,
+        name="Tarjeta de crédito",
         bank="bancolombia",
         instrument_kind="credit_card",
         last_four="7653",
@@ -132,8 +132,9 @@ def test_the_account_a_movement_looks_for_is_the_one_a_sighting_opens() -> None:
 
 def test_spending_on_a_credit_card_raises_what_it_owes() -> None:
     transaction = _transaction()
-    account = Account.open_automatically(
+    account = Account.open(
         user_id=USER,
+        name="Tarjeta de crédito",
         bank="bancolombia",
         instrument_kind="credit_card",
         last_four="7653",

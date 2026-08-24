@@ -142,6 +142,26 @@ financial-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.financial.presentation.cli.run_financial_worker
 
+# Store a secret in SSM Parameter Store, so the env file only holds a
+# reference. The value is read from a prompt, never from the command line: a
+# command line is visible in `ps` to every process on the box, and lands in
+# shell history.
+# Usage: just secret-put /finflow/production/jwt-secret
+secret-put name env_file=".env.production": (_require-env env_file)
+    @printf 'value: ' >&2; \
+    read -rs FINFLOW_SECRET_VALUE; echo >&2; \
+    ENV_FILE={{env_file}} PYTHONPATH=src \
+    FINFLOW_SECRET_NAME='{{name}}' \
+    FINFLOW_SECRET_VALUE="$FINFLOW_SECRET_VALUE" \
+    uv run python -c "\
+    import os; \
+    from personal_finance.shared.infrastructure.aws.session import get_ssm_client; \
+    get_ssm_client().put_parameter(Name=os.environ['FINFLOW_SECRET_NAME'], \
+        Value=os.environ['FINFLOW_SECRET_VALUE'], Type='SecureString', \
+        Overwrite=True); \
+    print('stored', os.environ['FINFLOW_SECRET_NAME'])"
+    @echo "put this in {{env_file}}:  ssm:{{name}}"
+
 # Local: hot reload, against the emulator.
 dev: (_require-env ".env")
     {{local_env}} uv run fastapi dev src/personal_finance/api/main.py

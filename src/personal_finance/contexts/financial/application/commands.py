@@ -3,9 +3,16 @@ from __future__ import annotations
 import dataclasses
 
 from personal_finance.contexts.financial.domain.value_objects import (
+    AccountId,
+    AccountKind,
     MovementDirection,
 )
-from personal_finance.shared.domain.value_objects import Money, PosixTime, UserId
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -30,3 +37,90 @@ class RecordMovementCommand:
     counterparty: str
     instrument_kind: str | None = None
     last_four: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class OpenAccountCommand:
+    """An account its owner declared.
+
+    The instrument is what makes the account start collecting: given a bank, a
+    kind of instrument and its last four digits, every alert arriving under
+    them lands here — including the ones that arrived before this moment. An
+    account without one never matches an alert, which is right for cash and
+    for a mortgage that emails nothing.
+    """
+
+    user_id: UserId
+    name: str
+    kind: AccountKind
+    currency: Currency
+    opening_balance: Money | None = None
+    bank: str | None = None
+    instrument_kind: str | None = None
+    last_four: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class LinkInstrumentCommand:
+    """Teach an existing account another of the names its alerts arrive under.
+
+    One real account emails as a debit card for purchases and as an account
+    number for transfers. Linking is always the owner's decision: deciding it
+    automatically would be guessing about somebody's money.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    bank: str
+    instrument_kind: str
+    last_four: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RenameAccountCommand:
+    user_id: UserId
+    account_id: AccountId
+    name: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class CloseAccountCommand:
+    user_id: UserId
+    account_id: AccountId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class EnterTransactionCommand:
+    """Money the user says moved, that no alert announced.
+
+    The path for an automatic payment the bank never emails, for cash, for
+    anything a parser could not be expected to see. The account is optional:
+    somebody watching only what comes in and goes out has none.
+    """
+
+    user_id: UserId
+    direction: MovementDirection
+    amount: Money
+    occurred_at: PosixTime
+    counterparty: str
+    account_id: AccountId | None = None
+    bank: str = ""
+    note: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class EditTransactionCommand:
+    """A correction. Every field left None is left alone.
+
+    `account_id` is three-valued on purpose: absent leaves the movement where
+    it is, a value moves it, and `detach` takes it off the account holding it.
+    """
+
+    user_id: UserId
+    transaction_id: str
+    amount: Money | None = None
+    occurred_at: PosixTime | None = None
+    counterparty: str | None = None
+    note: str | None = None
+    account_id: AccountId | None = None
+    detach: bool = False

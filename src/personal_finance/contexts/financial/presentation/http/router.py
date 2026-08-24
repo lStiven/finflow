@@ -1,0 +1,756 @@
+"""The financial surface a frontend draws itself from.
+
+Everything is scoped to the authenticated caller. Accounts and movements are
+per-user, so no endpoint takes a user id: the token decides whose money is
+read and whose can be edited, and anything belonging to somebody else is
+reported as missing rather than as forbidden.
+
+Two things shape this surface. **Accounts are declared, never discovered** —
+Finflow works with none at all, reporting what came in and what went out, and
+an account is what somebody adds when they want a running state for one card
+or one savings account. And **money that never emails can be entered by hand**,
+because an automatic payment the bank stays quiet about is still money that
+moved.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Generator
+import contextlib
+from decimal import Decimal
+import functools
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field, model_validator
+
+from personal_finance.contexts.financial.application.commands import (
+    CloseAccountCommand,
+    EditTransactionCommand,
+    EnterTransactionCommand,
+    LinkInstrumentCommand,
+    OpenAccountCommand,
+    RenameAccountCommand,
+)
+from personal_finance.contexts.financial.application.handlers import (
+    AccountAlreadyExistsError,
+    AccountNotFoundError,
+    ManageAccountsUseCase,
+    ManageTransactionsUseCase,
+    TransactionNotFoundError,
+)
+from personal_finance.contexts.financial.application.queries import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    AccountScope,
+    GetAccountUseCase,
+    GetTransactionUseCase,
+    ListAccountsUseCase,
+    ListTransactionsUseCase,
+    NetWorth,
+    TransactionQuery,
+)
+from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.exceptions import (
+    AccountClosedError,
+    CurrencyMismatchError,
+    TransactionAlreadyAssignedError,
+)
+from personal_finance.contexts.financial.domain.value_objects import (
+    AccountId,
+    AccountKind,
+    MovementDirection,
+    TransactionOrigin,
+)
+from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
+    DynamoDBAccountRepository,
+    DynamoDBTransactionLedger,
+)
+from personal_finance.contexts.identity.presentation.http.router import (
+    get_current_user_id,
+)
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
+from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
+from personal_finance.shared.infrastructure.config.settings import (
+    get_financial_settings,
+)
+from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
+    LoggingEventPublisher,
+)
+
+
+router = APIRouter(prefix="/financial", tags=["financial"])
+
+MAX_NAME_LENGTH = 120
+MAX_TEXT_LENGTH = 512
+
+
+# --------------------------------------------------------------- responses
+
+
+class AccountResponse(BaseModel):
+    id: str
+    name: str
+    kind: str
+    # `asset` | `liability` — what decides whether this balance adds to net
+    # worth or subtracts from it.
+    category: str
+    currency: str
+    # Signed: an asset legitimately goes below zero when its opening balance
+    # was never stated, and a liability's positive amount is what is owed.
+    balance: str
+    opening_balance: str
+    movements_applied: int
+    opened_at: int
+    closed_at: int | None
+    bank: str | None
+    # The bank/instrument keys whose alerts land here.
+    instruments: list[str]
+
+
+class NetWorthResponse(BaseModel):
+    currency: str
+    assets: str
+    liabilities: str
+    total: str
+
+
+class AccountListResponse(BaseModel):
+    accounts: list[AccountResponse]
+    # One entry per currency held; never summed across them, because that
+    # would need an exchange rate nobody recorded.
+    net_worth: list[NetWorthResponse]
+
+
+class StatedResponse(BaseModel):
+    """What the bank said, before anybody corrected it."""
+
+    amount: str
+    currency: str
+    occurred_at: int
+    counterparty: str
+
+
+class TransactionResponse(BaseModel):
+    id: str
+    # `outgoing` | `incoming`.
+    direction: str
+    amount: str
+    currency: str
+    occurred_at: int
+    counterparty: str
+    bank: str
+    # `bank_alert` | `manual`.
+    origin: str
+    # `assigned` | `unassigned`.
+    status: str
+    account_id: str | None
+    note: str | None
+    # Present only once somebody corrected this movement.
+    stated: StatedResponse | None
+
+
+class TransactionListResponse(BaseModel):
+    transactions: list[TransactionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------- payloads
+
+
+class OpenAccountPayload(BaseModel):
+    """Declare an account.
+
+    Give it an instrument and every alert arriving under that bank and those
+    last four digits lands here — including the ones that already arrived and
+    have been waiting. Leave it out for what never emails: cash, a mortgage.
+    """
+
+    name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
+    kind: AccountKind
+    currency: Currency = Currency.COP
+    opening_balance: Decimal | None = Field(default=None, ge=0)
+    bank: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+    instrument_kind: str | None = Field(default=None, max_length=64)
+    last_four: str | None = Field(default=None, pattern=r"^\d{4,}$")
+
+    @model_validator(mode="after")
+    def _instrument_is_all_or_nothing(self) -> OpenAccountPayload:
+        # `bank` stands on its own — a mortgage names the bank that holds it
+        # and has no card. The kind and the digits are what go together:
+        # matching on one of them would merge two real accounts.
+        if (self.instrument_kind is None) != (self.last_four is None):
+            raise ValueError(
+                "An instrument needs instrument_kind and last_four together: "
+                "matching on one of them would merge two real accounts",
+            )
+
+        if self.instrument_kind is not None and not self.bank:
+            raise ValueError("An instrument needs the bank whose alerts carry it")
+
+        return self
+
+
+class LinkInstrumentPayload(BaseModel):
+    """Teach an account another of the names its alerts arrive under."""
+
+    bank: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+    instrument_kind: str = Field(min_length=1, max_length=64)
+    last_four: str = Field(pattern=r"^\d{4,}$")
+
+
+class RenameAccountPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
+
+
+class EnterTransactionPayload(BaseModel):
+    """Money that moved without an alert to announce it."""
+
+    direction: MovementDirection
+    amount: Decimal = Field(gt=0)
+    currency: Currency = Currency.COP
+    occurred_at: int
+    counterparty: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+    account_id: str | None = None
+    bank: str = Field(default="", max_length=MAX_TEXT_LENGTH)
+    note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+
+
+class EditTransactionPayload(BaseModel):
+    """A correction. Everything omitted is left alone.
+
+    On a movement that came from a bank alert, the first correction keeps what
+    the bank said: `stated` on the response is how a reader tells the two
+    apart afterwards.
+    """
+
+    amount: Decimal | None = Field(default=None, gt=0)
+    currency: Currency | None = None
+    occurred_at: int | None = None
+    counterparty: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+    )
+    # An empty string clears the note; omitting the field leaves it alone.
+    note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+    account_id: str | None = None
+    # Take it off whatever account holds it, leaving it unassigned.
+    detach: bool = False
+
+    @model_validator(mode="after")
+    def _coherent(self) -> EditTransactionPayload:
+        if self.detach and self.account_id is not None:
+            raise ValueError("Give an account_id or detach, not both")
+
+        if self.amount is not None and self.currency is None:
+            raise ValueError("Changing the amount needs its currency too")
+
+        if not any(
+            (
+                self.amount is not None,
+                self.occurred_at is not None,
+                self.counterparty is not None,
+                self.note is not None,
+                self.account_id is not None,
+                self.detach,
+            ),
+        ):
+            raise ValueError("Nothing to change")
+
+        return self
+
+
+# ---------------------------------------------------------- wiring the deps
+
+
+@functools.lru_cache(maxsize=1)
+def build_accounts() -> DynamoDBAccountRepository:
+    return DynamoDBAccountRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def build_ledger() -> DynamoDBTransactionLedger:
+    return DynamoDBTransactionLedger(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_accounts() -> ManageAccountsUseCase:
+    return ManageAccountsUseCase(
+        accounts=build_accounts(),
+        ledger=build_ledger(),
+        event_publisher=LoggingEventPublisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_transactions() -> ManageTransactionsUseCase:
+    return ManageTransactionsUseCase(
+        accounts=build_accounts(),
+        ledger=build_ledger(),
+        event_publisher=LoggingEventPublisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_accounts() -> ListAccountsUseCase:
+    return ListAccountsUseCase(accounts=build_accounts())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_get_account() -> GetAccountUseCase:
+    return GetAccountUseCase(accounts=build_accounts())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_transactions() -> ListTransactionsUseCase:
+    return ListTransactionsUseCase(ledger=build_ledger())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_get_transaction() -> GetTransactionUseCase:
+    return GetTransactionUseCase(ledger=build_ledger())
+
+
+def get_manage_accounts_use_case() -> ManageAccountsUseCase:
+    return _build_manage_accounts()
+
+
+def get_manage_transactions_use_case() -> ManageTransactionsUseCase:
+    return _build_manage_transactions()
+
+
+def get_list_accounts_use_case() -> ListAccountsUseCase:
+    return _build_list_accounts()
+
+
+def get_account_use_case() -> GetAccountUseCase:
+    return _build_get_account()
+
+
+def get_list_transactions_use_case() -> ListTransactionsUseCase:
+    return _build_list_transactions()
+
+
+def get_transaction_use_case() -> GetTransactionUseCase:
+    return _build_get_transaction()
+
+
+CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
+
+
+# -------------------------------------------------------------- endpoints
+
+
+@router.get("/accounts", response_model=AccountListResponse)
+def list_accounts(
+    user_id: CurrentUser,
+    use_case: Annotated[ListAccountsUseCase, Depends(get_list_accounts_use_case)],
+    scope: Annotated[AccountScope, Query()] = AccountScope.OPEN,
+) -> AccountListResponse:
+    view = use_case.execute(user_id=user_id, scope=scope)
+
+    return AccountListResponse(
+        accounts=[_account_response(account) for account in view.accounts],
+        net_worth=[_net_worth_response(figure) for figure in view.net_worth],
+    )
+
+
+@router.post(
+    "/accounts",
+    response_model=AccountResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def open_account(
+    user_id: CurrentUser,
+    payload: OpenAccountPayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    with _domain_errors():
+        account = use_case.open(
+            OpenAccountCommand(
+                user_id=user_id,
+                name=payload.name,
+                kind=payload.kind,
+                currency=payload.currency,
+                opening_balance=(
+                    None
+                    if payload.opening_balance is None
+                    else Money(
+                        amount=payload.opening_balance,
+                        currency=payload.currency,
+                    )
+                ),
+                bank=payload.bank,
+                instrument_kind=payload.instrument_kind,
+                last_four=payload.last_four,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.get("/accounts/{account_id}", response_model=AccountResponse)
+def get_account(
+    user_id: CurrentUser,
+    account_id: str,
+    use_case: Annotated[GetAccountUseCase, Depends(get_account_use_case)],
+) -> AccountResponse:
+    account = use_case.execute(
+        user_id=user_id,
+        account_id=_account_id(account_id),
+    )
+
+    if account is None:
+        raise _no_such_account(account_id)
+
+    return _account_response(account)
+
+
+@router.patch("/accounts/{account_id}", response_model=AccountResponse)
+def rename_account(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: RenameAccountPayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    with _domain_errors():
+        account = use_case.rename(
+            RenameAccountCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                name=payload.name,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.post("/accounts/{account_id}/instruments", response_model=AccountResponse)
+def link_instrument(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: LinkInstrumentPayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """Add another card or account number whose alerts belong here.
+
+    One real account emails as a debit card for purchases and as an account
+    number for transfers. Linking is always the owner's call — inferring it
+    would be guessing about somebody's money — and it adopts the movements
+    already waiting under that key.
+    """
+    with _domain_errors():
+        account = use_case.link_instrument(
+            LinkInstrumentCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                bank=payload.bank,
+                instrument_kind=payload.instrument_kind,
+                last_four=payload.last_four,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.post("/accounts/{account_id}/close", response_model=AccountResponse)
+def close_account(
+    user_id: CurrentUser,
+    account_id: str,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """Stop taking movements, keeping the history and the balance.
+
+    Not a delete: a closed account still explains past spending, and a
+    paid-off loan closing at zero is exactly what should stay visible.
+    """
+    with _domain_errors():
+        account = use_case.close(
+            CloseAccountCommand(user_id=user_id, account_id=_account_id(account_id)),
+        )
+
+    return _account_response(account)
+
+
+@router.get("/net-worth", response_model=list[NetWorthResponse])
+def get_net_worth(
+    user_id: CurrentUser,
+    use_case: Annotated[ListAccountsUseCase, Depends(get_list_accounts_use_case)],
+) -> list[NetWorthResponse]:
+    """Assets minus liabilities, one figure per currency held.
+
+    Empty for somebody who declared no accounts, which is an ordinary answer:
+    they are watching what comes in and goes out, not a net position.
+    """
+    view = use_case.execute(user_id=user_id, scope=AccountScope.ALL)
+
+    return [_net_worth_response(figure) for figure in view.net_worth]
+
+
+@router.get("/transactions", response_model=TransactionListResponse)
+def list_transactions(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ListTransactionsUseCase,
+        Depends(get_list_transactions_use_case),
+    ],
+    account_id: Annotated[str | None, Query()] = None,
+    unassigned: Annotated[bool | None, Query()] = None,
+    origin: Annotated[TransactionOrigin | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TransactionListResponse:
+    page = use_case.execute(
+        TransactionQuery(
+            user_id=user_id,
+            account_id=None if account_id is None else _account_id(account_id),
+            unassigned=unassigned,
+            origin=origin,
+            search=search,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+    return TransactionListResponse(
+        transactions=[
+            _transaction_response(movement) for movement in page.transactions
+        ],
+        total=page.total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/transactions",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def enter_transaction(
+    user_id: CurrentUser,
+    payload: EnterTransactionPayload,
+    use_case: Annotated[
+        ManageTransactionsUseCase,
+        Depends(get_manage_transactions_use_case),
+    ],
+) -> TransactionResponse:
+    """Record money the bank never emailed about.
+
+    An automatic payment, cash, a transfer that produced no alert. The account
+    is optional: somebody watching only what comes in and goes out has none.
+    """
+    with _domain_errors():
+        transaction = use_case.enter(
+            EnterTransactionCommand(
+                user_id=user_id,
+                direction=payload.direction,
+                amount=Money(amount=payload.amount, currency=payload.currency),
+                occurred_at=PosixTime.from_epoch_seconds(payload.occurred_at),
+                counterparty=payload.counterparty,
+                account_id=(
+                    None
+                    if payload.account_id is None
+                    else _account_id(payload.account_id)
+                ),
+                bank=payload.bank,
+                note=payload.note,
+            ),
+        )
+
+    return _transaction_response(transaction)
+
+
+@router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
+def get_transaction(
+    user_id: CurrentUser,
+    transaction_id: str,
+    use_case: Annotated[GetTransactionUseCase, Depends(get_transaction_use_case)],
+) -> TransactionResponse:
+    transaction = use_case.execute(
+        user_id=user_id,
+        transaction_id=transaction_id,
+    )
+
+    if transaction is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No movement {transaction_id}",
+        )
+
+    return _transaction_response(transaction)
+
+
+@router.patch("/transactions/{transaction_id}", response_model=TransactionResponse)
+def edit_transaction(
+    user_id: CurrentUser,
+    transaction_id: str,
+    payload: EditTransactionPayload,
+    use_case: Annotated[
+        ManageTransactionsUseCase,
+        Depends(get_manage_transactions_use_case),
+    ],
+) -> TransactionResponse:
+    with _domain_errors():
+        transaction = use_case.edit(
+            EditTransactionCommand(
+                user_id=user_id,
+                transaction_id=transaction_id,
+                amount=(
+                    None
+                    if payload.amount is None or payload.currency is None
+                    else Money(amount=payload.amount, currency=payload.currency)
+                ),
+                occurred_at=(
+                    None
+                    if payload.occurred_at is None
+                    else PosixTime.from_epoch_seconds(payload.occurred_at)
+                ),
+                counterparty=payload.counterparty,
+                note=payload.note,
+                account_id=(
+                    None
+                    if payload.account_id is None
+                    else _account_id(payload.account_id)
+                ),
+                detach=payload.detach,
+            ),
+        )
+
+    return _transaction_response(transaction)
+
+
+# ----------------------------------------------------------------- helpers
+
+
+def _account_id(value: str) -> AccountId:
+    try:
+        return AccountId.from_string(value)
+    except ValueError as error:
+        raise _no_such_account(value) from error
+
+
+def _no_such_account(account_id: str) -> HTTPException:
+    """Missing rather than forbidden: whether somebody else owns an account is
+    not something this endpoint tells a stranger.
+    """
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"No account {account_id}",
+    )
+
+
+def _account_response(account: Account) -> AccountResponse:
+    return AccountResponse(
+        id=str(account.id.value),
+        name=account.name,
+        kind=account.kind.value,
+        category=account.category.value,
+        currency=account.currency.value,
+        balance=str(account.balance.signed_amount),
+        opening_balance=str(account.opening_balance.signed_amount),
+        movements_applied=account.movements_applied,
+        opened_at=account.opened_at.as_epoch_seconds(),
+        closed_at=(
+            None if account.closed_at is None else account.closed_at.as_epoch_seconds()
+        ),
+        bank=account.bank,
+        instruments=sorted(print_.value for print_ in account.fingerprints),
+    )
+
+
+def _net_worth_response(figure: NetWorth) -> NetWorthResponse:
+    return NetWorthResponse(
+        currency=figure.currency.value,
+        assets=str(figure.assets),
+        liabilities=str(figure.liabilities),
+        total=str(figure.total),
+    )
+
+
+def _transaction_response(transaction: Transaction) -> TransactionResponse:
+    stated = transaction.stated
+
+    return TransactionResponse(
+        id=transaction.id.value,
+        direction=transaction.direction.value,
+        amount=str(transaction.amount.amount),
+        currency=transaction.amount.currency.value,
+        occurred_at=transaction.occurred_at.as_epoch_seconds(),
+        counterparty=transaction.counterparty,
+        bank=transaction.bank,
+        origin=transaction.origin.value,
+        status=transaction.status.value,
+        account_id=(
+            None
+            if transaction.account_id is None
+            else str(transaction.account_id.value)
+        ),
+        note=transaction.note,
+        stated=(
+            None
+            if stated is None
+            else StatedResponse(
+                amount=str(stated.amount.amount),
+                currency=stated.amount.currency.value,
+                occurred_at=stated.occurred_at.as_epoch_seconds(),
+                counterparty=stated.counterparty,
+            )
+        ),
+    )
+
+
+@contextlib.contextmanager
+def _domain_errors() -> Generator[None]:
+    """Turn the refusals the model makes into the answers HTTP has for them."""
+    try:
+        yield
+    except (AccountNotFoundError, TransactionNotFoundError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+    except AccountAlreadyExistsError as error:
+        # Not a bad request: what refuses it is the state of the user's
+        # accounts, not the shape of the request.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except AccountClosedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except TransactionAlreadyAssignedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except CurrencyMismatchError as error:
+        # Never converted: an exchange rate is a fact about a moment nobody
+        # recorded here.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error

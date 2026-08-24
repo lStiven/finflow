@@ -5,8 +5,13 @@ import functools
 import os
 from typing import Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from personal_finance.shared.infrastructure.config.secrets import (
+    reset_secrets_cache,
+    resolve,
+)
 
 
 # Which env file to read, so a production-shaped run never picks up the local
@@ -102,8 +107,11 @@ class IngestionSettings(BaseSettings):
     # billed from the first request, so it is not the right default for a
     # test account.
     dynamodb_billing_mode: BillingMode = "PROVISIONED"
-    dynamodb_read_capacity: int = 5
-    dynamodb_write_capacity: int = 5
+    # Five tables and one secondary index, at four units each, is 24 of the
+    # 25 free units. A sixth table means lowering this again or accepting a
+    # bill — the arithmetic is written down because nothing enforces it.
+    dynamodb_read_capacity: int = 4
+    dynamodb_write_capacity: int = 4
 
     # The one Gmail account every user forwards their bank email to, read over
     # plain IMAP with an App Password. Empty by default so a deployment that
@@ -115,6 +123,11 @@ class IngestionSettings(BaseSettings):
     ingest_mailbox_port: int = 993
     # How often the ingest worker polls, in seconds.
     ingest_poll_interval_seconds: int = 60
+
+    @field_validator("ingest_mailbox_app_password")
+    @classmethod
+    def _resolve(cls, value: SecretStr) -> SecretStr:
+        return resolve(value)
 
     @property
     def ingest_mailbox_configured(self) -> bool:
@@ -195,6 +208,11 @@ class LLMSettings(BaseSettings):
     # cut, with a warning, rather than sent whole.
     max_input_characters: int = 40_000
 
+    @field_validator("api_key")
+    @classmethod
+    def _resolve(cls, value: SecretStr) -> SecretStr:
+        return resolve(value)
+
     @property
     def configured(self) -> bool:
         return bool(self.api_key.get_secret_value())
@@ -215,6 +233,11 @@ class IdentitySettings(BaseSettings):
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60 * 24
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _resolve(cls, value: SecretStr) -> SecretStr:
+        return resolve(value)
 
 
 @functools.lru_cache(maxsize=1)
@@ -257,3 +280,4 @@ def reset_settings() -> None:
     get_financial_settings.cache_clear()
     get_llm_settings.cache_clear()
     get_identity_settings.cache_clear()
+    reset_secrets_cache()

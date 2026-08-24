@@ -21,14 +21,18 @@ from mypy_boto3_events.client import EventBridgeClient
 from mypy_boto3_sqs.client import SQSClient
 import pytest
 
+from personal_finance.contexts.financial.application.commands import (
+    OpenAccountCommand,
+)
 from personal_finance.contexts.financial.application.handlers import (
+    ManageAccountsUseCase,
     RecordMovementUseCase,
 )
+from personal_finance.contexts.financial.domain.entities import Account
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
     AccountFingerprint,
     AccountKind,
-    AccountStatus,
     BalanceSign,
     MovementDirection,
     TransactionStatus,
@@ -165,6 +169,41 @@ def worker(
 
 
 @pytest.fixture
+def manage_accounts(
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> ManageAccountsUseCase:
+    return ManageAccountsUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=NullEventPublisher(),
+    )
+
+
+def _declare_card(
+    manage_accounts: ManageAccountsUseCase,
+    *,
+    user_id: UserId = USER_ID,
+    name: str = "Tarjeta de crédito",
+    kind: AccountKind = AccountKind.CREDIT_CARD,
+    instrument: Instrument = CREDIT_CARD,
+) -> Account:
+    assert instrument.last_four is not None
+
+    return manage_accounts.open(
+        OpenAccountCommand(
+            user_id=user_id,
+            name=name,
+            kind=kind,
+            currency=Currency.COP,
+            bank="Bancolombia",
+            instrument_kind=instrument.kind.value,
+            last_four=instrument.last_four,
+        ),
+    )
+
+
+@pytest.fixture
 def publisher(eventbridge_client: EventBridgeClient) -> EventBridgeEventPublisher:
     return EventBridgeEventPublisher(
         client=eventbridge_client,
@@ -241,7 +280,9 @@ def test_a_bank_alert_becomes_a_balance_that_survives_the_process(
     publisher: EventBridgeEventPublisher,
     worker: SQSFinancialWorker,
     accounts: DynamoDBAccountRepository,
+    manage_accounts: ManageAccountsUseCase,
 ) -> None:
+    _declare_card(manage_accounts)
     _publish(publisher, [_alert()])
 
     result = worker.poll_once(wait_seconds=0)
@@ -256,10 +297,9 @@ def test_a_bank_alert_becomes_a_balance_that_survives_the_process(
     )
 
     assert account is not None
-    assert account.name == "Bancolombia ••7653"
+    assert account.name == "Tarjeta de crédito"
     assert account.kind is AccountKind.CREDIT_CARD
     assert account.category is AccountCategory.LIABILITY
-    assert account.status is AccountStatus.AUTOMATIC
     # Spending on a credit card raises what it owes, and the cents survived
     # both the bus and the table.
     assert account.balance.amount.amount == Decimal("50000.50")
@@ -267,11 +307,63 @@ def test_a_bank_alert_becomes_a_balance_that_survives_the_process(
     assert account.movements_applied == 1
 
 
+def test_an_alert_with_no_account_declared_is_recorded_and_waits(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Finflow with no accounts at all is a complete answer, not a broken one.
+
+    Somebody who only wants to see what comes in and what goes out declares
+    nothing, and every movement is recorded and stays unassigned.
+    """
+    _publish(publisher, [_alert()])
+
+    assert worker.poll_once(wait_seconds=0).handled == 1
+    assert accounts.list_by_user(USER_ID) == []
+    assert len(ledger.list_unassigned(USER_ID)) == 1
+
+
+def test_declaring_an_account_adopts_what_already_arrived(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    manage_accounts: ManageAccountsUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Adding an account is retroactive.
+
+    The alerts that arrived under that card before it existed are still in the
+    ledger, and they belong to it. The account opens with the history it
+    already had rather than at zero.
+    """
+    _publish(
+        publisher,
+        [_alert(), _alert(counterparty="EXITO EXPRESS", amount="20000")],
+    )
+
+    assert worker.poll_once(wait_seconds=0).handled == 2
+    assert len(ledger.list_unassigned(USER_ID)) == 2
+
+    declared = _declare_card(manage_accounts)
+
+    assert ledger.list_unassigned(USER_ID) == []
+
+    stored = accounts.find(user_id=USER_ID, account_id=declared.id)
+
+    assert stored is not None
+    assert stored.movements_applied == 2
+    assert stored.balance.amount.amount == Decimal("70000.50")
+    assert len(ledger.list_movements(user_id=USER_ID, account_id=declared.id)) == 2
+
+
 def test_the_same_alert_delivered_twice_moves_the_balance_once(
     publisher: EventBridgeEventPublisher,
     worker: SQSFinancialWorker,
     accounts: DynamoDBAccountRepository,
     ledger: DynamoDBTransactionLedger,
+    manage_accounts: ManageAccountsUseCase,
 ) -> None:
     """The conditional write, doing the only job it exists for.
 
@@ -280,6 +372,7 @@ def test_the_same_alert_delivered_twice_moves_the_balance_once(
     the same ledger key — and the second write is refused whole, balance
     included.
     """
+    _declare_card(manage_accounts)
     _publish(publisher, [_alert(), _alert()])
 
     assert worker.poll_once(wait_seconds=0).received == 2
@@ -300,12 +393,14 @@ def test_the_balance_replays_from_the_rows_behind_it(
     worker: SQSFinancialWorker,
     accounts: DynamoDBAccountRepository,
     ledger: DynamoDBTransactionLedger,
+    manage_accounts: ManageAccountsUseCase,
 ) -> None:
     """The ledger is the authority, and this is what makes that true.
 
     A running total nobody can retrace is a total nobody can repair, so
     replaying the stored rows must reproduce the stored number exactly.
     """
+    _declare_card(manage_accounts)
     _publish(
         publisher,
         [
@@ -342,7 +437,15 @@ def test_two_cards_at_one_bank_keep_two_balances(
     publisher: EventBridgeEventPublisher,
     worker: SQSFinancialWorker,
     accounts: DynamoDBAccountRepository,
+    manage_accounts: ManageAccountsUseCase,
 ) -> None:
+    _declare_card(manage_accounts)
+    _declare_card(
+        manage_accounts,
+        name="Cuenta de ahorros",
+        kind=AccountKind.SAVINGS,
+        instrument=DEBIT_CARD,
+    )
     _publish(
         publisher,
         [_alert(), _alert(counterparty="EXITO EXPRESS", instrument=DEBIT_CARD)],
@@ -392,6 +495,7 @@ def test_two_users_sharing_a_cards_digits_keep_separate_accounts(
     publisher: EventBridgeEventPublisher,
     worker: SQSFinancialWorker,
     accounts: DynamoDBAccountRepository,
+    manage_accounts: ManageAccountsUseCase,
 ) -> None:
     """The isolation `AccountFingerprint` cannot provide on its own.
 
@@ -399,6 +503,8 @@ def test_two_users_sharing_a_cards_digits_keep_separate_accounts(
     bank whose cards end in the same digits produce the same fingerprint, and
     only the user-scoped lookup keeps their money apart.
     """
+    _declare_card(manage_accounts)
+    _declare_card(manage_accounts, user_id=OTHER_USER)
     _publish(publisher, [_alert(), _alert(user_id=OTHER_USER)])
 
     assert worker.poll_once(wait_seconds=0).handled == 2

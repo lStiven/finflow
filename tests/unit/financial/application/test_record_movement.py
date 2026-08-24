@@ -4,20 +4,16 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from personal_finance.contexts.financial.application.commands import (
     RecordMovementCommand,
 )
 from personal_finance.contexts.financial.application.handlers import (
-    AccountVanishedError,
     Outcome,
     RecordMovementUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
-    AccountOpened,
     TransactionAssigned,
     TransactionRecorded,
 )
@@ -70,6 +66,9 @@ class FakeAccounts:
     def save(self, account: Account) -> None:
         self._store(account)
 
+    def overwrite_balance(self, account: Account) -> None:
+        self.save(account)
+
     def add(self, account: Account) -> bool:
         if self.loser is not None:
             winner = self.loser
@@ -110,6 +109,23 @@ class FakeLedger:
 
         return True
 
+    def save(self, transaction: Transaction) -> None:
+        self.rows[transaction.id.value] = (transaction, None)
+
+    def list_unassigned_matching(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Sequence[Transaction]:
+        return [
+            movement
+            for movement, _ in self.rows.values()
+            if movement.user_id == user_id
+            and movement.account_id is None
+            and movement.account_fingerprint == fingerprint
+        ]
+
     def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
         row = self.rows.get(transaction_id)
 
@@ -125,6 +141,13 @@ class FakeLedger:
             movement
             for movement, _ in self.rows.values()
             if movement.user_id == user_id and movement.account_id == account_id
+        ]
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        return [
+            movement
+            for movement, _ in self.rows.values()
+            if movement.user_id == user_id
         ]
 
     def list_unassigned(self, user_id: UserId) -> Sequence[Transaction]:
@@ -171,20 +194,56 @@ def _use_case(
     )
 
 
-def test_a_first_sighting_opens_the_account_it_needs() -> None:
+def _declare(accounts: FakeAccounts, **overrides: object) -> Account:
+    parts: dict[str, object] = {
+        "user_id": USER,
+        "name": "Tarjeta de crédito",
+        "kind": AccountKind.CREDIT_CARD,
+        "currency": Currency.COP,
+        "opened_at": PURCHASE_TIME,
+        "bank": "bancolombia",
+        "instrument_kind": "credit_card",
+        "last_four": "7653",
+    }
+    parts.update(overrides)
+    account = Account.open(**parts)  # type: ignore[arg-type]
+    account.pull_events()
+    accounts.add(account)
+
+    return account
+
+
+def test_an_alert_lands_on_the_account_its_owner_declared() -> None:
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    declared = _declare(accounts)
 
     result = _use_case(accounts, ledger, publisher).execute(_command())
 
     assert result.outcome is Outcome.APPLIED
     assert result.account is not None
-    assert result.account.kind is AccountKind.CREDIT_CARD
+    assert result.account.id == declared.id
     assert result.account.balance.amount.amount == Decimal("50000")
-    assert len(accounts.list_by_user(USER)) == 1
 
 
-def test_a_second_movement_lands_on_the_account_the_first_opened() -> None:
+def test_no_account_declared_means_the_movement_waits_rather_than_creating_one() -> (
+    None
+):
+    """The core of the model. Finflow works with no accounts at all: every
+    movement is recorded, nothing is assigned, and what came in and went out
+    is still complete.
+    """
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+
+    result = _use_case(accounts, ledger, publisher).execute(_command())
+
+    assert result.outcome is Outcome.UNASSIGNED
+    assert accounts.list_by_user(USER) == []
+    assert len(ledger.list_unassigned(USER)) == 1
+
+
+def test_a_second_movement_lands_on_the_same_declared_account() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
     use_case = _use_case(accounts, ledger, publisher)
 
     first = use_case.execute(_command())
@@ -204,6 +263,7 @@ def test_the_ledger_refusing_a_row_applies_nothing_and_publishes_nothing() -> No
     on it.
     """
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
     use_case = _use_case(accounts, ledger, publisher)
 
     use_case.execute(_command())
@@ -213,50 +273,6 @@ def test_the_ledger_refusing_a_row_applies_nothing_and_publishes_nothing() -> No
     assert result.outcome is Outcome.DUPLICATE
     assert len(ledger.rows) == 1
     assert len(publisher.published) == published_after_first
-
-
-def test_losing_the_race_to_open_an_account_uses_the_winners() -> None:
-    """Two workers can open one account from one redelivered alert.
-
-    The loser must find the winner's account, not create a second one holding
-    half the movements.
-    """
-    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
-    winner = Account.open_automatically(
-        user_id=USER,
-        bank="bancolombia",
-        instrument_kind="credit_card",
-        last_four="7653",
-        kind=AccountKind.CREDIT_CARD,
-        currency=Currency.COP,
-        opened_at=PURCHASE_TIME,
-    )
-    winner.pull_events()
-    accounts.loser = winner
-
-    result = _use_case(accounts, ledger, publisher).execute(_command())
-
-    assert result.outcome is Outcome.APPLIED
-    assert result.account is not None
-    assert result.account.id == winner.id
-    assert len(accounts.list_by_user(USER)) == 1
-
-
-def test_an_account_that_wins_and_then_vanishes_is_an_error_not_a_guess() -> None:
-    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
-    accounts.loser = Account.open_automatically(
-        user_id=USER,
-        bank="bancolombia",
-        instrument_kind="credit_card",
-        last_four="7653",
-        kind=AccountKind.CREDIT_CARD,
-        currency=Currency.COP,
-        opened_at=PURCHASE_TIME,
-    )
-    accounts.swallow_the_winner = True
-
-    with pytest.raises(AccountVanishedError):
-        _use_case(accounts, ledger, publisher).execute(_command())
 
 
 def test_an_alert_naming_no_instrument_is_recorded_unassigned() -> None:
@@ -277,6 +293,7 @@ def test_a_movement_in_a_currency_the_account_does_not_hold_stays_unassigned() -
     recorded, and guessing one would corrupt the balance quietly.
     """
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
     use_case = _use_case(accounts, ledger, publisher)
 
     use_case.execute(_command())
@@ -297,6 +314,7 @@ def test_a_movement_in_a_currency_the_account_does_not_hold_stays_unassigned() -
 
 def test_a_late_alert_for_a_closed_account_does_not_reopen_it() -> None:
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
     use_case = _use_case(accounts, ledger, publisher)
 
     use_case.execute(_command())
@@ -313,6 +331,13 @@ def test_a_late_alert_for_a_closed_account_does_not_reopen_it() -> None:
 
 def test_spending_lowers_an_asset_and_raises_a_liability() -> None:
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
+    _declare(
+        accounts,
+        name="Cuenta de ahorros",
+        kind=AccountKind.SAVINGS,
+        instrument_kind="debit_card",
+    )
     use_case = _use_case(accounts, ledger, publisher)
 
     on_credit = use_case.execute(_command())
@@ -326,12 +351,12 @@ def test_spending_lowers_an_asset_and_raises_a_liability() -> None:
 
 def test_a_recorded_movement_announces_what_happened_to_it() -> None:
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
 
     _use_case(accounts, ledger, publisher).execute(_command())
 
     kinds = {type(event) for event in publisher.published}
 
-    assert AccountOpened in kinds
     assert TransactionRecorded in kinds
     assert TransactionAssigned in kinds
     assert AccountBalanceChanged in kinds
@@ -341,6 +366,7 @@ def test_the_balance_delta_written_is_the_one_the_account_computed() -> None:
     # What the ledger adds to the stored total has to be exactly the move the
     # domain made, or the running total drifts from the rows behind it.
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)
 
     result = _use_case(accounts, ledger, publisher).execute(_command())
     _, delta = next(iter(ledger.rows.values()))

@@ -45,6 +45,7 @@ class AccountKind(enum.Enum):
     SAVINGS = "savings"
     CHECKING = "checking"
     CASH = "cash"
+    INVESTMENT = "investment"
     CREDIT_CARD = "credit_card"
     LOAN = "loan"
     MORTGAGE = "mortgage"
@@ -58,45 +59,10 @@ class AccountKind(enum.Enum):
             else AccountCategory.ASSET
         )
 
-    @classmethod
-    def from_instrument(cls, value: str) -> AccountKind | None:
-        """What kind of account an alert's instrument implies, or nothing.
-
-        This is Financial reading ingestion's vocabulary into its own; the
-        strings arrive in a JSON payload and ingestion's enum is never
-        imported. `None` means no account kind can be concluded, which leaves
-        the movement unassigned rather than opening an account on a guess.
-
-        The reading is allowed to be imprecise *within* a category and never
-        *across* it. A debit card may well draw on a checking account rather
-        than a savings one, and being wrong there costs a rename — both are
-        assets. Confusing a debit card with a credit card would turn money
-        held into money owed and invert net worth, so those two are read
-        straight from the alert and never inferred.
-        """
-        return _INSTRUMENT_ACCOUNT_KINDS.get(value.strip().lower())
-
 
 _LIABILITY_KINDS = frozenset(
     {AccountKind.CREDIT_CARD, AccountKind.LOAN, AccountKind.MORTGAGE},
 )
-
-_INSTRUMENT_ACCOUNT_KINDS = {
-    "credit_card": AccountKind.CREDIT_CARD,
-    "debit_card": AccountKind.SAVINGS,
-    "savings_account": AccountKind.SAVINGS,
-    "checking_account": AccountKind.CHECKING,
-    # A bank that names no more than "account" is stating an asset; what never
-    # emails a movement — a loan, a mortgage — is opened by hand instead.
-    "account": AccountKind.SAVINGS,
-}
-
-
-class AccountStatus(enum.Enum):
-    # Discovered from a bank alert; nobody has looked at it yet.
-    AUTOMATIC = "automatic"
-    # A user created it, renamed it, or accepted it as it stands.
-    CONFIRMED = "confirmed"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -279,6 +245,18 @@ class Balance(ValueObject):
         }
 
 
+class TransactionOrigin(enum.Enum):
+    """Where a movement came from, which decides what may be trusted about it.
+
+    A bank alert states a fact somebody else recorded; a manual entry is the
+    user's own claim. Automatic payments that never email are exactly why the
+    second exists.
+    """
+
+    BANK_ALERT = "bank_alert"
+    MANUAL = "manual"
+
+
 class TransactionStatus(enum.Enum):
     # No account answers to this movement's instrument, or the alert named
     # none it could use. Kept and visible, never guessed at.
@@ -306,6 +284,16 @@ class MovementId(ValueObject):
             raise ValueError("Movement id cannot be empty")
 
         object.__setattr__(self, "value", value)
+
+    @classmethod
+    def new(cls) -> Self:
+        """Identity for a movement no bank announced.
+
+        Random, unlike a movement read from an alert: two manual entries with
+        the same amount, merchant and date are two entries, because somebody
+        meant to record both. There is nothing to deduplicate against.
+        """
+        return cls(value=uuid.uuid4().hex)
 
     @classmethod
     def from_fingerprint(cls, fingerprint: MovementFingerprint) -> Self:
@@ -528,6 +516,20 @@ class MovementFingerprint(ValueObject):
 
     def to_dict(self) -> JsonValue:
         return self.value
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StatedMovement(ValueObject):
+    """What the bank said, before anybody corrected it.
+
+    Kept so a corrected movement can still be told apart from one the parser
+    read right the first time. Without it, a balance that looks wrong gives no
+    way to know whether the alert or the correction was the mistake.
+    """
+
+    amount: Money
+    occurred_at: PosixTime
+    counterparty: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

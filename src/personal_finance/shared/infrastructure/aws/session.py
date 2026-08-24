@@ -5,8 +5,8 @@ import functools
 import boto3
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_events.client import EventBridgeClient
-from mypy_boto3_secretsmanager.client import SecretsManagerClient
 from mypy_boto3_sqs.client import SQSClient
+from mypy_boto3_ssm.client import SSMClient
 
 from personal_finance.shared.infrastructure.config.settings import (
     AwsSettings,
@@ -79,9 +79,9 @@ def get_eventbridge_client() -> EventBridgeClient:
 
 
 @functools.lru_cache(maxsize=1)
-def get_secretsmanager_client() -> SecretsManagerClient:
+def get_ssm_client() -> SSMClient:
     return get_session().client(  # pyright: ignore[reportUnknownMemberType]
-        "secretsmanager",
+        "ssm",
         endpoint_url=get_aws_settings().endpoint_url,
     )
 
@@ -92,4 +92,4 @@ def reset_session() -> None:
     get_dynamodb_client.cache_clear()
     get_sqs_client.cache_clear()
     get_eventbridge_client.cache_clear()
-    get_secretsmanager_client.cache_clear()
+    get_ssm_client.cache_clear()

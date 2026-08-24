@@ -10,6 +10,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     Balance,
     MovementDirection,
     MovementId,
+    TransactionOrigin,
 )
 from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import (
@@ -40,6 +41,7 @@ class AccountOpened(AccountEvent):
     category: AccountCategory
     currency: Currency
     opening_balance: Balance
+    bank: str | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -52,11 +54,6 @@ class AccountFingerprintLinked(AccountEvent):
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountRenamed(AccountEvent):
     name: str
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class AccountConfirmed(AccountEvent):
-    pass
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -123,11 +120,37 @@ class TransactionRecorded(TransactionEvent):
     movement_occurred_at: PosixTime
     counterparty: str
     bank: str
+    origin: TransactionOrigin
     account_fingerprint: AccountFingerprint | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionAssigned(TransactionEvent):
     """The movement now belongs to an account and has moved its balance."""
+
+    account_id: AccountId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionEdited(TransactionEvent):
+    """Somebody corrected what this movement says.
+
+    Carries the corrected values, not the original: the original stays on the
+    aggregate, where a reader can compare the two. The identity is absent
+    from the list on purpose — an edit never moves it.
+    """
+
+    amount: Money
+    movement_occurred_at: PosixTime
+    counterparty: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionUnassigned(TransactionEvent):
+    """The movement came off the account that was holding it.
+
+    `account_id` is the account it left, so the balance it stopped counting
+    towards can be traced back.
+    """
 
     account_id: AccountId

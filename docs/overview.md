@@ -53,10 +53,12 @@ flowchart TD
     K --> L["Merchant worker"]
     L --> M["Comercio canónico<br/>+ categoría"]
     K --> N["Financial worker"]
-    N --> O["¿A qué cuenta pertenece?<br/>banco + instrumento + últimos cuatro"]
-    O -->|"coincide, o se abre<br/>en la primera aparición"| P["Fila del ledger + saldo<br/>en una sola escritura atómica"]
-    O -.->|"la alerta no nombró<br/>un instrumento usable"| Q["Se conserva<br/>sin asignar"]
-    P -.->|"regla del dominio,<br/>todavía sin consulta"| R["Patrimonio neto<br/>activos − pasivos"]
+    N --> O["¿Hay una cuenta declarada<br/>para esa tarjeta?"]
+    O -->|"sí"| P["Fila del ledger + saldo<br/>en una sola escritura atómica"]
+    O -->|"no, o la alerta no nombró<br/>un instrumento usable"| Q["Se conserva<br/>sin asignar"]
+    Q -.->|"el usuario declara la cuenta<br/>más tarde: la adopta"| P
+    S["El usuario registra<br/>un movimiento a mano"] --> P
+    P --> R["Patrimonio neto<br/>activos − pasivos"]
 ```
 
 Merchant y Financial escuchan el **mismo** evento y no se conocen entre sí:
@@ -132,17 +134,32 @@ dirección ella misma.
 Cuentas, transacciones, saldos, deuda y patrimonio neto. Es lo que convierte
 todo lo anterior en un número que alguien puede mirar.
 
-**Las cuentas se abren solas.** La primera vez que se ve un par (banco,
-instrumento) nuevo aparece una cuenta con nombre genérico y renombrable
-—`Bancolombia ••7653`— marcada para revisión, con saldo de apertura cero
-porque es desconocido: esa cuenta la descubrió una alerta, no la declaró su
-dueño. Para lo que nunca envía un correo por movimiento —una hipoteca, un
-crédito, efectivo en un cajón— el dominio ya sabe abrir una cuenta declarada
-por su dueño, con el saldo que este indique; falta el endpoint que lo exponga.
+**Las cuentas las declara su dueño, no se descubren.** Y Finflow funciona sin
+ninguna: cada alerta se registra igual y el movimiento queda *sin asignar*.
+Eso es una respuesta completa, no degradada — es exactamente lo que necesita
+quien solo quiere ver qué entra y qué sale.
 
-Cada cuenta tiene un **tipo** (ahorros, corriente, tarjeta de crédito,
-préstamo…) del que se deriva si es **activo o pasivo**; nadie puede declarar
-que una hipoteca es un activo. El patrimonio neto es la suma de activos menos
+Una cuenta es lo que alguien añade cuando quiere algo más: el estado corriente
+de una tarjeta o de una cuenta de ahorros sin abrir la app del banco. Al
+declararla indica su tipo, su moneda, y opcionalmente el banco, el tipo de
+instrumento y los últimos cuatro dígitos bajo los que llegan sus alertas. A
+partir de ahí, todo lo que coincida con esa huella aterriza allí.
+
+**Declarar una cuenta es retroactivo.** Las alertas que llegaron antes de que
+existiera siguen en el ledger, sin asignar, y le pertenecen: se adoptan y el
+saldo se recalcula reproduciéndolas. Una tarjeta declarada hoy abre con el
+historial que ya tenía, no en cero.
+
+**Lo que nunca llega por correo se registra a mano.** Un pago automático que
+el banco no anuncia, efectivo, una transferencia que no generó alerta. Se
+indica monto, contraparte, fecha y, si aplica, la cuenta. Y cualquier
+movimiento —venga del banco o de una mano— se puede corregir después: la
+primera corrección de una alerta guarda lo que el banco dijo, que es la única
+forma de saber luego si el error estaba en la alerta o en la corrección.
+
+Cada cuenta tiene un **tipo** (ahorros, corriente, efectivo, inversión,
+tarjeta de crédito, préstamo, hipoteca) del que se deriva si es **activo o
+pasivo**; nadie puede declarar que una hipoteca es un activo. El patrimonio neto es la suma de activos menos
 la de pasivos, y es lo que hace que 1,2M en una tarjeta *reste*: lo que esa
 cuenta guarda es deuda.
 
@@ -168,7 +185,10 @@ fallo limpio. Es la misma filosofía que `pending_fallback` en Ingestion.
 
 **Una cuenta se identifica por (banco, tipo de instrumento, últimos cuatro).**
 Emparejar solo por banco y tipo fundiría todas las cuentas de ahorro de un
-mismo banco en un saldo equivocado.
+mismo banco en un saldo equivocado. Una misma cuenta real puede responder a
+varias huellas —una cuenta corriente llega como tarjeta débito en las compras
+y como número de cuenta en las transferencias—, pero enlazarlas es siempre
+decisión del dueño: deducirlo sería adivinar sobre el dinero de alguien.
 
 **Una autorización no es un movimiento, y se descarta antes de llegar aquí.**
 Una retención de hotel y su cobro real son dos correos distintos con cuerpos
@@ -180,10 +200,9 @@ que rechace cualquier cosa aprobada, retenida o en proceso. Conciliarlas
 después habría exigido una heurística sobre montos y ventanas de tiempo para
 deshacer algo que el texto original ya dice.
 
-> **Lo que todavía no está.** No hay endpoints: el worker escribe cuentas,
-> filas y saldos, pero nada los consulta por HTTP todavía —ni el patrimonio
-> neto, que hoy es una regla del dominio y no una consulta.
-> `PROGRESS.md` lleva la lista completa.
+El contrato HTTP —declarar cuentas, listarlas, patrimonio neto, movimientos,
+entrada manual y edición— está en la colección de
+[Postman](postman/README.md), carpeta *Financial*.
 
 ## Decisiones que conviene conocer
 
@@ -199,9 +218,11 @@ lo que otros contextos reciben.
 **El contenido de un correo y la salida del modelo son datos no confiables.**
 Ambos se validan en el borde y se vuelven a validar en el dominio.
 
-**Un secreto nunca se escribe en código ni en un log.** La contraseña de
-aplicación de la cuenta de ingesta vive en variables de entorno, nunca en
-código; las contraseñas de usuario solo cruzan hacia el almacenamiento ya
+**Un secreto nunca se escribe en código ni en un log.** En producción los
+secretos viven en SSM Parameter Store y el fichero de entorno solo guarda una
+referencia: `IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret`. Cualquier
+otro valor se toma como el secreto mismo, que es lo que mantiene el desarrollo
+local con valores planos; las contraseñas de usuario solo cruzan hacia el almacenamiento ya
 hasheadas; y la app se niega a arrancar si falta un secreto obligatorio —
 incluida la dirección de ingesta misma, sin la cual nadie podría registrarse.
 

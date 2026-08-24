@@ -4,7 +4,7 @@ Dos archivos, formato estándar de Postman Collection v2.1 (Bruno importa este
 mismo formato con "Import Collection" → "Postman Collection"):
 
 - `finflow_v2.postman_collection.json` — los requests, agrupados por contexto
-  acotado (Identity, Ingestion, Merchant), igual que el código.
+  acotado (Identity, Ingestion, Merchant, Financial), igual que el código.
 - `finflow_v2.postman_environment.json` — el ambiente `finflow_v2 - local`.
 
 ## Importar

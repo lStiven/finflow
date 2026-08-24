@@ -17,7 +17,6 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
     AccountFingerprint,
     AccountKind,
-    AccountStatus,
     Balance,
     LedgerMovement,
     MovementDirection,
@@ -54,9 +53,10 @@ def _movement(
     )
 
 
-def _discovered(kind: AccountKind = AccountKind.SAVINGS) -> Account:
-    account = Account.open_automatically(
+def _declared(kind: AccountKind = AccountKind.SAVINGS) -> Account:
+    account = Account.open(
         user_id=USER_ID,
+        name="Cuenta de ahorros",
         bank="bancolombia",
         instrument_kind="debit_card",
         last_four="7653",
@@ -69,9 +69,10 @@ def _discovered(kind: AccountKind = AccountKind.SAVINGS) -> Account:
     return account
 
 
-def test_a_discovered_account_is_named_after_the_bank_that_announced_it() -> None:
-    account = Account.open_automatically(
+def test_a_declared_account_answers_to_the_card_it_was_given() -> None:
+    account = Account.open(
         user_id=USER_ID,
+        name="Tarjeta de crédito",
         bank="Bancolombia",
         instrument_kind="credit_card",
         last_four="7653",
@@ -80,9 +81,10 @@ def test_a_discovered_account_is_named_after_the_bank_that_announced_it() -> Non
         opened_at=NOW,
     )
 
-    assert account.name == "Bancolombia ••7653"
+    assert account.name == "Tarjeta de crédito"
     assert account.bank == "bancolombia"
-    assert account.needs_review
+    # Zero because its owner named no opening balance, which simply means the
+    # running total is movement from here on.
     assert account.balance == Balance.zero(Currency.COP)
     assert [type(event).__name__ for event in account.pull_events()] == [
         "AccountOpened",
@@ -90,8 +92,25 @@ def test_a_discovered_account_is_named_after_the_bank_that_announced_it() -> Non
     ]
 
 
-def test_a_discovered_account_answers_to_the_pair_that_created_it() -> None:
-    account = _discovered()
+def test_an_account_without_an_instrument_never_matches_an_alert() -> None:
+    # Cash in a drawer, a mortgage that emails nothing. Perfectly valid, and
+    # simply never claimed by a movement.
+    account = Account.open(
+        user_id=USER_ID,
+        name="Efectivo",
+        kind=AccountKind.CASH,
+        currency=Currency.COP,
+        opened_at=NOW,
+    )
+
+    assert account.fingerprints == set()
+    assert [type(event).__name__ for event in account.pull_events()] == [
+        "AccountOpened",
+    ]
+
+
+def test_a_declared_account_answers_to_the_pair_that_created_it() -> None:
+    account = _declared()
 
     assert account.matches(
         AccountFingerprint.from_parts(
@@ -103,7 +122,7 @@ def test_a_discovered_account_answers_to_the_pair_that_created_it() -> None:
 
 
 def test_one_account_can_answer_to_several_of_its_banks_names() -> None:
-    account = _discovered()
+    account = _declared()
     transfers = AccountFingerprint.from_parts(
         bank="bancolombia",
         instrument_kind="savings_account",
@@ -119,7 +138,7 @@ def test_one_account_can_answer_to_several_of_its_banks_names() -> None:
 
 
 def test_linking_a_pair_the_account_already_answers_to_changes_nothing() -> None:
-    account = _discovered()
+    account = _declared()
     account.link_fingerprint(next(iter(account.fingerprints)))
 
     assert len(account.fingerprints) == 1
@@ -127,7 +146,7 @@ def test_linking_a_pair_the_account_already_answers_to_changes_nothing() -> None
 
 
 def test_spending_lowers_an_asset_and_income_raises_it() -> None:
-    account = _discovered()
+    account = _declared()
     account.apply(_movement("50000", MovementDirection.OUTGOING))
     account.apply(_movement("80000", MovementDirection.INCOMING))
 
@@ -136,7 +155,7 @@ def test_spending_lowers_an_asset_and_income_raises_it() -> None:
 
 
 def test_spending_on_a_credit_card_raises_what_you_owe() -> None:
-    card = _discovered(AccountKind.CREDIT_CARD)
+    card = _declared(AccountKind.CREDIT_CARD)
     card.apply(_movement("1200000", MovementDirection.OUTGOING))
 
     assert card.category is AccountCategory.LIABILITY
@@ -145,7 +164,7 @@ def test_spending_on_a_credit_card_raises_what_you_owe() -> None:
 
 
 def test_paying_a_credit_card_lowers_what_you_owe() -> None:
-    card = _discovered(AccountKind.CREDIT_CARD)
+    card = _declared(AccountKind.CREDIT_CARD)
     card.apply(_movement("1200000", MovementDirection.OUTGOING))
     card.apply(_movement("500000", MovementDirection.INCOMING))
 
@@ -155,7 +174,7 @@ def test_paying_a_credit_card_lowers_what_you_owe() -> None:
 def test_an_account_discovered_mid_life_may_go_below_zero() -> None:
     # Its real opening balance is unknown: the running total is movement
     # since discovery, and inventing a starting number would be worse.
-    account = _discovered()
+    account = _declared()
     account.apply(_movement("50000", MovementDirection.OUTGOING))
 
     assert account.balance.is_negative
@@ -163,7 +182,7 @@ def test_an_account_discovered_mid_life_may_go_below_zero() -> None:
 
 
 def test_a_balance_change_names_the_movement_behind_it() -> None:
-    account = _discovered()
+    account = _declared()
     account.apply(_movement("50000", movement_id="movement-42"))
     (event,) = account.pull_events()
 
@@ -173,7 +192,7 @@ def test_a_balance_change_names_the_movement_behind_it() -> None:
 
 
 def test_a_movement_in_another_currency_is_refused_not_converted() -> None:
-    account = _discovered()
+    account = _declared()
 
     with pytest.raises(CurrencyMismatchError):
         account.apply(
@@ -190,7 +209,7 @@ def test_a_movement_in_another_currency_is_refused_not_converted() -> None:
 
 
 def test_a_declared_mortgage_starts_at_what_is_owed() -> None:
-    mortgage = Account.open_manually(
+    mortgage = Account.open(
         user_id=USER_ID,
         name="Apartment mortgage",
         kind=AccountKind.MORTGAGE,
@@ -199,8 +218,6 @@ def test_a_declared_mortgage_starts_at_what_is_owed() -> None:
         opening_balance=_cop("180000000"),
     )
 
-    assert mortgage.status is AccountStatus.CONFIRMED
-    assert not mortgage.needs_review
     assert mortgage.opening_balance.signed_amount == Decimal("180000000")
     assert mortgage.balance == mortgage.opening_balance
     assert [type(event).__name__ for event in mortgage.pull_events()] == [
@@ -210,7 +227,7 @@ def test_a_declared_mortgage_starts_at_what_is_owed() -> None:
 
 def test_a_declared_account_cannot_open_with_another_currency() -> None:
     with pytest.raises(CurrencyMismatchError):
-        Account.open_manually(
+        Account.open(
             user_id=USER_ID,
             name="Savings",
             kind=AccountKind.SAVINGS,
@@ -222,7 +239,7 @@ def test_a_declared_account_cannot_open_with_another_currency() -> None:
 
 def test_an_account_needs_a_name() -> None:
     with pytest.raises(ValueError):
-        Account.open_manually(
+        Account.open(
             user_id=USER_ID,
             name="   ",
             kind=AccountKind.CASH,
@@ -231,29 +248,19 @@ def test_an_account_needs_a_name() -> None:
         )
 
 
-def test_naming_an_account_counts_as_reviewing_it() -> None:
-    account = _discovered()
+def test_renaming_an_account_keeps_everything_else() -> None:
+    account = _declared()
     account.rename("  Daily savings  ")
 
     assert account.name == "Daily savings"
-    assert not account.needs_review
+    assert account.fingerprints
     assert [type(event).__name__ for event in account.pull_events()] == [
         "AccountRenamed",
     ]
 
 
-def test_an_account_can_be_accepted_with_the_name_it_was_given() -> None:
-    account = _discovered()
-    account.confirm()
-
-    assert account.status is AccountStatus.CONFIRMED
-    assert [type(event).__name__ for event in account.pull_events()] == [
-        "AccountConfirmed",
-    ]
-
-
 def test_a_closed_account_takes_no_further_movements() -> None:
-    account = _discovered()
+    account = _declared()
     account.close(LATER)
 
     assert account.is_closed
@@ -266,7 +273,7 @@ def test_a_closed_account_takes_no_further_movements() -> None:
 
 
 def test_closing_an_already_closed_account_announces_nothing() -> None:
-    account = _discovered()
+    account = _declared()
     account.close(NOW)
     account.pull_events()
     account.close(LATER)
@@ -276,7 +283,7 @@ def test_closing_an_already_closed_account_announces_nothing() -> None:
 
 
 def test_replaying_the_ledger_reproduces_the_running_total() -> None:
-    account = _discovered()
+    account = _declared()
     movements = [
         _movement("50000", MovementDirection.OUTGOING, movement_id="a"),
         _movement("80000", MovementDirection.INCOMING, movement_id="b"),
@@ -298,7 +305,7 @@ def test_replaying_the_ledger_reproduces_the_running_total() -> None:
 
 
 def test_replaying_the_ledger_repairs_a_total_that_drifted() -> None:
-    account = _discovered()
+    account = _declared()
     truth = [_movement("50000", MovementDirection.OUTGOING, movement_id="a")]
     # What a redelivered movement would have done before the ledger caught it.
     account.apply(truth[0])
@@ -312,7 +319,7 @@ def test_replaying_the_ledger_repairs_a_total_that_drifted() -> None:
 
 
 def test_a_declared_opening_balance_survives_a_replay() -> None:
-    mortgage = Account.open_manually(
+    mortgage = Account.open(
         user_id=USER_ID,
         name="Apartment mortgage",
         kind=AccountKind.MORTGAGE,
@@ -327,7 +334,7 @@ def test_a_declared_opening_balance_survives_a_replay() -> None:
 
 
 def test_a_replay_that_cannot_finish_leaves_the_balance_untouched() -> None:
-    account = _discovered()
+    account = _declared()
     account.apply(_movement("50000", MovementDirection.OUTGOING))
     account.pull_events()
 
@@ -350,7 +357,7 @@ def test_a_replay_that_cannot_finish_leaves_the_balance_untouched() -> None:
 
 
 def test_a_closed_account_can_still_be_repaired() -> None:
-    account = _discovered()
+    account = _declared()
     account.close(LATER)
     account.pull_events()
     account.rebuild([_movement("50000", MovementDirection.OUTGOING)])
@@ -358,16 +365,12 @@ def test_a_closed_account_can_still_be_repaired() -> None:
     assert account.balance.signed_amount == Decimal("-50000")
 
 
-def test_a_long_bank_name_still_produces_a_usable_placeholder() -> None:
-    account = Account.open_automatically(
-        user_id=USER_ID,
-        bank="b" * 200,
-        instrument_kind="credit_card",
-        last_four="7653",
-        kind=AccountKind.CREDIT_CARD,
-        currency=Currency.COP,
-        opened_at=NOW,
-    )
-
-    assert len(account.name) <= MAX_ACCOUNT_NAME_LENGTH
-    assert account.name.endswith("••7653")
+def test_a_name_longer_than_the_limit_is_refused() -> None:
+    with pytest.raises(ValueError):
+        Account.open(
+            user_id=USER_ID,
+            name="b" * (MAX_ACCOUNT_NAME_LENGTH + 1),
+            kind=AccountKind.SAVINGS,
+            currency=Currency.COP,
+            opened_at=NOW,
+        )

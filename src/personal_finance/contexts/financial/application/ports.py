@@ -47,13 +47,21 @@ class AccountRepository(Protocol):
         ...
 
     def save(self, account: Account) -> None:
-        """Replace an account that already exists, and its fingerprints.
+        """Store what the owner changed: name, closure, fingerprints.
 
-        Everything `Account` can be told to do after it is opened needs this:
-        rename, confirm, close, rebuild a drifted total, and link the second
-        instrument one real account emails under. Never used to move a
-        balance — that is the ledger's atomic write, and a read-then-write
-        here would drop one of two movements landing at once.
+        Must not write the balance. That number is moved by the ledger's
+        atomic add, and writing back a value read moments earlier would
+        discard any movement that landed in between — leaving a ledger row on
+        record whose effect vanished, with nothing to trigger a repair. A
+        rename must not be able to lose an expense.
+        """
+        ...
+
+    def overwrite_balance(self, account: Account) -> None:
+        """Store a balance that was recomputed from the ledger.
+
+        The repair path, and the only writer of that number besides the
+        ledger's own atomic add.
         """
         ...
 
@@ -99,8 +107,30 @@ class TransactionLedger(Protocol):
         """
         ...
 
+    def save(self, transaction: Transaction) -> None:
+        """Replace a movement that already exists.
+
+        For corrections and for moving a movement between accounts. Never
+        moves a balance by itself — `record` owns the atomic write that does,
+        and a balance touched here would be one with no row behind it.
+        """
+        ...
+
     def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
         """Load one movement, for reading a balance back to its rows."""
+        ...
+
+    def list_unassigned_matching(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Sequence[Transaction]:
+        """Every movement waiting for the account that answers to this key.
+
+        What makes declaring an account retroactive: the alerts that arrived
+        before it existed are still here, and they belong to it.
+        """
         ...
 
     def list_movements(
@@ -118,4 +148,12 @@ class TransactionLedger(Protocol):
 
     def list_unassigned(self, user_id: UserId) -> Sequence[Transaction]:
         """Movements no account answered for, for the user to place by hand."""
+        ...
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        """Everything this user has, assigned or not.
+
+        The whole point for somebody who declared no accounts: what came in
+        and what went out is a complete answer on its own.
+        """
         ...

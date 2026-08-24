@@ -16,26 +16,44 @@ reading the code.
 
 ## Current focus
 
-Financial's write side runs end to end. A forwarded bank alert reaches
-`just financial-worker` over the bus, opens the account it needs, and lands as
-a ledger row plus a balance in one atomic DynamoDB write — verified against
-the local emulator, not only in tests. Redeliveries are refused by the
-conditional write, and a movement no account answers for is kept unassigned.
+Financial is complete for v1, backend-side. Accounts are **declared by
+their owner**, never discovered: Finflow works with none at all — every alert
+is recorded and stays unassigned, which is a complete answer for somebody
+watching only what comes in and goes out. Declaring an account starts the
+association and is retroactive. Money that never emails can be entered by
+hand, and anything recorded can be corrected.
 
-What is missing is the read side (no endpoints, no net-worth query) and the
-three correctness gaps under **Next steps** — the first of which now produces
-wrong money rather than merely being absent. `just prepare` green (520
-tests).
+Eleven endpoints under `/financial`, the SQS worker, the atomic ledger write,
+and secrets read from SSM Parameter Store. All verified against the local
+emulator, not only in tests. `just prepare` green (547 tests).
+
+What is missing for production is the frontend, a deployment mechanism,
+observability and backups — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-24 — Financial's write side: `RecordMovementUseCase`, both
-  persistence ports, the DynamoDB adapter, `SQSFinancialWorker`,
-  `just financial-worker`, and provisioning for the `financial` table and
-  queue.
+- 2026-08-24 — Financial's read/write surface: user-declared accounts with
+  retroactive adoption, manual transactions, editing, eleven endpoints, the
+  Postman folder, and secrets resolved from SSM Parameter Store.
 
 ## Next steps
 
+- [ ] **Next: what production actually needs.** In order of what hurts
+      soonest:
+      1. **Backups.** No table has point-in-time recovery. Losing `financial`
+         loses everybody's history with no way back.
+      2. **Observability.** CloudWatch shipping is still deferred, so the
+         workers log to stdout on a box nobody watches, and nothing alarms on
+         DLQ depth. A bank changing its template would pile up in silence.
+      3. **Deployment.** No Dockerfile, no CI, nothing that keeps the four
+         workers alive. `just run-prod` is uvicorn on whatever machine runs
+         it.
+      4. **The frontend**, deliberately deferred until the backend settles.
+- [ ] **Only Bancolombia has a parser**, with three sender domains mapped.
+      Every other bank falls through to the LLM, which costs money per email
+      and refuses when unsure. More banks get added over time; this is
+      deliberate, not a gap.
+- [ ] **No spending cap on the LLM.** Every unrecognised email calls Gemini.
 - [ ] **Validate the authorization filter against real alerts.** An
       authorization and its posting are two different emails with different
       bodies, so the rule lives at parse time: an authorization never becomes
@@ -44,27 +62,6 @@ tests).
       refuse anything approved/held/in process. What is missing is
       confirmation against real authorization emails from each bank — the
       refusal wording was written without one in hand.
-- [ ] **An auto-opened account's currency is fixed by its first alert, with
-      no repair path.** A card whose first sighting happens to be a USD
-      purchase becomes a USD account; every later COP alert on it then fails
-      `Account.apply` and is filed unassigned forever. Needs either a way to
-      correct an account's currency or a rethink of what currency an
-      auto-opened account has.
-- [ ] **One real account still becomes two.** The design says one account
-      answers to many fingerprints — a checking account emails as a debit
-      card and as an account number — but `_resolve_account` only ever
-      matches or opens, so the second instrument opens a second account and
-      splits one balance. `AccountRepository.save` exists to persist the
-      linking; what is missing is the user-facing action that decides two
-      fingerprints are one account. Never inferred: that is a guess about
-      somebody's money.
-- [ ] **Reassignment has no path.** `Transaction.assign_to` refuses any second
-      account, and nothing reverses an amount off the balance that holds it.
-      A movement auto-assigned to the wrong account is stuck there — which
-      matters because reading a debit card as a savings account is a
-      deliberate guess the user may need to correct.
-- [ ] **The read side.** Account list, net worth, the unassigned queue, and
-      the Postman collection that goes with them.
 - [ ] **The whole SQS worker is duplicated**, not just the envelope.
       `IntegrationEventEnvelope`, the source/detail-type constants, `_Outcome`,
       `PollResult`, `poll_once`, `_delete`, and both CLI runners' `_Stopper`
@@ -209,6 +206,46 @@ tests).
   shape (each `Account` stays owned by one user; a mutually-accepted link in
   Identity; the combined view is a query, not new data) is recorded here so
   the door stays open, but nothing is designed or built.
+
+### Financial (accounts are the user's, 2026-08-24)
+
+- **Accounts are declared, never discovered.** Auto-opening was removed. The
+  product has two uses and this serves both: watching what comes in and goes
+  out needs no accounts at all — every movement is recorded and stays
+  unassigned, which is complete rather than degraded — and watching a card's
+  running state without opening the bank's app needs an account its owner
+  declared, with the kind and currency they chose. Guessing a kind from an
+  instrument would have meant guessing asset against liability, which inverts
+  net worth. `AccountStatus`, `needs_review` and the generated
+  `Bancolombia ••7653` names went with it: nothing is discovered any more, so
+  there is nothing to review.
+- **Declaring an account is retroactive.** The alerts that arrived under its
+  card before it existed are still in the ledger, unassigned, and they belong
+  to it: they are adopted and the balance replays from them. Adoption cannot
+  be atomic across every row it touches, so it assigns the rows first and
+  recomputes the total last. A crash in between leaves a stale total, which
+  `rebuild` repairs — the ledger is the authority and the balance is derived
+  from it, which is exactly what makes that recoverable instead of lost.
+- **A movement's identity never moves with an edit.** It is derived from the
+  bank's own statement, so a redelivery of a corrected alert still lands on
+  the same row rather than arriving as a second expense. The first correction
+  keeps what the bank said in `stated`, which is the only way to tell later
+  whether the alert or the correction was wrong. Manual entries get a random
+  identity instead: two identical ones are two entries somebody meant to
+  record, and there is nothing to deduplicate against.
+- **Corrections replay the balance; only new movements use the atomic add.**
+  Editing, adopting and moving a movement all recompute the affected account
+  from its rows. Nudging by a delta would work, but replaying is the only
+  version that cannot end up disagreeing with the ledger, and these are the
+  rare paths.
+- **Secrets are referenced, not stored.** A configured value of
+  `ssm:/finflow/production/jwt-secret` means the SecureString at that path;
+  anything else is the secret itself. Explicit per-secret rather than a global
+  switch, so `grep ssm:` answers which values are real and one deployment can
+  move across one at a time. Parameter Store over Secrets Manager: standard
+  parameters are free, nothing here rotates automatically, and paying per
+  secret per month buys nothing. Resolved once per process, so a rotation
+  needs a restart.
 
 ### Financial (write side, 2026-08-24)
 
