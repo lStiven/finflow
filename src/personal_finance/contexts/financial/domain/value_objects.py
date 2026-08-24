@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 import dataclasses
 from decimal import Decimal
 import enum
+import hashlib
+import re
 from typing import Self
+import unicodedata
 import uuid
 
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -14,6 +18,7 @@ from personal_finance.shared.domain.value_objects import (
     JsonValue,
     Money,
     PosixTime,
+    UserId,
     ValueObject,
 )
 
@@ -53,10 +58,38 @@ class AccountKind(enum.Enum):
             else AccountCategory.ASSET
         )
 
+    @classmethod
+    def from_instrument(cls, value: str) -> AccountKind | None:
+        """What kind of account an alert's instrument implies, or nothing.
+
+        This is Financial reading ingestion's vocabulary into its own; the
+        strings arrive in a JSON payload and ingestion's enum is never
+        imported. `None` means no account kind can be concluded, which leaves
+        the movement unassigned rather than opening an account on a guess.
+
+        The reading is allowed to be imprecise *within* a category and never
+        *across* it. A debit card may well draw on a checking account rather
+        than a savings one, and being wrong there costs a rename — both are
+        assets. Confusing a debit card with a credit card would turn money
+        held into money owed and invert net worth, so those two are read
+        straight from the alert and never inferred.
+        """
+        return _INSTRUMENT_ACCOUNT_KINDS.get(value.strip().lower())
+
 
 _LIABILITY_KINDS = frozenset(
     {AccountKind.CREDIT_CARD, AccountKind.LOAN, AccountKind.MORTGAGE},
 )
+
+_INSTRUMENT_ACCOUNT_KINDS = {
+    "credit_card": AccountKind.CREDIT_CARD,
+    "debit_card": AccountKind.SAVINGS,
+    "savings_account": AccountKind.SAVINGS,
+    "checking_account": AccountKind.CHECKING,
+    # A bank that names no more than "account" is stating an asset; what never
+    # emails a movement — a loan, a mortgage — is opened by hand instead.
+    "account": AccountKind.SAVINGS,
+}
 
 
 class AccountStatus(enum.Enum):
@@ -102,6 +135,19 @@ def normalize_last_four(value: str) -> str:
     return digits[-4:]
 
 
+def _canonical(parts: Iterable[str]) -> str:
+    """Join parts so no field's content can imitate the separator.
+
+    Length-prefixed rather than merely delimited: `bank` and `counterparty`
+    come out of an untrusted email, and a crafted separator inside either one
+    would otherwise let two different records canonicalize to the same string
+    — on a key that routes money to an account, or decides whether a movement
+    is new, that means somebody's money landing on the wrong balance or never
+    landing at all.
+    """
+    return "".join(f"{len(part)}:{part}|" for part in parts)
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class AccountFingerprint(ValueObject):
     """How an incoming movement finds the account it belongs to.
@@ -120,8 +166,14 @@ class AccountFingerprint(ValueObject):
     value: str
 
     def __post_init__(self) -> None:
-        if not self.value.strip():
+        value = self.value.strip()
+
+        if not value:
             raise ValueError("Account fingerprint cannot be empty")
+
+        # Stripped, not merely checked: this is a stored key, and a value that
+        # picks up padding on a round-trip would stop matching its own row.
+        object.__setattr__(self, "value", value)
 
     @classmethod
     def from_parts(
@@ -142,7 +194,9 @@ class AccountFingerprint(ValueObject):
             raise ValueError("Account fingerprint requires an instrument kind")
 
         return cls(
-            value=f"{institution}:{instrument}:{normalize_last_four(last_four)}",
+            value=_canonical(
+                (institution, instrument, normalize_last_four(last_four)),
+            ),
         )
 
     def to_dict(self) -> JsonValue:
@@ -225,6 +279,14 @@ class Balance(ValueObject):
         }
 
 
+class TransactionStatus(enum.Enum):
+    # No account answers to this movement's instrument, or the alert named
+    # none it could use. Kept and visible, never guessed at.
+    UNASSIGNED = "unassigned"
+    # On an account, and counted in its balance.
+    ASSIGNED = "assigned"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class MovementId(ValueObject):
     """Identity of one movement of money.
@@ -238,8 +300,24 @@ class MovementId(ValueObject):
     value: str
 
     def __post_init__(self) -> None:
-        if not self.value.strip():
+        value = self.value.strip()
+
+        if not value:
             raise ValueError("Movement id cannot be empty")
+
+        object.__setattr__(self, "value", value)
+
+    @classmethod
+    def from_fingerprint(cls, fingerprint: MovementFingerprint) -> Self:
+        """A movement a bank announced is identified by what it is.
+
+        Deriving the id from the fingerprint is what keeps reprocessing safe
+        all the way down to storage: the same alert read twice produces the
+        same ledger row, so rejecting a duplicate is a conditional insert on
+        that row's own key rather than a second bookkeeping row that has to
+        stay in step with it.
+        """
+        return cls(value=fingerprint.value)
 
     def to_dict(self) -> JsonValue:
         return self.value
@@ -255,6 +333,201 @@ class MovementDirection(enum.Enum):
 
     OUTGOING = "outgoing"
     INCOMING = "incoming"
+
+    @classmethod
+    def from_alert(cls, value: str) -> MovementDirection:
+        """Read a direction out of an alert, or refuse the alert.
+
+        The one field with no safe default. An unreadable instrument costs an
+        unassigned movement somebody can still fix; a guessed direction moves
+        a real balance the wrong way and looks entirely correct doing it.
+        """
+        try:
+            return cls(value.strip().lower())
+        except ValueError as error:
+            raise ValueError(f"Unknown movement direction: {value!r}") from error
+
+
+_NON_ALPHANUMERIC = re.compile(r"[\W_]+")
+
+# What the fingerprint writes where an instrument would go when the alert
+# named none. Empty on purpose: a present instrument is never empty once
+# stripped, so no alert can spell this sentinel and pass itself off as
+# instrument-less. Private, too — ingestion publishes its own `NO_INSTRUMENT`
+# with a different value, and importing the wrong one would change every
+# derived `MovementId`.
+_ABSENT_INSTRUMENT = ""
+
+
+def normalize_counterparty(value: str) -> str:
+    """The other side of a movement, folded just enough to compare it.
+
+    Conservative on purpose: case, accents, punctuation and repeated spaces
+    are noise banks add inconsistently, and nothing beyond that is touched.
+    Folding harder — dropping store numbers, say — would let two real
+    purchases at two branches collapse into one, and a movement that never
+    reaches the ledger is invisible, while a duplicate is a row a user can see
+    and delete. Merchant does its own, deliberately more aggressive grouping;
+    this one is Financial's and stays here rather than crossing the boundary.
+    """
+    stripped = value.strip()
+
+    if not stripped:
+        raise ValueError("Movement counterparty cannot be empty")
+
+    # Case-folded last, after decomposing: NFKD turns compatibility characters
+    # into ordinary cased letters (`№` -> `No`, `™` -> `TM`), and a fold done
+    # first never sees them — leaving one merchant spelled two ways with two
+    # fingerprints and a doubled expense. Folding last also still expands `ß`
+    # into `ss`, because `\W` keeps it rather than dropping it as punctuation.
+    decomposed = unicodedata.normalize("NFKD", stripped)
+    unaccented = "".join(char for char in decomposed if not unicodedata.combining(char))
+    # `\W` keeps letters and digits in every script rather than ASCII alone: a
+    # merchant named outside the Latin alphabet must normalize like any other,
+    # not slip through unfolded.
+    folded = _NON_ALPHANUMERIC.sub(" ", unaccented).strip().casefold()
+
+    # A counterparty of pure punctuation (`***`) folds away to nothing. It is
+    # still a real movement, so its raw text stands in — folded and collapsed
+    # as far as it can be — instead of being refused or sharing one
+    # fingerprint with every other such alert.
+    return folded or " ".join(stripped.casefold().split())
+
+
+def _canonical_amount(amount: Money) -> str:
+    """`50000` and `50000.00` are the same money and must fingerprint alike.
+
+    A template parser prints what its bank printed; the LLM fallback may add
+    or drop trailing zeros. Trailing zeros are therefore stripped by hand
+    rather than through `Decimal.normalize`, which rounds at the ambient
+    context's precision: this key has to be byte-identical across processes
+    and restarts, and a library that changed `getcontext()` would otherwise
+    make one movement fingerprint two ways.
+    """
+    text = f"{amount.amount:f}"
+
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+
+    return text or "0"
+
+
+def _instrument_last_four(value: str | None) -> str:
+    """The card digits a fingerprint uses, or the sentinel when there are none.
+
+    Never raises, unlike `normalize_last_four`. Blank arrives from a JSON
+    payload meaning "no digits", and ingestion gates `last_four` on bare
+    `str.isdigit`, which accepts numerals this cannot use — an alert can
+    therefore reach Financial carrying digits it must refuse. The movement is
+    real either way: losing its instrument costs an unassigned movement
+    somebody can still see and fix, while refusing the alert loses the money.
+    """
+    if value is None or not value.strip():
+        return _ABSENT_INSTRUMENT
+
+    try:
+        return normalize_last_four(value)
+    except ValueError:
+        return _ABSENT_INSTRUMENT
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MovementFingerprint(ValueObject):
+    """What makes two bank alerts the same movement of money.
+
+    Deliberately not the email's `message_id`: a bank can announce one
+    purchase in two messages, the same message can be parsed more than once,
+    and SQS delivers at least once — under all three the money moved exactly
+    once. This is the key the ledger writes conditionally, so it is the only
+    thing standing between a redelivery and a doubled expense.
+
+    The key is user, bank, instrument, direction, amount, time and
+    counterparty. It resolves to the second, but **in practice to the
+    minute**: both extraction paths stop there — the template parser reads
+    `HH:MM` and the LLM prompt asks for `HH:MM`. So two identical charges on
+    one card, at one merchant, for one amount, inside a single minute are
+    indistinguishable from one charge announced twice, and this key calls them
+    one movement. That is a knowingly accepted loss, not an oversight: the
+    same data cannot say which it is, and idempotency under at-least-once
+    delivery is the requirement that has to hold. Making that second charge
+    visible belongs to the ledger, which can record what announced each row.
+
+    A temporary authorization and its later posting are *not* handled here:
+    they differ in time, and often in amount, so no key comparing fields can
+    catch them. That is settlement, a decision `Transaction` makes with both
+    records in hand, not something to approximate by loosening this.
+
+    `kind` is left out on purpose. It is a classification, not an identity —
+    one bank's QR payment is another's card purchase, and a re-parse that
+    reclassifies a movement must not turn it into a second one.
+
+    Hashed rather than readable so no amount, counterparty or card digits sit
+    in plaintext wherever an id is logged — this value reaches ledger keys and
+    `AccountBalanceChanged`. Obfuscation, not confidentiality: the inputs are
+    enumerable, so anyone already holding the logs could confirm a guess. An
+    HMAC would close that, at the price of a secret inside a domain value
+    object whose loss would re-apply every movement ever stored.
+
+    Built through `from_movement` so every caller normalizes the same way; the
+    constructor stays open for reading a stored value back.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        value = self.value.strip()
+
+        if not value:
+            raise ValueError("Movement fingerprint cannot be empty")
+
+        object.__setattr__(self, "value", value)
+
+    @classmethod
+    def from_movement(
+        cls,
+        *,
+        user_id: UserId,
+        bank: str,
+        direction: MovementDirection,
+        amount: Money,
+        occurred_at: PosixTime,
+        counterparty: str,
+        instrument_kind: str | None = None,
+        last_four: str | None = None,
+    ) -> Self:
+        institution = bank.strip().lower()
+
+        if not institution:
+            raise ValueError("Movement fingerprint requires a bank")
+
+        instrument = (
+            _ABSENT_INSTRUMENT
+            if instrument_kind is None
+            else instrument_kind.strip().lower()
+        )
+        digits = _instrument_last_four(last_four)
+
+        canonical = _canonical(
+            (
+                # The user is part of the key, not a filter applied after it:
+                # two people forwarding alerts for the same shared card must
+                # never land on one another's ledger row.
+                str(user_id.value),
+                institution,
+                instrument,
+                digits,
+                direction.value,
+                _canonical_amount(amount),
+                amount.currency.value,
+                str(occurred_at.as_epoch_seconds()),
+                normalize_counterparty(counterparty),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    def to_dict(self) -> JsonValue:
+        return self.value
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

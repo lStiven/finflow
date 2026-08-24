@@ -16,3 +16,14 @@ class CurrencyMismatchError(FinancialDomainError):
     Never converted here: an exchange rate is a fact about a moment in time,
     and guessing one would corrupt the balance quietly.
     """
+
+
+class TransactionAlreadyAssignedError(FinancialDomainError):
+    """Raised when a movement already on one account is offered to another.
+
+    Reassignment is deferred, not supported and refused: moving a movement
+    means first taking its amount back off the balance that holds it, and no
+    operation does that yet. Until one does, a movement auto-assigned to the
+    wrong account stays there — which matters, because reading a debit card
+    as a savings account is a guess the user may need to correct.
+    """
