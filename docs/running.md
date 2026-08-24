@@ -77,6 +77,10 @@ just aws-init
 Arranca moto y crea todo: cinco tablas de DynamoDB, las colas con sus DLQ, el
 bus de eventos y las reglas que lo conectan. Es idempotente, se puede repetir.
 
+Cada tabla queda con **point-in-time recovery** activado (ver
+[Copias de seguridad](#copias-de-seguridad)); en local no sirve de nada, pero
+el camino es el mismo que en producción, que es el punto.
+
 Las URLs que imprime ya están en `.env.example` — el id de cuenta de moto es
 siempre `123456789012`, así que son predecibles y no hay que copiar nada.
 
@@ -306,6 +310,45 @@ nombre, la aplicación exige la URL completa.
 
 Comprueba con `just aws-status .env.production`.
 
+### Copias de seguridad
+
+`just provision-prod` deja las cinco tablas con **point-in-time recovery**
+(PITR) activado. Significa que AWS registra cada cambio de forma continua y
+puedes devolver una tabla al estado exacto que tenía en cualquier segundo de
+los últimos 35 días.
+
+No protege sobre todo contra un fallo de AWS, que es raro. Protege contra la
+forma normal en que se pierden datos: borrar la tabla equivocada creyendo que
+era la de pruebas, un despliegue con un bug que corrompe saldos durante unas
+horas, un script de limpieza apuntando al entorno que no era.
+
+Importa especialmente por la tabla `financial`, que contiene el ledger
+completo — cada movimiento de cada usuario desde el primer día. Los saldos se
+recalculan a partir de ella, así que perderla no es perder un saldo: es perder
+el historial, y no hay forma de reconstruirlo porque los correos originales ya
+se procesaron.
+
+Es también lo único de esta guía que **no se puede añadir después**. Una alarma
+que faltaba se configura el día que se echa en falta; una tabla que nunca tuvo
+copias, no.
+
+**Restaurar** crea siempre una tabla *nueva* — nunca sobrescribe la original,
+que es lo que te deja comparar antes de decidir:
+
+```bash
+aws dynamodb restore-table-to-point-in-time \
+  --profile finflow-production \
+  --source-table-name financial \
+  --target-table-name financial-restaurada \
+  --restore-date-time 2026-09-03T14:32:00Z
+```
+
+Tarda del orden de minutos a horas según el tamaño. Cuando la tabla nueva esté
+lista y hayas comprobado que trae lo que esperabas, apunta la app hacia ella
+con `FINANCIAL_ACCOUNTS_TABLE=financial-restaurada` y reinicia — o renómbrala
+tú. El coste es aproximadamente el de almacenar la tabla otra vez; a esta
+escala, céntimos.
+
 ### 3. Arrancar
 
 ```bash
@@ -354,8 +397,17 @@ degradarse en silencio. Estos son los mensajes que verás y qué significan:
 | `MERCHANT_EVENTS_QUEUE_URL is not set` | Igual, para el worker de comercios. |
 | `FINANCIAL_EVENTS_QUEUE_URL is not set` | Igual, para el worker de saldos: sin él ningún movimiento tocaría una cuenta. |
 | `Could not read the secret at '/...' from Parameter Store` | La referencia `ssm:` apunta a un parámetro que no existe o al que el rol no tiene acceso. Nunca se degrada a vacío: un secreto de firma ausente tiene que parar el arranque. |
+| `AccessDeniedException` al provisionar | Al rol le faltan permisos. Con PITR hacen falta `dynamodb:DescribeContinuousBackups` y `dynamodb:UpdateContinuousBackups` además de los de crear tablas. |
 | `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
 | `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
+
+**La DLQ** (*dead-letter queue*) es la segunda cola que acompaña a cada cola de
+trabajo, con el sufijo `-dlq`. Un worker no borra un mensaje al recogerlo sino
+al terminar bien, así que uno que falla siempre reaparecería para siempre,
+tapando a los demás. Tras cinco intentos SQS lo aparta ahí. No arregla nada por
+sí sola: es lo que convierte "desapareció dinero sin explicación" en "hay 40
+mensajes en `parse-notifications-dlq`, algo cambió". Hoy nadie vigila ese
+número — `just inspect` lo muestra, pero no hay alarma.
 
 Un mensaje que no se puede parsear se borra de la cola; uno que quizá entienda
 un despliegue más nuevo se deja, y acaba en la DLQ tras cinco intentos. Esa

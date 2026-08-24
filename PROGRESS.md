@@ -40,15 +40,13 @@ observability and backups — see **Next steps**.
 
 - [ ] **Next: what production actually needs.** In order of what hurts
       soonest:
-      1. **Backups.** No table has point-in-time recovery. Losing `financial`
-         loses everybody's history with no way back.
-      2. **Observability.** CloudWatch shipping is still deferred, so the
+      1. **Observability.** CloudWatch shipping is still deferred, so the
          workers log to stdout on a box nobody watches, and nothing alarms on
          DLQ depth. A bank changing its template would pile up in silence.
-      3. **Deployment.** No Dockerfile, no CI, nothing that keeps the four
+      2. **Deployment.** No Dockerfile, no CI, nothing that keeps the four
          workers alive. `just run-prod` is uvicorn on whatever machine runs
          it.
-      4. **The frontend**, deliberately deferred until the backend settles.
+      3. **The frontend**, deliberately deferred until the backend settles.
 - [ ] **Only Bancolombia has a parser**, with three sender domains mapped.
       Every other bank falls through to the LLM, which costs money per email
       and refuses when unsure. More banks get added over time; this is
@@ -278,6 +276,16 @@ observability and backups — see **Next steps**.
   new work to any subscriber deduping on it.
 
 ### Operations
+
+- **Point-in-time recovery is on for every table** (2026-08-24), applied on
+  each provisioning run rather than only at creation, so an environment that
+  predates it catches up. On by default because every table holds something
+  nothing else can reconstruct — the ledger balances are replayed from, the
+  credentials people log in with, the merchants they renamed by hand — and
+  because it is the only safeguard on the production list that cannot be added
+  after it is needed. An alarm nobody set up can be set up the day it is
+  missed; a table that was never backed up is gone.
+
 
 - **CloudWatch log shipping deferred** (2026-08-23). Options weighed:
   app-level (`watchtower`) vs. platform-native capture (awslogs driver /

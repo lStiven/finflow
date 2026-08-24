@@ -185,9 +185,10 @@ def provision_table(
     read_capacity: int = 5,
     write_capacity: int = 5,
     enable_ttl: bool = True,
+    enable_point_in_time_recovery: bool = True,
     secondary_indexes: Sequence[SecondaryIndex] = (),
 ) -> None:
-    """Create a table and, unless told otherwise, enable its TTL.
+    """Create a table, back it up continuously, and enable its TTL.
 
     The two billing modes take different arguments — DynamoDB rejects a
     throughput specification on an on-demand table — so they are two distinct
@@ -242,6 +243,9 @@ def provision_table(
             ),
         )
 
+    if enable_point_in_time_recovery:
+        _enable_point_in_time_recovery(client, table_name=table_name)
+
     if not enable_ttl:
         # Inboxes are user configuration: they must never expire.
         return
@@ -255,6 +259,43 @@ def provision_table(
     client.update_time_to_live(
         TableName=table_name,
         TimeToLiveSpecification={"Enabled": True, "AttributeName": TTL_ATTRIBUTE},
+    )
+
+
+def _enable_point_in_time_recovery(
+    client: DynamoDBClient,
+    *,
+    table_name: str,
+) -> None:
+    """Let this table be restored to any second in the last 35 days.
+
+    On by default because every table here holds something nobody can
+    reconstruct: the ledger these balances are replayed from, the credentials
+    people log in with, the merchants they renamed by hand. What it guards
+    against is not AWS failing, which is rare — it is the ordinary way data
+    dies, which is somebody deleting the wrong table or a bad deploy
+    corrupting rows for an hour before anyone notices.
+
+    It is also the only safeguard on the list that cannot be added after the
+    fact. An alarm nobody set up can be set up the day it is missed; a table
+    that was never backed up is simply gone.
+
+    Applied whether or not the table was just created, so an environment that
+    predates this gets it on the next `just aws-provision`. Idempotent: it
+    asks first, because enabling it twice is an error on a real account.
+    """
+    description = client.describe_continuous_backups(TableName=table_name)
+    recovery = description["ContinuousBackupsDescription"].get(
+        "PointInTimeRecoveryDescription",
+        {},
+    )
+
+    if recovery.get("PointInTimeRecoveryStatus") in {"ENABLED", "ENABLING"}:
+        return
+
+    client.update_continuous_backups(
+        TableName=table_name,
+        PointInTimeRecoverySpecification={"PointInTimeRecoveryEnabled": True},
     )
 
 
@@ -585,10 +626,13 @@ def main() -> None:
         f"  DynamoDB table : {resources.table_name} "
         f"({capacity}, TTL on {TTL_ATTRIBUTE})",
     )
+    # Named once rather than on every line: it is the same for all of them,
+    # and it is the one thing here that cannot be added after it is needed.
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.merchants_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.financial_table_name} ({capacity})")
+    print("                   every table restorable to any second, last 35 days")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")
     print(
