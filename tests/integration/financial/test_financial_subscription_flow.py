@@ -1,42 +1,46 @@
-"""End-to-end proof that a parsed bank alert becomes a balance.
+"""End-to-end proof that a parsed bank alert becomes a durable balance.
 
-The chain up to Financial's boundary is entirely real: ingestion's own
-translator puts `TransactionExtracted` on a real EventBridge bus, a rule
-routes it to a real queue, and Financial's own Pydantic schema reads what
-comes off that queue back into a command. Nothing in the payload is
-hand-built, which is the point — a field ingestion renames, or a number it
+The whole chain is real. Ingestion's own translator puts `TransactionExtracted`
+on a real EventBridge bus, Financial's own rule routes it to Financial's own
+queue, Financial's own worker drains it, and the balance is read back out of
+DynamoDB rather than out of the object that wrote it. A rule whose pattern
+does not match delivers nowhere and reports nothing, and an in-memory balance
+proves nothing about a restart, so nothing short of this proves the pipeline.
+
+Nothing in the payload is hand-built: a field ingestion renames, or a number it
 serializes differently, breaks here rather than in production.
-
-What is *not* real yet is the last hop: Financial has no worker and no
-persistence, so `_record` stands in for the use case that will own the
-conditional write. It is written to make that gap visible rather than to
-paper over it — see the assertions about redelivery, which show what the
-ledger will have to enforce and what it can rely on the domain for.
 """
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+import json
 
+from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_events.client import EventBridgeClient
 from mypy_boto3_sqs.client import SQSClient
 import pytest
 
-from personal_finance.contexts.financial.application.commands import (
-    RecordMovementCommand,
+from personal_finance.contexts.financial.application.handlers import (
+    RecordMovementUseCase,
 )
-from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
+    AccountFingerprint,
+    AccountKind,
+    AccountStatus,
     BalanceSign,
     MovementDirection,
     TransactionStatus,
 )
-from personal_finance.contexts.financial.infrastructure.messaging.inbound import (
-    INGESTION_SOURCE,
-    TRANSACTION_EXTRACTED,
-    IntegrationEventEnvelope,
-    TransactionExtractedDetail,
+from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
+    SQSFinancialWorker,
+)
+from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
+    PARTITION_KEY,
+    SORT_KEY,
+    DynamoDBAccountRepository,
+    DynamoDBTransactionLedger,
 )
 from personal_finance.contexts.ingestion.application.integration_events import (
     IngestionIntegrationEventTranslator,
@@ -53,6 +57,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailMessageId,
     NotificationId,
 )
+from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import (
     Currency,
     Money,
@@ -63,24 +68,30 @@ from personal_finance.shared.infrastructure.aws.eventbridge import (
     EventBridgeEventPublisher,
 )
 from personal_finance.shared.infrastructure.aws.provisioning import (
+    FINANCIAL_EVENTS_RULE,
+    FINANCIAL_EVENTS_TARGET_ID,
     provision_context_subscription,
     provision_event_bus,
+    provision_table,
 )
 
 
 BUS = "finflow"
 QUEUE = "financial-events"
-# Named here rather than imported: Financial has no worker yet, so production
-# owns no rule for this queue. When it does, these move into provisioning.
-RULE = "finflow-financial-transactions"
-TARGET_ID = "financial-events-queue"
+TABLE_NAME = "financial"
 
 USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
+OTHER_USER = UserId.from_string("22222222-2222-2222-2222-222222222222")
 MESSAGE_ID = EmailMessageId("<abc@bancolombia.com.co>")
 PURCHASE_TIME = PosixTime.from_datetime(datetime(2026, 8, 23, 14, 5, tzinfo=UTC))
 
 CREDIT_CARD = Instrument(kind=InstrumentKind.CREDIT_CARD, last_four="7653")
 DEBIT_CARD = Instrument(kind=InstrumentKind.DEBIT_CARD, last_four="1234")
+
+
+class NullEventPublisher:
+    def publish(self, events: Sequence[Event]) -> None:
+        del events
 
 
 @pytest.fixture
@@ -94,15 +105,63 @@ def queue_url(
         sqs_client,
         event_bus_name=BUS,
         queue_name=QUEUE,
-        rule_name=RULE,
-        target_id=TARGET_ID,
+        rule_name=FINANCIAL_EVENTS_RULE,
+        target_id=FINANCIAL_EVENTS_TARGET_ID,
         event_pattern={
-            "source": [INGESTION_SOURCE],
-            "detail-type": [TRANSACTION_EXTRACTED],
+            "source": ["finflow.ingestion"],
+            "detail-type": ["TransactionExtracted"],
         },
     )
 
     return url
+
+
+@pytest.fixture
+def table(dynamodb_client: DynamoDBClient) -> str:
+    provision_table(
+        dynamodb_client,
+        table_name=TABLE_NAME,
+        partition_key=PARTITION_KEY,
+        sort_key=SORT_KEY,
+        sort_key_type="S",
+        enable_ttl=False,
+    )
+
+    return TABLE_NAME
+
+
+@pytest.fixture
+def accounts(
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> DynamoDBAccountRepository:
+    return DynamoDBAccountRepository(client=dynamodb_client, table_name=table)
+
+
+@pytest.fixture
+def ledger(
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> DynamoDBTransactionLedger:
+    return DynamoDBTransactionLedger(client=dynamodb_client, table_name=table)
+
+
+@pytest.fixture
+def worker(
+    sqs_client: SQSClient,
+    queue_url: str,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> SQSFinancialWorker:
+    return SQSFinancialWorker(
+        client=sqs_client,
+        queue_url=queue_url,
+        use_case=RecordMovementUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=NullEventPublisher(),
+        ),
+    )
 
 
 @pytest.fixture
@@ -120,6 +179,7 @@ def _alert(
     amount: str = "50000.50",
     instrument: Instrument | None = CREDIT_CARD,
     user_id: UserId = USER_ID,
+    direction: TransactionDirection = TransactionDirection.OUTGOING,
 ) -> TransactionExtracted:
     return TransactionExtracted(
         notification_id=NotificationId.for_message(
@@ -130,7 +190,7 @@ def _alert(
         message_id=MESSAGE_ID,
         transaction=ExtractedTransaction(
             kind=TransactionKind.CARD_PURCHASE,
-            direction=TransactionDirection.OUTGOING,
+            direction=direction,
             amount=Money(amount=Decimal(amount), currency=Currency.COP),
             occurred_at=PURCHASE_TIME,
             counterparty=counterparty,
@@ -140,81 +200,6 @@ def _alert(
     )
 
 
-def _drain(sqs_client: SQSClient, queue_url: str) -> list[RecordMovementCommand]:
-    """Everything on the queue, read the way Financial's worker will read it."""
-    response = sqs_client.receive_message(
-        QueueUrl=queue_url,
-        MaxNumberOfMessages=10,
-        WaitTimeSeconds=0,
-    )
-    commands: list[RecordMovementCommand] = []
-
-    for message in response.get("Messages", []):
-        envelope = IntegrationEventEnvelope.model_validate_json(message.get("Body", ""))
-
-        assert envelope.source == INGESTION_SOURCE
-        assert envelope.detail_type == TRANSACTION_EXTRACTED
-
-        detail = TransactionExtractedDetail.model_validate(envelope.detail)
-        commands.append(detail.to_command())
-
-    return commands
-
-
-def _record(
-    command: RecordMovementCommand,
-    accounts: dict[tuple[str, str], Account],
-) -> Transaction:
-    """Stands in for the use case that does not exist yet.
-
-    Deliberately thin: find the account the movement names, open one on first
-    sighting, then assign and apply. The conditional write that makes this
-    idempotent is the part still missing, which is why the tests below check
-    the domain gives it a stable key to write on.
-
-    Accounts are keyed by user *and* fingerprint. `AccountFingerprint` carries
-    no user of its own — unlike `MovementFingerprint`, which does — so two
-    people at one bank holding cards that end in the same four digits would
-    otherwise resolve to a single account holding both their money. The real
-    query has to scope the same way, and this is the shape it will copy.
-    """
-    transaction = Transaction.from_alert(
-        user_id=command.user_id,
-        bank=command.bank,
-        direction=command.direction,
-        amount=command.amount,
-        occurred_at=command.occurred_at,
-        counterparty=command.counterparty,
-        instrument_kind=command.instrument_kind,
-        last_four=command.last_four,
-    )
-
-    if transaction.account_fingerprint is None or transaction.account_kind is None:
-        return transaction
-
-    key = (str(command.user_id.value), transaction.account_fingerprint.value)
-    account = accounts.get(key)
-
-    if account is None:
-        assert command.last_four is not None
-        assert command.instrument_kind is not None
-        account = Account.open_automatically(
-            user_id=command.user_id,
-            bank=command.bank,
-            instrument_kind=command.instrument_kind,
-            last_four=command.last_four,
-            kind=transaction.account_kind,
-            currency=command.amount.currency,
-            opened_at=command.occurred_at,
-        )
-        accounts[key] = account
-
-    transaction.assign_to(account.id)
-    account.apply(transaction.as_movement())
-
-    return transaction
-
-
 def _publish(
     publisher: EventBridgeEventPublisher,
     events: Sequence[TransactionExtracted],
@@ -222,147 +207,317 @@ def _publish(
     publisher.publish(list(events))
 
 
-def test_a_bank_alert_becomes_a_balance(
+def _still_held(sqs_client: SQSClient, queue_url: str) -> int:
+    """How many messages the queue is holding, visible or not.
+
+    Counted rather than re-received: a message the worker left alone is inside
+    its visibility timeout, which is invisible, not gone. Deleting it is the
+    thing that would have lost it.
+    """
+    attributes = sqs_client.get_queue_attributes(
+        QueueUrl=queue_url,
+        AttributeNames=[
+            "ApproximateNumberOfMessages",
+            "ApproximateNumberOfMessagesNotVisible",
+        ],
+    )["Attributes"]
+
+    return int(attributes["ApproximateNumberOfMessages"]) + int(
+        attributes["ApproximateNumberOfMessagesNotVisible"],
+    )
+
+
+def _fingerprint(instrument: Instrument) -> AccountFingerprint:
+    assert instrument.last_four is not None
+
+    return AccountFingerprint.from_parts(
+        bank="bancolombia",
+        instrument_kind=instrument.kind.value,
+        last_four=instrument.last_four,
+    )
+
+
+def test_a_bank_alert_becomes_a_balance_that_survives_the_process(
     publisher: EventBridgeEventPublisher,
-    sqs_client: SQSClient,
-    queue_url: str,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
 ) -> None:
     _publish(publisher, [_alert()])
 
-    commands = _drain(sqs_client, queue_url)
+    result = worker.poll_once(wait_seconds=0)
 
-    assert len(commands) == 1
+    assert result.received == 1
+    assert result.handled == 1
 
-    accounts: dict[tuple[str, str], Account] = {}
-    transaction = _record(commands[0], accounts)
-
-    # The account nobody declared: discovered from the alert that needed it.
-    assert len(accounts) == 1
-    account = next(iter(accounts.values()))
-    assert account.needs_review
-    assert account.category is AccountCategory.LIABILITY
-    assert account.name == "Bancolombia ••7653"
-
-    # Spending on a credit card raises what it owes, and the cents survived
-    # the bus because the payload carries the amount as a string.
-    assert account.balance.amount == Money(
-        amount=Decimal("50000.50"),
-        currency=Currency.COP,
+    # Read back out of DynamoDB, not out of the object that wrote it.
+    account = accounts.find_by_fingerprint(
+        user_id=USER_ID,
+        fingerprint=_fingerprint(CREDIT_CARD),
     )
+
+    assert account is not None
+    assert account.name == "Bancolombia ••7653"
+    assert account.kind is AccountKind.CREDIT_CARD
+    assert account.category is AccountCategory.LIABILITY
+    assert account.status is AccountStatus.AUTOMATIC
+    # Spending on a credit card raises what it owes, and the cents survived
+    # both the bus and the table.
+    assert account.balance.amount.amount == Decimal("50000.50")
     assert account.balance.sign is BalanceSign.POSITIVE
-    assert transaction.status is TransactionStatus.ASSIGNED
     assert account.movements_applied == 1
 
 
-def test_the_same_alert_delivered_twice_names_one_movement(
+def test_the_same_alert_delivered_twice_moves_the_balance_once(
     publisher: EventBridgeEventPublisher,
-    sqs_client: SQSClient,
-    queue_url: str,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
 ) -> None:
-    """What the ledger's conditional write will key on.
+    """The conditional write, doing the only job it exists for.
 
-    Two deliveries of one purchase produce two integration events with two
-    `event_id`s — and one `MovementId`. Nothing here dedupes yet, so the
-    balance doubles: that is precisely the work the conditional write has to
-    do, and this pins the key it gets to do it with.
+    Two deliveries of one purchase are two integration events with two
+    `event_id`s. The movement's identity comes from its content, so both write
+    the same ledger key — and the second write is refused whole, balance
+    included.
     """
     _publish(publisher, [_alert(), _alert()])
 
-    commands = _drain(sqs_client, queue_url)
+    assert worker.poll_once(wait_seconds=0).received == 2
 
-    assert len(commands) == 2
+    account = accounts.find_by_fingerprint(
+        user_id=USER_ID,
+        fingerprint=_fingerprint(CREDIT_CARD),
+    )
 
-    accounts: dict[tuple[str, str], Account] = {}
-    first = _record(commands[0], accounts)
-    second = _record(commands[1], accounts)
-
-    assert first.id == second.id
-    assert first.fingerprint == second.fingerprint
-    # One account, not two: the second delivery found the first one's.
-    assert len(accounts) == 1
+    assert account is not None
+    assert account.balance.amount.amount == Decimal("50000.50")
+    assert account.movements_applied == 1
+    assert len(ledger.list_movements(user_id=USER_ID, account_id=account.id)) == 1
 
 
-def test_two_cards_at_one_bank_keep_two_balances(
+def test_the_balance_replays_from_the_rows_behind_it(
     publisher: EventBridgeEventPublisher,
-    sqs_client: SQSClient,
-    queue_url: str,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
 ) -> None:
+    """The ledger is the authority, and this is what makes that true.
+
+    A running total nobody can retrace is a total nobody can repair, so
+    replaying the stored rows must reproduce the stored number exactly.
+    """
     _publish(
         publisher,
         [
             _alert(),
+            _alert(counterparty="EXITO EXPRESS", amount="20000"),
             _alert(
-                counterparty="EXITO EXPRESS",
-                amount="20000",
-                instrument=DEBIT_CARD,
+                counterparty="PAGO TARJETA",
+                amount="30000",
+                direction=TransactionDirection.INCOMING,
             ),
         ],
     )
 
-    accounts: dict[tuple[str, str], Account] = {}
+    assert worker.poll_once(wait_seconds=0).handled == 3
 
-    for command in _drain(sqs_client, queue_url):
-        _record(command, accounts)
+    account = accounts.find_by_fingerprint(
+        user_id=USER_ID,
+        fingerprint=_fingerprint(CREDIT_CARD),
+    )
 
-    assert len(accounts) == 2
+    assert account is not None
 
-    by_category = {account.category: account for account in accounts.values()}
+    stored = account.balance
+    movements = ledger.list_movements(user_id=USER_ID, account_id=account.id)
+    account.rebuild(movement.as_movement() for movement in movements)
+
+    assert len(movements) == 3
+    # 50000.50 spent + 20000 spent - 30000 paid off.
+    assert account.balance.amount.amount == Decimal("40000.50")
+    assert account.balance == stored
+
+
+def test_two_cards_at_one_bank_keep_two_balances(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+) -> None:
+    _publish(
+        publisher,
+        [_alert(), _alert(counterparty="EXITO EXPRESS", instrument=DEBIT_CARD)],
+    )
+
+    assert worker.poll_once(wait_seconds=0).handled == 2
+
+    held = accounts.list_by_user(USER_ID)
+
+    assert len(held) == 2
+
+    by_category = {account.category: account for account in held}
 
     # The debit card is read as the savings account it draws on, so the same
-    # spending subtracts here and adds on the credit card.
+    # spending subtracts there and adds on the credit card.
     assert by_category[AccountCategory.ASSET].balance.sign is BalanceSign.NEGATIVE
     assert by_category[AccountCategory.LIABILITY].balance.sign is BalanceSign.POSITIVE
 
 
 def test_an_alert_naming_no_card_is_kept_outside_every_balance(
     publisher: EventBridgeEventPublisher,
-    sqs_client: SQSClient,
-    queue_url: str,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
 ) -> None:
-    """The unassigned path, end to end.
+    """The unassigned path, all the way to storage.
 
     The money moved and the record is kept; what is missing is only which
     account it belongs to, and that waits for a person rather than a guess.
     """
     _publish(publisher, [_alert(instrument=None)])
 
-    commands = _drain(sqs_client, queue_url)
-    accounts: dict[tuple[str, str], Account] = {}
-    transaction = _record(commands[0], accounts)
+    assert worker.poll_once(wait_seconds=0).handled == 1
+    assert accounts.list_by_user(USER_ID) == []
 
-    assert accounts == {}
-    assert transaction.status is TransactionStatus.UNASSIGNED
-    assert not transaction.is_routable
-    assert transaction.direction is MovementDirection.OUTGOING
-    assert transaction.amount.amount == Decimal("50000.50")
-    assert transaction.counterparty == "TIENDAS ARA 123"
+    unassigned = ledger.list_unassigned(USER_ID)
+
+    assert len(unassigned) == 1
+    movement = unassigned[0]
+    assert movement.status is TransactionStatus.UNASSIGNED
+    assert movement.direction is MovementDirection.OUTGOING
+    assert movement.amount.amount == Decimal("50000.50")
+    assert movement.counterparty == "TIENDAS ARA 123"
 
 
 def test_two_users_sharing_a_cards_digits_keep_separate_accounts(
     publisher: EventBridgeEventPublisher,
-    sqs_client: SQSClient,
-    queue_url: str,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
 ) -> None:
     """The isolation `AccountFingerprint` cannot provide on its own.
 
     Its key is bank, instrument and last four — no user. Two people at one
-    bank whose cards end in the same digits therefore produce the same
-    account fingerprint, and only a user-scoped lookup keeps their money
-    apart.
+    bank whose cards end in the same digits produce the same fingerprint, and
+    only the user-scoped lookup keeps their money apart.
     """
-    other_user = UserId.from_string("22222222-2222-2222-2222-222222222222")
+    _publish(publisher, [_alert(), _alert(user_id=OTHER_USER)])
 
-    _publish(publisher, [_alert(), _alert(user_id=other_user)])
+    assert worker.poll_once(wait_seconds=0).handled == 2
 
-    accounts: dict[tuple[str, str], Account] = {}
-    fingerprints: set[str] = set()
+    mine = accounts.list_by_user(USER_ID)
+    theirs = accounts.list_by_user(OTHER_USER)
 
-    for command in _drain(sqs_client, queue_url):
-        transaction = _record(command, accounts)
-        assert transaction.account_fingerprint is not None
-        fingerprints.add(transaction.account_fingerprint.value)
-
+    assert len(mine) == 1
+    assert len(theirs) == 1
+    assert mine[0].id != theirs[0].id
     # One fingerprint, two accounts: the scoping is what separated them.
-    assert len(fingerprints) == 1
-    assert len(accounts) == 2
-    assert {account.user_id for account in accounts.values()} == {USER_ID, other_user}
+    assert mine[0].fingerprints == theirs[0].fingerprints
+
+
+def test_a_version_this_deploy_cannot_read_stays_on_the_queue(
+    sqs_client: SQSClient,
+    worker: SQSFinancialWorker,
+    queue_url: str,
+    accounts: DynamoDBAccountRepository,
+) -> None:
+    """A newer deploy wrote it, and a newer worker may still take it.
+
+    Discarding would lose a real movement; reading it as v1 would book
+    whatever v2 changed straight onto a balance.
+    """
+    sqs_client.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "source": "finflow.ingestion",
+                "detail-type": "TransactionExtracted",
+                "detail": {
+                    "version": 2,
+                    "event_id": "3f1b7c2e-1111-4d63-9c2e-9d3b1f7c5a10",
+                    "user_id": str(USER_ID.value),
+                    "transaction": {
+                        "direction": "outgoing",
+                        "amount": "50000",
+                        "currency": "COP",
+                        "occurred_at": PURCHASE_TIME.as_epoch_seconds(),
+                        "counterparty": "TIENDAS ARA",
+                        "bank": "bancolombia",
+                        "instrument": {"kind": "credit_card", "last_four": "7653"},
+                    },
+                },
+            },
+        ),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.received == 1
+    assert result.handled == 0
+    assert result.rejected == 1
+    assert accounts.list_by_user(USER_ID) == []
+
+    # Still held for a worker that understands it.
+    assert _still_held(sqs_client, queue_url) == 1
+
+
+def test_a_currency_this_deploy_cannot_read_stays_on_the_queue(
+    sqs_client: SQSClient,
+    worker: SQSFinancialWorker,
+    queue_url: str,
+    accounts: DynamoDBAccountRepository,
+) -> None:
+    """`Currency` knows two members today.
+
+    An alert in a third is a real movement the very next deploy would read.
+    Deleting it to save a redelivery would destroy it; the dead-letter queue
+    is where something genuinely unreadable belongs — somewhere a person sees
+    it.
+    """
+    sqs_client.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(
+            {
+                "source": "finflow.ingestion",
+                "detail-type": "TransactionExtracted",
+                "detail": {
+                    "version": 1,
+                    "event_id": "3f1b7c2e-2222-4d63-9c2e-9d3b1f7c5a10",
+                    "user_id": str(USER_ID.value),
+                    "transaction": {
+                        "direction": "outgoing",
+                        "amount": "40",
+                        "currency": "EUR",
+                        "occurred_at": PURCHASE_TIME.as_epoch_seconds(),
+                        "counterparty": "CARREFOUR",
+                        "bank": "bancolombia",
+                        "instrument": {"kind": "credit_card", "last_four": "7653"},
+                    },
+                },
+            },
+        ),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
+    assert accounts.list_by_user(USER_ID) == []
+    assert _still_held(sqs_client, queue_url) == 1
+
+
+def test_a_payload_that_will_never_parse_is_dropped_rather_than_retried(
+    sqs_client: SQSClient,
+    worker: SQSFinancialWorker,
+    queue_url: str,
+) -> None:
+    sqs_client.send_message(QueueUrl=queue_url, MessageBody="not json at all")
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.received == 1
+    assert result.rejected == 1
+    assert (
+        sqs_client.receive_message(
+            QueueUrl=queue_url,
+            WaitTimeSeconds=0,
+        ).get("Messages", [])
+        == []
+    )

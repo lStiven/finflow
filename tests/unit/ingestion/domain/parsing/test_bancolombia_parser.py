@@ -127,6 +127,37 @@ def test_incoming_payroll(parser: BancolombiaParser) -> None:
     assert transaction.instrument.last_four is None
 
 
+@pytest.mark.parametrize(
+    "alert",
+    [
+        "Bancolombia: Aprobamos tu compra por COP29.259,00 en TIENDAS ARA con "
+        "tu T.Cred *7653, el 20/08/2026 a las 12:00.",
+        "Bancolombia: Autorizamos una compra por COP150.000,00 en HOTEL "
+        "ESTELAR con tu T.Cred *7653, el 20/08/2026 a las 12:00.",
+        "Bancolombia: Tienes una compra en proceso por COP29.259,00 en "
+        "TIENDAS ARA con tu T.Cred *7653, el 20/08/2026 a las 12:00.",
+        "Bancolombia: Retencion por COP150.000,00 en HOTEL ESTELAR con tu "
+        "T.Cred *7653, el 20/08/2026 a las 12:00.",
+    ],
+)
+def test_an_authorization_is_not_a_purchase(
+    parser: BancolombiaParser,
+    alert: str,
+) -> None:
+    """A hold is money reserved, not money spent.
+
+    The bank announces the real charge later in its own email, often for a
+    different amount — a hotel holds more than it finally bills. Parsing both
+    would put one expense on a card twice, and nothing downstream could tell
+    afterwards which of the two was real.
+
+    The templates only match a completed fact (`Compraste`, `Pagaste`,
+    `Transferiste`, `Recibiste`), so this holds today by construction. The
+    test is here so a future pattern cannot loosen that without saying so.
+    """
+    assert parser.parse(alert) is None
+
+
 def test_unknown_template_returns_none(parser: BancolombiaParser) -> None:
     # The signal to fall back to the LLM. A partial match must never become a
     # half-filled transaction.

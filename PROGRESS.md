@@ -16,53 +16,64 @@ reading the code.
 
 ## Current focus
 
-Building Financial. Its domain is complete for v1 — `Account`,
-`Transaction`, the movement fingerprint — and the inbound boundary reads
-`finflow.ingestion` off the bus into `RecordMovementCommand`. What is missing
-is everything that makes it durable: no use case, no repository, no worker, no
-endpoints. An integration test proves the chain as far as the boundary and
-stands in for the use case by hand. `just prepare` green (499 tests).
+Financial's write side runs end to end. A forwarded bank alert reaches
+`just financial-worker` over the bus, opens the account it needs, and lands as
+a ledger row plus a balance in one atomic DynamoDB write — verified against
+the local emulator, not only in tests. Redeliveries are refused by the
+conditional write, and a movement no account answers for is kept unassigned.
+
+What is missing is the read side (no endpoints, no net-worth query) and the
+three correctness gaps under **Next steps** — the first of which now produces
+wrong money rather than merely being absent. `just prepare` green (520
+tests).
 
 ## Last completed
 
-- 2026-08-24 — Financial's `Transaction` aggregate and its inbound
-  boundary (`RecordMovementCommand`, `infrastructure/messaging/inbound.py`),
-  with an end-to-end test from ingestion's translator to a balance.
+- 2026-08-24 — Financial's write side: `RecordMovementUseCase`, both
+  persistence ports, the DynamoDB adapter, `SQSFinancialWorker`,
+  `just financial-worker`, and provisioning for the `financial` table and
+  queue.
 
 ## Next steps
 
-- [ ] **Next: Financial's write side — use case, port, DynamoDB adapter,
-      worker.** The domain and the inbound boundary are done; nothing
-      persists yet, so every balance dies with the process. In order:
-      1. The use case behind `RecordMovementCommand`: find the account by
-         `(user_id, account_fingerprint)`, open one on first sighting, assign
-         and apply. The lookup must be user-scoped — `AccountFingerprint`
-         carries no `user_id`, unlike `MovementFingerprint`, so two people at
-         one bank with the same last four resolve to one account otherwise.
-      2. Port → DynamoDB adapter: conditional write on `MovementId` (which is
-         the movement fingerprint), with the ledger row and the balance
-         update in one atomic write, per the Decisions below.
-      3. The SQS worker. It must map `UnsupportedPayloadVersionError` to
-         "leave on the queue" and `ValidationError` to "discard", the way
-         merchant's does, and drop an aggregate's pending events when the
-         conditional write refuses the row — `event_id` is fresh per attempt,
-         so republishing them would look like new work downstream.
-      Endpoints and the Postman collection come with the read side (account
-      list, net worth), not with this step.
+- [ ] **Validate the authorization filter against real alerts.** An
+      authorization and its posting are two different emails with different
+      bodies, so the rule lives at parse time: an authorization never becomes
+      a `TransactionExtracted` at all. The deterministic templates only match
+      completed facts (`Compraste`, `Pagaste`, …) and the LLM is now told to
+      refuse anything approved/held/in process. What is missing is
+      confirmation against real authorization emails from each bank — the
+      refusal wording was written without one in hand.
+- [ ] **An auto-opened account's currency is fixed by its first alert, with
+      no repair path.** A card whose first sighting happens to be a USD
+      purchase becomes a USD account; every later COP alert on it then fails
+      `Account.apply` and is filed unassigned forever. Needs either a way to
+      correct an account's currency or a rethink of what currency an
+      auto-opened account has.
+- [ ] **One real account still becomes two.** The design says one account
+      answers to many fingerprints — a checking account emails as a debit
+      card and as an account number — but `_resolve_account` only ever
+      matches or opens, so the second instrument opens a second account and
+      splits one balance. `AccountRepository.save` exists to persist the
+      linking; what is missing is the user-facing action that decides two
+      fingerprints are one account. Never inferred: that is a guess about
+      somebody's money.
 - [ ] **Reassignment has no path.** `Transaction.assign_to` refuses any second
       account, and nothing reverses an amount off the balance that holds it.
       A movement auto-assigned to the wrong account is stuck there — which
       matters because reading a debit card as a savings account is a
       deliberate guess the user may need to correct.
-- [ ] **Settlement (authorization → posting) is unbuilt.** The fingerprint
-      deliberately cannot catch it: the two differ in time and often in
-      amount. It needs both records in hand, so it waits for the ledger.
-- [ ] **`IntegrationEventEnvelope` is duplicated** in merchant's worker and
-      Financial's inbound module, along with the source/detail-type
-      constants. It describes EventBridge's transport, not any context's
-      rules, so it belongs beside `EventBridgeEventPublisher` in
+- [ ] **The read side.** Account list, net worth, the unassigned queue, and
+      the Postman collection that goes with them.
+- [ ] **The whole SQS worker is duplicated**, not just the envelope.
+      `IntegrationEventEnvelope`, the source/detail-type constants, `_Outcome`,
+      `PollResult`, `poll_once`, `_delete`, and both CLI runners' `_Stopper`
+      and `main()` exist twice, in merchant and in Financial. It is transport,
+      not any context's rules, so a generic worker parameterised by (source,
+      detail-type, detail model, handler) belongs in
       `shared/infrastructure/aws/`. The duplication is already what let
-      Financial's copy ship without merchant's version guard.
+      Financial's copy ship without merchant's version guard, and it has since
+      let the two diverge on whether an unreadable payload is discarded.
 - [ ] **Decide how a bank-reported balance is treated** (TODO left in
       `financial/domain/entities.py`). Some alerts state the resulting
       balance; unknown which local banks do. Either it reconciles the running
@@ -152,6 +163,15 @@ stands in for the use case by hand. `just prepare` green (499 tests).
   user + bank + instrument + direction + amount + time + counterparty, hashed.
   `kind` is left out — it is a classification, and a re-parse that
   reclassifies a movement must not turn it into a second one.
+- **An authorization is filtered at parse time, not reconciled later**
+  (2026-08-24, corrected). An authorization and its posting are two separate
+  emails whose bodies differ, so the cheap and certain place to drop the
+  authorization is the parser: it never becomes a `TransactionExtracted`, and
+  Financial never sees it. Rejected: matching the two inside Financial — it
+  would need a heuristic over amount and time windows to undo something the
+  upstream text already states plainly. The deterministic templates hold by
+  construction (they only match completed facts) and a test pins that; the
+  LLM is told explicitly to refuse anything that has not settled.
 - **Accepted risk: the key resolves to the minute, so two identical charges
   inside one minute collapse into one movement.** Both extraction paths stop
   at `HH:MM` (the template parser's regex and the LLM prompt), so a real
@@ -160,7 +180,11 @@ stands in for the use case by hand. `just prepare` green (499 tests).
   at-least-once delivery is the requirement that has to hold. Rejected: a
   time bucket (folds *more* real charges together), and `message_id` as a
   tiebreaker (defeats dedup entirely). Making that lost charge visible is the
-  ledger's job — it can record what announced each row — not the key's.
+  ledger's job, and **it is not built**: the row records nothing about which
+  announcement produced it, and `RecordMovementCommand` deliberately drops the
+  event id at the boundary. Storing the set of `event_id`s behind a row would
+  separate an SQS redelivery (same id) from a second announcement (different
+  id), which is the signal worth surfacing.
 - **The fingerprint is hashed for obfuscation, not confidentiality.** It
   reaches ledger keys and `AccountBalanceChanged`, so a readable key would put
   amounts, counterparties and card digits in plaintext wherever an id is
@@ -185,6 +209,36 @@ stands in for the use case by hand. `just prepare` green (499 tests).
   shape (each `Account` stays owned by one user; a mutually-accepted link in
   Identity; the combined view is a query, not new data) is recorded here so
   the door stays open, but nothing is designed or built.
+
+### Financial (write side, 2026-08-24)
+
+- **The balance moves by DynamoDB's `ADD`, never by writing a number back.**
+  A read-then-write loses one of two movements landing in the same instant,
+  and a balance that quietly drops a row is what the ledger exists to prevent.
+  `ADD` *is* a running total, applied by the database. The ledger row and the
+  balance change go out as one `TransactWriteItems`, so a balance can never
+  move without a row behind it. The domain computes how far the balance moves
+  and the adapter applies that delta, which is why `TransactionLedger.record`
+  takes one.
+- **A cancelled transaction is not the same as a refused condition.**
+  DynamoDB cancels for throttles and write conflicts too, and all of them look
+  identical from the outside. Reading them all as "this movement is already
+  recorded" is how a real expense disappears: nothing is written, the caller
+  reports a duplicate, and the worker deletes the message. `record` and `add`
+  inspect `CancellationReasons` and only treat *their own* condition failing
+  as the answer they expect; everything else raises so the message comes back.
+- **An unreadable direction or currency leaves the message on the queue; an
+  unparseable payload is deleted.** `Currency` knows two members, so an alert
+  in a third is a real movement the next deploy would read — deleting it to
+  save a redelivery destroys it, and the dead-letter queue is where something
+  genuinely unreadable belongs. A payload that fails its schema, by contrast,
+  never becomes parseable and is not a movement anybody can recover.
+- **A duplicate result hands back no account.** The aggregate was applied in
+  memory before the write was refused, so its balance is one movement ahead of
+  what is stored; returning it would let a caller report a number that
+  double-counts the redelivery. Its pending events are dropped rather than
+  pulled — `event_id` is fresh on every attempt, so republishing them reads as
+  new work to any subscriber deduping on it.
 
 ### Operations
 

@@ -25,6 +25,27 @@ statement summaries, payment reminders, several transactions in one message, \
 and anything whose amount, date or counterparty you cannot read exactly as \
 printed. Refusing is a good answer and costs nothing; the email is kept.
 
+AUTHORIZATIONS ARE NOT MOVEMENTS
+
+A card authorization — a hold, a pre-authorization, an approval, a purchase \
+still in process — is money reserved, not money spent. The bank announces it \
+now and announces the real charge later in a separate email, often for a \
+different amount: a hotel holds more than it finally bills, a restaurant \
+holds the bill before the tip. Reporting both is recording one expense twice \
+on somebody's card, and nothing downstream can tell afterwards which of the \
+two was real.
+
+Set understood=false whenever the email describes a charge that has not \
+settled — anything that reads as approved, authorized, reserved, held, \
+pending, or in process ("aprobamos", "autorizamos", "en proceso", \
+"pendiente", "retencion", "reserva"). Report only what already happened: an \
+alert that states the movement as a completed fact ("Compraste", "Pagaste", \
+"Transferiste", "Recibiste").
+
+When you cannot tell which of the two an email is, set understood=false. The \
+email is kept either way, and a missing expense is visible where a doubled \
+one is not.
+
 FIELDS
 
 kind:

@@ -99,6 +99,17 @@ class InstrumentBody(BaseModel):
     kind: str = Field(default="", max_length=64)
     last_four: str | None = Field(default=None, max_length=32)
 
+    @property
+    def named_kind(self) -> str | None:
+        """The instrument's kind, or None when the alert named none.
+
+        Blank is absent, and saying so here is what keeps it out of the
+        domain: an empty kind would otherwise reach the movement fingerprint
+        and land in the same slot as "this alert named no instrument",
+        which is a sentinel no alert is supposed to be able to spell.
+        """
+        return self.kind.strip() or None
+
 
 class TransactionExtractedDetail(BaseModel):
     version: int = Field(ge=1)
@@ -139,7 +150,7 @@ class TransactionExtractedDetail(BaseModel):
             ),
             occurred_at=PosixTime.from_epoch_seconds(movement.occurred_at),
             counterparty=movement.counterparty,
-            instrument_kind=None if instrument is None else instrument.kind,
+            instrument_kind=None if instrument is None else instrument.named_kind,
             last_four=None if instrument is None else instrument.last_four,
         )
 

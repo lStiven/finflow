@@ -138,6 +138,18 @@ def test_an_instrument_without_digits_still_reads() -> None:
     assert command.last_four is None
 
 
+def test_a_blank_instrument_kind_is_absent_not_a_kind_named_nothing() -> None:
+    # An empty kind would reach the movement fingerprint and land in the same
+    # slot as "this alert named no instrument" — a sentinel no alert is
+    # supposed to be able to spell.
+    for blank in ("", "   "):
+        command = TransactionExtractedDetail.model_validate(
+            _payload(instrument={"kind": blank, "last_four": "7653"}),
+        ).to_command()
+
+        assert command.instrument_kind is None
+
+
 def test_a_payload_missing_what_identifies_the_movement_is_refused() -> None:
     for missing in ("bank", "counterparty"):
         with pytest.raises(ValidationError):

@@ -133,6 +133,15 @@ merchant-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.merchant.presentation.cli.run_merchant_worker
 
+# Drain financial's queue: TransactionExtracted -> ledger rows and balances.
+financial-worker: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.financial.presentation.cli.run_financial_worker
+
+financial-worker-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.financial.presentation.cli.run_financial_worker
+
 # Local: hot reload, against the emulator.
 dev: (_require-env ".env")
     {{local_env}} uv run fastapi dev src/personal_finance/api/main.py

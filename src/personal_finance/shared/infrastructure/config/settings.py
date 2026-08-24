@@ -143,6 +143,25 @@ class MerchantSettings(BaseSettings):
     events_queue_url: str = ""
 
 
+class FinancialSettings(BaseSettings):
+    """Resources owned by the financial context."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="FINANCIAL_",
+        env_file=ENV_FILE,
+        extra="ignore",
+    )
+
+    # Accounts, the fingerprints they answer to, and the ledger of movements —
+    # all in one per-user partition, because a balance and the rows behind it
+    # have to be written together.
+    accounts_table: str = "financial"
+    # This context's own subscription to the bus, named and resolved
+    # separately for the same reason merchant's is.
+    events_queue_name: str = "financial-events"
+    events_queue_url: str = ""
+
+
 class LLMSettings(BaseSettings):
     """The language model every context falls back to.
 
@@ -214,6 +233,11 @@ def get_merchant_settings() -> MerchantSettings:
 
 
 @functools.lru_cache(maxsize=1)
+def get_financial_settings() -> FinancialSettings:
+    return FinancialSettings()
+
+
+@functools.lru_cache(maxsize=1)
 def get_llm_settings() -> LLMSettings:
     return LLMSettings()
 
@@ -230,5 +254,6 @@ def reset_settings() -> None:
     get_aws_settings.cache_clear()
     get_ingestion_settings.cache_clear()
     get_merchant_settings.cache_clear()
+    get_financial_settings.cache_clear()
     get_llm_settings.cache_clear()
     get_identity_settings.cache_clear()

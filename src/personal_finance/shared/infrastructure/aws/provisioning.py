@@ -23,6 +23,10 @@ from mypy_boto3_dynamodb.type_defs import (
 from mypy_boto3_events.client import EventBridgeClient
 from mypy_boto3_sqs.client import SQSClient
 
+from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
+    PARTITION_KEY as FINANCIAL_PARTITION_KEY,
+    SORT_KEY as FINANCIAL_SORT_KEY,
+)
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as USERS_PARTITION_KEY,
 )
@@ -54,6 +58,7 @@ from personal_finance.shared.infrastructure.config.settings import (
     ENV_FILE,
     BillingMode,
     get_aws_settings,
+    get_financial_settings,
     get_identity_settings,
     get_ingestion_settings,
     get_merchant_settings,
@@ -72,6 +77,9 @@ INTEGRATION_EVENTS_TARGET_ID = "integration-events-queue"
 # never fills with other contexts' traffic.
 MERCHANT_EVENTS_RULE = "finflow-merchant-transactions"
 MERCHANT_EVENTS_TARGET_ID = "merchant-events-queue"
+
+FINANCIAL_EVENTS_RULE = "finflow-financial-transactions"
+FINANCIAL_EVENTS_TARGET_ID = "financial-events-queue"
 MAX_RECEIVE_COUNT = 5
 # Long enough for a parse plus the LLM fallback, short enough that a crashed
 # worker releases the message quickly.
@@ -85,9 +93,11 @@ class ProvisionedResources:
     inboxes_table_name: str
     users_table_name: str
     merchants_table_name: str
+    financial_table_name: str
     queue_url: str
     dead_letter_queue_url: str
     merchant_events_queue_url: str
+    financial_events_queue_url: str
     event_bus_name: str
     integration_events_queue_url: str
 
@@ -411,6 +421,7 @@ def provision() -> ProvisionedResources:
     settings = get_ingestion_settings()
     identity_settings = get_identity_settings()
     merchant_settings = get_merchant_settings()
+    financial_settings = get_financial_settings()
 
     started = _step(f"table {settings.notifications_table}")
     provision_table(
@@ -475,6 +486,22 @@ def provision() -> ProvisionedResources:
     )
     _done(started)
 
+    started = _step(f"table {financial_settings.accounts_table}")
+    provision_table(
+        get_dynamodb_client(),
+        table_name=financial_settings.accounts_table,
+        partition_key=FINANCIAL_PARTITION_KEY,
+        sort_key=FINANCIAL_SORT_KEY,
+        sort_key_type="S",
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        # Nothing here expires: an account, the fingerprints it answers to and
+        # every ledger row are the record a balance is rebuilt from.
+        enable_ttl=False,
+    )
+    _done(started)
+
     started = _step(f"event bus {settings.event_bus_name}")
     provision_event_bus(
         get_eventbridge_client(),
@@ -490,6 +517,21 @@ def provision() -> ProvisionedResources:
         queue_name=merchant_settings.events_queue_name,
         rule_name=MERCHANT_EVENTS_RULE,
         target_id=MERCHANT_EVENTS_TARGET_ID,
+        event_pattern={
+            "source": [INGESTION_SOURCE],
+            "detail-type": [TRANSACTION_EXTRACTED],
+        },
+    )
+    _done(started)
+
+    started = _step(f"financial subscription ({financial_settings.events_queue_name})")
+    financial_events_url, _ = provision_context_subscription(
+        get_eventbridge_client(),
+        get_sqs_client(),
+        event_bus_name=settings.event_bus_name,
+        queue_name=financial_settings.events_queue_name,
+        rule_name=FINANCIAL_EVENTS_RULE,
+        target_id=FINANCIAL_EVENTS_TARGET_ID,
         event_pattern={
             "source": [INGESTION_SOURCE],
             "detail-type": [TRANSACTION_EXTRACTED],
@@ -513,9 +555,11 @@ def provision() -> ProvisionedResources:
         inboxes_table_name=settings.user_inboxes_table,
         users_table_name=identity_settings.users_table,
         merchants_table_name=merchant_settings.merchants_table,
+        financial_table_name=financial_settings.accounts_table,
         queue_url=queue_url,
         dead_letter_queue_url=dead_letter_url,
         merchant_events_queue_url=merchant_events_url,
+        financial_events_queue_url=financial_events_url,
         event_bus_name=settings.event_bus_name,
         integration_events_queue_url=integration_events_url,
     )
@@ -544,12 +588,18 @@ def main() -> None:
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.merchants_table_name} ({capacity})")
+    print(f"  DynamoDB table : {resources.financial_table_name} ({capacity})")
     print(f"  SQS queue      : {resources.queue_url}")
     print(f"  SQS DLQ        : {resources.dead_letter_queue_url}")
     print(
         f"  Merchant queue : {resources.merchant_events_queue_url}\n"
         f"                   (rule {MERCHANT_EVENTS_RULE}, "
         f"{INGESTION_SOURCE} {TRANSACTION_EXTRACTED} -> {MERCHANT_SOURCE})",
+    )
+    print(
+        f"  Financial queue: {resources.financial_events_queue_url}\n"
+        f"                   (rule {FINANCIAL_EVENTS_RULE}, "
+        f"{INGESTION_SOURCE} {TRANSACTION_EXTRACTED} -> balances)",
     )
     print(f"  Event bus      : {resources.event_bus_name}")
     print(
@@ -575,6 +625,11 @@ def main() -> None:
                 "MERCHANT_EVENTS_QUEUE_URL",
                 resources.merchant_events_queue_url,
                 get_merchant_settings().events_queue_url,
+            ),
+            (
+                "FINANCIAL_EVENTS_QUEUE_URL",
+                resources.financial_events_queue_url,
+                get_financial_settings().events_queue_url,
             ),
         )
         if current != value

@@ -74,7 +74,7 @@ Si tienes key de Gemini, añádela también (`LLM_API_KEY=...`). Se obtiene en
 just aws-init
 ```
 
-Arranca moto y crea todo: cuatro tablas de DynamoDB, las colas con sus DLQ, el
+Arranca moto y crea todo: cinco tablas de DynamoDB, las colas con sus DLQ, el
 bus de eventos y las reglas que lo conectan. Es idempotente, se puede repetir.
 
 Las URLs que imprime ya están en `.env.example` — el id de cuenta de moto es
@@ -82,20 +82,23 @@ siempre `123456789012`, así que son predecibles y no hay que copiar nada.
 
 Para ver qué existe realmente en cualquier momento: `just aws-status`.
 
-### 3. Los cuatro procesos
+### 3. Los cinco procesos
 
 Cada uno en su terminal:
 
 ```bash
-just dev              # API en http://localhost:8000 con recarga en caliente
-just ingest-worker    # IMAP -> filtrado por remitente -> SQS
-just parse-worker     # SQS -> parser determinista -> Gemini -> EventBridge
-just merchant-worker  # EventBridge -> comercios canónicos
+just dev               # API en http://localhost:8000 con recarga en caliente
+just ingest-worker     # IMAP -> filtrado por remitente -> SQS
+just parse-worker      # SQS -> parser determinista -> Gemini -> EventBridge
+just merchant-worker   # EventBridge -> comercios canónicos
+just financial-worker  # EventBridge -> filas del ledger y saldos
 ```
 
-`ingest-worker` y `parse-worker` avisan al arrancar si les falta configurar
-algo. La API expone su documentación interactiva en
-`http://localhost:8000/docs`.
+`merchant-worker` y `financial-worker` escuchan el mismo evento en colas
+distintas y no dependen uno del otro: puedes correr solo el que te interese.
+Cada worker avisa al arrancar si le falta configurar algo.
+
+La API expone su documentación interactiva en `http://localhost:8000/docs`.
 
 > En local se monta además `POST /ingestion/bank-notifications`, un webhook sin
 > autenticar que acepta un correo entero directamente, sin pasar por ningún
@@ -144,15 +147,48 @@ curl -X POST http://localhost:8000/ingestion/bank-notifications \
        \"raw_content\":\"Bancolombia: Compraste \$45.000 en EXITO CALI con tu T.Cred *1234, el 20/08/2026 a las 10:15\"}"
 ```
 
-Responde `{"outcome":"accepted",...}`. A partir de ahí los workers de parseo y
-comercios hacen el resto — corre `just parse-worker` y `just merchant-worker`
-en sus terminales para verlo avanzar.
+Responde `{"outcome":"accepted",...}`. A partir de ahí los workers hacen el
+resto — corre `just parse-worker`, `just merchant-worker` y
+`just financial-worker` en sus terminales para verlo avanzar.
 
 **Ver el resultado:**
 
 ```bash
 curl -s http://localhost:8000/merchants -H "Authorization: Bearer $TOKEN"
 ```
+
+Eso muestra el comercio. **El saldo todavía no tiene endpoint**: Financial
+escribe la cuenta, la fila del ledger y el saldo, pero el lado de lectura
+—listado de cuentas, patrimonio neto— es el siguiente paso del proyecto, y con
+él llegará también una tarea de inspección como las de abajo.
+
+Por ahora lo que se ve es la salida del propio `financial-worker`. Esta es una
+pasada real con la misma compra entregada dos veces:
+
+```
+INFO:...logging_event_publisher:domain_event | event_type='AccountOpened' …
+INFO:...logging_event_publisher:domain_event | event_type='AccountFingerprintLinked' …
+INFO:...logging_event_publisher:domain_event | event_type='TransactionRecorded' …
+INFO:...logging_event_publisher:domain_event | event_type='TransactionAssigned' …
+INFO:...logging_event_publisher:domain_event | event_type='AccountBalanceChanged' …
+INFO:...sqs_worker:movement recorded | movement_id='5dc2b4eb…' outcome='applied' account_id='ef3bd2d3…'
+INFO:...sqs_worker:movement recorded | movement_id='5dc2b4eb…' outcome='duplicate' account_id=None
+```
+
+Las dos entregas comparten `movement_id` —la identidad sale del contenido, no
+del correo— y la segunda no aplicó nada. `outcome` es lo que hay que mirar:
+
+| | |
+|---|---|
+| `applied` | Cayó en una cuenta y movió su saldo. |
+| `unassigned` | La alerta no nombró una tarjeta que Financial pudiera usar. El movimiento se guarda igual, esperando a que alguien lo coloque. Es lo esperado, no un fallo. |
+| `duplicate` | Ese movimiento ya estaba en el ledger. No se aplicó nada: ni fila, ni saldo — por eso `account_id` viene vacío. |
+
+Los `domain_event` de arriba son la otra mitad de la historia: `AccountOpened`
+solo aparece la primera vez que se ve una tarjeta, porque la cuenta se abre
+sola. Deliberadamente **no se registra ni el monto, ni la contraparte, ni los
+dígitos** — juntos son una línea del historial de gastos de alguien, y un log
+no es sitio para eso.
 
 ### 5. Herramientas de inspección
 
@@ -206,12 +242,13 @@ just provision-prod
 ```
 
 Imprime las URLs de las colas y termina con un bloque **`Put this in
-.env.production:`**. Esas tres líneas hay que pegarlas:
+.env.production:`**. Esas cuatro líneas hay que pegarlas:
 
 ```
 INGESTION_PARSE_QUEUE_URL=...
 INGESTION_INTEGRATION_EVENTS_QUEUE_URL=...
 MERCHANT_EVENTS_QUEUE_URL=...
+FINANCIAL_EVENTS_QUEUE_URL=...
 ```
 
 Solo existen una vez creada la cola, porque la URL incluye el id de cuenta. Es
@@ -227,6 +264,7 @@ just run-prod              # uvicorn, sin recarga, puerto 8000
 just ingest-worker-prod
 just parse-worker-prod
 just merchant-worker-prod
+just financial-worker-prod
 ```
 
 ### 4. Configurar la cuenta de ingesta
@@ -265,12 +303,16 @@ degradarse en silencio. Estos son los mensajes que verás y qué significan:
 | `INGESTION_INGEST_MAILBOX_ADDRESS / ..._APP_PASSWORD are not set` (solo el `ingest worker`) | El worker no tiene qué buzón revisar. Configura la cuenta dedicada — ver arriba. |
 | `INGESTION_PARSE_QUEUE_URL is not set` | Corre el aprovisionamiento y pega la URL. Si no, se aceptarían notificaciones que nunca se parsearían. |
 | `MERCHANT_EVENTS_QUEUE_URL is not set` | Igual, para el worker de comercios. |
+| `FINANCIAL_EVENTS_QUEUE_URL is not set` | Igual, para el worker de saldos: sin él ningún movimiento tocaría una cuenta. |
 | `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
 | `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
 
 Un mensaje que no se puede parsear se borra de la cola; uno que quizá entienda
-un despliegue más nuevo se deja, y acaba en la DLQ tras cinco intentos. Revisa
-las colas `*-dlq` si algo desaparece sin explicación.
+un despliegue más nuevo se deja, y acaba en la DLQ tras cinco intentos. Esa
+distinción es deliberada: un payload que no cumple su esquema nunca va a
+cumplirlo, pero una moneda o una versión que este despliegue no conoce puede
+ser perfectamente legible para el siguiente, y borrarla destruiría un
+movimiento real. Revisa las colas `*-dlq` si algo desaparece sin explicación.
 
 ---
 
