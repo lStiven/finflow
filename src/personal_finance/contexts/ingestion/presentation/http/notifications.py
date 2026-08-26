@@ -30,7 +30,12 @@ from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
     NotificationQuery,
 )
-from personal_finance.contexts.ingestion.domain.value_objects import ProcessingStatus
+from personal_finance.contexts.ingestion.domain.transactions import InstrumentKind
+from personal_finance.contexts.ingestion.domain.value_objects import (
+    NotificationDeferredReason,
+    NotificationIgnoredReason,
+    ProcessingStatus,
+)
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     DynamoDBNotificationReader,
 )
@@ -39,9 +44,26 @@ from personal_finance.shared.infrastructure.aws.session import get_dynamodb_clie
 from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
 )
+from personal_finance.shared.presentation.catalog import CatalogOption, options
 
 
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
+
+
+class IngestionCatalogResponse(BaseModel):
+    """Ingestion's vocabulary, for the screens that render or filter by it.
+
+    `instrument_kinds` is the one a client sends rather than displays, and it
+    is published from here rather than from Financial because these are the
+    words a bank alert arrives with. An account declared with any other
+    spelling is accepted and then never matches an alert — silently, since
+    nothing about that is an error.
+    """
+
+    processing_statuses: list[CatalogOption]
+    ignored_reasons: list[CatalogOption]
+    deferred_reasons: list[CatalogOption]
+    instrument_kinds: list[CatalogOption]
 
 
 class NotificationResponse(BaseModel):
@@ -91,6 +113,17 @@ def get_list_notifications_use_case() -> ListNotificationsUseCase:
 
 
 CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
+
+
+@router.get("/catalog", response_model=IngestionCatalogResponse)
+def get_catalog() -> IngestionCatalogResponse:
+    """What this context's states are called, and what an instrument may be."""
+    return IngestionCatalogResponse(
+        processing_statuses=options(ProcessingStatus),
+        ignored_reasons=options(NotificationIgnoredReason),
+        deferred_reasons=options(NotificationDeferredReason),
+        instrument_kinds=options(InstrumentKind),
+    )
 
 
 @router.get("/notifications", response_model=NotificationListResponse)

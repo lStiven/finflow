@@ -457,3 +457,28 @@ def test_a_merchant_cannot_be_merged_into_itself(
     )
 
     assert response.status_code == 400
+
+
+def test_the_catalog_publishes_every_vocabulary_the_endpoints_use(
+    client: TestClient,
+) -> None:
+    response = client.get("/merchants/catalog")
+
+    assert response.status_code == 200
+
+    catalog = response.json()
+    assert "groceries" in [option["value"] for option in catalog["categories"]]
+    assert "last_seen" in [option["value"] for option in catalog["sorts"]]
+    assert "confirmed" in [option["value"] for option in catalog["statuses"]]
+    assert "manual" in [option["value"] for option in catalog["alias_origins"]]
+    assert "person" in [option["value"] for option in catalog["counterparty_kinds"]]
+
+
+def test_the_catalog_and_the_older_categories_endpoint_agree(
+    client: TestClient,
+) -> None:
+    """Two endpoints answer the same list, so nothing may drift between them."""
+    catalog = client.get("/merchants/catalog").json()["categories"]
+    categories = client.get("/merchants/categories").json()["categories"]
+
+    assert catalog == categories

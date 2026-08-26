@@ -181,6 +181,23 @@ secret-put name env_file=".env.production": (_require-env env_file)
 dev: (_require-env ".env")
     {{local_env}} uv run fastapi dev src/personal_finance/api/main.py
 
+# --------------------------------------------------
+# The whole stack, one terminal
+# --------------------------------------------------
+#
+# `dev`, the four workers and — locally — the emulator behind them, started
+# together and stopped together. See scripts/run_stack.py.
+
+# Everything local: emulator, resources, demo data, then the processes.
+# Flags go through, e.g. `just up --api-port 8001 --with-ingest`.
+up *args: aws-init seed
+    @{{local_env}} uv run python scripts/run_stack.py {{args}}
+
+# The five processes against the dev- resources in real AWS. Run
+# `just provision-dev` once first; there is nothing to seed, the data persists.
+up-dev *args: (_require-env ".env.development")
+    @{{dev_env}} uv run python scripts/run_stack.py {{args}}
+
 # Production-shaped: real AWS, real credentials, no reload, no emulator.
 # Authenticate first, e.g. `aws sso login --profile <name>`.
 run-prod: (_require-env ".env.production")

@@ -189,3 +189,42 @@ def test_it_needs_a_token() -> None:
     app.include_router(router)
 
     assert TestClient(app).get(PATH).status_code == 401
+
+
+def test_the_catalog_publishes_the_states_and_the_instrument_vocabulary(
+    client: TestClient,
+) -> None:
+    response = client.get("/ingestion/catalog")
+
+    assert response.status_code == 200
+
+    catalog = response.json()
+    statuses = [option["value"] for option in catalog["processing_statuses"]]
+    assert "processed" in statuses
+    assert "pending_fallback" in statuses
+
+    assert "unauthorized_sender" in [
+        option["value"] for option in catalog["ignored_reasons"]
+    ]
+    assert catalog["deferred_reasons"]
+
+    # The words an alert arrives with. An account declared with any other
+    # spelling is accepted and then never matches one.
+    kinds = [option["value"] for option in catalog["instrument_kinds"]]
+    assert "credit_card" in kinds
+    assert "savings_account" in kinds
+
+
+def test_every_published_status_is_one_the_filter_accepts(
+    client: TestClient,
+) -> None:
+    """The catalogue is worth nothing if a value in it is rejected on use."""
+    catalog = client.get("/ingestion/catalog").json()
+
+    for option in catalog["processing_statuses"]:
+        response = client.get(
+            "/ingestion/notifications",
+            params={"status": option["value"]},
+        )
+
+        assert response.status_code == 200, (option["value"], response.text)

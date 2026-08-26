@@ -68,10 +68,12 @@ from personal_finance.contexts.financial.domain.exceptions import (
     TransactionAlreadyAssignedError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
+    AccountCategory,
     AccountId,
     AccountKind,
     MovementDirection,
     TransactionOrigin,
+    TransactionStatus,
 )
 from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
     build_merchant_directory,
@@ -95,6 +97,11 @@ from personal_finance.shared.infrastructure.config.settings import (
 )
 from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
     LoggingEventPublisher,
+)
+from personal_finance.shared.presentation.catalog import (
+    CatalogOption,
+    label,
+    options,
 )
 
 
@@ -240,6 +247,35 @@ class SpendingSummaryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------- payloads
+
+
+class AccountKindOption(CatalogOption):
+    """An account kind, and which side of net worth it lands on.
+
+    `category` is derived from the kind and never chosen, so a client can
+    group the dropdown — and say "money you owe" against a balance — without
+    duplicating the rule that decides it.
+    """
+
+    category: str
+
+
+class FinancialCatalogResponse(BaseModel):
+    """Every vocabulary this context's endpoints accept.
+
+    `instrument_kind` is deliberately absent: an account matches an alert by
+    the words the alert itself carries, so that vocabulary is Ingestion's and
+    is published at `GET /ingestion/catalog`.
+    """
+
+    account_kinds: list[AccountKindOption]
+    account_categories: list[CatalogOption]
+    currencies: list[CatalogOption]
+    movement_directions: list[CatalogOption]
+    transaction_origins: list[CatalogOption]
+    transaction_statuses: list[CatalogOption]
+    account_scopes: list[CatalogOption]
+    summary_groupings: list[CatalogOption]
 
 
 class OpenAccountPayload(BaseModel):
@@ -453,6 +489,33 @@ CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
 
 
 # -------------------------------------------------------------- endpoints
+
+
+@router.get("/catalog", response_model=FinancialCatalogResponse)
+def get_catalog() -> FinancialCatalogResponse:
+    """What a client may send, so a form cannot offer what the API rejects.
+
+    Unauthenticated like the merchant catalogue beside it: this is the shape
+    of the API, not anybody's data, and a client needs it to render the form
+    that a session is created from.
+    """
+    return FinancialCatalogResponse(
+        account_kinds=[
+            AccountKindOption(
+                value=kind.value,
+                label=label(kind.value),
+                category=kind.category.value,
+            )
+            for kind in AccountKind
+        ],
+        account_categories=options(AccountCategory),
+        currencies=options(Currency),
+        movement_directions=options(MovementDirection),
+        transaction_origins=options(TransactionOrigin),
+        transaction_statuses=options(TransactionStatus),
+        account_scopes=options(AccountScope),
+        summary_groupings=options(SummaryGrouping),
+    )
 
 
 @router.get("/accounts", response_model=AccountListResponse)

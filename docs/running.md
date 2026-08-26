@@ -17,14 +17,15 @@ Todo se ejecuta dentro del DevContainer, en `/workspaces/finflow_v2`.
 
 ---
 
-## Empezar: cuatro comandos
+## Empezar: dos comandos
 
 ```bash
 cp .env.example .env       # y edita dos valores — ver "Configurar .env"
-just aws-init              # emulador AWS + todos los recursos
-just seed                  # usuario demo con cuentas y movimientos
-just dev                   # API en http://localhost:8000/docs
+just up                    # emulador, recursos, datos demo y los procesos
 ```
+
+`just up` hace por sí solo lo que antes eran cuatro comandos y cinco
+terminales. La API queda en http://localhost:8000/docs.
 
 El resto de esta guía explica cada paso y los otros dos entornos.
 
@@ -160,7 +161,26 @@ suyo.
 
 ### 4. Los cinco procesos
 
-Cada uno en su terminal:
+Todos a la vez, en una sola terminal:
+
+```bash
+just up   # emulador + recursos + datos demo + los procesos
+```
+
+Cada línea va etiquetada con el servicio que la escribió, y un solo Ctrl+C
+los baja todos. Tarda hasta 25s en salir a propósito: los workers terminan el
+long poll que tengan en curso en vez de tirar el mensaje.
+
+`just up` **no arranca `ingest-worker`**. El buzón de Gmail es el mismo en los
+tres entornos y el poller marca como leído lo que lee, así que un run local
+contra un emulador en memoria se comería el correo que development iba a
+procesar — sin que nada lo reporte. En local la entrada es el webhook que la
+API monta justo para eso. Si de verdad lo quieres: `just up --with-ingest`.
+
+Dos stacks a la vez (local y development) necesitan puertos distintos:
+`just up --api-port 8001`.
+
+O cada uno en su terminal, si prefieres controlarlos por separado:
 
 ```bash
 just dev               # API en http://localhost:8000, con recarga en caliente
@@ -240,11 +260,16 @@ el bus ya está separado.
 ```bash
 cp .env.development.example .env.development
 # edita AWS_PROFILE, IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
-just provision-dev          # crea los recursos dev-*
+just provision-dev          # crea los recursos dev-*, una sola vez
 # pega en .env.development las cuatro URLs de cola que imprime
-just run-dev                # la API contra dev
-just ingest-worker-dev      # y sus workers, todos con sufijo -dev
+just up-dev                 # los cinco procesos, en una terminal
 ```
+
+Aquí `ingest-worker` **sí** arranca: development es un entorno donde el correo
+entra por donde entra en producción. No corras a la vez el poller de dos
+entornos — se pelean por el mismo buzón.
+
+Uno por uno, si lo prefieres: `just run-dev` y los cuatro `*-worker-dev`.
 
 El prefijo separa tablas, colas y bus — **no el buzón**. Si vas a correr
 `just ingest-worker-dev`, que sea contra una cuenta de Gmail distinta de la de

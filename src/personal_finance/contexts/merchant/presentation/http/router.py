@@ -50,9 +50,12 @@ from personal_finance.contexts.merchant.domain.exceptions import (
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
+    AliasOrigin,
+    CounterpartyKind,
     MerchantAlias,
     MerchantCategory,
     MerchantId,
+    MerchantStatus,
 )
 from personal_finance.contexts.merchant.infrastructure.events import (
     build_merchant_event_publisher,
@@ -63,6 +66,7 @@ from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb impo
 from personal_finance.shared.domain.value_objects import UserId
 from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
 from personal_finance.shared.infrastructure.config.settings import get_merchant_settings
+from personal_finance.shared.presentation.catalog import CatalogOption, options
 
 
 router = APIRouter(prefix="/merchants", tags=["merchants"])
@@ -119,6 +123,21 @@ class CategoryResponse(BaseModel):
 
 class CategoryListResponse(BaseModel):
     categories: list[CategoryResponse]
+
+
+class MerchantCatalogResponse(BaseModel):
+    """Every vocabulary this context's endpoints accept or return.
+
+    `categories` repeats what `GET /merchants/categories` already answers.
+    That endpoint stays: it is what a client already calls, and one list in
+    two places costs nothing next to breaking it.
+    """
+
+    categories: list[CatalogOption]
+    sorts: list[CatalogOption]
+    statuses: list[CatalogOption]
+    alias_origins: list[CatalogOption]
+    counterparty_kinds: list[CatalogOption]
 
 
 class EditMerchantPayload(BaseModel):
@@ -256,12 +275,21 @@ def list_categories() -> CategoryListResponse:
     """The category vocabulary, for a dropdown that cannot drift from it."""
     return CategoryListResponse(
         categories=[
-            CategoryResponse(
-                value=category.value,
-                label=category.value.replace("_", " ").capitalize(),
-            )
-            for category in MerchantCategory
+            CategoryResponse(value=option.value, label=option.label)
+            for option in options(MerchantCategory)
         ],
+    )
+
+
+@router.get("/catalog", response_model=MerchantCatalogResponse)
+def get_catalog() -> MerchantCatalogResponse:
+    """What a client may send, and what the words in a response mean."""
+    return MerchantCatalogResponse(
+        categories=options(MerchantCategory),
+        sorts=options(MerchantSort),
+        statuses=options(MerchantStatus),
+        alias_origins=options(AliasOrigin),
+        counterparty_kinds=options(CounterpartyKind),
     )
 
 

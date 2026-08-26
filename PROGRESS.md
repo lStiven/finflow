@@ -45,8 +45,8 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-26 — `just infra-check` validates the SAM template without the SAM
-  CLI or Docker, and the `PackageType` it found in `Globals` is fixed.
+- 2026-08-26 — the three contexts publish their enum vocabularies at
+  `GET /<context>/catalog`, so a client stops guessing what a form may offer.
 
 ## Next steps
 
@@ -557,6 +557,32 @@ frontend — see **Next steps**.
   editor could not have caught it: its errors on this file were all
   `Unresolved tag: !Sub`, the YAML extension not knowing CloudFormation's
   short forms, now settled with `yaml.customTags` in `.vscode/settings.json`.
+- **Each context publishes its own vocabulary; there is no one catalogue.**
+  A client cannot guess an enum member, and hardcoding the list on the other
+  side means two lists drifting apart, the failure being a 422 nobody sees
+  until a user hits it. One aggregated endpoint would have been convenient and
+  would have had to reach into all three contexts to build it, so each
+  publishes its own from the enum its endpoints already validate against.
+  Unauthenticated, like the `/merchants/categories` that predates them: this
+  is the shape of the API, not anybody's data, and the registration screen
+  needs it before a session exists. `instrument_kinds` sits in Ingestion's
+  catalogue rather than Financial's even though it is Financial that receives
+  it, because those are the words an alert arrives with — Financial takes a
+  free string and matches on it. That last one is a real trap: an account
+  declared with any other spelling is accepted and then never matches an
+  alert, silently. Making it an enum in Financial's own vocabulary, mapped at
+  the boundary the way `MovementDirection` already is, is the fix nobody has
+  made yet.
+- **The stack runner leaves the mailbox alone locally, and that is its one
+  opinionated default.** `just up` starts four processes, not five: the Gmail
+  account is shared by all three environments and the poller marks what it
+  reads as seen, so a local run against an in-memory emulator would consume
+  the mail development was going to process, reporting nothing anywhere. The
+  webhook the API mounts under `ENVIRONMENT=local` is the intake that exists
+  for this. `--with-ingest` overrides it. `up-dev` starts all five, because
+  there the mail is supposed to arrive the way production receives it.
+  Production is refused outright: there the five are Lambda functions AWS
+  invokes, and the `*-prod` recipes remain for driving one deliberately.
 - **The deploy will fail on IAM before it fails on anything in the template.**
   `dev-proyecto-ddd`, the only credential here, is denied
   `cloudformation:ListStacks` and `ssm:DescribeParameters`. Nothing to fix in

@@ -901,3 +901,48 @@ def test_a_category_that_names_nothing_is_refused_not_answered_with_zero(
         ).status_code
         == 422
     )
+
+
+def test_the_catalog_publishes_what_declaring_an_account_accepts(
+    client: TestClient,
+) -> None:
+    response = client.get("/financial/catalog")
+
+    assert response.status_code == 200
+
+    catalog = response.json()
+    kinds = {option["value"]: option["category"] for option in catalog["account_kinds"]}
+
+    # Every kind the payload validates against, and the side of net worth it
+    # lands on — derived here rather than restated by a client.
+    assert kinds["savings"] == "asset"
+    assert kinds["credit_card"] == "liability"
+    assert kinds["mortgage"] == "liability"
+
+    # A currency code is not a word: "Cop" would be a typo, not a label.
+    assert {"value": "COP", "label": "COP"} in catalog["currencies"]
+    assert "outgoing" in [option["value"] for option in catalog["movement_directions"]]
+    assert "bank_alert" in [
+        option["value"] for option in catalog["transaction_origins"]
+    ]
+    assert "unassigned" in [
+        option["value"] for option in catalog["transaction_statuses"]
+    ]
+    assert "open" in [option["value"] for option in catalog["account_scopes"]]
+    assert "month" in [option["value"] for option in catalog["summary_groupings"]]
+
+
+def test_every_published_account_kind_is_one_the_api_actually_takes(
+    client: TestClient,
+) -> None:
+    """The catalogue is worth nothing if a value in it is rejected on use."""
+    catalog = client.get("/financial/catalog").json()
+
+    for option in catalog["account_kinds"]:
+        response = client.post(
+            "/financial/accounts",
+            json={"name": f"Cuenta {option['value']}", "kind": option["value"]},
+        )
+
+        assert response.status_code == 201, (option["value"], response.text)
+        assert response.json()["kind"] == option["value"]

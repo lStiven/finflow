@@ -644,8 +644,41 @@ Resumen para revisar contra la interfaz cuando esté hecha:
 
 ## Vocabularios
 
-Todos son strings estables: se persisten, así que no cambian de valor aunque se
-reordenen.
+**Pídelos a la API, no los copies.** Tres endpoints publican cada lista desde
+el mismo enum contra el que el endpoint valida, así que no pueden desfasarse:
+
+| Método | Ruta | Auth | Qué trae |
+|---|---|---|---|
+| GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings` |
+| GET | `/ingestion/catalog` | — | `processing_statuses`, `ignored_reasons`, `deferred_reasons`, `instrument_kinds` |
+| GET | `/merchants/catalog` | — | `categories`, `sorts`, `statuses`, `alias_origins`, `counterparty_kinds` |
+
+Los tres son públicos: describen la forma de la API, no los datos de nadie, y
+la pantalla de registro los necesita antes de que exista una sesión. Cada
+elemento trae `value` y `label`:
+
+```jsonc
+{
+  "account_kinds": [
+    { "value": "savings",     "label": "Savings",     "category": "asset" },
+    { "value": "credit_card", "label": "Credit card", "category": "liability" }
+  ]
+}
+```
+
+`value` es lo que se envía y es estable — se persiste, así que no cambia
+aunque se reordenen los miembros. `label` es una comodidad en inglés; si tu
+interfaz está en español, construye tus propias etiquetas a partir de `value`.
+
+`category` solo aparece en `account_kinds`, y es derivada: nadie declara una
+hipoteca como activo. Sirve para agrupar el desplegable y para decir "dinero
+que debes" junto a un saldo, sin duplicar la regla que lo decide.
+
+Llámalos una vez al arrancar la app y cachéalos. Son estáticos.
+
+### Instantánea de referencia
+
+Para leer sin levantar el backend. La API manda; esto es una copia.
 
 | Enum | Valores |
 |---|---|
@@ -663,9 +696,17 @@ reordenen.
 | `deferred_reason` | `no_fallback_configured`, `fallback_found_nothing` — solo junto a `pending_fallback`, y ambos son finales para ese intento |
 | `category` (comercio) | `uncategorized`, `groceries`, `restaurants`, `transport`, `fuel`, `shopping`, `entertainment`, `subscriptions`, `utilities`, `health`, `education`, `travel`, `fees`, `transfers`, `income`, `other` |
 
-`instrument_kind` viene del parser, no de un desplegable: una compra con
-tarjeta de crédito llega como `credit_card`, un QR o una transferencia como
-`account`. Es lo que hay que usar al declarar la cuenta para que la adopte.
+`instrument_kind` es el caso que más cuesta caro equivocar. Son las palabras
+con las que **llega la alerta**, no un vocabulario de Financial: una compra
+con tarjeta de crédito llega como `credit_card`, un QR o una transferencia
+como `account`. Por eso lo publica `/ingestion/catalog` y no
+`/financial/catalog`.
+
+Al declarar una cuenta, `instrument_kind` se envía a `POST /financial/accounts`
+como string libre — la API acepta cualquier cosa de 64 caracteres. Si envías
+algo que no esté en esa lista, la cuenta se crea **sin error** y luego no
+adopta ninguna alerta, nunca, y nada lo reporta. Ofrece siempre un desplegable
+alimentado por el catálogo; no un campo de texto.
 
 ---
 
@@ -679,7 +720,10 @@ tarjeta de crédito llega como `credit_card`, un QR o una transferencia como
 | GET | `/identity/me` | ✔ | El id del usuario del token. |
 | GET | `/identity/inbox` | ✔ | Dirección de reenvío + remitentes aprobados. |
 | PATCH | `/identity/inbox` | ✔ | Reemplazar los remitentes aprobados. |
-| GET | `/merchants/categories` | — | Vocabulario de categorías. |
+| GET | `/financial/catalog` | — | Vocabularios de Financial, para poblar formularios. |
+| GET | `/ingestion/catalog` | — | Estados de una notificación e `instrument_kinds`. |
+| GET | `/merchants/catalog` | — | Vocabularios de Merchant. |
+| GET | `/merchants/categories` | — | Solo categorías. Lo cubre `/merchants/catalog`; se mantiene por compatibilidad. |
 | GET | `/merchants` | ✔ | Listar/buscar/filtrar comercios. |
 | GET | `/merchants/{id}` | ✔ | Detalle con sus alias. |
 | PATCH | `/merchants/{id}` | ✔ | Renombrar y/o recategorizar (marca revisado). |

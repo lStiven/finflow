@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "finflow_v2",
-    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant — Financial is not implemented yet). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/email-forwarding.md and docs/running.md for the narrative version of this API.",
+    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant, Financial). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/email-forwarding.md and docs/running.md for the narrative version of this API.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -229,6 +229,30 @@
       "name": "Ingestion",
       "item": [
         {
+          "name": "Catalog",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ingestion/catalog",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ingestion",
+                "catalog"
+              ]
+            },
+            "description": "Processing statuses, the reasons behind them, and instrument_kinds — the words a bank alert arrives with. An account declared with any other spelling is accepted and then never matches an alert."
+          },
+          "response": []
+        },
+        {
           "name": "List notifications",
           "request": {
             "method": "GET",
@@ -311,6 +335,30 @@
     {
       "name": "Merchant",
       "item": [
+        {
+          "name": "Catalog",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/merchants/catalog",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                "catalog"
+              ]
+            },
+            "description": "Categories, sorts, statuses, alias origins and counterparty kinds. Supersedes Categories, which stays for clients already calling it."
+          },
+          "response": []
+        },
         {
           "name": "Categories",
           "request": {
@@ -634,6 +682,30 @@
       "name": "Financial",
       "description": "Accounts are declared, never discovered. Finflow works with none at all — every alert is recorded and every movement stays unassigned, which is a complete answer for somebody who only wants to see what came in and what went out. Declaring an account is what starts the association, and it is retroactive: the alerts that already arrived under that card are adopted and the balance replays from them.",
       "item": [
+        {
+          "name": "Catalog",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/catalog",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "catalog"
+              ]
+            },
+            "description": "Every vocabulary this context's endpoints accept: account kinds (each with the side of net worth it lands on), currencies, movement directions, transaction origins and statuses, account scopes and summary groupings. Call it before rendering any form that posts here. The instrument vocabulary is Ingestion's — see Ingestion > Catalog."
+          },
+          "response": []
+        },
         {
           "name": "List accounts",
           "request": {
