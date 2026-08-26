@@ -70,6 +70,13 @@ App Password cuando quieras correr `just ingest-worker` de verdad. Ver
 Si tienes key de Gemini, añádela también (`LLM_API_KEY=...`). Se obtiene en
 [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 
+`API_CORS_ORIGINS` ya trae los puertos de dev habituales
+(`http://localhost:5173,http://localhost:3000`): son los orígenes desde los que
+un navegador puede llamar a esta API. Si tu frontend escucha en otro puerto,
+añádelo a esa lista. Vacío significa ninguno, que es lo correcto cuando el
+frontend se sirve desde el mismo origen. Ver
+[frontend-integration.md](frontend-integration.md#cors-qué-origen-puede-llamar).
+
 ### 2. Infraestructura
 
 ```bash
@@ -283,12 +290,80 @@ just aws-status  # tablas, colas y buses que existen ahora mismo
 no entrega nada, así que es la única forma de comprobar que un evento salió de
 verdad.
 
+`just inspect` mira el despliegue entero, sin autenticación y desde la máquina
+que lo corre. La vista equivalente para un usuario —solo su propio correo— es
+`GET /ingestion/notifications`, y esa sí está montada en producción.
+
 ### 7. Antes de dar por terminado un cambio
 
 ```bash
 just prepare   # formato + lint + tipos + tests
 just fix       # arregla formato y lint automáticamente
 ```
+
+---
+
+## Desarrollo contra AWS real
+
+Un tercer entorno, entre el emulador y producción: **una cuenta de AWS de
+verdad, con todos los recursos prefijados `dev-`**. Existe porque on-demand
+cobra por petición, y probar contra producción para no pagar dos veces es
+exactamente lo que no hay que hacer.
+
+`ENVIRONMENT=development` es todo el mecanismo. El prefijo se aplica **en
+código**, no configurando nueve nombres a mano:
+
+| Recurso | local / producción | development |
+|---|---|---|
+| Tablas | `bank_notifications`, `user_inboxes`, `users`, `merchants`, `financial` | `dev-` + cada una |
+| Colas | `parse-notifications`, `merchant-events`, `financial-events`, `integration-events` | `dev-` + cada una |
+| Bus | `finflow` | `dev-finflow` |
+
+Que sea central es el punto: ocho nombres bien y uno olvidado es el caso que
+cuesta datos reales, y nada lo reportaría. Las reglas de EventBridge no llevan
+prefijo porque su nombre es único **por bus**, y el bus ya está separado.
+
+Producción conserva los nombres desnudos que ya creó: activar este entorno no
+toca nada de lo que hay.
+
+```bash
+cp .env.development.example .env.development
+# edita AWS_PROFILE y IDENTITY_JWT_SECRET
+just provision-dev          # crea los recursos dev-*
+# pega las cuatro URLs de cola que imprime en .env.development
+just run-dev                # la API contra dev
+just ingest-worker-dev      # y sus workers, todos con sufijo -dev
+```
+
+El webhook local (`POST /ingestion/bank-notifications`) **no** se monta aquí:
+solo existe con `ENVIRONMENT=local`. En dev los correos entran por donde
+entran en producción — el `ingest-worker` leyendo el buzón por IMAP.
+
+### Comprobar que los datos cuadran
+
+```bash
+just verify                    # contra el emulador
+just verify .env.development   # contra la cuenta dev
+```
+
+Recorre el flujo entero con **dos usuarios**: registra, aprueba el remitente
+del banco, reenvía sus alertas, drena los tres workers, declara las cuentas
+(que adoptan retroactivamente lo que ya había llegado), coloca a mano el pago
+de nómina —su plantilla no trae dígitos, así que nada puede emparejarlo solo—,
+registra un movimiento manual y renombra un comercio. Después comprueba dos
+familias de propiedades:
+
+- **Integridad**: cada saldo es igual a los movimientos que tiene detrás; el
+  patrimonio es activos menos pasivos; un movimiento asignado está en una
+  cuenta que responde a su instrumento; los buckets del resumen suman su
+  total.
+- **Aislamiento**: ninguno de los dos usuarios llega a lo del otro — ni
+  listando, ni buscando, ni pidiendo un id conocido, que responde `404` y no
+  `403`. También comprueba que no pueda **escribir** sobre lo ajeno.
+
+Sale con código 1 si algo falla, así que sirve en CI. Se **niega a correr con
+`ENVIRONMENT=production`**: registra dos usuarios con una contraseña que está
+escrita en este repositorio.
 
 ---
 
@@ -474,6 +549,7 @@ movimiento real. Revisa las colas `*-dlq` si algo desaparece sin explicación.
 | `GET /identity/me` | Quién soy |
 | `GET /identity/inbox` | Mi dirección de reenvío y quién está aprobado |
 | `PATCH /identity/inbox` | Reemplazar los remitentes aprobados |
+| `GET /ingestion/notifications` | Qué correos llegaron y en qué estado quedaron |
 | `GET /merchants` | Listado con búsqueda, filtros y contador de revisión |
 | `GET /merchants/{id}` | Detalle con todos los alias |
 | `PATCH /merchants/{id}` | Renombrar y/o recategorizar |

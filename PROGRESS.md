@@ -23,18 +23,25 @@ watching only what comes in and goes out. Declaring an account starts the
 association and is retroactive. Money that never emails can be entered by
 hand, and anything recorded can be corrected.
 
-Eleven endpoints under `/financial`, the SQS worker, the atomic ledger write,
-and secrets read from SSM Parameter Store. All verified against the local
-emulator, not only in tests. `just prepare` green (547 tests).
+Twenty-eight endpoints across the four contexts, the three SQS workers, the
+atomic ledger write, secrets from SSM, point-in-time recovery on every table,
+CORS, and `just seed` to refill the emulator. Movements now carry the
+canonical merchant behind the bank's text, and `GET /financial/summary`
+answers what a period adds up to. All verified against the local emulator, not
+only in tests. `just prepare` green (660 tests).
 
-What is missing for production is the frontend, a deployment mechanism,
-observability and backups — see **Next steps**.
+DynamoDB runs on-demand: at this deployment's volume the bill is on the order
+of a cent a month, and the free tier's 25 provisioned units were shaping the
+schema for no real saving.
+
+What is missing for production is deployment, observability, a cap on LLM
+spending and the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-24 — `docs/frontend-integration.md`: the whole flow as a client
-  has to integrate it, the business rules a UI must not break, and what the
-  backend does not expose yet (CORS, notifications, movement↔merchant).
+- 2026-08-26 — a `development` environment with every AWS resource prefixed
+  `dev-`, and `just verify`: two users driven end to end, asserting integrity
+  and that neither reaches the other's data.
 
 ## Next steps
 
@@ -46,12 +53,35 @@ observability and backups — see **Next steps**.
       2. **Deployment.** No Dockerfile, no CI, nothing that keeps the four
          workers alive. `just run-prod` is uvicorn on whatever machine runs
          it.
-      3. **The frontend**, deliberately deferred until the backend settles.
+      3. **A spending cap on the LLM** (see the standalone item below). The
+         cheapest of the three and the only one that costs money while it is
+         missing.
+      4. **The frontend**, deliberately deferred until the backend settles.
          Its integration contract is written up in
-         `docs/frontend-integration.md`, which also lists what it cannot build
-         yet: no CORS middleware, no way to see received emails, and no
-         movement↔merchant link, so spending by category is not reachable
-         from a client.
+         `docs/frontend-integration.md`.
+- [ ] **Decide whether merchants are per-user or shared.** They are per-user
+      today — partition key is the owner, and `just verify` shows Ana and
+      Bruno holding separate `Éxito` records that renaming one does not touch.
+      Shared merchants would match the intuition that a business is the same
+      business for everybody, but renames and categories are personal
+      decisions, and `times_seen` would leak one person's habits into
+      another's list. The middle option nobody has designed yet: a shared
+      catalogue of canonical merchants with per-user overrides on top.
+- [ ] **Set a billing alarm on the AWS account.** The per-table request
+      ceiling bounds a runaway's *rate*, not a month's spend, and it is the
+      only guard there is. Nothing in this repo can create it; it is a
+      console/CLI step on the account itself.
+- [ ] **A manual entry can be attributed but never creates a merchant.** The
+      join is a fingerprint lookup, so a hand-entered `TIENDAS ARA` does find
+      the merchant that owns that spelling — but a name that never arrived by
+      email belongs to nobody and stays in the `null` bucket forever. Closing
+      it means Financial publishing its own integration event for manual
+      entries and merchant subscribing to a second source, which is a session
+      of its own.
+- [ ] **`GET /ingestion/notifications` reads the whole partition per page.**
+      `limit`/`offset` shrink the response, not the read: the counts beside
+      the list genuinely need the full set, but the page window does not, and
+      the index runs at 3 RCU.
 - [ ] **Only Bancolombia has a parser**, with three sender domains mapped.
       Every other bank falls through to the LLM, which costs money per email
       and refuses when unsure. More banks get added over time; this is
@@ -88,6 +118,19 @@ observability and backups — see **Next steps**.
 ## Decisions
 
 ### Intake
+
+- **Ingestion has one read surface, and it carries no email bodies**
+  (2026-08-24). `GET /ingestion/notifications` exists so a client can tell
+  three failures apart that otherwise look identical — nothing arrived, it
+  arrived from a sender nobody approved, it arrived and nothing could be read
+  out of it. It reads a `by_user` index whose projection lists the attributes
+  a screen shows and excludes `raw_content`: an index is a full copy of what
+  it projects, and duplicating every untrusted message to answer a question
+  that never involves one is not a trade worth making. The counts beside the
+  list cover every status the user has regardless of the filter, so the
+  summary does not move when somebody narrows the list. The cost of the index
+  is what eventually moved the whole account off provisioned capacity — see
+  **Billing** below.
 
 - **Email forwarding, not Gmail OAuth** (2026-08-22, reversal to the original
   plan). Every user forwards bank mail to `finflowingest+<user_id>@gmail.com`,
@@ -280,7 +323,68 @@ observability and backups — see **Next steps**.
   pulled — `event_id` is fresh on every attempt, so republishing them reads as
   new work to any subscriber deduping on it.
 
+### Reading Financial and Merchant together (2026-08-25)
+
+- **The movement↔merchant join is made on read, never stored.**
+  A movement keeps what the bank wrote; which canonical merchant that text
+  belongs to is Merchant's decision and the user's to change. Stamping a
+  `merchant_id` onto the row at write time would mean re-attributing every
+  past movement after a rename, a move or a merge — a background pass that can
+  fail halfway and leave two screens disagreeing. Joined on read, a correction
+  is visible everywhere at once with nothing to re-process. The cost is a read
+  of the user's merchants per page (a point lookup on the alias index for a
+  single movement), which is one query in one partition at this scale.
+  Financial declares a `MerchantDirectory` port and
+  `AttributeCounterpartiesUseCase` is Merchant's published read surface behind
+  it; the adapter in `financial/infrastructure/merchant/` is where Merchant's
+  `MerchantId` and `MerchantCategory` stop and plain strings continue.
+  Rejected: publishing a `CounterpartyResolved` integration event Financial
+  would store — the merchant worker never learns Financial's movement id, and
+  matching them back up would have to redo the normalization Merchant owns.
+
+- **The attribution read is exact and never decides anything.**
+  `ResolveMerchantUseCase` derives, guesses and creates; the read only answers
+  from aliases that already exist. Asking a second time on the read path would
+  let a screen show a merchant that does not own the spelling, and the two
+  answers could differ. A counterparty nobody has resolved yet reads as
+  `merchant: null` — ordinary for the seconds before merchant's worker drains
+  its queue, and permanent for a name only a manual entry ever used.
+
+- **A summary totals per currency and orders by movement count.**
+  Ordering the buckets by amount would compare a figure in one currency
+  against a figure in another, and no rate exists anywhere in this system; a
+  count means the same thing in both. A client showing one currency has every
+  amount it needs to reorder them itself. Months are the exception and run
+  newest first. The bucket a grouping cannot place keeps `key: null` rather
+  than being dropped — without it the groups stop adding up to the total,
+  which is the one way a spending screen can lie quietly.
+- **Months are grouped in a stated timezone, defaulting to Bogotá.**
+  A purchase at 8pm on the 31st is the following month once it
+  is read in UTC, which is wrong for everybody this deployment serves. The
+  timezone is a query parameter rather than a guess from a locale, and one
+  that does not exist is refused rather than quietly read as UTC.
+- **A `category` filter that names nothing is refused, a `merchant_id` is
+  not.** An unknown category would filter everything out and
+  answer an empty page, and on a money screen zero is a credible number — so
+  Financial asks the directory for the vocabulary and returns 422. An unknown
+  merchant id stays an empty page on purpose: saying it does not exist would
+  tell a stranger whether it is somebody else's.
+
 ### Operations
+
+- **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a
+  comma-separated allow-list; empty mounts no middleware at all, which is the
+  right default for a frontend served from the same origin. Credentials are
+  off: authentication is a bearer token the client attaches itself, so asking
+  browsers to carry ambient authority would add nothing but risk. Methods and
+  headers are the ones this surface actually uses (`GET`/`POST`/`PATCH`,
+  `Authorization`/`Content-Type`) rather than `*`. A `*` origin is refused at
+  startup when `ENVIRONMENT=production`, in `ApiSettings` itself — which reads
+  `ENVIRONMENT` a second time on purpose, so the rule holds wherever those
+  settings are constructed instead of only where the app is built. Each origin
+  is also checked for shape at startup: the comparison against the browser's
+  `Origin` header is exact, so a trailing slash or a path would block every
+  cross-origin call while erroring nowhere.
 
 - **Local data is ephemeral on purpose; `just seed` is what makes that cheap**
   (2026-08-24). moto holds everything in memory, so `just aws-down`, a
@@ -288,10 +392,9 @@ observability and backups — see **Next steps**.
   in local development survives. Rejected: DynamoDB Local with `-dbPath`
   (durable, but only DynamoDB — SQS and EventBridge would still be moto, so
   two emulators for half the surface), LocalStack persistence (Pro only), and
-  a real AWS dev environment (production's five tables and one index already
-  spend 24 of the 25 always-free provisioned units, so a parallel set would
-  have to be on-demand; worth it when the frontend needs durable staging, not
-  before). The seed drives the ASGI app in process and the workers' own
+  a real AWS dev environment (worth it when the frontend needs durable
+  staging, not before — and now cheap enough to reconsider, since on-demand
+  charges a parallel set nothing while it sits idle). The seed drives the ASGI app in process and the workers' own
   `build_worker()`, so it exercises the whole chain rather than writing rows:
   alerts in, queues drained, accounts declared *after* they arrive so
   retroactive adoption is covered. Idempotent, and the model stays unwired
@@ -305,6 +408,15 @@ observability and backups — see **Next steps**.
   because it is the only safeguard on the production list that cannot be added
   after it is needed. An alarm nobody set up can be set up the day it is
   missed; a table that was never backed up is gone.
+- **Provisioning reconciles, it does not only create** (2026-08-24). Same
+  reasoning as the line above, generalized: `create_table` is skipped once a
+  table exists, so capacity lowered in configuration would have reached new
+  environments only and left a running one over the free allowance the number
+  was chosen to fit. It now brings tables and indexes to the configured
+  throughput on every run, and waits for a new index to finish backfilling
+  before returning — the endpoint reading that index is mounted the moment a
+  deploy lands, and DynamoDB refuses a query against an index it is still
+  filling.
 
 
 - **CloudWatch log shipping deferred** (2026-08-23). Options weighed:
@@ -319,6 +431,81 @@ observability and backups — see **Next steps**.
 - Orphaned `mailbox_connections` / `simulated_mailbox` tables removed from the
   real AWS account (2026-08-23). Provisioning only ever creates, never
   deletes, so leftovers from a removed feature need deleting by hand.
+
+### Environments (2026-08-26)
+
+- **A third environment exists because on-demand bills per request.** local
+  (emulator), development (real AWS, everything prefixed `dev-`), production
+  (bare names). Testing against production to avoid paying twice is exactly
+  the thing worth spending a cent a month to prevent.
+- **The prefix is applied in code, not by configuring nine names.** Tables,
+  queues and the event bus all pass through `Environment.resource_prefix` in
+  the settings validators, so `ENVIRONMENT=development` is the whole
+  mechanism. Configuring each name by hand was rejected for the reason this
+  whole module keeps returning to: eight right and one forgotten is the case
+  that costs real data, and nothing reports it. Idempotent, so spelling the
+  prefix into the variable as well is harmless. EventBridge *rules* are not
+  prefixed — a rule name is unique per bus and the bus already is.
+- **Development inherits every production restriction except the emulator
+  one.** `*` as a CORS origin is refused (the check is "not LOCAL"), and the
+  bank-notification webhook stays unmounted (`is_local` is LOCAL only), so
+  the one unauthenticated write surface never exists outside a developer's
+  machine. `AWS_ENDPOINT_URL` is allowed, which is what lets the whole dev
+  configuration be rehearsed against moto before it costs anything.
+
+- **`just verify` is the integrity and isolation harness.** Two users through
+  the whole chain, then two families of assertions: balances equal the
+  movements behind them and the summary's buckets add up (integrity), and
+  neither user reaches the other by listing, searching, reading a known id or
+  writing to one (isolation). Missing rather than forbidden throughout — a
+  403 would itself answer whether somebody else's record exists. It refuses
+  `ENVIRONMENT=production`: it registers two users with a password committed
+  to this repository, and writes movements nothing can delete.
+- **Isolation is pinned at the adapter level, not only at the endpoint.**
+  `tests/integration/financial/test_user_isolation.py` puts both users'
+  records in one real table, because a repository missing its partition
+  condition still passes a test whose fake was a dict keyed by user. The
+  sharpest case is `list_unassigned_matching`: `AccountFingerprint` carries no
+  user, so two people at one bank with the same last four digits produce the
+  same key, and only the partition keeps their money apart.
+
+
+### Billing (2026-08-25)
+
+- **DynamoDB runs on-demand, and the free tier was the thing costing money.**
+  PROVISIONED gives 25 read and 25 write units free across the account, and
+  DynamoDB charges a secondary index like a table: five tables and two indexes
+  at three units each already spent 21 of the 25, so every new index meant
+  lowering capacity again — the schema being shaped by an allowance rather
+  than by the data, and one more index away from not fitting at all. Three
+  units is also roughly three 4 KB reads a second, while several endpoints
+  read a whole partition, so ordinary use sat one refresh away from
+  throttling. Measured against a full seed run (six alerts end to end, three
+  accounts, two manual entries, the summary reads): 67 DynamoDB writes and 52
+  reads. At ten forwarded emails a day that is on the order of **a cent a
+  month** on-demand. The trade is an unmeasurable bill for a ceiling that no
+  longer constrains the design. PROVISIONED is still reachable by
+  configuration, and provisioning moves existing tables in either direction.
+- **Provisioning reconciles the billing mode, not only the throughput.**
+  `create_table` decides the mode only for a table that does not exist yet, so
+  without this, changing the configured mode would have reached new
+  environments only and said nothing while a running one stayed on the old
+  one — a reconciler that silently does nothing, which is worse than one never
+  written because the run reports success either way.
+- **Every `UpdateTable` waits for the table to go back to ACTIVE.** DynamoDB
+  refuses a second control-plane change while one is applying, and
+  provisioning issues several in a row (mode, then capacity, then each index).
+  Without the wait the second raises `ResourceInUseException` and the run dies
+  partway through, leaving a table half-reconciled — and moto does not model
+  `UPDATING`, so no test could have caught it.
+- **The on-demand ceiling is a blast radius, not a budget.**
+  `INGESTION_DYNAMODB_MAX_*_UNITS` caps requests per second per table and per
+  index, so a runaway loop throttles instead of billing; pegged for a month it
+  would still cost real money. The guard for spending is a billing alarm on
+  the account, which nothing in this repo can create. Twenty-five is what the
+  entire free allowance used to be *shared across all seven objects*, so as a
+  per-object ceiling it is far more headroom than this ever had.
+
 
 ### Review findings worth remembering
 

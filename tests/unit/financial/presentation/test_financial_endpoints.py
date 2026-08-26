@@ -1,6 +1,6 @@
 """The surface a frontend calls, exercised end to end over fakes."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
 from fastapi import FastAPI
@@ -11,11 +11,13 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
 )
+from personal_finance.contexts.financial.application.ports import MerchantAttribution
 from personal_finance.contexts.financial.application.queries import (
     GetAccountUseCase,
     GetTransactionUseCase,
     ListAccountsUseCase,
     ListTransactionsUseCase,
+    SummarizeSpendingUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -28,6 +30,8 @@ from personal_finance.contexts.financial.presentation.http.router import (
     get_list_transactions_use_case,
     get_manage_accounts_use_case,
     get_manage_transactions_use_case,
+    get_merchant_directory,
+    get_summarize_spending_use_case,
     get_transaction_use_case,
     router,
 )
@@ -155,6 +159,35 @@ class NullPublisher:
         del events
 
 
+ARA = MerchantAttribution(
+    merchant_id="aaaaaaaa-0000-0000-0000-000000000001",
+    display_name="Ara",
+    category="groceries",
+    needs_review=False,
+)
+
+
+class FakeDirectory:
+    """Stands in for merchant, answering by exact counterparty text."""
+
+    def attribute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> Mapping[str, MerchantAttribution]:
+        del user_id
+
+        return {
+            counterparty: ARA
+            for counterparty in counterparties
+            if counterparty == "TIENDAS ARA"
+        }
+
+    def categories(self) -> frozenset[str]:
+        return frozenset({"groceries", "transport", "subscriptions", "uncategorized"})
+
+
 @pytest.fixture
 def client() -> TestClient:
     accounts = InMemoryAccounts()
@@ -183,11 +216,21 @@ def client() -> TestClient:
     app.dependency_overrides[get_account_use_case] = lambda: GetAccountUseCase(
         accounts=accounts,
     )
+    directory = FakeDirectory()
     app.dependency_overrides[get_list_transactions_use_case] = lambda: (
-        ListTransactionsUseCase(ledger=ledger)
+        ListTransactionsUseCase(ledger=ledger, merchants=directory)
     )
     app.dependency_overrides[get_transaction_use_case] = lambda: GetTransactionUseCase(
         ledger=ledger,
+        merchants=directory,
+    )
+    app.dependency_overrides[get_merchant_directory] = lambda: directory
+    app.dependency_overrides[get_summarize_spending_use_case] = lambda: (
+        SummarizeSpendingUseCase(
+            ledger=ledger,
+            accounts=accounts,
+            merchants=directory,
+        )
     )
 
     return TestClient(app)
@@ -666,3 +709,195 @@ def test_an_account_id_that_is_not_an_id_is_missing_too(client: TestClient) -> N
 
 def test_a_movement_nobody_owns_reads_as_missing(client: TestClient) -> None:
     assert client.get("/financial/transactions/deadbeef").status_code == 404
+
+
+def test_a_movement_carries_the_merchant_behind_its_counterparty(
+    client: TestClient,
+) -> None:
+    movement = _enter(client, counterparty="TIENDAS ARA")
+
+    assert movement["merchant"] == {
+        "id": ARA.merchant_id,
+        "display_name": "Ara",
+        "category": "groceries",
+        "needs_review": False,
+    }
+
+    listed = client.get("/financial/transactions").json()["transactions"][0]
+
+    assert listed["merchant"] == {
+        "id": ARA.merchant_id,
+        "display_name": "Ara",
+        "category": "groceries",
+        "needs_review": False,
+    }
+
+    fetched = client.get(f"/financial/transactions/{movement['id']}").json()
+
+    assert fetched["merchant"]["display_name"] == "Ara"
+
+
+def test_a_movement_no_merchant_owns_reads_with_a_null_merchant(
+    client: TestClient,
+) -> None:
+    # Ordinary while the sighting is still on merchant's queue, permanent for
+    # something entered by hand. Never an error.
+    _enter(client, counterparty="PAGO NOMINA")
+
+    listed = client.get("/financial/transactions").json()["transactions"][0]
+
+    assert listed["merchant"] is None
+
+
+def test_movements_can_be_asked_for_by_merchant(client: TestClient) -> None:
+    _enter(client, counterparty="TIENDAS ARA")
+    _enter(client, counterparty="PAGO NOMINA")
+
+    page = client.get(
+        "/financial/transactions",
+        params={"merchant_id": ARA.merchant_id},
+    ).json()
+
+    assert page["total"] == 1
+    assert page["transactions"][0]["counterparty"] == "TIENDAS ARA"
+
+
+def test_movements_can_be_asked_for_by_category(client: TestClient) -> None:
+    _enter(client, counterparty="TIENDAS ARA")
+    _enter(client, counterparty="PAGO NOMINA")
+
+    page = client.get(
+        "/financial/transactions",
+        params={"category": "groceries"},
+    ).json()
+
+    assert page["total"] == 1
+
+
+def test_the_summary_answers_a_month_without_paging_the_ledger(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="50000")
+    _enter(client, counterparty="PAGO NOMINA", amount="20000")
+    _enter(
+        client,
+        counterparty="SALARIO",
+        amount="3000000",
+        direction="incoming",
+    )
+
+    summary = client.get("/financial/summary").json()
+
+    assert summary["group_by"] == "month"
+    assert summary["totals"] == [
+        {
+            "currency": "COP",
+            "incoming": "3000000",
+            "outgoing": "70000",
+            "net": "2930000",
+            "movements": 3,
+        },
+    ]
+    assert len(summary["groups"]) == 1
+
+
+def test_the_summary_breaks_spending_down_by_category(client: TestClient) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="50000")
+    _enter(client, counterparty="PAGO NOMINA", amount="20000")
+
+    summary = client.get(
+        "/financial/summary",
+        params={"group_by": "category"},
+    ).json()
+    buckets = {group["key"]: group for group in summary["groups"]}
+
+    assert buckets["groceries"]["totals"][0]["outgoing"] == "50000"
+    # What no merchant owns is its own bucket, not a silent omission.
+    assert buckets[None]["label"] == "Unattributed"
+
+
+def test_the_summary_takes_the_filters_the_list_takes(client: TestClient) -> None:
+    # This is what makes a bucket openable: the same query against
+    # /transactions returns the movements behind it.
+    _enter(client, counterparty="TIENDAS ARA", amount="50000")
+    _enter(client, counterparty="PAGO NOMINA", amount="20000")
+
+    summary = client.get(
+        "/financial/summary",
+        params={"merchant_id": ARA.merchant_id},
+    ).json()
+
+    assert summary["totals"][0]["outgoing"] == "50000"
+
+
+def test_the_summary_refuses_a_timezone_it_cannot_read(client: TestClient) -> None:
+    # Falling back to UTC would move somebody's late-evening spending into the
+    # following month without saying so.
+    response = client.get("/financial/summary", params={"timezone": "Mars/Olympus"})
+
+    assert response.status_code == 400
+
+
+def test_somebody_with_no_movements_gets_an_empty_but_valid_summary(
+    client: TestClient,
+) -> None:
+    summary = client.get("/financial/summary").json()
+
+    assert summary == {
+        "group_by": "month",
+        "timezone": "America/Bogota",
+        "totals": [],
+        "groups": [],
+    }
+
+
+def test_correcting_a_movement_keeps_its_merchant_in_the_answer(
+    client: TestClient,
+) -> None:
+    # A client refreshing its cache from the PATCH response would otherwise
+    # drop the merchant until a full reload, with `null` claiming that nobody
+    # owns a spelling that plainly has an owner.
+    movement = _enter(client, counterparty="TIENDAS ARA")
+
+    patched = client.patch(
+        f"/financial/transactions/{movement['id']}",
+        json={"note": "revisado"},
+    )
+
+    assert patched.status_code == 200
+    assert patched.json()["merchant"]["display_name"] == "Ara"
+
+
+def test_an_epoch_out_of_range_is_a_bad_request_not_a_crash(
+    client: TestClient,
+) -> None:
+    # Unbounded, the conversion raises OSError from inside datetime and the
+    # request answers 500 — which a browser then reports as a CORS failure,
+    # because the error middleware sits outside the CORS one.
+    for endpoint in ("/financial/transactions", "/financial/summary"):
+        response = client.get(endpoint, params={"from": 10**18})
+
+        assert response.status_code == 422, endpoint
+
+
+def test_a_category_that_names_nothing_is_refused_not_answered_with_zero(
+    client: TestClient,
+) -> None:
+    # An empty page on a money screen reads as "you spent nothing here", which
+    # is the one wrong answer worse than an error.
+    _enter(client, counterparty="TIENDAS ARA")
+
+    assert (
+        client.get(
+            "/financial/transactions",
+            params={"category": "Groceries"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/financial/summary",
+            params={"group_by": "category", "category": "food"},
+        ).status_code
+        == 422
+    )

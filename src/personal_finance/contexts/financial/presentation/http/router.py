@@ -20,6 +20,7 @@ import contextlib
 from decimal import Decimal
 import functools
 from typing import Annotated
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
@@ -39,15 +40,25 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageTransactionsUseCase,
     TransactionNotFoundError,
 )
+from personal_finance.contexts.financial.application.ports import MerchantDirectory
 from personal_finance.contexts.financial.application.queries import (
     DEFAULT_PAGE_SIZE,
+    DEFAULT_TIMEZONE,
     MAX_PAGE_SIZE,
     AccountScope,
+    AttributedTransaction,
     GetAccountUseCase,
     GetTransactionUseCase,
     ListAccountsUseCase,
     ListTransactionsUseCase,
+    MovementFilter,
     NetWorth,
+    SpendingSummary,
+    SpendingTotals,
+    SummarizeSpendingUseCase,
+    SummaryGroup,
+    SummaryGrouping,
+    SummaryQuery,
     TransactionQuery,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
@@ -61,6 +72,9 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountKind,
     MovementDirection,
     TransactionOrigin,
+)
+from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
+    build_merchant_directory,
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
@@ -88,6 +102,14 @@ router = APIRouter(prefix="/financial", tags=["financial"])
 
 MAX_NAME_LENGTH = 120
 MAX_TEXT_LENGTH = 512
+
+# Epoch seconds this side of the year 10000. Unbounded, the conversion raises
+# `OSError` from deep inside `datetime` rather than the `ValueError` the error
+# translation below understands, and the request answers 500 — which, since
+# Starlette's error middleware sits outside the CORS one, a browser then
+# reports as a CORS failure rather than as a bad number.
+MIN_EPOCH_SECONDS = 0
+MAX_EPOCH_SECONDS = 253_402_300_799
 
 
 # --------------------------------------------------------------- responses
@@ -136,6 +158,24 @@ class StatedResponse(BaseModel):
     counterparty: str
 
 
+class MerchantResponse(BaseModel):
+    """The canonical merchant behind this movement's counterparty text.
+
+    Joined when the answer is read, never stored on the movement: the grouping
+    belongs to Merchant and a user can change it, so a rename or a merge shows
+    up on every past movement at once with nothing to re-process.
+    """
+
+    id: str
+    display_name: str
+    # Merchant's vocabulary — the same values `GET /merchants/categories`
+    # lists, so a client has one place to read labels from.
+    category: str
+    # True while Merchant is still waiting for somebody to confirm the
+    # grouping. A screen can show the attribution and say it is a guess.
+    needs_review: bool
+
+
 class TransactionResponse(BaseModel):
     id: str
     # `outgoing` | `incoming`.
@@ -153,6 +193,10 @@ class TransactionResponse(BaseModel):
     note: str | None
     # Present only once somebody corrected this movement.
     stated: StatedResponse | None
+    # Null while no merchant owns this spelling: the sighting may still be on
+    # merchant's queue, and a movement entered by hand under a name nothing
+    # else has seen never gets one. Not an error either way.
+    merchant: MerchantResponse | None
 
 
 class TransactionListResponse(BaseModel):
@@ -160,6 +204,39 @@ class TransactionListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SpendingTotalsResponse(BaseModel):
+    currency: str
+    incoming: str
+    outgoing: str
+    # `incoming - outgoing`. Signed, and negative for a month that spent more
+    # than it took in.
+    net: str
+    movements: int
+
+
+class SummaryGroupResponse(BaseModel):
+    # `2026-08` for a month, otherwise the merchant, category or account id.
+    # Null is the bucket the grouping could not place — a movement no account
+    # claimed, or a counterparty no merchant owns yet. It belongs in the
+    # answer: without it the groups stop adding up to `totals`.
+    key: str | None
+    label: str
+    totals: list[SpendingTotalsResponse]
+    movements: int
+
+
+class SpendingSummaryResponse(BaseModel):
+    group_by: str
+    timezone: str
+    # Over everything the filter matched, so a period total needs no second
+    # call and no adding up of the buckets.
+    totals: list[SpendingTotalsResponse]
+    # Months run newest first; every other grouping runs busiest first, by
+    # movement count — ordering by amount would compare two currencies, which
+    # nothing here has a rate for.
+    groups: list[SummaryGroupResponse]
 
 
 # ---------------------------------------------------------------- payloads
@@ -317,12 +394,27 @@ def _build_get_account() -> GetAccountUseCase:
 
 @functools.lru_cache(maxsize=1)
 def _build_list_transactions() -> ListTransactionsUseCase:
-    return ListTransactionsUseCase(ledger=build_ledger())
+    return ListTransactionsUseCase(
+        ledger=build_ledger(),
+        merchants=build_merchant_directory(),
+    )
 
 
 @functools.lru_cache(maxsize=1)
 def _build_get_transaction() -> GetTransactionUseCase:
-    return GetTransactionUseCase(ledger=build_ledger())
+    return GetTransactionUseCase(
+        ledger=build_ledger(),
+        merchants=build_merchant_directory(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_summarize_spending() -> SummarizeSpendingUseCase:
+    return SummarizeSpendingUseCase(
+        ledger=build_ledger(),
+        accounts=build_accounts(),
+        merchants=build_merchant_directory(),
+    )
 
 
 def get_manage_accounts_use_case() -> ManageAccountsUseCase:
@@ -347,6 +439,14 @@ def get_list_transactions_use_case() -> ListTransactionsUseCase:
 
 def get_transaction_use_case() -> GetTransactionUseCase:
     return _build_get_transaction()
+
+
+def get_summarize_spending_use_case() -> SummarizeSpendingUseCase:
+    return _build_summarize_spending()
+
+
+def get_merchant_directory() -> MerchantDirectory:
+    return build_merchant_directory()
 
 
 CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
@@ -508,33 +608,109 @@ def list_transactions(
         ListTransactionsUseCase,
         Depends(get_list_transactions_use_case),
     ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
     account_id: Annotated[str | None, Query()] = None,
     unassigned: Annotated[bool | None, Query()] = None,
     origin: Annotated[TransactionOrigin | None, Query()] = None,
     search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    merchant_id: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    since: Annotated[
+        int | None,
+        Query(alias="from", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> TransactionListResponse:
+    """Movements, newest first, each with the merchant behind its text.
+
+    `merchant_id` and `category` are Merchant's answer, so a movement whose
+    counterparty nobody has resolved yet matches neither — it is unknown, not
+    uncategorized. `from` is included and `to` is not, so two consecutive
+    months can be asked for without one movement landing in both.
+    """
     page = use_case.execute(
         TransactionQuery(
-            user_id=user_id,
-            account_id=None if account_id is None else _account_id(account_id),
-            unassigned=unassigned,
-            origin=origin,
-            search=search,
+            filter=_movement_filter(
+                user_id=user_id,
+                account_id=account_id,
+                unassigned=unassigned,
+                origin=origin,
+                search=search,
+                merchant_id=merchant_id,
+                category=_known_category(category, merchants),
+                since=since,
+                until=until,
+            ),
             limit=limit,
             offset=offset,
         ),
     )
 
     return TransactionListResponse(
-        transactions=[
-            _transaction_response(movement) for movement in page.transactions
-        ],
+        transactions=[_transaction_response(entry) for entry in page.transactions],
         total=page.total,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/summary", response_model=SpendingSummaryResponse)
+def summarize_spending(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        SummarizeSpendingUseCase,
+        Depends(get_summarize_spending_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    group_by: Annotated[SummaryGrouping, Query()] = SummaryGrouping.MONTH,
+    since: Annotated[
+        int | None,
+        Query(alias="from", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    account_id: Annotated[str | None, Query()] = None,
+    unassigned: Annotated[bool | None, Query()] = None,
+    origin: Annotated[TransactionOrigin | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    merchant_id: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> SpendingSummaryResponse:
+    """What a period adds up to, broken down by month, category, merchant or
+    account — and totalled per currency, never across them.
+
+    It takes the same filters as `/transactions`, so any bucket here can be
+    opened as a list by repeating the query with the bucket's key. `timezone`
+    only affects `month`, and it matters: a purchase at 8pm on the 31st falls
+    in the next month once it is read in UTC.
+    """
+    summary = use_case.execute(
+        SummaryQuery(
+            filter=_movement_filter(
+                user_id=user_id,
+                account_id=account_id,
+                unassigned=unassigned,
+                origin=origin,
+                search=search,
+                merchant_id=merchant_id,
+                category=_known_category(category, merchants),
+                since=since,
+                until=until,
+            ),
+            group_by=group_by,
+            timezone=_known_timezone(timezone),
+        ),
+    )
+
+    return _summary_response(summary, timezone=timezone)
 
 
 @router.post(
@@ -549,6 +725,7 @@ def enter_transaction(
         ManageTransactionsUseCase,
         Depends(get_manage_transactions_use_case),
     ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
 ) -> TransactionResponse:
     """Record money the bank never emailed about.
 
@@ -573,7 +750,7 @@ def enter_transaction(
             ),
         )
 
-    return _transaction_response(transaction)
+    return _transaction_response(_attributed(transaction, merchants))
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -582,18 +759,15 @@ def get_transaction(
     transaction_id: str,
     use_case: Annotated[GetTransactionUseCase, Depends(get_transaction_use_case)],
 ) -> TransactionResponse:
-    transaction = use_case.execute(
-        user_id=user_id,
-        transaction_id=transaction_id,
-    )
+    entry = use_case.execute(user_id=user_id, transaction_id=transaction_id)
 
-    if transaction is None:
+    if entry is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No movement {transaction_id}",
         )
 
-    return _transaction_response(transaction)
+    return _transaction_response(entry)
 
 
 @router.patch("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -605,6 +779,7 @@ def edit_transaction(
         ManageTransactionsUseCase,
         Depends(get_manage_transactions_use_case),
     ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
 ) -> TransactionResponse:
     with _domain_errors():
         transaction = use_case.edit(
@@ -632,7 +807,7 @@ def edit_transaction(
             ),
         )
 
-    return _transaction_response(transaction)
+    return _transaction_response(_attributed(transaction, merchants))
 
 
 # ----------------------------------------------------------------- helpers
@@ -683,8 +858,96 @@ def _net_worth_response(figure: NetWorth) -> NetWorthResponse:
     )
 
 
-def _transaction_response(transaction: Transaction) -> TransactionResponse:
+def _movement_filter(
+    *,
+    user_id: UserId,
+    account_id: str | None,
+    unassigned: bool | None,
+    origin: TransactionOrigin | None,
+    search: str | None,
+    merchant_id: str | None,
+    category: str | None,
+    since: int | None,
+    until: int | None,
+) -> MovementFilter:
+    """The filters `/transactions` and `/summary` share, read once.
+
+    Both surfaces take them so a bucket in the summary can be opened as the
+    list of movements behind it, and two readings of one query string would be
+    two chances for those answers to disagree.
+    """
+    return MovementFilter(
+        user_id=user_id,
+        account_id=None if account_id is None else _account_id(account_id),
+        unassigned=unassigned,
+        origin=origin,
+        search=search,
+        merchant_id=merchant_id,
+        category=category,
+        since=None if since is None else PosixTime.from_epoch_seconds(since),
+        until=None if until is None else PosixTime.from_epoch_seconds(until),
+    )
+
+
+def _attributed(
+    transaction: Transaction,
+    merchants: MerchantDirectory,
+) -> AttributedTransaction:
+    """A movement a write just produced, read back the way a list reads it.
+
+    Without this a `PATCH` would answer `merchant: null` for a counterparty
+    that plainly has one, and a client refreshing its cache from the response
+    would drop the attribution until the next full reload.
+    """
+    attributed = merchants.attribute(
+        user_id=transaction.user_id,
+        counterparties=[transaction.counterparty],
+    )
+
+    return AttributedTransaction(
+        transaction=transaction,
+        merchant=attributed.get(transaction.counterparty),
+    )
+
+
+def _known_category(
+    category: str | None,
+    merchants: MerchantDirectory,
+) -> str | None:
+    """Refuse a category that names nothing, rather than answering nothing.
+
+    An unknown value would filter every movement out and return an empty page,
+    which on a money screen reads as "you spent nothing here" — the one wrong
+    answer worse than an error.
+    """
+    if category is None or category in merchants.categories():
+        return category
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Unknown category: {category!r}",
+    )
+
+
+def _known_timezone(name: str) -> str:
+    """Refuse a timezone rather than quietly falling back to UTC, which would
+    move somebody's late-evening spending into the following month.
+    """
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown timezone: {name!r}",
+        ) from error
+
+    return name
+
+
+def _transaction_response(entry: AttributedTransaction) -> TransactionResponse:
+    transaction = entry.transaction
     stated = transaction.stated
+    merchant = entry.merchant
 
     return TransactionResponse(
         id=transaction.id.value,
@@ -712,6 +975,48 @@ def _transaction_response(transaction: Transaction) -> TransactionResponse:
                 counterparty=stated.counterparty,
             )
         ),
+        merchant=(
+            None
+            if merchant is None
+            else MerchantResponse(
+                id=merchant.merchant_id,
+                display_name=merchant.display_name,
+                category=merchant.category,
+                needs_review=merchant.needs_review,
+            )
+        ),
+    )
+
+
+def _summary_response(
+    summary: SpendingSummary,
+    *,
+    timezone: str,
+) -> SpendingSummaryResponse:
+    return SpendingSummaryResponse(
+        group_by=summary.group_by.value,
+        timezone=timezone,
+        totals=[_totals_response(figure) for figure in summary.totals],
+        groups=[_group_response(group) for group in summary.groups],
+    )
+
+
+def _group_response(group: SummaryGroup) -> SummaryGroupResponse:
+    return SummaryGroupResponse(
+        key=group.key,
+        label=group.label,
+        totals=[_totals_response(figure) for figure in group.totals],
+        movements=group.movements,
+    )
+
+
+def _totals_response(figure: SpendingTotals) -> SpendingTotalsResponse:
+    return SpendingTotalsResponse(
+        currency=figure.currency.value,
+        incoming=str(figure.incoming),
+        outgoing=str(figure.outgoing),
+        net=str(figure.net),
+        movements=figure.movements,
     )
 
 

@@ -13,7 +13,7 @@ Complementos, no sustitutos de esta guía:
 | [overview.md](overview.md) | Qué hace el sistema y por qué está partido así. Léelo primero si nunca lo has visto. |
 | [running.md](running.md) | Cómo levantar el backend, los workers y el emulador. |
 | [email-forwarding.md](email-forwarding.md) | El contrato de la bandeja de entrada, en detalle. |
-| [postman/](postman/README.md) | Los 26 requests listos para importar en Postman o Bruno. |
+| [postman/](postman/README.md) | Los 27 requests listos para importar en Postman o Bruno. |
 | `http://localhost:8000/docs` | OpenAPI en vivo. Es la fuente de verdad de esquemas y códigos. |
 
 ---
@@ -30,20 +30,46 @@ Complementos, no sustitutos de esta guía:
 | **Asincronía** | El correo entra por un pipeline de colas. Lo que se ve en pantalla es el resultado de un proceso que corre por detrás, no de la petición del usuario. |
 | **Idempotencia** | La entrega es *at-least-once*. Un mismo movimiento puede procesarse dos veces y el backend lo absorbe; la UI nunca debe reintentar un `POST` de movimiento manual "por si acaso" (ese sí duplica). |
 
-### ⚠️ CORS todavía no está configurado
+### CORS: qué origen puede llamar
 
-La aplicación **no monta middleware de CORS**. Un frontend servido desde otro
-origen (`http://localhost:5173`, por ejemplo) recibirá el bloqueo del
-navegador en cada llamada, incluido el preflight `OPTIONS`.
+La API acepta llamadas desde los orígenes listados en `API_CORS_ORIGINS`, y
+solo desde esos. El `.env` local ya trae los dos servidores de desarrollo
+habituales:
 
-Mientras eso no se resuelva en el backend hay dos salidas:
+```bash
+API_CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+```
 
-- **Proxy en el dev server** (Vite/Next): redirige `/api/*` a
-  `http://localhost:8000`. Mismo origen, sin CORS de por medio. Es lo que
-  recomiendo para empezar hoy.
-- Añadir `CORSMiddleware` a la API con la lista de orígenes permitidos. Es un
-  cambio de backend, pequeño, y hay que hacerlo antes de desplegar el
-  frontend en un dominio propio.
+Si tu dev server escucha en otro puerto, añádelo a esa lista —separada por
+comas— y reinicia `just dev`.
+
+Lo que hay que saber para escribir el cliente:
+
+- **Métodos permitidos: `GET`, `POST`, `PATCH`.** Son los que la API usa; el
+  preflight `OPTIONS` lo responde el middleware.
+- **Cabeceras permitidas: `Authorization` y `Content-Type`**, además de las que
+  el navegador considera seguras por sí mismo. Si mandas una cabecera propia
+  (`X-Trace-Id`, lo que sea), el preflight la rechaza hasta que se añada en el
+  backend.
+- **Las credenciales están desactivadas a propósito.** La autenticación es un
+  bearer token que el cliente adjunta él mismo, no una cookie. No uses
+  `credentials: "include"`: no hay cookie que mandar, y pedirla solo haría
+  peligroso un origen mal configurado.
+- **Vacío significa ningún origen cruzado.** Es lo correcto cuando el frontend
+  se sirve desde el mismo origen que la API; no es un olvido.
+- **`*` se rechaza al arrancar con `ENVIRONMENT=production`** y la aplicación no
+  levanta. En local sí se admite, para trastear.
+- **Escribe el origen exacto: `esquema://host[:puerto]`**, sin barra final y
+  sin ruta. Es literalmente lo que el navegador manda en la cabecera `Origin`,
+  y la comparación es exacta: `https://app.example.com/` no coincide con nada.
+  La aplicación lo comprueba al arrancar y se niega a levantar con un valor mal
+  escrito, en vez de dejarte depurando el navegador.
+- Un origen no listado tiene **dos respuestas distintas** según el tipo de
+  petición: una simple (un `GET` sin cabeceras especiales) recibe `200` sin
+  cabeceras CORS y es el navegador quien la bloquea; un preflight recibe
+  `400 Disallowed CORS origin` del propio middleware. Si ves ese 400, o
+  "blocked by CORS policy" en la consola, lo primero que hay que mirar es
+  `API_CORS_ORIGINS`.
 
 ---
 
@@ -195,9 +221,69 @@ Lo que implica para la UI:
   configurado se conserva sin extraer, una autorización (compra "aprobada",
   todavía no cobrada) se descarta a propósito para no contar el gasto dos
   veces.
-- **El frontend no puede ver los correos.** Hoy no hay ningún endpoint que
-  liste notificaciones ni sus estados; eso solo se ve por CLI (`just inspect`).
-  Ver [Lo que el backend todavía no expone](#lo-que-el-backend-todavía-no-expone).
+- **El usuario sí puede ver qué llegó**, y esa es la pantalla que salva la
+  situación cuando algo no funciona. Va justo abajo.
+
+#### `GET /ingestion/notifications`
+
+Lo que llegó al alias del usuario, del más reciente al más antiguo. Es la única
+superficie de lectura de Ingestion, y existe para distinguir tres fallos que
+desde el cliente se ven idénticos —no aparece ningún movimiento nuevo—:
+
+1. **No llegó nada.** La lista está vacía: la regla de reenvío del usuario no
+   está haciendo lo que él cree.
+2. **Llegó de un remitente que nadie aprobó.** `status: "ignored"`, con el
+   remitente a la vista para poder aprobarlo con un `PATCH /identity/inbox`.
+   Este es el caso más común y el más fácil de resolver desde la interfaz.
+3. **Llegó y no se pudo leer.** `status: "pending_fallback"`, y
+   `deferred_reason` dice cuál de las dos cosas pasó: `no_fallback_configured`
+   (no hay modelo puesto) o `fallback_found_nothing` (lo leyó y se negó).
+
+```http
+GET /ingestion/notifications?limit=50&offset=0
+GET /ingestion/notifications?status=ignored
+```
+
+Los filtros van **omitidos o con un valor válido**: `status=` vacío es un
+`422`, no "sin filtro". Vale para cualquier parámetro de enum de esta API.
+
+```json
+{
+  "notifications": [
+    {
+      "id": "8a448922-2641-52b9-bc7f-eecfcc82186c",
+      "message_id": "<seed-transfer@finflow.local>",
+      "sender": "alertasynotificaciones@an.notificacionesbancolombia.com",
+      "subject": "Transferencia realizada",
+      "status": "processed",
+      "deferred_reason": null,
+      "received_at": 1787403660
+    }
+  ],
+  "total": 7,
+  "counts": { "processed": 6, "ignored": 1 },
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Reglas:
+
+- **Nunca devuelve el cuerpo del correo.** Una lista no lo necesita, y dos de
+  los estados ya lo descartaron a propósito. Si la interfaz quiere enseñar "de
+  qué era", el asunto y el remitente es todo lo que hay.
+- **`counts` cuenta todos los estados del usuario**, filtre o no filtre la
+  lista. Es el resumen de la pantalla ("6 procesados, 1 ignorado") y no se
+  mueve al estrechar la lista, igual que el badge de comercios.
+- **Orden fijo**, del más reciente al más antiguo. `limit` entre 1 y 200 (50 por
+  defecto), `offset` desde 0, y `total` es el total **filtrado**.
+- **El índice que hay detrás es eventualmente consistente**: un correo recibido
+  hace un instante puede tardar un momento en aparecer. No hagas de esta lista
+  la confirmación inmediata de un `POST`.
+- Está montado **también en producción**, a diferencia del webhook de al lado.
+
+Con esto, la pantalla de "conecta tu banco" se puede cerrar entera: dirección
+para copiar, remitentes aprobados, y qué ha llegado de verdad.
 
 ### 5. Movimientos
 
@@ -207,6 +293,9 @@ GET /financial/transactions?unassigned=true
 GET /financial/transactions?account_id=<id>
 GET /financial/transactions?origin=bank_alert|manual
 GET /financial/transactions?search=EXITO
+GET /financial/transactions?merchant_id=<id>
+GET /financial/transactions?category=groceries
+GET /financial/transactions?from=<epoch>&to=<epoch>
 GET /financial/transactions/{transaction_id}
 ```
 
@@ -225,7 +314,13 @@ GET /financial/transactions/{transaction_id}
       "status": "assigned",
       "account_id": "a854326b-3cf9-4378-9679-fce7de56d95d",
       "note": "cobro automatico, sin correo",
-      "stated": null
+      "stated": null,
+      "merchant": {
+        "id": "6f2b1d0e-0c0a-4f2e-9a3b-6d5c4e3f2a1b",
+        "display_name": "Netflix",
+        "category": "subscriptions",
+        "needs_review": false
+      }
     }
   ],
   "total": 8,
@@ -251,6 +346,28 @@ Reglas:
   con la acción de declarar la cuenta al lado — no como una advertencia roja.
 - `bank` viene vacío en los movimientos manuales; en los de alerta llega
   normalizado en minúsculas (`"bancolombia"`).
+- **`merchant` es el comercio canónico detrás del texto del banco**, resuelto
+  por el contexto Merchant. `TIENDAS ARA 123` y `ARA 900` traen el mismo
+  `merchant.id`, que es justo lo que la búsqueda por texto no puede darte.
+  `category` sale del mismo vocabulario que `GET /merchants/categories`.
+- **`merchant: null` no es un error.** Puede ser que el worker de comercios
+  todavía no haya procesado ese avistamiento (dura segundos: las dos colas se
+  drenan por separado) o que sea un movimiento manual con un nombre que nadie
+  ha visto nunca. El movimiento se lee igual de bien sin comercio.
+- **La unión se hace al leer, no se guarda en el movimiento.** Renombrar un
+  comercio, mover una grafía o fusionar dos se refleja de inmediato en todo el
+  historial; no hay nada que reprocesar ni ninguna pantalla que refrescar dos
+  veces.
+- `merchant_id` y `category` filtran por la respuesta de Merchant, así que un
+  movimiento sin comercio **no** cae en `category=uncategorized`: es
+  desconocido, no "sin categorizar". Aparece en el bucket `key: null` del
+  resumen.
+- **Una `category` que no exista devuelve `422`**, no una lista vacía: en una
+  pantalla de dinero, cero es una respuesta creíble y un error de teclado no
+  puede parecerse a "no gastaste nada aquí". Un `merchant_id` inexistente sí
+  devuelve una lista vacía — decir que no existe filtraría si es de otro.
+- `from` **incluye** y `to` **excluye** (epoch en segundos), para que dos
+  meses consecutivos nunca compartan un movimiento.
 
 ### 6. Cuentas
 
@@ -359,6 +476,13 @@ Reglas:
   después de la corrección sigue siendo el mismo movimiento y no aparece dos
   veces.
 - **No hay borrado de movimientos.**
+- **Un movimiento manual sí puede traer `merchant`**, si su `counterparty`
+  coincide con una grafía que ya conoce algún comercio del usuario: la unión
+  es una búsqueda por huella, no requiere un avistamiento nuevo. Lo que **no**
+  hace una entrada a mano es *crear* un comercio, así que un nombre que nunca
+  llegó por correo se queda sin comercio para siempre. Merece la pena avisarlo
+  al escribir: escribir el nombre tal como lo manda el banco es lo que hace
+  que el gasto acabe en el mismo sitio.
 
 ### 8. Comercios
 
@@ -398,8 +522,101 @@ Reglas:
   existe. Ofrece "fusionar" en su lugar.
 - **Fusionar con uno mismo → `400`.** En un merge, el del path sobrevive.
 - **`times_seen` cuenta apariciones del nombre, no dinero.** El gasto lo
-  responde Financial, y hoy **no hay forma fiable de unir un movimiento con su
-  comercio** desde el frontend (ver los gaps abajo).
+  responde Financial: `GET /financial/summary?group_by=merchant` para el
+  reparto, o `GET /financial/transactions?merchant_id=<id>` para los
+  movimientos de un comercio.
+
+### 9. Resumen de gasto
+
+Lo que el cliente no debería calcular paginando: totales de un periodo y su
+desglose. Un año de historial son miles de movimientos y `limit` llega a 200.
+
+```http
+GET /financial/summary?group_by=month|category|merchant|account
+GET /financial/summary?from=<epoch>&to=<epoch>
+GET /financial/summary?group_by=category&from=<epoch>&to=<epoch>
+GET /financial/summary?timezone=America/Bogota
+```
+
+Acepta **los mismos filtros que `/financial/transactions`** (`account_id`,
+`unassigned`, `origin`, `search`, `merchant_id`, `category`, `from`, `to`), y
+eso es a propósito: cualquier bucket del resumen se abre repitiendo la misma
+consulta contra `/transactions` con la `key` del bucket.
+
+```json
+{
+  "group_by": "category",
+  "timezone": "America/Bogota",
+  "totals": [
+    {
+      "currency": "COP",
+      "incoming": "3200000",
+      "outgoing": "845300",
+      "net": "2354700",
+      "movements": 27
+    }
+  ],
+  "groups": [
+    {
+      "key": "groceries",
+      "label": "groceries",
+      "totals": [
+        {
+          "currency": "COP",
+          "incoming": "0",
+          "outgoing": "412000",
+          "net": "-412000",
+          "movements": 11
+        }
+      ],
+      "movements": 11
+    },
+    {
+      "key": null,
+      "label": "Unattributed",
+      "totals": [
+        {
+          "currency": "COP",
+          "incoming": "0",
+          "outgoing": "120000",
+          "net": "-120000",
+          "movements": 3
+        }
+      ],
+      "movements": 3
+    }
+  ]
+}
+```
+
+Reglas:
+
+- **`totals` es el total del periodo filtrado**, ya sumado: no hace falta
+  recorrer `groups` para pintar la cifra grande.
+- **Nunca se suman dos monedas.** Tanto `totals` como cada bucket traen una
+  entrada por moneda. Si el usuario tiene COP y USD, son dos cifras, no una
+  convertida — no hay tasa de cambio en ninguna parte del backend.
+- **`net = incoming - outgoing`**, con signo. Negativo es un mes que gastó más
+  de lo que entró. `incoming` y `outgoing` siempre son positivos.
+- **`key: null` es el bucket que la agrupación no pudo colocar**: un movimiento
+  sin cuenta (`group_by=account`) o una contraparte que ningún comercio
+  reclama —todavía, o nunca, si es un nombre que solo existe en una entrada
+  manual— (`group_by=category|merchant`). Píntalo: sin él los buckets
+  dejan de sumar `totals`. `label` trae `Unassigned` o `Unattributed`,
+  pensados para traducirse en el cliente.
+- **`label`**: para `merchant` es el nombre que el usuario le puso al comercio,
+  para `account` el nombre de la cuenta, y para `month` y `category` es igual
+  que la `key` (formatea `2026-08` y traduce `groceries` en el cliente, con el
+  vocabulario de `GET /merchants/categories`).
+- **Orden**: `month` viene del más reciente al más antiguo; el resto viene por
+  número de movimientos, de mayor a menor. Ordenar por monto exigiría comparar
+  dos monedas, y el backend no tiene con qué. Si tu pantalla enseña una sola
+  moneda, reordena en el cliente: tienes todos los montos.
+- **`timezone` solo afecta a `group_by=month`, y sí importa.** Una compra a
+  las 8pm del 31 en Bogotá es el día 1 del mes siguiente en UTC. Por defecto
+  `America/Bogota`; una zona que no exista devuelve `400`.
+- **`from` incluye y `to` excluye**, igual que en la lista.
+- Sin movimientos: `totals` y `groups` vacíos. Es una respuesta válida.
 
 ---
 
@@ -442,6 +659,8 @@ reordenen.
 | `status` (comercio) | `automatic`, `confirmed` |
 | `origin` (alias) | `seed`, `derived`, `suggested`, `manual` |
 | `sort` (comercios) | `name`, `last_seen`, `times_seen` |
+| `status` (notificación) | `received`, `queued`, `processing`, `processed`, `pending_fallback`, `failed`, `ignored` |
+| `deferred_reason` | `no_fallback_configured`, `fallback_found_nothing` — solo junto a `pending_fallback`, y ambos son finales para ese intento |
 | `category` (comercio) | `uncategorized`, `groceries`, `restaurants`, `transport`, `fuel`, `shopping`, `entertainment`, `subscriptions`, `utilities`, `health`, `education`, `travel`, `fees`, `transfers`, `income`, `other` |
 
 `instrument_kind` viene del parser, no de un desplegable: una compra con
@@ -475,10 +694,12 @@ tarjeta de crédito llega como `credit_card`, un QR o una transferencia como
 | POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento. |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
-| GET | `/financial/transactions` | ✔ | Movimientos, con filtros y paginación. |
+| GET | `/financial/summary` | ✔ | Totales del periodo y desglose por mes, categoría, comercio o cuenta. |
+| GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |
 | PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. |
+| GET | `/ingestion/notifications` | ✔ | Qué llegó al alias del usuario y en qué estado quedó. |
 | POST | `/ingestion/bank-notifications` | — | **Solo local.** Simular un correo. No es una ruta del producto. |
 
 ---
@@ -517,10 +738,6 @@ tocar el backend.
 
 | Falta | Consecuencia para el frontend |
 |---|---|
-| **CORS** | Bloqueante desde un origen distinto. Proxy en el dev server mientras tanto. |
-| **Listado de correos/notificaciones** | No se puede mostrar "recibimos 3 correos, 1 sin leer" ni el estado de la ingesta. La pantalla de "conectar el banco" no puede confirmar que llegó nada; solo se puede inferir por movimientos nuevos. |
-| **Relación movimiento ↔ comercio** | Un movimiento trae `counterparty` en crudo, no el `merchant_id`. No hay forma fiable de agrupar gasto por comercio o por categoría desde el cliente: la normalización que hace Merchant no está expuesta. Buscar por texto es aproximado, no equivalente. |
-| **Agregados** | No hay "gasto del mes", "por categoría", "por cuenta". Se puede calcular en el cliente paginando movimientos, con el límite de 200 por página, o pedir el endpoint. |
 | **Tiempo real** | Sin websockets ni SSE. Polling o refresco manual. |
 | **Refresh token / logout** | Sesión = token guardado en el cliente; al vencer, login otra vez. |
 | **Borrado** | No hay `DELETE` de cuentas ni de movimientos. Cerrar y corregir es lo que hay. |
@@ -606,7 +823,21 @@ curl -X POST http://localhost:8000/financial/accounts \
 
 La respuesta trae `movements_applied: 1` y el saldo ya movido.
 
-**7. Comprobar el aislamiento entre usuarios.** Registra un segundo usuario,
+**7. Ver el comercio y el resumen.** Con `just merchant-worker` corriendo, el
+movimiento ya trae su comercio canónico y el resumen sabe repartir el gasto.
+
+```bash
+curl -s "http://localhost:8000/financial/transactions" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+
+curl -s "http://localhost:8000/financial/summary?group_by=category" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+Si `merchant` viene `null`, el worker de comercios todavía no ha drenado su
+cola: espera unos segundos y repite. El movimiento se lee igual sin él.
+
+**8. Comprobar el aislamiento entre usuarios.** Registra un segundo usuario,
 pide su lista con su propio token y confirma que **no ve nada** del primero; y
 que pedir por id una cuenta del primero responde `404`, no `403`.
 
@@ -619,7 +850,7 @@ OTHER=$(curl -s -X POST http://localhost:8000/identity/register \
 curl -s http://localhost:8000/financial/accounts -H "Authorization: Bearer $OTHER"
 ```
 
-**8. Probar los rechazos**, que son la mitad del contrato:
+**9. Probar los rechazos**, que son la mitad del contrato:
 
 ```bash
 # Remitente no aprobado: el correo se registra pero nunca se parsea.

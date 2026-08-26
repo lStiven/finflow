@@ -505,6 +505,17 @@ def _summarize(client: TestClient, *, token: str, email: str, password: str) -> 
         client.get("/merchants", params={"limit": 1}, headers=headers),
         status.HTTP_200_OK,
     ).json()
+    # Exercises the movement/merchant join as well as the aggregate: a
+    # breakdown by category can only be built by reading every movement's
+    # counterparty back through merchant.
+    by_category = _expect(
+        client.get(
+            "/financial/summary",
+            params={"group_by": "category"},
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
 
     print("\nAccounts")
 
@@ -531,6 +542,15 @@ def _summarize(client: TestClient, *, token: str, email: str, password: str) -> 
         f"Merchants   {merchants['total']} known, "
         f"{merchants['needs_review']} awaiting review",
     )
+    print("\nSpending by category")
+
+    for group in by_category["groups"]:
+        for figure in group["totals"]:
+            print(
+                f"  {group['label']!s:<22} {figure['outgoing']!s:>12} "
+                f"{figure['currency']!s}  ({group['movements']} movements)",
+            )
+
     print(f"\nLog in with {email} / {password}")
     print(f"Bearer      {token}")
 

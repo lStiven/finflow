@@ -10,7 +10,7 @@ push down into the index.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 import enum
 
@@ -20,6 +20,7 @@ from personal_finance.contexts.merchant.domain.normalization import (
     normalize_counterparty,
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
+    AliasFingerprint,
     MerchantCategory,
     MerchantId,
 )
@@ -87,6 +88,95 @@ class GetMerchantUseCase:
         return self._repository.find(user_id=user_id, merchant_id=merchant_id)
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MerchantAttribution:
+    """Which merchant one spelling belongs to, as much as another context
+    needs to know of it.
+    """
+
+    merchant_id: MerchantId
+    display_name: str
+    category: MerchantCategory
+    needs_review: bool
+
+
+class AttributeCounterpartiesUseCase:
+    """Resolve spellings to the merchants that already own them.
+
+    This context's published read surface for the rest of the system: it is
+    what lets a context holding movements say *which* merchant one was with,
+    instead of only the raw text a bank happened to send.
+
+    Read-only and exact, on purpose. `ResolveMerchantUseCase` is the writer —
+    it derives, guesses and creates — and deciding a second time here would
+    let a read invent a grouping the write side never recorded, showing a
+    merchant that does not own that spelling. A counterparty nobody has
+    resolved yet answers nothing, which is the honest answer while its
+    sighting is still on the queue.
+    """
+
+    def __init__(self, *, repository: MerchantRepository) -> None:
+        self._repository = repository
+
+    def execute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> Mapping[str, MerchantAttribution]:
+        """Keyed by the exact text handed in, so a caller finds its own back.
+
+        One spelling is a point lookup on the alias index, which is what that
+        index is for. A page of them is one read of the user's merchants
+        instead of one lookup each: a person has tens of merchants in a single
+        partition, and a page of movements names the same handful over and
+        over.
+        """
+        if not counterparties:
+            return {}
+
+        if len(counterparties) == 1:
+            return self._one(user_id=user_id, counterparty=counterparties[0])
+
+        by_alias = {
+            alias.fingerprint: merchant
+            for merchant in self._repository.list_by_user(user_id)
+            for alias in merchant.aliases.values()
+        }
+        attributed: dict[str, MerchantAttribution] = {}
+
+        for counterparty in counterparties:
+            fingerprint = _fingerprint_or_none(counterparty)
+
+            if fingerprint is None:
+                continue
+
+            merchant = by_alias.get(fingerprint)
+
+            if merchant is not None:
+                attributed[counterparty] = _attribution(merchant)
+
+        return attributed
+
+    def _one(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+    ) -> Mapping[str, MerchantAttribution]:
+        fingerprint = _fingerprint_or_none(counterparty)
+
+        if fingerprint is None:
+            return {}
+
+        merchant = self._repository.find_by_alias(
+            user_id=user_id,
+            fingerprint=fingerprint,
+        )
+
+        return {} if merchant is None else {counterparty: _attribution(merchant)}
+
+
 def _matches(merchant: Merchant, *, query: MerchantQuery) -> bool:
     if query.category is not None and merchant.category is not query.category:
         return False
@@ -123,3 +213,25 @@ def _sort(merchants: list[Merchant], sort: MerchantSort) -> None:
             key=lambda merchant: merchant.last_seen.as_epoch_seconds(),
             reverse=True,
         )
+
+
+def _attribution(merchant: Merchant) -> MerchantAttribution:
+    return MerchantAttribution(
+        merchant_id=merchant.id,
+        display_name=merchant.display_name,
+        category=merchant.category,
+        needs_review=merchant.needs_review,
+    )
+
+
+def _fingerprint_or_none(counterparty: str) -> AliasFingerprint | None:
+    """None for text no fingerprint can be built from.
+
+    Punctuation alone reaches here from a movement whose counterparty no
+    merchant could ever have been made of, and that is a lookup that misses,
+    not a request that fails.
+    """
+    try:
+        return AliasFingerprint.from_raw(counterparty)
+    except ValueError:
+        return None

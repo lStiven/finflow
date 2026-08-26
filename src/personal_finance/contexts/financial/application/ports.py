@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+import dataclasses
 from decimal import Decimal
 from typing import Protocol
 
@@ -10,6 +11,64 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
 )
 from personal_finance.shared.domain.value_objects import UserId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MerchantAttribution:
+    """Who a movement was with, as Merchant already decided it.
+
+    Plain strings, deliberately. The id and the category are another
+    context's vocabulary: Financial groups by them and hands them on, and
+    never reads meaning into either — importing Merchant's enum would give
+    that context a veto over renaming its own members.
+    """
+
+    merchant_id: str
+    display_name: str
+    category: str
+    # Whether Merchant still wants somebody to look at this grouping, so a
+    # movement can say "attributed, but nobody has confirmed it".
+    needs_review: bool
+
+
+class MerchantDirectory(Protocol):
+    """Reads the counterparty text on a movement back as a merchant.
+
+    Financial stores what the bank wrote, because that is the fact it was
+    given and it must survive somebody regrouping their merchants later. The
+    join to a canonical merchant is therefore made when the answer is read,
+    which is also what makes a correction retroactive for free: renaming a
+    merchant or moving a spelling changes every past movement's attribution
+    at once, with nothing to re-process.
+    """
+
+    def attribute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> Mapping[str, MerchantAttribution]:
+        """Keyed by the exact counterparty text handed in.
+
+        Absent from the mapping means no merchant owns that spelling yet —
+        an ordinary answer while the sighting is still on merchant's queue,
+        and a permanent one for a movement entered by hand under a name
+        nothing else has ever seen.
+
+        Must not raise for a counterparty it cannot resolve: an attribution
+        is an enrichment, and a movement with none is still a movement.
+        """
+        ...
+
+    def categories(self) -> frozenset[str]:
+        """Every category value a movement can come back attributed with.
+
+        Financial reads none of them; it only needs the vocabulary to refuse a
+        `category` filter that names nothing. Without it a typo answers 200
+        with an empty page, which on a money screen is indistinguishable from
+        "you spent nothing here".
+        """
+        ...
 
 
 class AccountRepository(Protocol):

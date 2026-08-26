@@ -229,6 +229,46 @@
       "name": "Ingestion",
       "item": [
         {
+          "name": "List notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ingestion/notifications?limit=20&offset=0",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ingestion",
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "received | queued | processing | processed | pending_fallback | failed | ignored",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "What arrived for the authenticated caller, newest first — the only read surface ingestion has, and the one that tells the three failures apart: nothing arrived, it arrived from a sender nobody approved (status `ignored`, and its sender is shown so it can be approved), or it arrived and nothing could be read out of it (`pending_fallback`, with `deferred_reason` saying whether a model declined it or none was configured). Never returns the email body. `counts` is every status this user has, filter or no filter, so a summary line does not move when the list is narrowed. The index behind it is eventually consistent: a message received a moment ago can take an instant to appear."
+          },
+          "response": []
+        },
+        {
           "name": "Local testing",
           "item": [
             {
@@ -306,7 +346,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/merchants?search=&category=&needs_review=&sort=last_seen&limit=20&offset=0",
+              "raw": "{{base_url}}/merchants?search=&sort=last_seen&limit=20&offset=0",
               "host": [
                 "{{base_url}}"
               ],
@@ -322,12 +362,14 @@
                 {
                   "key": "category",
                   "value": "",
-                  "description": "One of the Categories values, e.g. groceries"
+                  "description": "One of the Categories values, e.g. groceries",
+                  "disabled": true
                 },
                 {
                   "key": "needs_review",
                   "value": "",
-                  "description": "true / false"
+                  "description": "true / false",
+                  "disabled": true
                 },
                 {
                   "key": "sort",
@@ -837,6 +879,90 @@
           "response": []
         },
         {
+          "name": "Spending summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/summary?group_by=month&timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "group_by",
+                  "value": "month",
+                  "description": "month | category | merchant | account"
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "Epoch seconds, included",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "Epoch seconds, excluded",
+                  "disabled": true
+                },
+                {
+                  "key": "account_id",
+                  "value": "",
+                  "description": "Only this account's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "unassigned",
+                  "value": "",
+                  "description": "true totals only what no account claimed",
+                  "disabled": true
+                },
+                {
+                  "key": "origin",
+                  "value": "",
+                  "description": "bank_alert | manual",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Matched against the counterparty",
+                  "disabled": true
+                },
+                {
+                  "key": "merchant_id",
+                  "value": "",
+                  "description": "Only this merchant's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Merchant category, from GET /merchants/categories",
+                  "disabled": true
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "IANA name. Only affects group_by=month, and it matters: 8pm on the 31st in Bogotá is already the next month in UTC"
+                }
+              ]
+            },
+            "description": "What a period adds up to, totalled per currency and never across them. Takes the same filters as `GET /financial/transactions`, so any bucket here opens as a list by repeating the query with the bucket's `key`. A `key` of null is the bucket the grouping could not place — a movement no account claimed, or a counterparty no merchant owns yet — and it belongs in the answer: without it the groups stop adding up to `totals`. Months come back newest first; every other grouping comes back busiest first, by movement count."
+          },
+          "response": []
+        },
+        {
           "name": "List transactions",
           "request": {
             "method": "GET",
@@ -847,7 +973,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/financial/transactions?account_id=&unassigned=&origin=&search=&limit=50&offset=0",
+              "raw": "{{base_url}}/financial/transactions?account_id=&search=&limit=50&offset=0",
               "host": [
                 "{{base_url}}"
               ],
@@ -864,17 +990,43 @@
                 {
                   "key": "unassigned",
                   "value": "",
-                  "description": "true lists only what no account claimed"
+                  "description": "true lists only what no account claimed",
+                  "disabled": true
                 },
                 {
                   "key": "origin",
                   "value": "",
-                  "description": "bank_alert | manual"
+                  "description": "bank_alert | manual",
+                  "disabled": true
                 },
                 {
                   "key": "search",
                   "value": "",
                   "description": "Matched against the counterparty"
+                },
+                {
+                  "key": "merchant_id",
+                  "value": "",
+                  "description": "Only this merchant's movements. Merchant's answer, so a counterparty nobody has resolved yet matches nothing",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Merchant category, from GET /merchants/categories",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "Epoch seconds, included",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "Epoch seconds, excluded — so two consecutive months never share a movement",
+                  "disabled": true
                 },
                 {
                   "key": "limit",
@@ -886,7 +1038,7 @@
                 }
               ]
             },
-            "description": "Newest first. `unassigned=true` is the queue somebody works through after declaring an account — or the whole ledger, for somebody who declared none."
+            "description": "Newest first, each movement carrying the canonical `merchant` behind its counterparty text (null while no merchant owns that spelling). `unassigned=true` is the queue somebody works through after declaring an account — or the whole ledger, for somebody who declared none."
           },
           "response": []
         },

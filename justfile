@@ -5,6 +5,7 @@ set shell := ['bash', '-cu']
 # reads the file named by ENV_FILE.
 local_env := "ENV_FILE=.env PYTHONPATH=src"
 prod_env := "ENV_FILE=.env.production PYTHONPATH=src"
+dev_env := "ENV_FILE=.env.development PYTHONPATH=src"
 
 # Local AWS runs on moto, an in-process emulator: no Docker, no credentials.
 moto_port := "5000"
@@ -180,6 +181,39 @@ run-prod: (_require-env ".env.production")
 # Create the resources in the real account named by .env.production.
 provision-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m personal_finance.shared.infrastructure.aws.provisioning
+
+# --------------------------------------------------
+# Development: a real AWS account, every resource prefixed `dev-`
+# --------------------------------------------------
+
+# Create the `dev-` resources. Safe to run against the same account as
+# production: nothing it touches shares a name with anything there.
+provision-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m personal_finance.shared.infrastructure.aws.provisioning
+
+run-dev: (_require-env ".env.development")
+    {{dev_env}} uv run uvicorn personal_finance.api.main:app --host 0.0.0.0 --port 8000
+
+ingest-worker-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_ingest_worker
+
+parse-worker-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.run_parse_worker
+
+merchant-worker-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.merchant.presentation.cli.run_merchant_worker
+
+financial-worker-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.financial.presentation.cli.run_financial_worker
+
+# Drive two users end to end and assert nothing of one reaches the other.
+# Reads ENV_FILE, so it runs against whichever environment you point it at.
+verify env_file=".env": (_require-env env_file)
+    ENV_FILE={{env_file}} PYTHONPATH=src uv run python scripts/verify_flow.py
 
 _require-env env_file:
     @test -f {{env_file}} || { \

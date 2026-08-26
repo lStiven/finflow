@@ -1,0 +1,621 @@
+"""The two answers a client could not build for itself: which merchant a
+movement was with, and what a period adds up to.
+"""
+
+from collections.abc import Mapping, Sequence
+from decimal import Decimal
+
+import pytest
+
+from personal_finance.contexts.financial.application.ports import MerchantAttribution
+from personal_finance.contexts.financial.application.queries import (
+    ListTransactionsUseCase,
+    MovementFilter,
+    SummarizeSpendingUseCase,
+    SummaryGrouping,
+    SummaryQuery,
+    TransactionQuery,
+)
+from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.value_objects import (
+    AccountFingerprint,
+    AccountId,
+    AccountKind,
+    MovementDirection,
+)
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
+
+
+USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
+
+# Bogotá is UTC-5, so these two are the same local day and the same month
+# while the second one is already the next day in UTC.
+AUGUST_MIDDAY = 1_787_500_000  # 2026-08-21 15:46 UTC / 10:46 Bogotá
+AUGUST_LAST_NIGHT = 1_788_224_400  # 2026-09-01 01:00 UTC / 2026-08-31 20:00 Bogotá
+JULY_MIDDAY = 1_784_900_000  # 2026-07-22 UTC
+
+SEPTEMBER_START = 1_788_246_000  # 2026-09-01 00:00 Bogotá
+
+
+class InMemoryLedger:
+    def __init__(self) -> None:
+        self.rows: dict[str, Transaction] = {}
+
+    def record(
+        self,
+        *,
+        transaction: Transaction,
+        balance_delta: Decimal | None,
+    ) -> bool:
+        del balance_delta
+        self.rows[transaction.id.value] = transaction
+
+        return True
+
+    def save(self, transaction: Transaction) -> None:
+        self.rows[transaction.id.value] = transaction
+
+    def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
+        row = self.rows.get(transaction_id)
+
+        return row if row is not None and row.user_id == user_id else None
+
+    def list_unassigned_matching(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.list_unassigned(user_id)
+            if row.account_fingerprint == fingerprint
+        ]
+
+    def list_movements(
+        self,
+        *,
+        user_id: UserId,
+        account_id: AccountId,
+    ) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.rows.values()
+            if row.user_id == user_id and row.account_id == account_id
+        ]
+
+    def list_unassigned(self, user_id: UserId) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.rows.values()
+            if row.user_id == user_id and row.account_id is None
+        ]
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        return [row for row in self.rows.values() if row.user_id == user_id]
+
+
+class InMemoryAccounts:
+    def __init__(self) -> None:
+        self.by_id: dict[AccountId, Account] = {}
+
+    def find(self, *, user_id: UserId, account_id: AccountId) -> Account | None:
+        account = self.by_id.get(account_id)
+
+        return account if account is not None and account.user_id == user_id else None
+
+    def find_by_fingerprint(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Account | None:
+        return next(
+            (
+                account
+                for account in self.by_id.values()
+                if account.user_id == user_id and account.matches(fingerprint)
+            ),
+            None,
+        )
+
+    def list_by_user(self, user_id: UserId) -> Sequence[Account]:
+        return [
+            account for account in self.by_id.values() if account.user_id == user_id
+        ]
+
+    def save(self, account: Account) -> None:
+        self.by_id[account.id] = account
+
+    def overwrite_balance(self, account: Account) -> None:
+        self.save(account)
+
+    def add(self, account: Account) -> bool:
+        self.save(account)
+
+        return True
+
+
+class FakeDirectory:
+    """Answers what merchant would, by exact counterparty text."""
+
+    def __init__(self, known: Mapping[str, MerchantAttribution]) -> None:
+        self._known = known
+        self.calls = 0
+
+    def attribute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> Mapping[str, MerchantAttribution]:
+        del user_id
+        self.calls += 1
+
+        return {
+            counterparty: self._known[counterparty]
+            for counterparty in counterparties
+            if counterparty in self._known
+        }
+
+    def categories(self) -> frozenset[str]:
+        return frozenset({"groceries", "transport", "subscriptions", "uncategorized"})
+
+
+ARA = MerchantAttribution(
+    merchant_id="aaaaaaaa-0000-0000-0000-000000000001",
+    display_name="Ara",
+    category="groceries",
+    needs_review=False,
+)
+UBER = MerchantAttribution(
+    merchant_id="aaaaaaaa-0000-0000-0000-000000000002",
+    display_name="Uber",
+    category="transport",
+    needs_review=True,
+)
+
+
+@pytest.fixture
+def ledger() -> InMemoryLedger:
+    return InMemoryLedger()
+
+
+@pytest.fixture
+def accounts() -> InMemoryAccounts:
+    return InMemoryAccounts()
+
+
+@pytest.fixture
+def directory() -> FakeDirectory:
+    return FakeDirectory({"TIENDAS ARA 123": ARA, "UBER TRIP": UBER})
+
+
+def _spend(
+    ledger: InMemoryLedger,
+    *,
+    counterparty: str,
+    amount: str = "50000",
+    when: int = AUGUST_MIDDAY,
+    direction: MovementDirection = MovementDirection.OUTGOING,
+    currency: Currency = Currency.COP,
+    account_id: AccountId | None = None,
+) -> Transaction:
+    movement = Transaction.enter_manually(
+        user_id=USER_ID,
+        direction=direction,
+        amount=Money(amount=Decimal(amount), currency=currency),
+        occurred_at=PosixTime.from_epoch_seconds(when),
+        counterparty=counterparty,
+        account_id=account_id,
+    )
+    ledger.save(movement)
+
+    return movement
+
+
+def _declare(accounts: InMemoryAccounts, name: str) -> Account:
+    account = Account.open(
+        user_id=USER_ID,
+        name=name,
+        kind=AccountKind.SAVINGS,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(JULY_MIDDAY),
+    )
+    accounts.save(account)
+
+    return account
+
+
+def _filter(**overrides: object) -> MovementFilter:
+    return MovementFilter(user_id=USER_ID, **overrides)  # type: ignore[arg-type]
+
+
+# ------------------------------------------------------- movement ↔ merchant
+
+
+def test_a_movement_carries_the_merchant_behind_its_counterparty_text(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter()),
+    )
+
+    assert page.transactions[0].merchant == ARA
+
+
+def test_a_counterparty_no_merchant_owns_yet_simply_reads_without_one(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    # Its sighting may still be on merchant's queue. The movement is complete
+    # either way — an attribution is an enrichment, not a precondition.
+    _spend(ledger, counterparty="PAGO NOMINA")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter()),
+    )
+
+    assert page.transactions[0].merchant is None
+    assert page.total == 1
+
+
+def test_movements_read_the_same_when_no_directory_is_wired(
+    ledger: InMemoryLedger,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    page = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(filter=_filter()),
+    )
+
+    assert page.total == 1
+    assert page.transactions[0].merchant is None
+
+
+def test_filtering_by_merchant_returns_only_that_merchants_movements(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+    _spend(ledger, counterparty="UBER TRIP")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter(merchant_id=ARA.merchant_id)),
+    )
+
+    assert page.total == 1
+    assert page.transactions[0].transaction.counterparty == "TIENDAS ARA 123"
+
+
+def test_filtering_by_category_groups_every_spelling_under_it(
+    ledger: InMemoryLedger,
+) -> None:
+    directory = FakeDirectory({"ARA 12": ARA, "TIENDAS ARA 99": ARA, "UBER": UBER})
+    _spend(ledger, counterparty="ARA 12")
+    _spend(ledger, counterparty="TIENDAS ARA 99")
+    _spend(ledger, counterparty="UBER")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter(category="groceries")),
+    )
+
+    assert page.total == 2
+
+
+def test_a_movement_with_no_merchant_matches_neither_merchant_nor_category(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    # Unknown is not "uncategorized": reporting it under a category would put
+    # spending in a bucket Merchant never placed it in.
+    _spend(ledger, counterparty="PAGO NOMINA")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter(category="uncategorized")),
+    )
+
+    assert page.total == 0
+
+
+def test_the_total_counts_what_the_merchant_filter_kept_not_the_whole_ledger(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    # The filter has to run before the page is cut, or paging walks off the end.
+    for index in range(5):
+        _spend(ledger, counterparty="UBER TRIP", when=AUGUST_MIDDAY + index)
+
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter(merchant_id=UBER.merchant_id), limit=2),
+    )
+
+    assert page.total == 5
+    assert len(page.transactions) == 2
+
+
+def test_a_page_of_movements_asks_the_directory_once(
+    ledger: InMemoryLedger,
+    directory: FakeDirectory,
+) -> None:
+    for index in range(20):
+        _spend(ledger, counterparty="TIENDAS ARA 123", when=AUGUST_MIDDAY + index)
+
+    ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
+        TransactionQuery(filter=_filter()),
+    )
+
+    assert directory.calls == 1
+
+
+# ------------------------------------------------------------- the period
+
+
+def test_movements_can_be_narrowed_to_a_period(
+    ledger: InMemoryLedger,
+) -> None:
+    _spend(ledger, counterparty="JULY", when=JULY_MIDDAY)
+    _spend(ledger, counterparty="AUGUST", when=AUGUST_MIDDAY)
+
+    page = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(
+            filter=_filter(
+                since=PosixTime.from_epoch_seconds(AUGUST_MIDDAY - 1),
+            ),
+        ),
+    )
+
+    assert page.total == 1
+    assert page.transactions[0].transaction.counterparty == "AUGUST"
+
+
+def test_the_period_is_half_open_so_two_months_never_share_a_movement(
+    ledger: InMemoryLedger,
+) -> None:
+    _spend(ledger, counterparty="ON THE BOUNDARY", when=SEPTEMBER_START)
+
+    august = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(
+            filter=_filter(until=PosixTime.from_epoch_seconds(SEPTEMBER_START)),
+        ),
+    )
+    september = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(
+            filter=_filter(since=PosixTime.from_epoch_seconds(SEPTEMBER_START)),
+        ),
+    )
+
+    assert august.total == 0
+    assert september.total == 1
+
+
+# ------------------------------------------------------------- aggregates
+
+
+def test_a_summary_totals_what_came_in_and_what_went_out(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="50000")
+    _spend(ledger, counterparty="UBER TRIP", amount="20000")
+    _spend(
+        ledger,
+        counterparty="NOMINA",
+        amount="3000000",
+        direction=MovementDirection.INCOMING,
+    )
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter()),
+    )
+    figure = summary.totals[0]
+
+    assert figure.currency is Currency.COP
+    assert figure.outgoing == Decimal("70000")
+    assert figure.incoming == Decimal("3000000")
+    assert figure.net == Decimal("2930000")
+    assert figure.movements == 3
+
+
+def test_two_currencies_are_never_added_together(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="LOCAL", amount="50000")
+    _spend(ledger, counterparty="ABROAD", amount="30", currency=Currency.USD)
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter()),
+    )
+
+    assert [(figure.currency, figure.outgoing) for figure in summary.totals] == [
+        (Currency.COP, Decimal("50000")),
+        (Currency.USD, Decimal("30")),
+    ]
+
+
+def test_a_late_evening_purchase_falls_in_the_month_it_was_made_locally(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    # 8pm on the 31st in Bogotá is already the 1st in UTC. Grouping in UTC
+    # would move somebody's spending into the following month.
+    _spend(ledger, counterparty="LATE", when=AUGUST_LAST_NIGHT)
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.MONTH),
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-08"]
+
+
+def test_months_come_back_newest_first(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="JULY", when=JULY_MIDDAY)
+    _spend(ledger, counterparty="AUGUST", when=AUGUST_MIDDAY)
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter()),
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-08", "2026-07"]
+
+
+def test_spending_can_be_broken_down_by_category(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="50000")
+    _spend(ledger, counterparty="UBER TRIP", amount="20000")
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.CATEGORY),
+    )
+
+    assert {group.key for group in summary.groups} == {"groceries", "transport"}
+
+
+def test_a_merchant_breakdown_names_the_merchant_rather_than_the_bank_text(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    directory = FakeDirectory({"ARA 12": ARA, "TIENDAS ARA 99": ARA})
+    _spend(ledger, counterparty="ARA 12", amount="10000")
+    _spend(ledger, counterparty="TIENDAS ARA 99", amount="15000")
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.MERCHANT),
+    )
+
+    assert len(summary.groups) == 1
+    assert summary.groups[0].label == "Ara"
+    assert summary.groups[0].totals[0].outgoing == Decimal("25000")
+
+
+def test_movements_no_merchant_owns_get_their_own_bucket_rather_than_vanishing(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    # Without it the groups would stop adding up to the total, which is worse
+    # than admitting a bucket is unknown.
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="50000")
+    _spend(ledger, counterparty="PAGO NOMINA", amount="10000")
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.CATEGORY),
+    )
+    unknown = next(group for group in summary.groups if group.key is None)
+
+    assert unknown.totals[0].outgoing == Decimal("10000")
+    assert sum(group.totals[0].outgoing for group in summary.groups) == (
+        summary.totals[0].outgoing
+    )
+
+
+def test_an_account_breakdown_calls_each_account_by_the_name_its_owner_gave(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    account = _declare(accounts, "Ahorros Bancolombia")
+    _spend(ledger, counterparty="TIENDAS ARA 123", account_id=account.id)
+    _spend(ledger, counterparty="PAGO NOMINA")
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.ACCOUNT),
+    )
+    labels = {group.key: group.label for group in summary.groups}
+
+    assert labels[str(account.id.value)] == "Ahorros Bancolombia"
+    # Somebody who declared no accounts sees only this bucket, which is the
+    # ordinary state and a complete answer.
+    assert labels[None] == "Unassigned"
+
+
+def test_a_summary_by_month_never_reads_the_merchant_list(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(SummaryQuery(filter=_filter(), group_by=SummaryGrouping.MONTH))
+
+    assert directory.calls == 0
+
+
+def test_a_summary_takes_the_same_filters_as_the_list(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    # What makes a bucket openable: repeat the query against /transactions
+    # with the bucket's key and the movements behind it come back.
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="50000")
+    _spend(ledger, counterparty="UBER TRIP", amount="20000")
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(
+        SummaryQuery(
+            filter=_filter(merchant_id=ARA.merchant_id),
+            group_by=SummaryGrouping.MONTH,
+        ),
+    )
+
+    assert summary.totals[0].outgoing == Decimal("50000")
+
+
+def test_an_unknown_timezone_is_refused_rather_than_quietly_read_as_utc(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    with pytest.raises(ValueError, match="timezone"):
+        SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+            SummaryQuery(filter=_filter(), timezone="Mars/Olympus"),
+        )
+
+
+def test_somebody_with_no_movements_gets_an_empty_but_valid_summary(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter()),
+    )
+
+    assert summary.totals == []
+    assert summary.groups == []

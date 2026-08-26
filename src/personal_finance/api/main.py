@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from personal_finance.contexts.financial.presentation.http.router import (
     router as financial_router,
@@ -13,14 +14,20 @@ from personal_finance.contexts.identity.presentation.http.router import (
     get_register_use_case,
     router as identity_router,
 )
+from personal_finance.contexts.ingestion.presentation.http.notifications import (
+    router as ingestion_notifications_router,
+)
 from personal_finance.contexts.ingestion.presentation.http.router import (
     get_use_case,
-    router as ingestion_router,
+    router as ingestion_webhook_router,
 )
 from personal_finance.contexts.merchant.presentation.http.router import (
     router as merchant_router,
 )
-from personal_finance.shared.infrastructure.config.settings import get_aws_settings
+from personal_finance.shared.infrastructure.config.settings import (
+    get_api_settings,
+    get_aws_settings,
+)
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,
 )
@@ -50,18 +57,43 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     yield
 
 
-def create_app(*, expose_local_only_routes: bool) -> FastAPI:
+def create_app(
+    *,
+    expose_local_only_routes: bool,
+    cors_origins: tuple[str, ...] = (),
+) -> FastAPI:
     """Build the application.
 
     A factory rather than a module-level side effect: which routes exist is a
     decision, and a decision that cannot be exercised without reimporting a
-    module is a decision nothing tests.
+    module is a decision nothing tests. The origins allowed to call it from a
+    browser are the same kind of decision, so they arrive the same way.
     """
     app = FastAPI(title="Finflow", lifespan=lifespan)
+
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_origins),
+            # This API authenticates with a bearer token the client sends
+            # itself, never a cookie the browser attaches. Allowing credentials
+            # would ask browsers to carry ambient authority that nothing here
+            # reads, and it is what makes a mistaken origin dangerous.
+            allow_credentials=False,
+            # Only what the surface actually uses. OPTIONS is handled by the
+            # middleware itself for the preflight.
+            allow_methods=["GET", "POST", "PATCH"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
+
     app.include_router(health_router)
     app.include_router(identity_router)
     app.include_router(merchant_router)
     app.include_router(financial_router)
+    # Ingestion's read surface, unlike its webhook, belongs everywhere: it is
+    # how somebody finds out that what they forwarded arrived, or why nothing
+    # came of it.
+    app.include_router(ingestion_notifications_router)
 
     if expose_local_only_routes:
         # Real intake never calls this: a user forwards bank email to their
@@ -70,9 +102,12 @@ def create_app(*, expose_local_only_routes: bool) -> FastAPI:
         # deployment, and an unauthenticated public write surface with no
         # caller is only a liability. It stays for local testing, where it is
         # the cheapest way to replay one email without touching a mailbox.
-        app.include_router(ingestion_router)
+        app.include_router(ingestion_webhook_router)
 
     return app
 
 
-app = create_app(expose_local_only_routes=get_aws_settings().is_local)
+app = create_app(
+    expose_local_only_routes=get_aws_settings().is_local,
+    cors_origins=get_api_settings().allowed_origins,
+)

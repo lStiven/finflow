@@ -45,6 +45,14 @@ def test_health_is_always_available() -> None:
     assert "/health" in _routes(expose_local_only_routes=False)
 
 
+def test_ingestions_read_surface_survives_in_a_real_deployment() -> None:
+    """Unlike the webhook. Listing what arrived is how somebody finds out
+    their forwarding rule is not working, which is exactly the question a
+    real deployment raises.
+    """
+    assert "/ingestion/notifications" in _routes(expose_local_only_routes=False)
+
+
 def test_merchants_survive_in_a_real_deployment() -> None:
     paths = _routes(expose_local_only_routes=False)
 

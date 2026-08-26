@@ -18,6 +18,9 @@ from mypy_boto3_dynamodb.type_defs import (
     AttributeDefinitionTypeDef,
     CreateGlobalSecondaryIndexActionTypeDef,
     KeySchemaElementTypeDef,
+    OnDemandThroughputTypeDef,
+    ProjectionTypeDef,
+    ProvisionedThroughputDescriptionTypeDef,
     ProvisionedThroughputTypeDef,
 )
 from mypy_boto3_events.client import EventBridgeClient
@@ -31,7 +34,10 @@ from personal_finance.contexts.identity.infrastructure.persistence.dynamodb impo
     PARTITION_KEY as USERS_PARTITION_KEY,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
+    NOTIFICATIONS_BY_USER_INDEX,
     PARTITION_KEY,
+    SUMMARY_ATTRIBUTES,
+    USER_ID_ATTRIBUTE as NOTIFICATION_USER_ID_ATTRIBUTE,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     INBOX_BY_USER_INDEX,
@@ -86,6 +92,12 @@ MAX_RECEIVE_COUNT = 5
 VISIBILITY_TIMEOUT_SECONDS = 120
 MESSAGE_RETENTION_SECONDS = 1_209_600  # 14 days, the SQS maximum.
 
+# How long to wait for the control plane to finish a change. Backfilling an
+# index over a large table is the slow one; everything else settles in
+# seconds.
+INDEX_ACTIVE_TIMEOUT_SECONDS = 600
+INDEX_POLL_SECONDS = 5
+
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class ProvisionedResources:
@@ -106,13 +118,26 @@ class ProvisionedResources:
 class SecondaryIndex:
     """A global secondary index over one attribute.
 
-    Projects every attribute: the indexes here answer "give me the records
-    belonging to X", and a key-only projection would force a second read per
-    hit to recover the record itself.
+    An index is a full copy of what it projects, and DynamoDB charges it like
+    a table. Projecting everything is the right default — these indexes answer
+    "give me the records belonging to X", and a key-only projection would
+    force a second read per hit — but naming attributes explicitly is what
+    lets the notifications index leave the raw email body out.
     """
 
     name: str
     partition_key: str
+    # Empty projects every attribute.
+    projected_attributes: tuple[str, ...] = ()
+
+    def projection(self) -> ProjectionTypeDef:
+        if not self.projected_attributes:
+            return {"ProjectionType": "ALL"}
+
+        return {
+            "ProjectionType": "INCLUDE",
+            "NonKeyAttributes": list(self.projected_attributes),
+        }
 
 
 def _index_throughput(
@@ -133,12 +158,234 @@ def _index_throughput(
     }
 
 
+def _on_demand_cap(
+    *,
+    billing_mode: BillingMode,
+    max_read_units: int,
+    max_write_units: int,
+) -> OnDemandThroughputTypeDef | None:
+    """The per-second ceiling an on-demand table and its indexes run under.
+
+    A blast radius, not a budget: it stops a runaway loop by throttling it,
+    while a month pegged at the ceiling would still cost real money. The guard
+    for spending is a billing alarm on the account.
+    """
+    if billing_mode != "PAY_PER_REQUEST":
+        return None
+
+    return {
+        "MaxReadRequestUnits": max_read_units,
+        "MaxWriteRequestUnits": max_write_units,
+    }
+
+
+def _throughput_matches(
+    current: ProvisionedThroughputDescriptionTypeDef | None,
+    *,
+    read_capacity: int,
+    write_capacity: int,
+) -> bool:
+    if current is None:
+        return False
+
+    return (
+        current.get("ReadCapacityUnits") == read_capacity
+        and current.get("WriteCapacityUnits") == write_capacity
+    )
+
+
+def _wait_until_active(client: DynamoDBClient, *, table_name: str) -> None:
+    """Block until the table accepts another control-plane change.
+
+    DynamoDB refuses a second `UpdateTable` while a table is `UPDATING`, and
+    provisioning issues several in a row — the billing mode, then the
+    capacity, then a new index. Without this the second one raises
+    `ResourceInUseException` and the run dies partway through, leaving the
+    table half-reconciled. moto does not model `UPDATING` at all, which is why
+    nothing caught this until it was run against real AWS.
+    """
+    deadline = time.monotonic() + INDEX_ACTIVE_TIMEOUT_SECONDS
+
+    while True:
+        described = client.describe_table(TableName=table_name)["Table"]
+
+        if described.get("TableStatus") == "ACTIVE":
+            return
+
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"{table_name} is still {described.get('TableStatus')} after "
+                f"{INDEX_ACTIVE_TIMEOUT_SECONDS}s. Check the table in the "
+                "console and re-run.",
+            )
+
+        time.sleep(INDEX_POLL_SECONDS)
+
+
+def _reconcile_billing_mode(
+    client: DynamoDBClient,
+    *,
+    table_name: str,
+    billing_mode: BillingMode,
+    throughput: ProvisionedThroughputTypeDef,
+    on_demand_cap: OnDemandThroughputTypeDef | None,
+) -> bool:
+    """Move an existing table onto the configured billing mode.
+
+    `create_table` only decides the mode of a table that does not exist yet,
+    so without this, changing the configured mode would reach new environments
+    only — and say nothing while a running one stayed on the old one. That is
+    the failure this whole module is written against: a reconciler that
+    silently does nothing is worse than one never written, because the run
+    reports success either way.
+
+    Returns whether it issued an update, so the caller knows to wait before
+    making the next control-plane call.
+    """
+    described = client.describe_table(TableName=table_name)["Table"]
+    # Absent on tables created before the field existed, and those are all
+    # provisioned.
+    current = described.get("BillingModeSummary", {}).get(
+        "BillingMode",
+        "PROVISIONED",
+    )
+
+    if current == billing_mode:
+        return False
+
+    if billing_mode == "PROVISIONED":
+        client.update_table(
+            TableName=table_name,
+            BillingMode="PROVISIONED",
+            ProvisionedThroughput=throughput,
+        )
+    elif on_demand_cap is None:
+        client.update_table(TableName=table_name, BillingMode="PAY_PER_REQUEST")
+    else:
+        client.update_table(
+            TableName=table_name,
+            BillingMode="PAY_PER_REQUEST",
+            OnDemandThroughput=on_demand_cap,
+        )
+
+    return True
+
+
+def _reconcile_throughput(
+    client: DynamoDBClient,
+    *,
+    table_name: str,
+    throughput: ProvisionedThroughputTypeDef,
+) -> None:
+    """Bring an existing table and its indexes to the configured capacity.
+
+    Creation is not enough: `create_table` is skipped once a table exists, so
+    a capacity lowered in configuration would apply to new environments only
+    and quietly leave a running one paying for the old number — or, when an
+    index is added, over the always-free allowance the configured value was
+    chosen to fit inside. Same reasoning as point-in-time recovery below:
+    applied on every run, not only the first.
+    """
+    described = client.describe_table(TableName=table_name)["Table"]
+    read_capacity = throughput["ReadCapacityUnits"]
+    write_capacity = throughput["WriteCapacityUnits"]
+
+    if not _throughput_matches(
+        described.get("ProvisionedThroughput"),
+        read_capacity=read_capacity,
+        write_capacity=write_capacity,
+    ):
+        client.update_table(
+            TableName=table_name,
+            ProvisionedThroughput=throughput,
+        )
+        # The index update below is a second `UpdateTable`, which DynamoDB
+        # refuses while this one is still applying.
+        _wait_until_active(client, table_name=table_name)
+
+    stale = [
+        name
+        for index in described.get("GlobalSecondaryIndexes", [])
+        if (name := index.get("IndexName")) is not None
+        and not _throughput_matches(
+            index.get("ProvisionedThroughput"),
+            read_capacity=read_capacity,
+            write_capacity=write_capacity,
+        )
+    ]
+
+    if not stale:
+        return
+
+    client.update_table(
+        TableName=table_name,
+        GlobalSecondaryIndexUpdates=[
+            {"Update": {"IndexName": name, "ProvisionedThroughput": throughput}}
+            for name in stale
+        ],
+    )
+
+
+def _wait_until_indexes_are_active(
+    client: DynamoDBClient,
+    *,
+    table_name: str,
+    secondary_indexes: Sequence[SecondaryIndex],
+) -> None:
+    """Block until every index this table is supposed to have can be queried.
+
+    `update_table` returns as soon as DynamoDB accepts the index; it then
+    backfills it, and until that finishes a query against it is refused. The
+    endpoint reading this index is mounted the moment a deploy lands, so
+    returning early here would hand somebody a live endpoint that errors.
+    """
+    deadline = time.monotonic() + INDEX_ACTIVE_TIMEOUT_SECONDS
+    # Named rather than counted: `all()` over an empty list is True, so a
+    # describe reporting no indexes at all — the creation silently lost, or the
+    # control plane not reflecting it yet — would otherwise pass this check
+    # vacuously and report a successful provision of a table whose endpoint
+    # then fails for every user.
+    expected = {index.name for index in secondary_indexes}
+
+    while True:
+        indexes = client.describe_table(TableName=table_name)["Table"].get(
+            "GlobalSecondaryIndexes",
+            [],
+        )
+        # `Backfilling` matters as much as the status: an index reports ACTIVE
+        # while it is still filling, and querying it then returns a partial
+        # answer. A short list of notifications reading as "nothing arrived" is
+        # worse than an error — somebody would go and rewrite a forwarding rule
+        # that was working.
+        ready = {
+            name
+            for index in indexes
+            if (name := index.get("IndexName")) is not None
+            and index.get("IndexStatus") == "ACTIVE"
+            and not index.get("Backfilling", False)
+        }
+
+        if expected <= ready:
+            return
+
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Indexes {sorted(expected - ready)} on {table_name} are still "
+                f"not ready after {INDEX_ACTIVE_TIMEOUT_SECONDS}s. Backfilling "
+                "a large table can take longer; check the table in the console "
+                "and re-run.",
+            )
+
+        time.sleep(INDEX_POLL_SECONDS)
+
+
 def _add_missing_indexes(
     client: DynamoDBClient,
     *,
     table_name: str,
     secondary_indexes: Sequence[SecondaryIndex],
     throughput: ProvisionedThroughputTypeDef | None,
+    on_demand_cap: OnDemandThroughputTypeDef | None,
 ) -> None:
     """Attach indexes a table predating them does not have yet.
 
@@ -159,11 +406,14 @@ def _add_missing_indexes(
         action: CreateGlobalSecondaryIndexActionTypeDef = {
             "IndexName": index.name,
             "KeySchema": [{"AttributeName": index.partition_key, "KeyType": "HASH"}],
-            "Projection": {"ProjectionType": "ALL"},
+            "Projection": index.projection(),
         }
 
         if throughput is not None:
             action["ProvisionedThroughput"] = throughput
+
+        if on_demand_cap is not None:
+            action["OnDemandThroughput"] = on_demand_cap
 
         client.update_table(
             TableName=table_name,
@@ -172,6 +422,9 @@ def _add_missing_indexes(
             ],
             GlobalSecondaryIndexUpdates=[{"Create": action}],
         )
+        # One index at a time: each is its own `UpdateTable`, and DynamoDB
+        # refuses a second one while the first is still applying.
+        _wait_until_active(client, table_name=table_name)
 
 
 def provision_table(
@@ -181,9 +434,11 @@ def provision_table(
     partition_key: str = PARTITION_KEY,
     sort_key: str | None = None,
     sort_key_type: ScalarAttributeTypeType = "N",
-    billing_mode: BillingMode = "PROVISIONED",
+    billing_mode: BillingMode = "PAY_PER_REQUEST",
     read_capacity: int = 5,
     write_capacity: int = 5,
+    max_read_units: int = 25,
+    max_write_units: int = 25,
     enable_ttl: bool = True,
     enable_point_in_time_recovery: bool = True,
     secondary_indexes: Sequence[SecondaryIndex] = (),
@@ -207,6 +462,16 @@ def provision_table(
         )
         key_schema.append({"AttributeName": sort_key, "KeyType": "RANGE"})
 
+    throughput: ProvisionedThroughputTypeDef = {
+        "ReadCapacityUnits": read_capacity,
+        "WriteCapacityUnits": write_capacity,
+    }
+    on_demand_cap = _on_demand_cap(
+        billing_mode=billing_mode,
+        max_read_units=max_read_units,
+        max_write_units=max_write_units,
+    )
+
     with contextlib.suppress(client.exceptions.ResourceInUseException):
         if billing_mode == "PROVISIONED":
             client.create_table(
@@ -214,10 +479,14 @@ def provision_table(
                 AttributeDefinitions=attribute_definitions,
                 KeySchema=key_schema,
                 BillingMode="PROVISIONED",
-                ProvisionedThroughput={
-                    "ReadCapacityUnits": read_capacity,
-                    "WriteCapacityUnits": write_capacity,
-                },
+                ProvisionedThroughput=throughput,
+            )
+        elif on_demand_cap is None:
+            client.create_table(
+                TableName=table_name,
+                AttributeDefinitions=attribute_definitions,
+                KeySchema=key_schema,
+                BillingMode="PAY_PER_REQUEST",
             )
         else:
             client.create_table(
@@ -225,9 +494,26 @@ def provision_table(
                 AttributeDefinitions=attribute_definitions,
                 KeySchema=key_schema,
                 BillingMode="PAY_PER_REQUEST",
+                OnDemandThroughput=on_demand_cap,
             )
 
     client.get_waiter("table_exists").wait(TableName=table_name)
+
+    # The mode first: everything below depends on which one the table is on,
+    # and a table that already existed was created under whatever the
+    # configuration used to say.
+    if _reconcile_billing_mode(
+        client,
+        table_name=table_name,
+        billing_mode=billing_mode,
+        throughput=throughput,
+        on_demand_cap=on_demand_cap,
+    ):
+        _wait_until_active(client, table_name=table_name)
+
+    if billing_mode == "PROVISIONED":
+        _reconcile_throughput(client, table_name=table_name, throughput=throughput)
+        _wait_until_active(client, table_name=table_name)
 
     # Indexes are attached after the fact even on a brand-new table, so a
     # fresh environment and one predating the index take the same code path.
@@ -241,6 +527,12 @@ def provision_table(
                 read_capacity=read_capacity,
                 write_capacity=write_capacity,
             ),
+            on_demand_cap=on_demand_cap,
+        )
+        _wait_until_indexes_are_active(
+            client,
+            table_name=table_name,
+            secondary_indexes=secondary_indexes,
         )
 
     if enable_point_in_time_recovery:
@@ -471,6 +763,19 @@ def provision() -> ProvisionedResources:
         billing_mode=settings.dynamodb_billing_mode,
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
+        secondary_indexes=(
+            SecondaryIndex(
+                name=NOTIFICATIONS_BY_USER_INDEX,
+                partition_key=NOTIFICATION_USER_ID_ATTRIBUTE,
+                # Everything a list screen shows, and nothing else. An index is
+                # a full copy of what it projects, and duplicating every
+                # untrusted email body to answer a question that never involves
+                # one is not a trade worth making.
+                projected_attributes=SUMMARY_ATTRIBUTES,
+            ),
+        ),
     )
     _done(started)
 
@@ -482,6 +787,8 @@ def provision() -> ProvisionedResources:
         billing_mode=settings.dynamodb_billing_mode,
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
         enable_ttl=False,
         secondary_indexes=(
             SecondaryIndex(
@@ -500,6 +807,8 @@ def provision() -> ProvisionedResources:
         billing_mode=settings.dynamodb_billing_mode,
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
         enable_ttl=False,
     )
     _done(started)
@@ -514,6 +823,8 @@ def provision() -> ProvisionedResources:
         billing_mode=settings.dynamodb_billing_mode,
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
         # TTL is on for the handled-event markers, which are the only records
         # in that table carrying an expiry. Merchants have none and stay.
         enable_ttl=True,
@@ -537,6 +848,8 @@ def provision() -> ProvisionedResources:
         billing_mode=settings.dynamodb_billing_mode,
         read_capacity=settings.dynamodb_read_capacity,
         write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
         # Nothing here expires: an account, the fingerprints it answers to and
         # every ledger row are the record a balance is rebuilt from.
         enable_ttl=False,
@@ -619,7 +932,11 @@ def main() -> None:
             f"{ingestion_settings.dynamodb_write_capacity} write units"
         )
     else:
-        capacity = "on-demand"
+        capacity = (
+            "on-demand, capped at "
+            f"{ingestion_settings.dynamodb_max_read_units} read / "
+            f"{ingestion_settings.dynamodb_max_write_units} write units/sec"
+        )
 
     print(f"Provisioned against {endpoint} ({aws_settings.region})")
     print(

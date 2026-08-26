@@ -18,6 +18,9 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
+    NotificationId,
+    ProcessingStatus,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
@@ -43,6 +46,44 @@ class BankNotificationRepository(Protocol):
 
     def save(self, notification: BankNotification) -> None:
         """Overwrite the stored notification with its current state."""
+        ...
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class NotificationSummary:
+    """One notification as a screen shows it: who sent it, when, and where it
+    got to.
+
+    Carries no body on purpose. Nothing on a list needs the email itself, two
+    of the states have already discarded theirs, and a read model that asks
+    for one would force the raw text to be copied into a second place to
+    answer a question that never involves it.
+    """
+
+    id: NotificationId
+    message_id: EmailMessageId
+    sender: EmailAddress
+    subject: str
+    status: ProcessingStatus
+    # Only ever set alongside `PENDING_FALLBACK`, and the difference between
+    # its two values is the difference between "nothing read it" and "it was
+    # read and refused".
+    deferred_reason: NotificationDeferredReason | None
+    received_at: PosixTime
+
+
+class NotificationReader(Protocol):
+    """Read side: what arrived for one user.
+
+    Separate from `BankNotificationRepository` because it answers with
+    summaries rather than aggregates. Nothing here writes, nothing here can
+    reach another user's mail, and an implementation must not scan the whole
+    table to answer it — the cost of listing one person's notifications must
+    not grow with everybody else's.
+    """
+
+    def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
+        """Every notification belonging to `user_id`, in no particular order."""
         ...
 
 
