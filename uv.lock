@@ -51,6 +51,21 @@ wheels = [
 ]
 
 [[package]]
+name = "aws-sam-translator"
+version = "1.113.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "boto3" },
+    { name = "jsonschema" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/21/a4/a0d384f9dcd3960fb4942e5665ad4c11f10d92a8ba7f517dd6b11df768a9/aws_sam_translator-1.113.0.tar.gz", hash = "sha256:3a24b3c5bab9c24b6389cdf18a7a745d338363c57803364e028718fb078259e5", size = 380108, upload-time = "2026-08-24T23:12:08.325Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/22/d505dcf1b5e90599655ee7607c44dc756ef866a503e25793ceefd98ba260/aws_sam_translator-1.113.0-py3-none-any.whl", hash = "sha256:b2db7e4f7c6ee8fafa89e718a82bfa33b8e97c4e64be643aa3595b27cd7a2e2b", size = 446355, upload-time = "2026-08-24T23:12:06.769Z" },
+]
+
+[[package]]
 name = "aws-xray-sdk"
 version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -537,7 +552,9 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aws-sam-translator" },
     { name = "boto3-stubs", extra = ["dynamodb", "events", "secretsmanager", "sqs", "ssm"] },
+    { name = "cfn-lint" },
     { name = "httpx2" },
     { name = "moto", extra = ["dynamodb", "events", "server"] },
     { name = "poethepoet" },
@@ -560,7 +577,9 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aws-sam-translator", specifier = ">=1.113.0" },
     { name = "boto3-stubs", extras = ["dynamodb", "events", "secretsmanager", "sqs", "ssm"], specifier = ">=1.43.75" },
+    { name = "cfn-lint", specifier = ">=1.55.1" },
     { name = "httpx2", specifier = ">=2.12.0" },
     { name = "moto", extras = ["dynamodb", "events", "secretsmanager", "server", "sqs"], specifier = ">=5.2.2" },
     { name = "poethepoet", specifier = ">=0.48.0" },

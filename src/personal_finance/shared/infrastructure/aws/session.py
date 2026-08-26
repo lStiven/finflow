@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import os
 
 import boto3
 from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -14,7 +15,17 @@ from personal_finance.shared.infrastructure.config.settings import (
 )
 
 
-def _build_session(settings: AwsSettings) -> boto3.Session:
+def _on_lambda() -> bool:
+    """Whether this process is a Lambda invocation.
+
+    Read from the real environment rather than from settings on purpose: this
+    is a fact about the runtime, not a configuration choice, and an env file
+    must not be able to claim it.
+    """
+    return bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+
+def build_session(settings: AwsSettings) -> boto3.Session:
     """Resolve credentials in the order a deployment actually needs them.
 
     A named profile wins when one is configured (local development against a
@@ -22,12 +33,25 @@ def _build_session(settings: AwsSettings) -> boto3.Session:
     emulator and CI are driven. With neither, boto3 falls back to its own
     provider chain — the path that matters in production, where credentials
     come from an instance or task role and no secret is ever configured.
+
+    On Lambda that order has to be cut short. Lambda hands its role's
+    credentials to the process as `AWS_ACCESS_KEY_ID` and friends, so settings
+    read them like any other variable and would pin them into the session — as
+    *static* strings, which boto3 then never refreshes. That is harmless for a
+    process that outlives its credentials by seconds and fatal for one that
+    does not: the ingest function is woken every minute, so its execution
+    environment stays warm for hours and would start failing with
+    `ExpiredTokenException` long after the deploy that looked fine. Handing
+    boto3 nothing is what lets it build refreshable credentials instead.
     """
     if settings.profile:
         return boto3.Session(
             profile_name=settings.profile,
             region_name=settings.region,
         )
+
+    if _on_lambda():
+        return boto3.Session(region_name=settings.region)
 
     return boto3.Session(
         region_name=settings.region,
@@ -47,7 +71,7 @@ def _build_session(settings: AwsSettings) -> boto3.Session:
 
 @functools.lru_cache(maxsize=1)
 def get_session() -> boto3.Session:
-    return _build_session(get_aws_settings())
+    return build_session(get_aws_settings())
 
 
 # `Session.client` is overloaded over every AWS service, but boto3-stubs only

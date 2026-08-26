@@ -1,0 +1,33 @@
+# Everything the image does not need. Smaller context, faster builds, and
+# — the part that matters — no chance of an env file reaching a layer.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+.git
+.github
+.venv
+.devcontainer
+.vscode
+.claude
+
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+tests/
+scripts/
+docs/
+infra/
+*.md
+
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+reports/
+*.log

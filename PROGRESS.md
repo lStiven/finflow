@@ -28,20 +28,25 @@ atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
 canonical merchant behind the bank's text, and `GET /financial/summary`
 answers what a period adds up to. All verified against the local emulator, not
-only in tests. `just prepare` green (660 tests).
+only in tests. `just prepare` green (694 tests).
 
 DynamoDB runs on-demand: at this deployment's volume the bill is on the order
 of a cent a month, and the free tier's 25 provisioned units were shaping the
 schema for no real saving.
 
-What is missing for production is deployment, observability, a cap on LLM
-spending and the frontend — see **Next steps**.
+Deployment is declared: five Lambda functions from one container image, in
+`infra/template.yaml`, with the API reachable over HTTPS through a Function
+URL and no domain to buy. Never actually built or deployed — this DevContainer
+has neither Docker nor the SAM CLI — so the first `just deploy-prod` is the
+real test.
+
+What is missing for production is observability, a cap on LLM spending and the
+frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-26 — a `development` environment with every AWS resource prefixed
-  `dev-`, and `just verify`: two users driven end to end, asserting integrity
-  and that neither reaches the other's data.
+- 2026-08-26 — `just infra-check` validates the SAM template without the SAM
+  CLI or Docker, and the `PackageType` it found in `Globals` is fixed.
 
 ## Next steps
 
@@ -50,9 +55,11 @@ spending and the frontend — see **Next steps**.
       1. **Observability.** CloudWatch shipping is still deferred, so the
          workers log to stdout on a box nobody watches, and nothing alarms on
          DLQ depth. A bank changing its template would pile up in silence.
-      2. **Deployment.** No Dockerfile, no CI, nothing that keeps the four
-         workers alive. `just run-prod` is uvicorn on whatever machine runs
-         it.
+      2. **CI.** There is a Dockerfile and a SAM template now, but nothing
+         builds or deploys them automatically, and the image has never been
+         built in this DevContainer — it has no Docker daemon and no SAM CLI,
+         so `just deploy-*` and `just sam-validate` are unverified here. The
+         first real run is the test.
       3. **A spending cap on the LLM** (see the standalone item below). The
          cheapest of the three and the only one that costs money while it is
          missing.
@@ -446,6 +453,14 @@ spending and the frontend — see **Next steps**.
   that costs real data, and nothing reports it. Idempotent, so spelling the
   prefix into the variable as well is harmless. EventBridge *rules* are not
   prefixed — a rule name is unique per bus and the bus already is.
+- **The `dev-` prefix does not cover the ingest mailbox, and nothing else
+  does either.** It namespaces AWS resources; the mailbox is a Gmail account.
+  The reader searches `UNSEEN` and marks `\Seen`, so a local or dev
+  `ingest-worker` pointed at production's mailbox consumes production's mail —
+  the same failure as sharing a queue, and the one the prefix was built to
+  prevent. The only separation available is a different Gmail account, or an
+  empty App Password so the worker refuses to start. Documented in
+  `docs/running.md`; not enforced in code.
 - **Development inherits every production restriction except the emulator
   one.** `*` as a CORS origin is refused (the check is "not LOCAL"), and the
   bank-notification webhook stays unmounted (`is_local` is LOCAL only), so
@@ -470,6 +485,87 @@ spending and the frontend — see **Next steps**.
   same key, and only the partition keeps their money apart.
 
 
+### Deployment (2026-08-26)
+
+- **Lambda rather than a box, and the cost is what settled it.** Four of the
+  five processes are pollers that idle ~99.9% of the time, so a always-on
+  instance (~$12/month) buys mostly the privilege of waiting. On Lambda the
+  waiting is AWS's and free: ~50k invocations and ~23k GB-seconds a month
+  against free tiers of 1M and 400k that do not expire. The Function URL is
+  what tipped it past "cheaper but more work" — HTTPS with no domain, no
+  certificate and no load balancer, which deletes a whole section of the
+  alternative rather than trading against it.
+- **One image, five entry points, chosen by the template.** Five images would
+  be five things to keep in step and the drift would only show in production.
+  Both Dockerfile stages sit on Lambda's own base image because `bcrypt` is a
+  compiled extension: wheels built against another distribution's glibc import
+  fine and fail at runtime.
+- **The API needed no code.** The Lambda Web Adapter runs the same uvicorn
+  command as `just run-prod`, so `create_app`, the `lifespan` eager build and
+  `/docs` all survive untouched. Mangum was rejected for re-implementing the
+  ASGI bridge and for its history with `lifespan` — the eager build is exactly
+  what must keep working.
+- **SAM owns compute, `provisioning.py` keeps the data plane.** Not an
+  arbitrary split: moto emulates a queue and cannot run a function, so moving
+  tables and queues into SAM would leave the local environment with no way to
+  exist. The consequence is an ordering constraint — provision, then deploy.
+- **Lambda inverts the queue's default and that is the whole risk.** Under
+  `poll_once` a message survives unless deleted; under Lambda it is deleted
+  unless the response names it. `lambda_batch.drain` holds that inversion in
+  one place, and it only works because of
+  `FunctionResponseTypes: [ReportBatchItemFailures]` — without that line the
+  response is ignored and the batch is deleted whole, including what asked to
+  come back. `tests/integration/shared/test_lambda_handlers_flow.py` drives
+  real bus → real rule → real queue → handler → DynamoDB rather than trusting
+  it.
+- **Concurrency: Financial scales, Merchant and Ingest do not.** The polling
+  loops were serial by construction and Lambda is not. Financial is safe
+  because the ledger row is a conditional write and the balance an atomic
+  `ADD` inside one transaction. Merchant has no equivalent proof — two alerts
+  naming the same unseen merchant could each create one — so it is pinned to
+  one execution until it does. Ingest is pinned because two pollers would race
+  for the same `UNSEEN` mail and each mark the other's read.
+- **Batch size is set by the queue's visibility timeout, not by taste.**
+  Lambda refuses an event source mapping whose function timeout exceeds
+  `VisibilityTimeout` (120s). With a model that can take 30s per message, ten
+  per batch does not fit, so parse and merchant take three; financial calls no
+  model and takes ten.
+- **Credentials must not be pinned on Lambda.** Lambda publishes its role's
+  credentials as `AWS_*` environment variables, so settings read them like any
+  other value and `build_session` passed them to boto3 as *static* strings.
+  Harmless for a process that outlives them by seconds; fatal for the ingest
+  function, whose environment stays warm for hours — `ExpiredTokenException`
+  hours after a deploy that looked healthy. Detected with
+  `AWS_LAMBDA_FUNCTION_NAME` from the real environment, never from settings:
+  it is a fact about the runtime and an env file must not be able to claim it.
+- **One SSM parameter per function, because `/finflow/*` crossed the
+  environment line.** The first draft granted every function the whole prefix.
+  Both stacks live in one AWS account, so that wildcard let the dev stack read
+  `/finflow/production/jwt-secret` — the single value that authenticates the
+  whole API, now on a public URL. The `dev-` prefix isolates tables, queues
+  and the bus; nothing was doing the same for secrets. Secrets also left
+  `Globals`: a reference every function carries is a permission every function
+  needs. Financial resolves none and is granted none.
+- **The template is checked here even though it cannot be deployed here.**
+  No SAM CLI and no Docker daemon in the DevContainer, so `sam validate` and
+  `sam build` do not run, and the first deploy would have been the first read
+  of the template. `just infra-check` runs cfn-lint plus SAM's own
+  `samtranslator` transform — the second is what matters, because SAM's
+  `Globals` accepts a fixed property list that no CloudFormation schema
+  describes. It immediately found `PackageType: Image` there, which fails the
+  transform outright rather than being merged into the five functions. The
+  editor could not have caught it: its errors on this file were all
+  `Unresolved tag: !Sub`, the YAML extension not knowing CloudFormation's
+  short forms, now settled with `yaml.customTags` in `.vscode/settings.json`.
+- **The deploy will fail on IAM before it fails on anything in the template.**
+  `dev-proyecto-ddd`, the only credential here, is denied
+  `cloudformation:ListStacks` and `ssm:DescribeParameters`. Nothing to fix in
+  this repo — it is an account-side grant, and it blocks `deploy-dev` and
+  `deploy-prod` equally. Local runs against `.env.development` are unaffected:
+  they touch DynamoDB, SQS and EventBridge only, and read secrets from the
+  env file rather than SSM.
+
+
 ### Billing (2026-08-25)
 
 - **DynamoDB runs on-demand, and the free tier was the thing costing money.**
@@ -486,6 +582,11 @@ spending and the frontend — see **Next steps**.
   month** on-demand. The trade is an unmeasurable bill for a ceiling that no
   longer constrains the design. PROVISIONED is still reachable by
   configuration, and provisioning moves existing tables in either direction.
+  That last part cuts both ways and is the hazard to remember: an env file
+  left on the old mode is not inert, it *reverts* live tables on the next
+  provisioning run, reporting success. The setting lives in all three `.env`
+  files, so all three have to move together — `.env.production` was found
+  still on PROVISIONED a day later.
 - **Provisioning reconciles the billing mode, not only the throughput.**
   `create_table` decides the mode only for a table that does not exist yet, so
   without this, changing the configured mode would have reached new

@@ -1,0 +1,484 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Finflow's compute plane: the five functions, what triggers them, and what
+  they are allowed to touch.
+
+  It deliberately does not create the tables, queues, bus or rules. Those are
+  the data plane, `provisioning.py` owns them, and local development runs
+  against moto with the same code — moto can emulate a queue, it cannot run a
+  function. Splitting there keeps one story for local and one tool per job;
+  moving them here would mean the local environment had no way to exist.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [development, production]
+    Description: >
+      Passed straight through as ENVIRONMENT. The application derives its own
+      resource names from it — this template never spells a prefixed name into
+      a variable, only into the ARNs it grants access to.
+
+  ResourcePrefix:
+    Type: String
+    Default: ""
+    AllowedValues: ["", "dev-"]
+    Description: >
+      Must match what `Environment.resource_prefix` produces for
+      EnvironmentName: "" for production, "dev-" for development. Only the
+      ARNs below use it; the application prefixes its own names in code.
+
+  IngestMailboxAddress:
+    Type: String
+    Description: The Gmail account every user forwards their bank mail to.
+
+  JwtSecretParameter:
+    Type: String
+    Default: /finflow/production/jwt-secret
+    Description: SSM parameter holding the token-signing secret.
+
+  MailboxPasswordParameter:
+    Type: String
+    Default: /finflow/production/mailbox-app-password
+    Description: SSM parameter holding the mailbox App Password.
+
+  LlmApiKeyParameter:
+    Type: String
+    Default: /finflow/production/llm-api-key
+    Description: SSM parameter holding the Gemini API key.
+
+  CorsOrigins:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated origins allowed to call the API from a browser. Empty
+      means none, which is correct when the frontend is served from this same
+      origin.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    Description: >
+      Set explicitly because the default is "never expire", and log storage
+      that nobody ever deletes is the one line of this bill that only grows.
+
+  IngestScheduleExpression:
+    Type: String
+    Default: rate(1 minute)
+    Description: >
+      How often the mailbox is polled. This is the single largest consumer of
+      the Lambda free tier — almost entirely invocations that find an empty
+      mailbox — so it is the first dial to turn if that ever matters.
+
+Globals:
+  Function:
+    # `PackageType` is deliberately absent: SAM's Globals accepts a fixed list
+    # of properties and this is not on it, so putting the five functions' one
+    # shared value here fails the transform outright rather than being merged.
+    # It is repeated per function instead.
+    Timeout: 30
+    MemorySize: 512
+    # Matches the machine the image is built on. arm64 is marginally cheaper,
+    # but at this volume both are inside the free tier, and an image built
+    # x86_64 against an arm64 function fails the deploy for no gain.
+    Architectures: [x86_64]
+    Environment:
+      Variables:
+        # No secret reference here. A value in Globals is a value every
+        # function carries, and a reference carried is a permission needed:
+        # the three `ssm:` refs live on the single function that resolves
+        # each, so the grant below can be exactly one parameter wide. An
+        # unset one is read as empty and never reaches Parameter Store.
+        #
+        # Bare names throughout: `Environment.resource_prefix` adds `dev-` in
+        # the application, and doing it in both places would produce
+        # `dev-dev-users`. The prefix appears below only inside ARNs.
+        ENVIRONMENT: !Ref EnvironmentName
+        INGESTION_NOTIFICATIONS_TABLE: bank_notifications
+        INGESTION_USER_INBOXES_TABLE: user_inboxes
+        INGESTION_EVENT_BUS_NAME: finflow
+        INGESTION_RETENTION_DAYS: "90"
+        INGESTION_PARSE_QUEUE_NAME: parse-notifications
+        INGESTION_PARSE_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}parse-notifications"
+        INGESTION_INTEGRATION_EVENTS_QUEUE_NAME: integration-events
+        INGESTION_INTEGRATION_EVENTS_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}integration-events"
+        INGESTION_DYNAMODB_BILLING_MODE: PAY_PER_REQUEST
+        INGESTION_DYNAMODB_MAX_READ_UNITS: "25"
+        INGESTION_DYNAMODB_MAX_WRITE_UNITS: "25"
+        INGESTION_INGEST_MAILBOX_ADDRESS: !Ref IngestMailboxAddress
+        INGESTION_INGEST_MAILBOX_HOST: imap.gmail.com
+        INGESTION_INGEST_MAILBOX_PORT: "993"
+        IDENTITY_USERS_TABLE: users
+        IDENTITY_JWT_ALGORITHM: HS256
+        IDENTITY_ACCESS_TOKEN_TTL_MINUTES: "1440"
+        MERCHANT_MERCHANTS_TABLE: merchants
+        MERCHANT_EVENTS_QUEUE_NAME: merchant-events
+        MERCHANT_EVENTS_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}merchant-events"
+        FINANCIAL_ACCOUNTS_TABLE: financial
+        FINANCIAL_EVENTS_QUEUE_NAME: financial-events
+        FINANCIAL_EVENTS_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}financial-events"
+        LLM_MODEL: gemini-3.6-flash
+        LLM_MAX_OUTPUT_TOKENS: "4096"
+        LLM_TIMEOUT_SECONDS: "30"
+        LLM_MAX_INPUT_CHARACTERS: "40000"
+
+Resources:
+  # ------------------------------------------------------------------
+  # API — the same uvicorn command as `just run-prod`, behind the adapter
+  # ------------------------------------------------------------------
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: api
+    Properties:
+      PackageType: Image
+      LoggingConfig:
+        LogGroup: !Ref ApiLogGroup
+      ImageConfig:
+        # Overriding the entry point is what turns this container into a web
+        # server instead of a handler runner. The adapter in /opt/extensions
+        # does the rest.
+        EntryPoint:
+          - /var/lang/bin/python
+          - -m
+          - uvicorn
+          - personal_finance.api.main:app
+          - --host
+          - 0.0.0.0
+          - --port
+          - "8000"
+        Command: []
+      Environment:
+        Variables:
+          API_CORS_ORIGINS: !Ref CorsOrigins
+          # Only the API signs and verifies tokens.
+          IDENTITY_JWT_SECRET: !Sub "ssm:${JwtSecretParameter}"
+      FunctionUrlConfig:
+        # The application authenticates every request itself with a bearer
+        # token, so IAM auth here would only lock out the browser it exists
+        # for. This is what gives the phone an HTTPS address with no domain,
+        # no certificate and no load balancer.
+        AuthType: NONE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}users"
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}user_inboxes"
+        - DynamoDBReadPolicy:
+            TableName: !Sub "${ResourcePrefix}bank_notifications"
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}merchants"
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}financial"
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Sub "${ResourcePrefix}finflow"
+        # Exactly the one parameter this function resolves, and no other.
+        # `/finflow/*` would have spanned both `/finflow/development/*` and
+        # `/finflow/production/*` — the two stacks share one AWS account, so
+        # that wildcard handed the dev stack production's signing key and
+        # mailbox password. The `dev-` prefix isolates tables, queues and the
+        # bus; nothing was doing the same for secrets.
+        #
+        # The API is the only thing that signs or verifies a token.
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${JwtSecretParameter}"
+            # SecureString decryption goes through the AWS-managed SSM key,
+            # reachable only via SSM itself.
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
+  # Ingest — the only worker whose loop did not survive the move
+  # ------------------------------------------------------------------
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: ingest
+    Properties:
+      PackageType: Image
+      Environment:
+        Variables:
+          # Only this function opens the mailbox.
+          INGESTION_INGEST_MAILBOX_APP_PASSWORD: !Sub "ssm:${MailboxPasswordParameter}"
+      LoggingConfig:
+        LogGroup: !Ref IngestLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.ingestion.presentation.awslambda.ingest_handler.handler
+      # An IMAP round trip plus one write per message. Generous because the
+      # cost of a slow pass is nothing and the cost of a truncated one is a
+      # message read but never queued.
+      Timeout: 120
+      # One poller, always. Two would race for the same UNSEEN messages and
+      # each mark the other's as read.
+      ReservedConcurrentExecutions: 1
+      Events:
+        Tick:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref IngestScheduleExpression
+            Description: Poll the shared ingest mailbox.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}bank_notifications"
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}user_inboxes"
+        - SQSSendMessagePolicy:
+            QueueName: !Sub "${ResourcePrefix}parse-notifications"
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Sub "${ResourcePrefix}finflow"
+        # Exactly the one parameter this function resolves, and no other.
+        # `/finflow/*` would have spanned both `/finflow/development/*` and
+        # `/finflow/production/*` — the two stacks share one AWS account, so
+        # that wildcard handed the dev stack production's signing key and
+        # mailbox password. The `dev-` prefix isolates tables, queues and the
+        # bus; nothing was doing the same for secrets.
+        #
+        # Only the ingest function opens the mailbox.
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MailboxPasswordParameter}"
+            # SecureString decryption goes through the AWS-managed SSM key,
+            # reachable only via SSM itself.
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
+  # Parse — SQS to deterministic parser to LLM fallback
+  # ------------------------------------------------------------------
+  ParseFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: parse
+    Properties:
+      PackageType: Image
+      Environment:
+        Variables:
+          # The deterministic parser's fallback.
+          LLM_API_KEY: !Sub "ssm:${LlmApiKeyParameter}"
+      LoggingConfig:
+        LogGroup: !Ref ParseLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.ingestion.presentation.awslambda.parse_handler.handler
+      # Capped by the queue, not chosen freely: Lambda refuses an event source
+      # mapping whose function timeout exceeds the queue's VisibilityTimeout,
+      # which `provisioning.py` sets to 120s. A longer timeout here does not
+      # deploy at all — and if it did, the message would become visible again
+      # mid-run and be processed a second time, concurrently.
+      Timeout: 120
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ResourcePrefix}parse-notifications"
+            # Three, not ten: every message can fall through to the model at
+            # LLM_TIMEOUT_SECONDS=30, so ten of them would not fit inside the
+            # 120s above. The batch size is what has to give.
+            BatchSize: 3
+            # Without this, the handler's batchItemFailures response is
+            # ignored and every message in the batch is deleted — including
+            # the ones it asked to keep. It is the single line that makes the
+            # whole retry story true rather than merely written down.
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}bank_notifications"
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Sub "${ResourcePrefix}finflow"
+        # Exactly the one parameter this function resolves, and no other.
+        # `/finflow/*` would have spanned both `/finflow/development/*` and
+        # `/finflow/production/*` — the two stacks share one AWS account, so
+        # that wildcard handed the dev stack production's signing key and
+        # mailbox password. The `dev-` prefix isolates tables, queues and the
+        # bus; nothing was doing the same for secrets.
+        #
+        # The parser's fallback is the model.
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LlmApiKeyParameter}"
+            # SecureString decryption goes through the AWS-managed SSM key,
+            # reachable only via SSM itself.
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
+  # Merchant — canonical merchants
+  # ------------------------------------------------------------------
+  MerchantFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: merchant
+    Properties:
+      PackageType: Image
+      Environment:
+        Variables:
+          # The merchant advisor.
+          LLM_API_KEY: !Sub "ssm:${LlmApiKeyParameter}"
+      LoggingConfig:
+        LogGroup: !Ref MerchantLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.merchant.presentation.awslambda.merchant_handler.handler
+      Timeout: 120
+      # Serialised deliberately, and the only function that is. Two alerts
+      # naming the same unseen merchant could otherwise be resolved side by
+      # side and each create a canonical record for it. The polling loop was
+      # serial by construction; this is what buys that back until the write
+      # path is proven safe under concurrency.
+      ReservedConcurrentExecutions: 1
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ResourcePrefix}merchant-events"
+            # Same arithmetic as Parse: the advisor is an LLM call too.
+            BatchSize: 3
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}merchants"
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Sub "${ResourcePrefix}finflow"
+        # Exactly the one parameter this function resolves, and no other.
+        # `/finflow/*` would have spanned both `/finflow/development/*` and
+        # `/finflow/production/*` — the two stacks share one AWS account, so
+        # that wildcard handed the dev stack production's signing key and
+        # mailbox password. The `dev-` prefix isolates tables, queues and the
+        # bus; nothing was doing the same for secrets.
+        #
+        # The merchant advisor is the model.
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LlmApiKeyParameter}"
+            # SecureString decryption goes through the AWS-managed SSM key,
+            # reachable only via SSM itself.
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
+  # Financial — the ledger and the balances
+  # ------------------------------------------------------------------
+  FinancialFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: financial
+    Properties:
+      PackageType: Image
+      LoggingConfig:
+        LogGroup: !Ref FinancialLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.financial.presentation.awslambda.financial_handler.handler
+      MemorySize: 256
+      Timeout: 60
+      # Left to scale: the ledger row is a conditional write and the balance
+      # an atomic ADD, both inside one transaction, so a movement applied
+      # twice is a no-op and two movements on one account cannot lose each
+      # other. That is why this function needs no concurrency limit and
+      # Merchant does.
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ResourcePrefix}financial-events"
+            # A full batch: no model in this path, only DynamoDB writes.
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}financial"
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Sub "${ResourcePrefix}finflow"
+
+  # ------------------------------------------------------------------
+  # Logs — retention set explicitly, per function
+  # ------------------------------------------------------------------
+  # ------------------------------------------------------------------
+  # Logs
+  #
+  # Named by us, not `/aws/lambda/<function>`. Lambda creates that one itself
+  # on first invocation, so declaring it here is a race the stack loses on any
+  # redeploy where it already exists — "already exists", rollback, no deploy.
+  # A name Lambda would never pick has no such conflict, and `LoggingConfig`
+  # is what points each function at it.
+  # ------------------------------------------------------------------
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/api"
+      RetentionInDays: !Ref LogRetentionDays
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/ingest"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ParseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/parse"
+      RetentionInDays: !Ref LogRetentionDays
+
+  MerchantLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/merchant"
+      RetentionInDays: !Ref LogRetentionDays
+
+  FinancialLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/financial"
+      RetentionInDays: !Ref LogRetentionDays
+
+Outputs:
+  ApiUrl:
+    Description: >
+      The HTTPS address of the API. This is what goes into the phone's browser
+      and into the frontend's configuration.
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+
+  ApiFunctionName:
+    Description: For `sam logs -n <name>`.
+    Value: !Ref ApiFunction

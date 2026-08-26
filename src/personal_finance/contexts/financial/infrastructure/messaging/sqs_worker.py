@@ -35,7 +35,14 @@ MAX_MESSAGES_PER_POLL = 10
 WAIT_TIME_SECONDS = 20
 
 
-class _Outcome(enum.Enum):
+class MessageOutcome(enum.Enum):
+    """What a single message left behind, whoever delivered it.
+
+    Public because the polling loop is no longer the only caller: the Lambda
+    entry point reads the same three answers and turns them into the batch
+    response AWS expects.
+    """
+
     HANDLED = "handled"
     # Understood, but nothing to do with it. Deleted.
     DISCARDED = "discarded"
@@ -78,13 +85,13 @@ class SQSFinancialWorker:
             if receipt is None:
                 continue
 
-            outcome = self._handle(message.get("Body", ""))
+            outcome = self.handle(message.get("Body", ""))
 
-            if outcome is _Outcome.RETRY:
+            if outcome is MessageOutcome.RETRY:
                 rejected += 1
                 continue
 
-            if outcome is _Outcome.HANDLED:
+            if outcome is MessageOutcome.HANDLED:
                 handled += 1
             else:
                 rejected += 1
@@ -97,7 +104,7 @@ class SQSFinancialWorker:
             rejected=rejected,
         )
 
-    def _handle(self, body: str) -> _Outcome:
+    def handle(self, body: str) -> MessageOutcome:
         try:
             envelope = IntegrationEventEnvelope.model_validate_json(body)
         except ValidationError:
@@ -105,7 +112,7 @@ class SQSFinancialWorker:
             # the DLQ takes it only delays the queue.
             _logger.exception("discarding malformed integration event")
 
-            return _Outcome.DISCARDED
+            return MessageOutcome.DISCARDED
 
         if (
             envelope.source != INGESTION_SOURCE
@@ -119,14 +126,14 @@ class SQSFinancialWorker:
                 extra={"detail_type": envelope.detail_type, "source": envelope.source},
             )
 
-            return _Outcome.DISCARDED
+            return MessageOutcome.DISCARDED
 
         try:
             detail = TransactionExtractedDetail.model_validate(envelope.detail)
         except ValidationError:
             _logger.exception("discarding malformed TransactionExtracted payload")
 
-            return _Outcome.DISCARDED
+            return MessageOutcome.DISCARDED
 
         try:
             command = detail.to_command()
@@ -139,7 +146,7 @@ class SQSFinancialWorker:
                 extra={"version": detail.version},
             )
 
-            return _Outcome.RETRY
+            return MessageOutcome.RETRY
         except ValueError:
             # A direction or currency this cannot read. Left on the queue for
             # the same reason an unknown version is: `Currency` knows two
@@ -149,7 +156,7 @@ class SQSFinancialWorker:
             # genuinely unreadable belongs — somewhere a person can see it.
             _logger.exception("leaving an unreadable movement on the queue")
 
-            return _Outcome.RETRY
+            return MessageOutcome.RETRY
 
         try:
             result = self._use_case.execute(command)
@@ -161,7 +168,7 @@ class SQSFinancialWorker:
                 "leaving a movement that could not be recorded on the queue",
             )
 
-            return _Outcome.RETRY
+            return MessageOutcome.RETRY
 
         _logger.info(
             "movement recorded",
@@ -183,7 +190,7 @@ class SQSFinancialWorker:
                 extra={"movement_id": result.transaction.id.value},
             )
 
-        return _Outcome.HANDLED
+        return MessageOutcome.HANDLED
 
     def _delete(self, receipt: str) -> None:
         self._client.delete_message(

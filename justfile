@@ -91,6 +91,10 @@ register-inbox *args: (_require-env ".env")
     {{local_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
 
+register-inbox-dev *args: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
+
 register-inbox-prod *args: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
@@ -107,6 +111,10 @@ inspect env_file=".env" *args: (_require-env env_file)
 # Integration events that reached the bus. `--follow` keeps polling.
 events *args: (_require-env ".env")
     @{{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.show_events {{args}}
+
+events-dev *args: (_require-env ".env.development")
+    @{{dev_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.show_events {{args}}
 
 events-prod *args: (_require-env ".env.production")
@@ -210,10 +218,53 @@ financial-worker-dev: (_require-env ".env.development")
     {{dev_env}} uv run python -m \
         personal_finance.contexts.financial.presentation.cli.run_financial_worker
 
+# --------------------------------------------------
+# Deploying: the five functions, from infrastructure only
+# --------------------------------------------------
+#
+# SAM owns the compute plane (functions, triggers, roles, the API's URL).
+# `provisioning.py` still owns the data plane (tables, queues, bus, rules),
+# because local runs against moto with the same code and moto cannot run a
+# function. Provision first, deploy second: the event source mappings below
+# point at queues that have to exist.
+
+sam_dir := "infra"
+
+sam-validate:
+    sam validate --lint --template {{sam_dir}}/template.yaml
+
+# What `sam-validate` would tell you, minus the SAM CLI and Docker daemon the
+# DevContainer does not have: cfn-lint plus SAM's own transform, over both environments.
+infra-check:
+    PYTHONPATH=src uv run python scripts/check_template.py
+
+# Build the image and deploy. Authenticate first, e.g. `aws sso login`.
+deploy-dev: (_require-env ".env.development")
+    sam build --config-env development \
+        --config-file {{sam_dir}}/samconfig.toml \
+        --template {{sam_dir}}/template.yaml
+    sam deploy --config-env development --config-file {{sam_dir}}/samconfig.toml
+
+deploy-prod: (_require-env ".env.production")
+    sam build --config-env production \
+        --config-file {{sam_dir}}/samconfig.toml \
+        --template {{sam_dir}}/template.yaml
+    sam deploy --config-env production --config-file {{sam_dir}}/samconfig.toml
+
+# The API's HTTPS address, and everything else the stack published.
+deploy-outputs stack="finflow" profile="finflow-production":
+    @aws cloudformation describe-stacks --stack-name {{stack}} \
+        --profile {{profile}} \
+        --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+
+# Tail one function's logs, e.g. `just deploy-logs finflow FinancialFunction`.
+deploy-logs stack="finflow" name="ApiFunction":
+    sam logs --stack-name {{stack}} --name {{name}} --tail
+
 # Drive two users end to end and assert nothing of one reaches the other.
 # Reads ENV_FILE, so it runs against whichever environment you point it at.
-verify env_file=".env": (_require-env env_file)
-    ENV_FILE={{env_file}} PYTHONPATH=src uv run python scripts/verify_flow.py
+verify env_file=".env" *args: (_require-env env_file)
+    ENV_FILE={{env_file}} PYTHONPATH=src uv run python scripts/verify_flow.py {{args}}
 
 _require-env env_file:
     @test -f {{env_file}} || { \

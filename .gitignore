@@ -70,6 +70,9 @@ Desktop.ini
 # AWS local credentials
 .aws/
 
+# SAM build output
+.aws-sam/
+
 # Coverage / reports
 reports/
 

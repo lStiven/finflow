@@ -1,0 +1,82 @@
+# Deploy settings per environment, so `just deploy-prod` is a command and not
+# a list of flags to remember.
+#
+# This file is tracked, and nothing secret belongs in it: the three secrets
+# appear only as SSM *paths*, and the values behind them are put there with
+# `just secret-put`. Check with `grep -i 'secret\|password\|key' samconfig.toml`
+# — every hit should be a path starting with `/finflow/`.
+
+version = 0.1
+
+[default.global.parameters]
+stack_name = "finflow"
+
+[default.build.parameters]
+# One image, five functions: without the cache each function rebuilds it.
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+# ----------------------------------------------------------------------
+# development — the same AWS account as production, every resource `dev-`
+# ----------------------------------------------------------------------
+[development.global.parameters]
+stack_name = "finflow-dev"
+
+[development.build.parameters]
+cached = true
+parallel = true
+
+[development.deploy.parameters]
+stack_name = "finflow-dev"
+region = "us-east-1"
+profile = "finflow-production"
+capabilities = "CAPABILITY_IAM"
+# Lets SAM create and manage the ECR repository for the image.
+resolve_image_repos = true
+confirm_changeset = true
+parameter_overrides = [
+    "EnvironmentName=development",
+    "ResourcePrefix=dev-",
+    "IngestMailboxAddress=finflowingest@gmail.com",
+    "JwtSecretParameter=/finflow/development/jwt-secret",
+    "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
+    "LlmApiKeyParameter=/finflow/development/llm-api-key",
+    "CorsOrigins=http://localhost:5173",
+    # Cheaper on the free tier and plenty for a rehearsal environment.
+    "IngestScheduleExpression=rate(5 minutes)",
+    "LogRetentionDays=7",
+]
+
+# ----------------------------------------------------------------------
+# production
+# ----------------------------------------------------------------------
+[production.global.parameters]
+stack_name = "finflow"
+
+[production.build.parameters]
+cached = true
+parallel = true
+
+[production.deploy.parameters]
+stack_name = "finflow"
+region = "us-east-1"
+profile = "finflow-production"
+capabilities = "CAPABILITY_IAM"
+resolve_image_repos = true
+confirm_changeset = true
+parameter_overrides = [
+    "EnvironmentName=production",
+    "ResourcePrefix=",
+    "IngestMailboxAddress=finflowingest@gmail.com",
+    "JwtSecretParameter=/finflow/production/jwt-secret",
+    "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
+    "LlmApiKeyParameter=/finflow/production/llm-api-key",
+    # Empty until there is a frontend on its own origin. See
+    # docs/frontend-integration.md.
+    "CorsOrigins=",
+    "IngestScheduleExpression=rate(1 minute)",
+    "LogRetentionDays=30",
+]

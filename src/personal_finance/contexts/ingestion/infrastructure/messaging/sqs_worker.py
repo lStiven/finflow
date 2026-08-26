@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import enum
 import logging
 import uuid
 
@@ -54,6 +55,21 @@ class ParseNotificationBody(BaseModel):
         )
 
 
+class MessageOutcome(enum.Enum):
+    """What a single message left behind, whoever delivered it.
+
+    Public because the polling loop is no longer the only caller: the Lambda
+    entry point reads the same three answers and turns them into the batch
+    response AWS expects.
+    """
+
+    HANDLED = "handled"
+    # Understood, but nothing to do with it. Deleted.
+    DISCARDED = "discarded"
+    # Left on the queue for somebody who understands it.
+    RETRY = "retry"
+
+
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class PollResult:
     received: int = 0
@@ -93,48 +109,60 @@ class SQSParseWorker:
 
         for message in messages:
             receipt = message.get("ReceiptHandle")
-            body = message.get("Body", "")
 
             if receipt is None:
                 continue
 
-            try:
-                parsed = ParseNotificationBody.model_validate_json(body)
-            except ValidationError:
-                # Unparseable payloads never become parseable. Retrying one
-                # until the DLQ takes it only delays the queue.
-                _logger.exception("discarding malformed parse message")
-                self._delete(receipt)
+            outcome = self.handle(message.get("Body", ""))
+
+            if outcome is MessageOutcome.RETRY:
                 rejected += 1
                 continue
 
-            if parsed.version != MESSAGE_SCHEMA_VERSION:
-                # Left on the queue on purpose: a version we do not understand
-                # was written by a newer deploy, and a newer worker may still
-                # pick it up. If none does, redrive moves it to the DLQ.
-                _logger.warning(
-                    "unsupported parse message version",
-                    extra={"version": parsed.version},
-                )
+            if outcome is MessageOutcome.HANDLED:
+                handled += 1
+            else:
                 rejected += 1
-                continue
 
-            result = self._use_case.execute(parsed.to_message())
-            _logger.info(
-                "parsed notification",
-                extra={
-                    "outcome": result.outcome.value,
-                    "notification_id": str(parsed.notification_id),
-                },
-            )
             self._delete(receipt)
-            handled += 1
 
         return PollResult(
             received=len(messages),
             handled=handled,
             rejected=rejected,
         )
+
+    def handle(self, body: str) -> MessageOutcome:
+        try:
+            parsed = ParseNotificationBody.model_validate_json(body)
+        except ValidationError:
+            # Unparseable payloads never become parseable. Retrying one until
+            # the DLQ takes it only delays the queue.
+            _logger.exception("discarding malformed parse message")
+
+            return MessageOutcome.DISCARDED
+
+        if parsed.version != MESSAGE_SCHEMA_VERSION:
+            # Left on the queue on purpose: a version we do not understand was
+            # written by a newer deploy, and a newer worker may still pick it
+            # up. If none does, redrive moves it to the DLQ.
+            _logger.warning(
+                "unsupported parse message version",
+                extra={"version": parsed.version},
+            )
+
+            return MessageOutcome.RETRY
+
+        result = self._use_case.execute(parsed.to_message())
+        _logger.info(
+            "parsed notification",
+            extra={
+                "outcome": result.outcome.value,
+                "notification_id": str(parsed.notification_id),
+            },
+        )
+
+        return MessageOutcome.HANDLED
 
     def _delete(self, receipt_handle: str) -> None:
         self._client.delete_message(
