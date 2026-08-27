@@ -753,7 +753,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Tarjeta Bancolombia\",\n  \"kind\": \"credit_card\",\n  \"currency\": \"COP\",\n  \"opening_balance\": null,\n  \"bank\": \"Bancolombia\",\n  \"instrument_kind\": \"credit_card\",\n  \"last_four\": \"7653\"\n}",
+              "raw": "{\n  \"name\": \"Tarjeta Bancolombia\",\n  \"kind\": \"credit_card\",\n  \"currency\": \"COP\",\n  \"opening_balance\": null,\n  \"bank\": \"Bancolombia\",\n  \"instrument_kind\": \"credit_card\",\n  \"last_four\": \"7653\",\n  \"credit_limit\": \"12000000\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -770,7 +770,7 @@
                 "accounts"
               ]
             },
-            "description": "kind: savings | checking | cash | investment | credit_card | loan | mortgage. The category (asset or liability) is derived from it — nobody gets to declare a mortgage an asset.\n\nbank, instrument_kind and last_four go together or not at all: matching on fewer would merge two real accounts into one wrong balance. Omit all three for what never emails a movement (cash, a mortgage).\n\nRetroactive: movements already waiting under that key are adopted and the balance replays from them."
+            "description": "Declare an account. `instrument_kind` must come from `/financial/catalog` -> instrument_kinds: it is what the BANK calls the thing the money moved through, not what you call the account. A savings account is kind `savings`, and its transfers arrive as instrument `account`. On a liability, `opening_balance` is what has been spent so far and `credit_limit` is what may be spent — two different numbers."
           },
           "response": []
         },
@@ -850,6 +850,46 @@
           "response": []
         },
         {
+          "name": "Set credit limit",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/credit-limit",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "credit-limit"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": "{{account_id}}"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credit_limit\": \"12000000\"\n}"
+            },
+            "description": "State or restate what this card may owe. Liabilities only. Send null to clear it. The response carries `available` = limit minus what is owed, signed: a card over its limit reports a negative rather than zero."
+          },
+          "response": []
+        },
+        {
           "name": "Link instrument",
           "request": {
             "method": "POST",
@@ -890,7 +930,7 @@
                 }
               ]
             },
-            "description": "One real account emails under several names: a checking account as a debit card for purchases and as an account number for transfers. Always the owner's call — inferring it would be guessing about somebody's money — and it adopts the movements already waiting under that key."
+            "description": "Teach an account another of the names its alerts arrive under, and adopt retroactively everything already waiting under it. ONE REAL ACCOUNT HAS SEVERAL: a savings account emails as instrument `account` under the account's last four for transfers, and as `debit_card` under the CARD's last four for purchases. Both must be linked or half its movements wait forever. `instrument_kind` comes from /financial/catalog."
           },
           "response": []
         },

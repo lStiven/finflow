@@ -18,6 +18,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountKind,
     Balance,
+    InstrumentKind,
     LedgerMovement,
     MovementDirection,
     MovementId,
@@ -58,7 +59,7 @@ def _declared(kind: AccountKind = AccountKind.SAVINGS) -> Account:
         user_id=USER_ID,
         name="Cuenta de ahorros",
         bank="bancolombia",
-        instrument_kind="debit_card",
+        instrument_kind=InstrumentKind.DEBIT_CARD,
         last_four="7653",
         kind=kind,
         currency=Currency.COP,
@@ -74,7 +75,7 @@ def test_a_declared_account_answers_to_the_card_it_was_given() -> None:
         user_id=USER_ID,
         name="Tarjeta de crédito",
         bank="Bancolombia",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653",
         kind=AccountKind.CREDIT_CARD,
         currency=Currency.COP,
@@ -115,7 +116,7 @@ def test_a_declared_account_answers_to_the_pair_that_created_it() -> None:
     assert account.matches(
         AccountFingerprint.from_parts(
             bank="Bancolombia",
-            instrument_kind="debit_card",
+            instrument_kind=InstrumentKind.DEBIT_CARD,
             last_four="7653",
         ),
     )
@@ -125,7 +126,7 @@ def test_one_account_can_answer_to_several_of_its_banks_names() -> None:
     account = _declared()
     transfers = AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind="savings_account",
+        instrument_kind=InstrumentKind.SAVINGS_ACCOUNT,
         last_four="1234",
     )
     account.link_fingerprint(transfers)
@@ -373,4 +374,120 @@ def test_a_name_longer_than_the_limit_is_refused() -> None:
             kind=AccountKind.SAVINGS,
             currency=Currency.COP,
             opened_at=NOW,
+        )
+
+
+def test_an_account_kind_is_not_an_instrument_kind() -> None:
+    """The mistake this enum exists to make impossible.
+
+    A savings account is declared `SAVINGS`, but its transfers arrive naming
+    the instrument `ACCOUNT`. Spelling the key with the account kind used to
+    be accepted and then matched nothing, forever, reporting nothing.
+    """
+    assert {kind.value for kind in InstrumentKind} == {
+        "credit_card",
+        "debit_card",
+        "savings_account",
+        "checking_account",
+        "account",
+    }
+    assert "savings" not in {kind.value for kind in InstrumentKind}
+
+
+def test_declaring_and_receiving_the_same_instrument_meet_on_one_key() -> None:
+    """The two constructors exist for different sides of the same key, and a
+    difference between them is an account that never matches its own alerts.
+    """
+    declared = AccountFingerprint.from_parts(
+        bank="Bancolombia",
+        instrument_kind=InstrumentKind.ACCOUNT,
+        last_four="5261",
+    )
+    arrived = AccountFingerprint.from_alert(
+        bank="bancolombia",
+        instrument_kind="account",
+        last_four="5261",
+    )
+
+    assert declared == arrived
+
+
+def test_a_credit_card_reports_what_is_left_of_its_limit() -> None:
+    account = Account.open(
+        user_id=USER_ID,
+        name="Tarjeta",
+        kind=AccountKind.CREDIT_CARD,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
+        # What has been spent against the limit so far.
+        opening_balance=Money(amount=Decimal("200000"), currency=Currency.COP),
+        credit_limit=Money(amount=Decimal("12000000"), currency=Currency.COP),
+    )
+
+    assert account.available == Decimal("11800000")
+
+    account.apply(
+        LedgerMovement(
+            movement_id=MovementId(value="m1"),
+            direction=MovementDirection.OUTGOING,
+            amount=Money(amount=Decimal("46150"), currency=Currency.COP),
+            occurred_at=LATER,
+        ),
+    )
+
+    # Spending raises the debt and lowers what is left. Both readings of the
+    # same fact, which is why the limit has to be stated separately.
+    assert account.balance.signed_amount == Decimal("246150")
+    assert account.available == Decimal("11753850")
+
+
+def test_a_card_can_be_over_its_limit_and_says_so() -> None:
+    account = Account.open(
+        user_id=USER_ID,
+        name="Tarjeta",
+        kind=AccountKind.CREDIT_CARD,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
+        opening_balance=Money(amount=Decimal("120000"), currency=Currency.COP),
+        credit_limit=Money(amount=Decimal("100000"), currency=Currency.COP),
+    )
+
+    # Clamping this to zero would hide the one case somebody needs to see.
+    assert account.available == Decimal("-20000")
+
+
+def test_an_asset_has_no_credit_limit() -> None:
+    with pytest.raises(ValueError, match="no credit limit"):
+        Account.open(
+            user_id=USER_ID,
+            name="Ahorros",
+            kind=AccountKind.SAVINGS,
+            currency=Currency.COP,
+            opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
+            credit_limit=Money(amount=Decimal("12000000"), currency=Currency.COP),
+        )
+
+
+def test_a_liability_without_a_stated_limit_reports_no_available() -> None:
+    account = Account.open(
+        user_id=USER_ID,
+        name="Hipoteca",
+        kind=AccountKind.MORTGAGE,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
+    )
+
+    # Not zero: zero would read as "no credit left", which is a different fact.
+    assert account.available is None
+
+
+def test_a_limit_in_another_currency_is_refused() -> None:
+    with pytest.raises(CurrencyMismatchError):
+        Account.open(
+            user_id=USER_ID,
+            name="Tarjeta",
+            kind=AccountKind.CREDIT_CARD,
+            currency=Currency.COP,
+            opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
+            credit_limit=Money(amount=Decimal("3000"), currency=Currency.USD),
         )

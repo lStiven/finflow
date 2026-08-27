@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Self
 
 from personal_finance.contexts.financial.domain.events import (
@@ -27,6 +28,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     AccountKind,
     Balance,
+    InstrumentKind,
     LedgerMovement,
     MovementDirection,
     MovementFingerprint,
@@ -83,9 +85,11 @@ class Account(AggregateRoot[AccountId]):
     )
     movements_applied: int = 0
     closed_at: PosixTime | None = None
+    credit_limit: Money | None = None
 
     def __post_init__(self) -> None:
         self.name = _valid_name(self.name)
+        self._check_credit_limit(self.credit_limit)
 
     @classmethod
     def open(
@@ -98,14 +102,20 @@ class Account(AggregateRoot[AccountId]):
         opened_at: PosixTime,
         opening_balance: Money | None = None,
         bank: str | None = None,
-        instrument_kind: str | None = None,
+        instrument_kind: InstrumentKind | None = None,
         last_four: str | None = None,
+        credit_limit: Money | None = None,
     ) -> Self:
         """Create the account its owner declared.
 
         The opening balance is what they say it holds today — zero when they
         do not know or do not care, which simply means the running total is
-        movement since this moment. On a liability it is what is owed.
+        movement since this moment. On a liability it is what is owed: on a
+        credit card, what has been spent against the limit so far.
+
+        `credit_limit` is that limit, and only a liability has one. The two
+        together are what `available` needs; the limit is deliberately not the
+        opening balance, which is the mistake the field exists to prevent.
 
         The instrument is optional: cash in a drawer and a mortgage that never
         emails have none, and an account without a fingerprint simply never
@@ -136,6 +146,7 @@ class Account(AggregateRoot[AccountId]):
             balance=opening,
             opened_at=opened_at,
             bank=institution or None,
+            credit_limit=credit_limit,
         )
         account._announce_opening()
 
@@ -160,6 +171,46 @@ class Account(AggregateRoot[AccountId]):
     @property
     def category(self) -> AccountCategory:
         return self.kind.category
+
+    @property
+    def available(self) -> Decimal | None:
+        """What is left of the limit: the limit minus what is owed.
+
+        `None` on anything without a limit, which is every asset and any
+        liability whose owner did not state one — there is no number to
+        report, and reporting the balance instead would read as credit
+        somebody does not have.
+
+        Signed, and it can go negative: a card can be over its limit, and that
+        is a fact worth showing rather than clamping to zero.
+        """
+        if self.credit_limit is None:
+            return None
+
+        return self.credit_limit.amount - self.balance.signed_amount
+
+    def set_credit_limit(self, limit: Money | None) -> None:
+        """State or restate the limit. Banks change them; this is not an event
+        about money, so the balance and the ledger are untouched.
+        """
+        self._check_credit_limit(limit)
+        self.credit_limit = limit
+
+    def _check_credit_limit(self, limit: Money | None) -> None:
+        if limit is None:
+            return
+
+        if self.category is not AccountCategory.LIABILITY:
+            raise ValueError(
+                f"A {self.kind.value} account has no credit limit: a limit is "
+                "what may be owed, and an asset owes nothing",
+            )
+
+        if limit.currency is not self.currency:
+            raise CurrencyMismatchError(
+                f"A {limit.currency.value} credit limit cannot sit on a "
+                f"{self.currency.value} account",
+            )
 
     @property
     def is_closed(self) -> bool:
@@ -597,12 +648,16 @@ def _account_fingerprint(
     None when the alert named no instrument, or named one without digits, or
     carried digits no account key can use. All three mean the same thing: no
     account can claim this movement by matching, so it waits for a person.
+
+    An instrument spelled in a vocabulary this context has not enumerated
+    still gets a key: what decides routing is whether an account was declared
+    for it, not whether the word is familiar.
     """
     if instrument_kind is None or last_four is None:
         return None
 
     try:
-        return AccountFingerprint.from_parts(
+        return AccountFingerprint.from_alert(
             bank=bank,
             instrument_kind=instrument_kind,
             last_four=last_four,

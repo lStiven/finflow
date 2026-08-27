@@ -45,8 +45,9 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-26 — the three contexts publish their enum vocabularies at
-  `GET /<context>/catalog`, so a client stops guessing what a form may offer.
+- 2026-08-26 — Financial owns an `InstrumentKind`, so an account can no
+  longer be declared under a key no alert produces, and a card states its
+  limit separately from what it has spent.
 
 ## Next steps
 
@@ -557,6 +558,27 @@ frontend — see **Next steps**.
   editor could not have caught it: its errors on this file were all
   `Unresolved tag: !Sub`, the YAML extension not knowing CloudFormation's
   short forms, now settled with `yaml.customTags` in `.vscode/settings.json`.
+- **Declaring takes the enum; receiving keeps the bank's own words.** A real
+  run lost five of six movements to one silent failure: a savings account
+  declared with `instrument_kind: "savings"` — the *account* kind — while its
+  alerts name the instrument `account`. Accepted, stored, and then matching
+  nothing forever, with no error anywhere. `AccountFingerprint.from_parts`
+  now takes `InstrumentKind`, so the 422 arrives at declaration time. What it
+  deliberately did **not** do is narrow the receiving side: `from_alert` still
+  takes free text, because a bank naming an instrument this context has never
+  enumerated still describes a real account, and storing the key it gave is
+  what lets that movement be adopted the day the word is added — retroactively
+  and with no migration. Narrowing there would discard routing information at
+  the only moment it exists.
+- **A credit limit is not an opening balance, and the trap was real.** The
+  same run put 12M in `opening_balance` on a card, meaning "my limit is 12M";
+  the ledger read it as "you already owe 12M" and every purchase raised it.
+  The arithmetic was right — on a liability the balance *is* the debt, and net
+  worth subtracts it — but there was nowhere else to put the number.
+  `credit_limit` is now its own field, `available` is derived from the two,
+  and asking an asset for one is a 422. `available` is signed rather than
+  clamped: a card over its limit is the one case worth showing. It is `None`
+  and not `0` when unstated, because zero reads as "no credit left".
 - **Each context publishes its own vocabulary; there is no one catalogue.**
   A client cannot guess an enum member, and hardcoding the list on the other
   side means two lists drifting apart, the failure being a 422 nobody sees

@@ -946,3 +946,114 @@ def test_every_published_account_kind_is_one_the_api_actually_takes(
 
         assert response.status_code == 201, (option["value"], response.text)
         assert response.json()["kind"] == option["value"]
+
+
+def test_declaring_an_account_with_an_account_kind_as_its_instrument_is_refused(
+    client: TestClient,
+) -> None:
+    """The exact mistake that cost five movements in a real run.
+
+    `savings` is what the owner calls the account; the alerts it sends name
+    the instrument `account`. This used to be accepted and then match nothing,
+    forever, reporting nothing anywhere.
+    """
+    response = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Cuenta de ahorros",
+            "kind": "savings",
+            "bank": "bancolombia",
+            "instrument_kind": "savings",
+            "last_four": "5261",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_the_catalog_offers_only_instruments_the_api_accepts(
+    client: TestClient,
+) -> None:
+    catalog = client.get("/financial/catalog").json()
+
+    for option in catalog["instrument_kinds"]:
+        response = client.post(
+            "/financial/accounts",
+            json={
+                "name": f"Cuenta {option['value']}",
+                "kind": "checking",
+                "bank": "bancolombia",
+                "instrument_kind": option["value"],
+                "last_four": "5261",
+            },
+        )
+
+        assert response.status_code == 201, (option["value"], response.text)
+
+
+def test_a_card_reports_its_limit_and_what_is_left_of_it(
+    client: TestClient,
+) -> None:
+    account = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Tarjeta",
+            "kind": "credit_card",
+            # Spent so far, not the limit. The two are different numbers.
+            "opening_balance": "200000",
+            "credit_limit": "12000000",
+        },
+    ).json()
+
+    assert account["credit_limit"] == "12000000"
+    assert account["available"] == "11800000"
+
+
+def test_an_asset_is_refused_a_credit_limit(client: TestClient) -> None:
+    response = client.post(
+        "/financial/accounts",
+        json={"name": "Ahorros", "kind": "savings", "credit_limit": "12000000"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_limit_can_be_restated_and_cleared(client: TestClient) -> None:
+    account = client.post(
+        "/financial/accounts",
+        json={"name": "Tarjeta", "kind": "credit_card", "credit_limit": "1000000"},
+    ).json()
+
+    raised = client.put(
+        f"/financial/accounts/{account['id']}/credit-limit",
+        json={"credit_limit": "3000000"},
+    )
+
+    assert raised.status_code == 200
+    assert raised.json()["available"] == "3000000"
+
+    cleared = client.put(
+        f"/financial/accounts/{account['id']}/credit-limit",
+        json={"credit_limit": None},
+    )
+
+    assert cleared.status_code == 200
+    assert cleared.json()["credit_limit"] is None
+    # Not zero: zero would read as "no credit left", a different fact.
+    assert cleared.json()["available"] is None
+
+
+def test_a_card_over_its_limit_says_so_rather_than_reporting_zero(
+    client: TestClient,
+) -> None:
+    account = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Tarjeta",
+            "kind": "credit_card",
+            "opening_balance": "120000",
+            "credit_limit": "100000",
+        },
+    ).json()
+
+    assert account["available"] == "-20000"

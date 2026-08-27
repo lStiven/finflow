@@ -54,6 +54,12 @@ GRACE_SECONDS = 25.0
 
 DEFAULT_API_PORT = 8000
 
+# Loopback, not 0.0.0.0. `up-dev` runs against real `dev-` resources, and
+# binding every interface publishes that to the whole network without anybody
+# choosing to. Testing from a phone is a real need and `--api-host 0.0.0.0` is
+# how to say so out loud.
+DEFAULT_API_HOST = "127.0.0.1"
+
 
 @dataclasses.dataclass(frozen=True)
 class Service:
@@ -66,7 +72,13 @@ def _worker(module: str) -> Sequence[str]:
     return ("uv", "run", "python", "-m", module)
 
 
-def _services(*, reload: bool, ingest: bool, port: int) -> Sequence[Service]:
+def _services(
+    *,
+    reload: bool,
+    ingest: bool,
+    port: int,
+    host: str,
+) -> Sequence[Service]:
     api = (
         (
             "uv",
@@ -74,6 +86,8 @@ def _services(*, reload: bool, ingest: bool, port: int) -> Sequence[Service]:
             "fastapi",
             "dev",
             "src/personal_finance/api/main.py",
+            "--host",
+            host,
             "--port",
             str(port),
         )
@@ -84,7 +98,7 @@ def _services(*, reload: bool, ingest: bool, port: int) -> Sequence[Service]:
             "uvicorn",
             "personal_finance.api.main:app",
             "--host",
-            "0.0.0.0",
+            host,
             "--port",
             str(port),
         )
@@ -140,6 +154,10 @@ class Stack:
         # once splices one line into another.
         self._output = threading.Lock()
         self._stopping = threading.Event()
+        # Set by a signal only. `_stopping` also fires when a service dies on
+        # its own, and conflating the two made the first Ctrl+C after a crash
+        # skip the grace period that lets in-flight batches finish.
+        self._asked = threading.Event()
         self._impatient = threading.Event()
         self._first_exit: str | None = None
 
@@ -210,9 +228,10 @@ class Stack:
         for `kill -9` on the supervisor, and every child is in its own session
         — five orphans holding a port and draining queues.
         """
-        if self._stopping.is_set():
+        if self._asked.is_set():
             self._impatient.set()
 
+        self._asked.set()
         self._stopping.set()
 
     def stop(self) -> None:
@@ -318,6 +337,15 @@ def main() -> None:
         default=DEFAULT_API_PORT,
         help=f"Port for the API (default {DEFAULT_API_PORT}).",
     )
+    parser.add_argument(
+        "--api-host",
+        default=DEFAULT_API_HOST,
+        help=(
+            f"Interface the API binds (default {DEFAULT_API_HOST}). Pass "
+            "0.0.0.0 to reach it from another device, such as a phone on the "
+            "same network."
+        ),
+    )
     arguments = parser.parse_args()
 
     environment = _environment_or_refuse()
@@ -336,7 +364,12 @@ def main() -> None:
         else environment is not Environment.LOCAL
     )
 
-    services = _services(reload=reload, ingest=ingest, port=arguments.api_port)
+    services = _services(
+        reload=reload,
+        ingest=ingest,
+        port=arguments.api_port,
+        host=arguments.api_host,
+    )
     stack = Stack(services, colour=colour)
 
     def _handle(number: int, frame: FrameType | None) -> None:
@@ -348,7 +381,8 @@ def main() -> None:
     prefix = environment.resource_prefix or "(no prefix)"
     print(
         f"{environment.value} — resources {prefix} — "
-        f"{len(services)} processes on port {arguments.api_port}, "
+        f"{len(services)} processes, API on "
+        f"{arguments.api_host}:{arguments.api_port}, "
         f"Ctrl+C stops all",
         flush=True,
     )

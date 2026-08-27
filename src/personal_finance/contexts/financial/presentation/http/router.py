@@ -32,6 +32,7 @@ from personal_finance.contexts.financial.application.commands import (
     LinkInstrumentCommand,
     OpenAccountCommand,
     RenameAccountCommand,
+    SetCreditLimitCommand,
 )
 from personal_finance.contexts.financial.application.handlers import (
     AccountAlreadyExistsError,
@@ -71,6 +72,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
     AccountId,
     AccountKind,
+    InstrumentKind,
     MovementDirection,
     TransactionOrigin,
     TransactionStatus,
@@ -134,6 +136,11 @@ class AccountResponse(BaseModel):
     # was never stated, and a liability's positive amount is what is owed.
     balance: str
     opening_balance: str
+    # Liabilities only, and only once the owner stated one. `available` is
+    # `credit_limit` minus what is owed, and it is signed: a card over its
+    # limit reports a negative, which is the case worth seeing.
+    credit_limit: str | None
+    available: str | None
     movements_applied: int
     opened_at: int
     closed_at: int | None
@@ -263,12 +270,14 @@ class AccountKindOption(CatalogOption):
 class FinancialCatalogResponse(BaseModel):
     """Every vocabulary this context's endpoints accept.
 
-    `instrument_kind` is deliberately absent: an account matches an alert by
-    the words the alert itself carries, so that vocabulary is Ingestion's and
-    is published at `GET /ingestion/catalog`.
+    `instrument_kinds` is the one that is not an account kind and is the one
+    people reach for anyway: a savings account is `savings`, but the alerts it
+    sends name the instrument `account`. Offer it as its own list, never a
+    text field.
     """
 
     account_kinds: list[AccountKindOption]
+    instrument_kinds: list[CatalogOption]
     account_categories: list[CatalogOption]
     currencies: list[CatalogOption]
     movement_directions: list[CatalogOption]
@@ -289,10 +298,29 @@ class OpenAccountPayload(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     kind: AccountKind
     currency: Currency = Currency.COP
+    # On a liability this is what has been spent so far, not the limit. The
+    # two are separate fields because conflating them is the mistake that
+    # makes a card read as fully drawn on the day it is declared.
     opening_balance: Decimal | None = Field(default=None, ge=0)
+    credit_limit: Decimal | None = Field(default=None, ge=0)
     bank: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
-    instrument_kind: str | None = Field(default=None, max_length=64)
+    instrument_kind: InstrumentKind | None = None
     last_four: str | None = Field(default=None, pattern=r"^\d{4,}$")
+
+    @model_validator(mode="after")
+    def _only_a_liability_has_a_limit(self) -> OpenAccountPayload:
+        # Asks the kind rather than restating which kinds are liabilities:
+        # `AccountKind.category` is the one place that decides it.
+        if (
+            self.credit_limit is not None
+            and self.kind.category is not AccountCategory.LIABILITY
+        ):
+            raise ValueError(
+                f"A {self.kind.value} account has no credit limit: a limit is "
+                "what may be owed, and an asset owes nothing",
+            )
+
+        return self
 
     @model_validator(mode="after")
     def _instrument_is_all_or_nothing(self) -> OpenAccountPayload:
@@ -312,15 +340,26 @@ class OpenAccountPayload(BaseModel):
 
 
 class LinkInstrumentPayload(BaseModel):
-    """Teach an account another of the names its alerts arrive under."""
+    """Teach an account another of the names its alerts arrive under.
+
+    One real account emails as a debit card for purchases and as an account
+    number for transfers, under different last four digits. Both have to be
+    linked or half its movements wait forever.
+    """
 
     bank: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
-    instrument_kind: str = Field(min_length=1, max_length=64)
+    instrument_kind: InstrumentKind
     last_four: str = Field(pattern=r"^\d{4,}$")
 
 
 class RenameAccountPayload(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
+
+
+class SetCreditLimitPayload(BaseModel):
+    """State or restate what a card may owe. `null` clears it."""
+
+    credit_limit: Decimal | None = Field(default=None, ge=0)
 
 
 class EnterTransactionPayload(BaseModel):
@@ -508,6 +547,7 @@ def get_catalog() -> FinancialCatalogResponse:
             )
             for kind in AccountKind
         ],
+        instrument_kinds=options(InstrumentKind),
         account_categories=options(AccountCategory),
         currencies=options(Currency),
         movement_directions=options(MovementDirection),
@@ -557,6 +597,14 @@ def open_account(
                         currency=payload.currency,
                     )
                 ),
+                credit_limit=(
+                    None
+                    if payload.credit_limit is None
+                    else Money(
+                        amount=payload.credit_limit,
+                        currency=payload.currency,
+                    )
+                ),
                 bank=payload.bank,
                 instrument_kind=payload.instrument_kind,
                 last_four=payload.last_four,
@@ -596,6 +644,30 @@ def rename_account(
                 user_id=user_id,
                 account_id=_account_id(account_id),
                 name=payload.name,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.put("/accounts/{account_id}/credit-limit", response_model=AccountResponse)
+def set_credit_limit(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: SetCreditLimitPayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """State or restate what this card may owe.
+
+    PUT rather than PATCH: the body carries the whole fact, and sending no
+    limit clears it rather than leaving the old one in place.
+    """
+    with _domain_errors():
+        account = use_case.set_credit_limit(
+            SetCreditLimitCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                credit_limit=payload.credit_limit,
             ),
         )
 
@@ -902,6 +974,10 @@ def _account_response(account: Account) -> AccountResponse:
         currency=account.currency.value,
         balance=str(account.balance.signed_amount),
         opening_balance=str(account.opening_balance.signed_amount),
+        credit_limit=(
+            None if account.credit_limit is None else str(account.credit_limit.amount)
+        ),
+        available=(None if account.available is None else str(account.available)),
         movements_applied=account.movements_applied,
         opened_at=account.opened_at.as_epoch_seconds(),
         closed_at=(

@@ -129,6 +129,11 @@ def _enum[T: enum.Enum](kind: type[T], value: str, what: str) -> T:
         ) from error
 
 
+# Written only when the account carries them, so `save` has to clear whatever
+# is now absent rather than leave a stale value behind.
+OPTIONAL_ACCOUNT_ATTRIBUTES = frozenset({"closed_at", "credit_limit"})
+
+
 def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
     return {
         PARTITION_KEY: {"S": str(account.user_id.value)},
@@ -152,6 +157,13 @@ def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
             if account.closed_at is not None
             else {}
         ),
+        # Absent rather than zero when unstated: zero is a real limit, and an
+        # account already stored before this field existed has none.
+        **(
+            {"credit_limit": {"N": str(account.credit_limit.amount)}}
+            if account.credit_limit is not None
+            else {}
+        ),
     }
 
 
@@ -173,6 +185,7 @@ def account_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Account:
 
     money = _enum(Currency, currency, "account currency")
     closed_at = item.get("closed_at", {}).get("N")
+    credit_limit = item.get("credit_limit", {}).get("N")
 
     return Account(
         id=AccountId.from_string(account_id),
@@ -192,6 +205,11 @@ def account_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Account:
         closed_at=(
             PosixTime.from_epoch_seconds(int(closed_at))
             if closed_at is not None
+            else None
+        ),
+        credit_limit=(
+            Money(amount=Decimal(credit_limit), currency=money)
+            if credit_limit is not None
             else None
         ),
     )
@@ -407,12 +425,29 @@ class DynamoDBAccountRepository:
         values = {
             f":{index}": value for index, value in enumerate(assignments.values())
         }
+
+        # An optional attribute the entity no longer carries has to be removed,
+        # not merely left out of the SET: an update that only assigns leaves
+        # the previous value in place, so clearing a credit limit would report
+        # success and change nothing. Only ever names attributes this method
+        # already owns, so a concurrent balance write is untouched.
+        removals = {
+            f"#r{index}": name
+            for index, name in enumerate(OPTIONAL_ACCOUNT_ATTRIBUTES - set(assignments))
+        }
+        clauses = [
+            "SET "
+            + ", ".join(f"{name} = :{index}" for index, name in enumerate(names)),
+        ]
+
+        if removals:
+            clauses.append("REMOVE " + ", ".join(removals))
+
         self._client.update_item(
             TableName=self._table_name,
             Key=_key(account.user_id, f"{ACCOUNT_PREFIX}{account.id.value}"),
-            UpdateExpression="SET "
-            + ", ".join(f"{name} = :{index}" for index, name in enumerate(names)),
-            ExpressionAttributeNames=names,
+            UpdateExpression=" ".join(clauses),
+            ExpressionAttributeNames={**names, **removals},
             ExpressionAttributeValues=values,
         )
         self._put_fingerprints(account)

@@ -24,6 +24,7 @@ from personal_finance.contexts.financial.domain.entities import Account, Transac
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountKind,
+    InstrumentKind,
     MovementDirection,
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
@@ -94,7 +95,7 @@ def _declare(
         currency=Currency.COP,
         opened_at=WHEN,
         bank=BANK,
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four=LAST_FOUR,
     )
     repository.add(account)
@@ -164,7 +165,7 @@ def test_two_users_can_hold_the_same_card_digits_without_colliding(
 
     fingerprint = AccountFingerprint.from_parts(
         bank=BANK,
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four=LAST_FOUR,
     )
 
@@ -208,7 +209,7 @@ def test_an_alert_never_lands_on_another_users_account(
 
     fingerprint = AccountFingerprint.from_parts(
         bank=BANK,
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four=LAST_FOUR,
     )
     waiting = ledger.list_unassigned_matching(user_id=ANA, fingerprint=fingerprint)
@@ -241,3 +242,31 @@ def test_a_search_never_reaches_another_users_counterparties(
     )
 
     assert page.total == 0
+
+
+def test_clearing_a_credit_limit_removes_it_from_storage(
+    accounts: DynamoDBAccountRepository,
+) -> None:
+    """`save` assigns; an attribute the entity dropped has to be removed.
+
+    An update that only SETs leaves the previous value in place, so clearing a
+    limit answered success and changed nothing — visible only on the next read
+    from real storage, which is why this test cannot live beside an in-memory
+    repository.
+    """
+    account = _declare(accounts, user_id=ANA, name="Tarjeta Ana")
+    account.set_credit_limit(Money(amount=Decimal("12000000"), currency=Currency.COP))
+    accounts.save(account)
+
+    stored = accounts.find(user_id=ANA, account_id=account.id)
+    assert stored is not None
+    assert stored.credit_limit is not None
+    assert stored.available == Decimal("12000000")
+
+    stored.set_credit_limit(None)
+    accounts.save(stored)
+
+    cleared = accounts.find(user_id=ANA, account_id=account.id)
+    assert cleared is not None
+    assert cleared.credit_limit is None
+    assert cleared.available is None

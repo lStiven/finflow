@@ -65,6 +65,30 @@ _LIABILITY_KINDS = frozenset(
 )
 
 
+class InstrumentKind(enum.Enum):
+    """The sort of card or account a movement arrived through.
+
+    Financial's own vocabulary, mapped at the boundary from whatever the
+    publishing context calls its instruments — the same arrangement as
+    `MovementDirection`. Neither context gets to change the other's meaning by
+    editing its own.
+
+    Not the same thing as `AccountKind`, and the difference is the whole point
+    of this type existing. `AccountKind` is what the owner calls the account;
+    this is what the *bank* calls the thing the money moved through, and only
+    these words ever appear in an alert. A savings account is declared
+    `SAVINGS` and its transfers arrive as `ACCOUNT` — spelling the fingerprint
+    with the account kind produces a key no alert can ever match, and the
+    owner finds out only by noticing that nothing was ever assigned.
+    """
+
+    CREDIT_CARD = "credit_card"
+    DEBIT_CARD = "debit_card"
+    SAVINGS_ACCOUNT = "savings_account"
+    CHECKING_ACCOUNT = "checking_account"
+    ACCOUNT = "account"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class AccountId(ValueObject):
     value: uuid.UUID
@@ -146,15 +170,52 @@ class AccountFingerprint(ValueObject):
         cls,
         *,
         bank: str,
+        instrument_kind: InstrumentKind,
+        last_four: str,
+    ) -> Self:
+        """The key an owner declares an account under.
+
+        Takes the enum, not a string, and that is the whole difference from
+        `from_alert`. A key spelled with a word no alert ever produces is not
+        an error anybody sees: it is an account that silently matches nothing,
+        forever. Declaring is the side where the vocabulary can be closed,
+        because it is a person choosing from a list.
+        """
+        return cls._build(
+            bank=bank,
+            instrument=instrument_kind.value,
+            last_four=last_four,
+        )
+
+    @classmethod
+    def from_alert(
+        cls,
+        *,
+        bank: str,
         instrument_kind: str,
         last_four: str,
     ) -> Self:
+        """The key a movement waits under, in the bank's own words.
+
+        Free text on purpose, and not narrowed to `InstrumentKind`: a bank
+        naming an instrument this context has never enumerated still describes
+        a real account, and storing the key it gave is what lets that movement
+        be adopted the day the word is added — retroactively, with no
+        migration. Narrowing here would throw the routing information away at
+        the only moment it exists.
+        """
+        return cls._build(
+            bank=bank,
+            instrument=instrument_kind.strip().lower(),
+            last_four=last_four,
+        )
+
+    @classmethod
+    def _build(cls, *, bank: str, instrument: str, last_four: str) -> Self:
         institution = bank.strip().lower()
 
         if not institution:
             raise ValueError("Account fingerprint requires a bank")
-
-        instrument = instrument_kind.strip().lower()
 
         if not instrument:
             raise ValueError("Account fingerprint requires an instrument kind")

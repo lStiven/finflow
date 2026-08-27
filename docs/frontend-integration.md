@@ -649,8 +649,8 @@ el mismo enum contra el que el endpoint valida, así que no pueden desfasarse:
 
 | Método | Ruta | Auth | Qué trae |
 |---|---|---|---|
-| GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings` |
-| GET | `/ingestion/catalog` | — | `processing_statuses`, `ignored_reasons`, `deferred_reasons`, `instrument_kinds` |
+| GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), **`instrument_kinds`**, `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings` |
+| GET | `/ingestion/catalog` | — | `processing_statuses`, `ignored_reasons`, `deferred_reasons`, `instrument_kinds` (el mismo vocabulario, visto desde quien lo recibe) |
 | GET | `/merchants/catalog` | — | `categories`, `sorts`, `statuses`, `alias_origins`, `counterparty_kinds` |
 
 Los tres son públicos: describen la forma de la API, no los datos de nadie, y
@@ -688,7 +688,7 @@ Para leer sin levantar el backend. La API manda; esto es una copia.
 | `kind` (cuenta) | `savings`, `checking`, `cash`, `investment`, `credit_card`, `loan`, `mortgage` |
 | `category` (cuenta, derivada) | `asset`, `liability` |
 | `currency` | `COP`, `USD` |
-| `instrument_kind` | `credit_card`, `debit_card`, `savings_account`, `checking_account`, `account` |
+| `instrument_kind` | `credit_card`, `debit_card`, `savings_account`, `checking_account`, `account` — **no** es `kind` |
 | `status` (comercio) | `automatic`, `confirmed` |
 | `origin` (alias) | `seed`, `derived`, `suggested`, `manual` |
 | `sort` (comercios) | `name`, `last_seen`, `times_seen` |
@@ -696,17 +696,80 @@ Para leer sin levantar el backend. La API manda; esto es una copia.
 | `deferred_reason` | `no_fallback_configured`, `fallback_found_nothing` — solo junto a `pending_fallback`, y ambos son finales para ese intento |
 | `category` (comercio) | `uncategorized`, `groceries`, `restaurants`, `transport`, `fuel`, `shopping`, `entertainment`, `subscriptions`, `utilities`, `health`, `education`, `travel`, `fees`, `transfers`, `income`, `other` |
 
-`instrument_kind` es el caso que más cuesta caro equivocar. Son las palabras
-con las que **llega la alerta**, no un vocabulario de Financial: una compra
-con tarjeta de crédito llega como `credit_card`, un QR o una transferencia
-como `account`. Por eso lo publica `/ingestion/catalog` y no
-`/financial/catalog`.
+### `instrument_kind` no es `kind`
 
-Al declarar una cuenta, `instrument_kind` se envía a `POST /financial/accounts`
-como string libre — la API acepta cualquier cosa de 64 caracteres. Si envías
-algo que no esté en esa lista, la cuenta se crea **sin error** y luego no
-adopta ninguna alerta, nunca, y nada lo reporta. Ofrece siempre un desplegable
-alimentado por el catálogo; no un campo de texto.
+Es la distinción que más cuesta caro equivocar, y ahora la API la hace cumplir.
+
+- **`kind`** es lo que el dueño llama a la cuenta: `savings`, `credit_card`…
+- **`instrument_kind`** es lo que el **banco** llama a la cosa por la que se
+  movió el dinero, y son las únicas palabras que aparecen en una alerta:
+  `account`, `debit_card`, `credit_card`, `savings_account`, `checking_account`.
+
+Una cuenta de ahorros se declara con `kind: "savings"`, pero sus
+transferencias llegan con `instrument_kind: "account"`. Declararla con
+`"savings"` produce una clave que ninguna alerta puede igualar jamás.
+
+Eso **antes se aceptaba en silencio**: la cuenta se creaba sin error y no
+adoptaba nada nunca. Hoy `POST /financial/accounts` responde **422**. Ofrece
+siempre un desplegable alimentado por `/financial/catalog` → `instrument_kinds`;
+nunca un campo de texto.
+
+### Una cuenta real tiene varios instrumentos
+
+Esto es lo segundo que rompe la adopción, y no lo arregla ninguna validación.
+
+Tu cuenta de ahorros manda alertas de **dos formas distintas**: como
+`account` con los últimos cuatro de la **cuenta** cuando haces una
+transferencia o un QR, y como `debit_card` con los últimos cuatro de la
+**tarjeta** cuando compras. Son dos claves diferentes, y los últimos cuatro
+tampoco coinciden entre sí.
+
+Hay que enlazar las dos, o la mitad de sus movimientos espera para siempre:
+
+```http
+POST /financial/accounts/{id}/instruments
+{ "bank": "bancolombia", "instrument_kind": "account",    "last_four": "5261" }
+
+POST /financial/accounts/{id}/instruments
+{ "bank": "bancolombia", "instrument_kind": "debit_card", "last_four": "0530" }
+```
+
+Enlazar es **retroactivo**: adopta al instante todo lo que ya estaba esperando
+bajo esa clave. No hay que reenviar ningún correo.
+
+Diséñalo como "esta cuenta, estas tarjetas", no como un solo campo.
+
+### Cupo de una tarjeta de crédito
+
+En una cuenta de pasivo el **saldo es la deuda**, no el disponible: gastar
+`sube` el saldo. Es correcto, y el patrimonio ya resta los pasivos.
+
+El cupo es un campo aparte, y son dos números distintos:
+
+| Campo | Qué es |
+|---|---|
+| `opening_balance` | lo **gastado** a la fecha de declararla |
+| `credit_limit` | el **cupo** total |
+| `available` | derivado: `credit_limit − saldo` |
+
+```jsonc
+// POST /financial/accounts
+{ "name": "Tarjeta", "kind": "credit_card",
+  "opening_balance": "200000",   // ya gastado
+  "credit_limit": "12000000" }   // cupo
+
+// respuesta -> "balance": "200000", "available": "11800000"
+```
+
+Meter el cupo en `opening_balance` deja la tarjeta leyéndose como agotada el
+día que se declara. `PUT /financial/accounts/{id}/credit-limit` lo cambia
+después (los bancos los mueven); `null` lo borra.
+
+`available` viene **con signo**: una tarjeta sobregirada reporta negativo en
+vez de cero, porque es justo el caso que hay que mostrar. Y es `null`, no
+`0`, cuando no hay cupo declarado — cero significaría "sin cupo disponible",
+que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
+`credit_limit` responde 422.
 
 ---
 
@@ -721,7 +784,7 @@ alimentado por el catálogo; no un campo de texto.
 | GET | `/identity/inbox` | ✔ | Dirección de reenvío + remitentes aprobados. |
 | PATCH | `/identity/inbox` | ✔ | Reemplazar los remitentes aprobados. |
 | GET | `/financial/catalog` | — | Vocabularios de Financial, para poblar formularios. |
-| GET | `/ingestion/catalog` | — | Estados de una notificación e `instrument_kinds`. |
+| GET | `/ingestion/catalog` | — | Estados de una notificación y sus razones. |
 | GET | `/merchants/catalog` | — | Vocabularios de Merchant. |
 | GET | `/merchants/categories` | — | Solo categorías. Lo cubre `/merchants/catalog`; se mantiene por compatibilidad. |
 | GET | `/merchants` | ✔ | Listar/buscar/filtrar comercios. |
@@ -735,7 +798,8 @@ alimentado por el catálogo; no un campo de texto.
 | POST | `/financial/accounts` | ✔ | Declarar cuenta (adopta lo que esperaba). |
 | GET | `/financial/accounts/{id}` | ✔ | Detalle. |
 | PATCH | `/financial/accounts/{id}` | ✔ | Renombrar. |
-| POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento. |
+| PUT | `/financial/accounts/{id}/credit-limit` | ✔ | Fijar, cambiar o borrar el cupo. Solo pasivos. |
+| POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento (retroactivo). |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
 | GET | `/financial/summary` | ✔ | Totales del periodo y desglose por mes, categoría, comercio o cuenta. |

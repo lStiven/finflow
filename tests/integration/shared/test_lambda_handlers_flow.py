@@ -32,6 +32,7 @@ from personal_finance.contexts.financial.application.handlers import (
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountKind,
+    InstrumentKind as FinancialInstrumentKind,
 )
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
     SQSFinancialWorker,
@@ -226,7 +227,7 @@ def _declare_card(manage_accounts: ManageAccountsUseCase) -> None:
             kind=AccountKind.CREDIT_CARD,
             currency=Currency.COP,
             bank="Bancolombia",
-            instrument_kind=CREDIT_CARD.kind.value,
+            instrument_kind=FinancialInstrumentKind(CREDIT_CARD.kind.value),
             last_four=CREDIT_CARD.last_four,
         ),
     )
@@ -276,7 +277,7 @@ def _balance(accounts: DynamoDBAccountRepository) -> Money:
         user_id=USER_ID,
         fingerprint=AccountFingerprint.from_parts(
             bank="bancolombia",
-            instrument_kind=CREDIT_CARD.kind.value,
+            instrument_kind=FinancialInstrumentKind(CREDIT_CARD.kind.value),
             last_four=CREDIT_CARD.last_four,
         ),
     )

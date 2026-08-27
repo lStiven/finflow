@@ -22,6 +22,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     AccountKind,
     BalanceSign,
+    InstrumentKind,
     MovementDirection,
 )
 from personal_finance.shared.domain.events import Event
@@ -202,7 +203,7 @@ def _declare(accounts: FakeAccounts, **overrides: object) -> Account:
         "currency": Currency.COP,
         "opened_at": PURCHASE_TIME,
         "bank": "bancolombia",
-        "instrument_kind": "credit_card",
+        "instrument_kind": InstrumentKind.CREDIT_CARD,
         "last_four": "7653",
     }
     parts.update(overrides)
@@ -336,7 +337,7 @@ def test_spending_lowers_an_asset_and_raises_a_liability() -> None:
         accounts,
         name="Cuenta de ahorros",
         kind=AccountKind.SAVINGS,
-        instrument_kind="debit_card",
+        instrument_kind=InstrumentKind.DEBIT_CARD,
     )
     use_case = _use_case(accounts, ledger, publisher)
 

@@ -11,6 +11,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountKind,
     Balance,
     BalanceSign,
+    InstrumentKind,
 )
 from personal_finance.shared.domain.value_objects import Currency, Money
 
@@ -29,27 +30,48 @@ def test_what_you_owe_is_never_an_asset() -> None:
 def test_the_same_account_written_two_ways_fingerprints_the_same() -> None:
     from_template = AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653",
     )
     from_llm = AccountFingerprint.from_parts(
         bank="  Bancolombia ",
-        instrument_kind="Credit_Card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653 ",
     )
 
     assert from_template == from_llm
 
 
+def test_an_alert_spelling_an_instrument_its_own_way_still_reaches_the_key() -> None:
+    """The deterministic parser and the model do not agree on casing, and the
+    instrument is the one field that used to carry that difference into a key.
+    """
+    declared = AccountFingerprint.from_parts(
+        bank="bancolombia",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
+        last_four="7653",
+    )
+
+    for spelling in ("Credit_Card", "  credit_card ", "CREDIT_CARD"):
+        assert (
+            AccountFingerprint.from_alert(
+                bank="bancolombia",
+                instrument_kind=spelling,
+                last_four="7653",
+            )
+            == declared
+        )
+
+
 def test_two_banks_reusing_four_digits_stay_two_accounts() -> None:
     bancolombia = AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653",
     )
     nu = AccountFingerprint.from_parts(
         bank="nu",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653",
     )
 
@@ -60,7 +82,7 @@ def test_an_instrument_without_last_four_cannot_identify_an_account() -> None:
     with pytest.raises(ValueError):
         AccountFingerprint.from_parts(
             bank="bancolombia",
-            instrument_kind="savings_account",
+            instrument_kind=InstrumentKind.SAVINGS_ACCOUNT,
             last_four="",
         )
 
@@ -99,12 +121,12 @@ def test_one_card_printed_two_ways_still_fingerprints_once() -> None:
     # hand back more of the number than that.
     template = AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="7653",
     )
     fallback = AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind="credit_card",
+        instrument_kind=InstrumentKind.CREDIT_CARD,
         last_four="45127653",
     )
 
@@ -116,6 +138,6 @@ def test_digits_that_are_not_ascii_are_refused() -> None:
     with pytest.raises(ValueError):
         AccountFingerprint.from_parts(
             bank="bancolombia",
-            instrument_kind="credit_card",
+            instrument_kind=InstrumentKind.CREDIT_CARD,
             last_four="\u0667\u0666\u0665\u0663",
         )

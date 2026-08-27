@@ -34,6 +34,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountKind,
     BalanceSign,
+    InstrumentKind as FinancialInstrumentKind,
     MovementDirection,
     TransactionStatus,
 )
@@ -197,7 +198,7 @@ def _declare_card(
             kind=kind,
             currency=Currency.COP,
             bank="Bancolombia",
-            instrument_kind=instrument.kind.value,
+            instrument_kind=FinancialInstrumentKind(instrument.kind.value),
             last_four=instrument.last_four,
         ),
     )
@@ -271,7 +272,7 @@ def _fingerprint(instrument: Instrument) -> AccountFingerprint:
 
     return AccountFingerprint.from_parts(
         bank="bancolombia",
-        instrument_kind=instrument.kind.value,
+        instrument_kind=FinancialInstrumentKind(instrument.kind.value),
         last_four=instrument.last_four,
     )
 

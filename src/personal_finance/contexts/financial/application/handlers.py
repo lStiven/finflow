@@ -12,6 +12,7 @@ from personal_finance.contexts.financial.application.commands import (
     OpenAccountCommand,
     RecordMovementCommand,
     RenameAccountCommand,
+    SetCreditLimitCommand,
 )
 from personal_finance.contexts.financial.application.ports import (
     AccountRepository,
@@ -28,7 +29,12 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
 )
 from personal_finance.shared.application.ports import EventPublisher
-from personal_finance.shared.domain.value_objects import Currency, PosixTime, UserId
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
 
 
 _logger = logging.getLogger(__name__)
@@ -263,6 +269,7 @@ class ManageAccountsUseCase:
             bank=command.bank,
             instrument_kind=command.instrument_kind,
             last_four=command.last_four,
+            credit_limit=command.credit_limit,
         )
 
         if not self._accounts.add(account):
@@ -286,6 +293,18 @@ class ManageAccountsUseCase:
         )
         self._accounts.save(account)
         self._adopt_waiting_movements(account)
+        self._events.publish(account.pull_events())
+
+        return account
+
+    def set_credit_limit(self, command: SetCreditLimitCommand) -> Account:
+        account = self._load(command.user_id, command.account_id)
+        account.set_credit_limit(
+            None
+            if command.credit_limit is None
+            else Money(amount=command.credit_limit, currency=account.currency),
+        )
+        self._accounts.save(account)
         self._events.publish(account.pull_events())
 
         return account
