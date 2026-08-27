@@ -135,6 +135,9 @@ class InMemoryAccounts:
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 
+    def restate_balance(self, account: Account) -> None:
+        self.save(account)
+
     def add(self, account: Account) -> bool:
         self.save(account)
 

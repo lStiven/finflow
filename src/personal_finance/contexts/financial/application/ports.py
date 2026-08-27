@@ -124,6 +124,16 @@ class AccountRepository(Protocol):
         """
         ...
 
+    def restate_balance(self, account: Account) -> None:
+        """Store a balance its owner stated, with the opening balance behind it.
+
+        One write, not `save` followed by `overwrite_balance`: those own
+        different halves of the same sum, and a crash between them would
+        leave an opening balance that does not explain the balance beside
+        it, with no replay scheduled to notice.
+        """
+        ...
+
     def add(self, account: Account) -> bool:
         """Create an account and the fingerprints it answers to, or lose.
 

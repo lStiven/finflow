@@ -70,6 +70,9 @@ class FakeAccounts:
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 
+    def restate_balance(self, account: Account) -> None:
+        self.save(account)
+
     def add(self, account: Account) -> bool:
         if self.loser is not None:
             winner = self.loser

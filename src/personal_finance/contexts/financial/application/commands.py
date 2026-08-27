@@ -89,6 +89,22 @@ class RenameAccountCommand:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RestateBalanceCommand:
+    """Say what the account holds now, and let the opening balance follow.
+
+    The number is today's, not the starting one: somebody declaring an
+    account rarely remembers what it held before the alerts Finflow already
+    has, but their bank shows them the current figure. Signed, because an
+    account legitimately goes below zero.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    # Bare amount, like the credit limit: the account carries the currency.
+    balance: Decimal
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class SetCreditLimitCommand:
     """State or restate what a card may owe.
 

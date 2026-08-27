@@ -22,6 +22,9 @@ from personal_finance.contexts.ingestion.application.ingest_handlers import (
 from personal_finance.contexts.ingestion.infrastructure.events import (
     build_ingestion_event_publisher,
 )
+from personal_finance.contexts.ingestion.infrastructure.ingest.forwarding_confirmer import (  # noqa: E501
+    HttpForwardingConfirmer,
+)
 from personal_finance.contexts.ingestion.infrastructure.ingest.imap_reader import (
     ImapIngestMailboxReader,
 )
@@ -86,6 +89,7 @@ def build_use_case() -> PollIngestMailboxUseCase:
     )
 
     return PollIngestMailboxUseCase(
+        forwarding_confirmer=HttpForwardingConfirmer(),
         reader=ImapIngestMailboxReader(
             host=settings.ingest_mailbox_host,
             port=settings.ingest_mailbox_port,
@@ -135,6 +139,7 @@ def main() -> None:
                         "duplicates": result.duplicates,
                         "unknown_recipient": result.unknown_recipient,
                         "failed": result.failed,
+                        "confirmations": result.confirmations,
                     },
                 )
 

@@ -32,6 +32,7 @@ from personal_finance.contexts.financial.application.commands import (
     LinkInstrumentCommand,
     OpenAccountCommand,
     RenameAccountCommand,
+    RestateBalanceCommand,
     SetCreditLimitCommand,
 )
 from personal_finance.contexts.financial.application.handlers import (
@@ -111,6 +112,11 @@ router = APIRouter(prefix="/financial", tags=["financial"])
 
 MAX_NAME_LENGTH = 120
 MAX_TEXT_LENGTH = 512
+
+# Far past any balance this is for, and far short of what DynamoDB's `N` can
+# hold. Unbounded, a magnitude the table cannot store reaches boto3 and comes
+# back as a 500 with a stack trace instead of the refusal it is.
+MAX_MONEY = Decimal("1e15")
 
 # Epoch seconds this side of the year 10000. Unbounded, the conversion raises
 # `OSError` from deep inside `datetime` rather than the `ValueError` the error
@@ -360,6 +366,17 @@ class SetCreditLimitPayload(BaseModel):
     """State or restate what a card may owe. `null` clears it."""
 
     credit_limit: Decimal | None = Field(default=None, ge=0)
+
+
+class RestateBalancePayload(BaseModel):
+    """What the account holds **now** — the figure the bank shows today.
+
+    Not the opening balance: that one is derived from this and the movements
+    already recorded, because it is the half nobody can look up. Signed, so
+    an overdrawn account and an overpaid card can both be stated.
+    """
+
+    balance: Decimal = Field(ge=-MAX_MONEY, le=MAX_MONEY)
 
 
 class EnterTransactionPayload(BaseModel):
@@ -644,6 +661,36 @@ def rename_account(
                 user_id=user_id,
                 account_id=_account_id(account_id),
                 name=payload.name,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.put("/accounts/{account_id}/balance", response_model=AccountResponse)
+def restate_balance(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: RestateBalancePayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """Correct what this account holds, without touching a single movement.
+
+    For the ordinary case of declaring an account and not knowing what it
+    held before the alerts Finflow already has: open it at zero, then send
+    the figure the bank shows today. The opening balance is solved backwards
+    so the ledger still adds up to it, every movement keeps counting exactly
+    once, and net worth follows from the corrected number.
+
+    PUT because the body carries the whole fact. Allowed on a closed account:
+    correcting what was already there is not new money moving.
+    """
+    with _domain_errors():
+        account = use_case.restate_balance(
+            RestateBalanceCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                balance=payload.balance,
             ),
         )
 

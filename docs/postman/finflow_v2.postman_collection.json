@@ -850,6 +850,46 @@
           "response": []
         },
         {
+          "name": "Restate balance",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/balance",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "balance"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": "{{account_id}}"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"balance\": \"1200000\"\n}"
+            },
+            "description": "Correct what the account holds, without touching a single movement. Send the figure the bank shows **today** — not the opening balance, which is solved backwards from this and the movements already on record. For declaring an account when nobody remembers what it held before the alerts Finflow already has: open it at zero, then restate. Signed, so an overdrawn account and an overpaid card can both be stated; on a liability the figure is what is owed. Works on a closed account too."
+          },
+          "response": []
+        },
+        {
           "name": "Set credit limit",
           "request": {
             "method": "PUT",

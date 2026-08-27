@@ -85,6 +85,9 @@ class InMemoryAccounts:
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 
+    def restate_balance(self, account: Account) -> None:
+        self.save(account)
+
     def save(self, account: Account) -> None:
         self.by_id[(account.user_id, account.id)] = account
 
@@ -1057,3 +1060,110 @@ def test_a_card_over_its_limit_says_so_rather_than_reporting_zero(
     ).json()
 
     assert account["available"] == "-20000"
+
+
+def test_restating_a_balance_keeps_every_movement_counted(client: TestClient) -> None:
+    # The case this exists for: somebody declares an account, cannot remember
+    # what it held before the alerts already on record, and states what their
+    # bank shows today instead.
+    account = _declare(client, name="Ahorros", kind="savings", currency="COP")
+    account_id = str(account["id"])
+    _enter(client, amount="50000", direction="outgoing", account_id=account_id)
+    _enter(client, amount="30000", direction="incoming", account_id=account_id)
+
+    response = client.put(
+        f"/financial/accounts/{account_id}/balance",
+        json={"balance": "1200000"},
+    )
+
+    assert response.status_code == 200, response.text
+    restated = response.json()
+    assert restated["balance"] == "1200000"
+    # Solved backwards: the two movements net to -20000.
+    assert restated["opening_balance"] == "1220000"
+    assert restated["movements_applied"] == 2
+
+    # No movement was touched to make the number come out.
+    listed = client.get("/financial/transactions", params={"account_id": account_id})
+    assert listed.json()["total"] == 2
+
+
+def test_a_movement_after_a_restatement_lands_on_top_of_it(
+    client: TestClient,
+) -> None:
+    account = _declare(client, name="Ahorros", kind="savings")
+    account_id = str(account["id"])
+    client.put(
+        f"/financial/accounts/{account_id}/balance",
+        json={"balance": "1200000"},
+    )
+
+    _enter(client, amount="200000", direction="outgoing", account_id=account_id)
+
+    current = client.get(f"/financial/accounts/{account_id}").json()
+    assert current["balance"] == "1000000"
+
+
+def test_a_restated_balance_moves_net_worth(client: TestClient) -> None:
+    account = _declare(client, name="Ahorros", kind="savings")
+
+    client.put(
+        f"/financial/accounts/{account['id']}/balance",
+        json={"balance": "1200000"},
+    )
+
+    figures = client.get("/financial/net-worth").json()
+    assert [figure["total"] for figure in figures] == ["1200000"]
+
+
+def test_restating_a_card_recomputes_what_is_available(client: TestClient) -> None:
+    card = _declare(client, credit_limit="12000000")
+
+    restated = client.put(
+        f"/financial/accounts/{card['id']}/balance",
+        json={"balance": "450000"},
+    ).json()
+
+    # On a liability the stated figure is what is owed, so the limit is that
+    # much further away.
+    assert restated["balance"] == "450000"
+    assert restated["available"] == "11550000"
+
+
+def test_a_balance_can_be_restated_below_zero(client: TestClient) -> None:
+    account = _declare(client, name="Ahorros", kind="savings")
+
+    restated = client.put(
+        f"/financial/accounts/{account['id']}/balance",
+        json={"balance": "-40000"},
+    ).json()
+
+    assert restated["balance"] == "-40000"
+
+
+def test_restating_an_account_nobody_owns_is_a_404(client: TestClient) -> None:
+    response = client.put(
+        "/financial/accounts/8f14e45f-ceea-467a-9c1b-000000000000/balance",
+        json={"balance": "1200000"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_balance_beyond_what_the_table_can_hold_is_refused(
+    client: TestClient,
+) -> None:
+    """Refused at the boundary, not by boto3.
+
+    Unbounded, `1E+200` reaches DynamoDB's `N` — which tops out far below it
+    — and the answer is a 500 with a stack trace instead of the plain
+    refusal every other money field on this router gives.
+    """
+    account = _declare(client, name="Ahorros", kind="savings")
+
+    response = client.put(
+        f"/financial/accounts/{account['id']}/balance",
+        json={"balance": "1E+200"},
+    )
+
+    assert response.status_code == 422

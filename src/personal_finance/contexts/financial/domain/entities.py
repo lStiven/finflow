@@ -8,6 +8,7 @@ from typing import Self
 from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
     AccountBalanceRebuilt,
+    AccountBalanceRestated,
     AccountClosed,
     AccountFingerprintLinked,
     AccountOpened,
@@ -289,6 +290,58 @@ class Account(AggregateRoot[AccountId]):
             AccountBalanceRebuilt(
                 account_id=self.id,
                 user_id=self.user_id,
+                balance=self.balance,
+                movements_applied=self.movements_applied,
+            ),
+        )
+
+    def restate_balance(
+        self,
+        stated: Balance,
+        movements: Iterable[LedgerMovement],
+    ) -> None:
+        """Set the balance to what its owner says it holds, and solve the
+        opening balance backwards so the ledger still adds up to it.
+
+        Takes today's number, not the starting one, because today's is the
+        one somebody can actually check: their bank shows it, while what the
+        account held before its first alert arrived is usually unknowable by
+        the time Finflow sees any of this. The opening balance is derived
+        from it rather than asked for.
+
+        This does not touch a single movement. The ledger stays the
+        authority — every row still counts exactly once, and an alert that
+        arrives afterwards moves this balance the same way it always would.
+        Allowed on a closed account for the same reason `rebuild` is: a
+        correction of what was already there is not new money moving.
+        """
+        if stated.currency is not self.currency:
+            raise CurrencyMismatchError(
+                f"A {stated.currency.value} balance cannot restate a "
+                f"{self.currency.value} account",
+            )
+
+        # Summed into locals, like a replay: a movement in a currency this
+        # account does not hold must abort the restatement rather than leave
+        # a balance behind that no opening balance explains.
+        moved = Balance.zero(self.currency)
+        applied = 0
+
+        for movement in movements:
+            moved = self._moved(moved, movement)
+            applied += 1
+
+        self.opening_balance = Balance.from_signed(
+            stated.signed_amount - moved.signed_amount,
+            self.currency,
+        )
+        self.balance = stated
+        self.movements_applied = applied
+        self.record_event(
+            AccountBalanceRestated(
+                account_id=self.id,
+                user_id=self.user_id,
+                opening_balance=self.opening_balance,
                 balance=self.balance,
                 movements_applied=self.movements_applied,
             ),

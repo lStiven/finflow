@@ -491,3 +491,120 @@ def test_a_limit_in_another_currency_is_refused() -> None:
             opened_at=PosixTime.from_epoch_seconds(1_700_000_000),
             credit_limit=Money(amount=Decimal("3000"), currency=Currency.USD),
         )
+
+
+def _balance(amount: str) -> Balance:
+    return Balance.from_signed(Decimal(amount), Currency.COP)
+
+
+def test_restating_a_balance_solves_the_opening_balance_backwards() -> None:
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING, movement_id="a"))
+    account.apply(_movement("30000", MovementDirection.INCOMING, movement_id="b"))
+    movements = [
+        _movement("50000", MovementDirection.OUTGOING, movement_id="a"),
+        _movement("30000", MovementDirection.INCOMING, movement_id="b"),
+    ]
+    account.pull_events()
+
+    account.restate_balance(_balance("1200000"), movements)
+
+    # The movements already net to -20000, so the account must have started
+    # 20000 above what its owner says it holds now.
+    assert account.opening_balance.signed_amount == Decimal("1220000")
+    assert account.balance.signed_amount == Decimal("1200000")
+    assert account.movements_applied == 2
+    assert [type(event).__name__ for event in account.pull_events()] == [
+        "AccountBalanceRestated",
+    ]
+
+
+def test_a_restated_balance_still_replays_to_the_same_number() -> None:
+    account = _declared()
+    movements = [
+        _movement("50000", MovementDirection.OUTGOING, movement_id="a"),
+        _movement("30000", MovementDirection.INCOMING, movement_id="b"),
+    ]
+    account.restate_balance(_balance("1200000"), movements)
+    account.pull_events()
+
+    account.rebuild(movements)
+
+    assert account.balance.signed_amount == Decimal("1200000")
+
+
+def test_a_movement_after_a_restatement_lands_on_top_of_it() -> None:
+    account = _declared()
+    account.restate_balance(_balance("1200000"), [])
+    account.pull_events()
+
+    account.apply(_movement("200000", MovementDirection.OUTGOING))
+
+    assert account.balance.signed_amount == Decimal("1000000")
+
+
+def test_restating_a_liability_states_what_is_owed() -> None:
+    card = _declared(AccountKind.CREDIT_CARD)
+    # Spending raises a card's balance, because what it holds is debt.
+    movements = [_movement("450000", MovementDirection.OUTGOING)]
+    card.restate_balance(_balance("450000"), movements)
+
+    assert card.opening_balance.signed_amount == Decimal("0")
+    assert card.balance.signed_amount == Decimal("450000")
+
+
+def test_restating_a_balance_below_what_was_spent_goes_negative() -> None:
+    account = _declared()
+    movements = [_movement("50000", MovementDirection.OUTGOING)]
+
+    account.restate_balance(_balance("10000"), movements)
+
+    assert account.opening_balance.signed_amount == Decimal("60000")
+    assert account.balance.signed_amount == Decimal("10000")
+
+
+def test_a_restatement_in_another_currency_is_refused() -> None:
+    account = _declared()
+
+    with pytest.raises(CurrencyMismatchError):
+        account.restate_balance(
+            Balance.from_signed(Decimal("300"), Currency.USD),
+            [],
+        )
+
+    assert account.balance.signed_amount == Decimal("0")
+    assert account.pull_events() == []
+
+
+def test_a_restatement_that_cannot_finish_leaves_the_account_untouched() -> None:
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING))
+    account.pull_events()
+
+    with pytest.raises(CurrencyMismatchError):
+        account.restate_balance(
+            _balance("1200000"),
+            [
+                _movement("50000", MovementDirection.OUTGOING),
+                LedgerMovement(
+                    movement_id=MovementId(value="movement-usd"),
+                    direction=MovementDirection.OUTGOING,
+                    amount=Money(amount=Decimal("20"), currency=Currency.USD),
+                    occurred_at=NOW,
+                ),
+            ],
+        )
+
+    assert account.opening_balance.signed_amount == Decimal("0")
+    assert account.balance.signed_amount == Decimal("-50000")
+    assert account.pull_events() == []
+
+
+def test_a_closed_account_can_still_be_restated() -> None:
+    account = _declared()
+    account.close(LATER)
+    account.pull_events()
+
+    account.restate_balance(_balance("1200000"), [])
+
+    assert account.balance.signed_amount == Decimal("1200000")

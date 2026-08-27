@@ -21,8 +21,12 @@ from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveOutcome,
 )
 from personal_finance.contexts.ingestion.application.ports import (
+    ForwardingConfirmer,
     InboundEmail,
     IngestMailboxReader,
+)
+from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
+    ForwardingConfirmation,
 )
 
 
@@ -40,6 +44,9 @@ class PollResult:
     # Recording it durably raised — left unacknowledged on purpose, so the
     # next poll finds it still new and tries again.
     failed: int = 0
+    # Gmail forwarding requests this pass finished. Counted apart from
+    # `accepted` because nothing about them is a bank notification.
+    confirmations: int = 0
 
 
 class PollIngestMailboxUseCase:
@@ -60,9 +67,11 @@ class PollIngestMailboxUseCase:
         *,
         reader: IngestMailboxReader,
         receive_use_case: ReceiveBankNotificationUseCase,
+        forwarding_confirmer: ForwardingConfirmer,
     ) -> None:
         self._reader = reader
         self._receive_use_case = receive_use_case
+        self._forwarding_confirmer = forwarding_confirmer
 
     def execute(self) -> PollResult:
         emails = self._reader.fetch_new()
@@ -70,9 +79,27 @@ class PollIngestMailboxUseCase:
         duplicates = 0
         unknown_recipient = 0
         failed = 0
+        confirmations = 0
         handled: list[InboundEmail] = []
 
         for email in emails:
+            # Ahead of the bank-notification path on purpose: this message
+            # carries no transaction, comes from a sender nobody approved, and
+            # that filter would discard its body — the link with it.
+            confirmation = ForwardingConfirmation.from_email(
+                sender=email.sender,
+                raw_content=email.raw_content,
+            )
+
+            if confirmation is not None:
+                if self._confirm(confirmation, email):
+                    confirmations += 1
+                    handled.append(email)
+                else:
+                    failed += 1
+
+                continue
+
             try:
                 result = self._receive_use_case.execute(
                     ReceiveBankNotificationCommand(
@@ -114,4 +141,39 @@ class PollIngestMailboxUseCase:
             duplicates=duplicates,
             unknown_recipient=unknown_recipient,
             failed=failed,
+            confirmations=confirmations,
         )
+
+    def _confirm(
+        self,
+        confirmation: ForwardingConfirmation,
+        email: InboundEmail,
+    ) -> bool:
+        """Follow one confirmation link, and never let it sink the batch."""
+        try:
+            accepted = self._forwarding_confirmer.confirm(confirmation)
+        except Exception:
+            # Unacknowledged, so the next poll finds the mail still new: the
+            # link stays valid for days and a network blip should cost a
+            # retry, not somebody's setup.
+            _logger.exception(
+                "failed to confirm a forwarding request; left unacknowledged",
+                extra={"recipient": email.recipient.value},
+            )
+
+            return False
+
+        if accepted:
+            _logger.info(
+                "forwarding confirmed",
+                extra={"recipient": email.recipient.value},
+            )
+        else:
+            # Acknowledged even so: an expired or already-used link answers
+            # this way every time, and retrying it forever would be noise.
+            _logger.warning(
+                "forwarding confirmation was refused",
+                extra={"recipient": email.recipient.value},
+            )
+
+        return True

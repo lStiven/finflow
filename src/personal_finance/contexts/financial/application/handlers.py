@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 import dataclasses
 import enum
 import logging
@@ -12,6 +13,7 @@ from personal_finance.contexts.financial.application.commands import (
     OpenAccountCommand,
     RecordMovementCommand,
     RenameAccountCommand,
+    RestateBalanceCommand,
     SetCreditLimitCommand,
 )
 from personal_finance.contexts.financial.application.ports import (
@@ -27,6 +29,8 @@ from personal_finance.contexts.financial.domain.exceptions import (
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
+    Balance,
+    LedgerMovement,
 )
 from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import (
@@ -297,6 +301,32 @@ class ManageAccountsUseCase:
 
         return account
 
+    def restate_balance(self, command: RestateBalanceCommand) -> Account:
+        """Correct what an account holds, keeping every movement it holds.
+
+        The owner states today's figure and the opening balance is solved
+        backwards from the rows already on record, which is the only half of
+        the sum nobody can look up. Declaring an account without knowing what
+        it held before its first alert is therefore not a dead end: open it
+        at zero, then say what the bank shows.
+
+        Both numbers go out in one write: they are two halves of the same
+        sum, and an opening balance stored without the balance it explains
+        would be a state no replay is scheduled to notice. A movement landing
+        between the read and that write is the same race a replay already
+        runs, and self-corrects the same way — the next replay reads the row
+        that was missed.
+        """
+        account = self._load(command.user_id, command.account_id)
+        account.restate_balance(
+            Balance.from_signed(command.balance, account.currency),
+            _replayed(account, self._ledger),
+        )
+        self._accounts.restate_balance(account)
+        self._events.publish(account.pull_events())
+
+        return account
+
     def set_credit_limit(self, command: SetCreditLimitCommand) -> Account:
         account = self._load(command.user_id, command.account_id)
         account.set_credit_limit(
@@ -525,6 +555,22 @@ class ManageTransactionsUseCase:
         return account
 
 
+def _replayed(account: Account, ledger: TransactionLedger) -> Iterator[LedgerMovement]:
+    """Every movement on an account, as the balance rules consume them.
+
+    One reader for both paths that replay: a repair and a restatement must
+    derive their number from the same rows, or they disagree the moment one
+    of them learns to skip a row the other still counts.
+    """
+    return (
+        movement.as_movement()
+        for movement in ledger.list_movements(
+            user_id=account.user_id,
+            account_id=account.id,
+        )
+    )
+
+
 def _resettle(
     account: Account,
     accounts: AccountRepository,
@@ -536,13 +582,7 @@ def _resettle(
     or moved. Nudging the total by a delta would work too, but replaying is
     the only version that cannot end up disagreeing with the ledger.
     """
-    account.rebuild(
-        movement.as_movement()
-        for movement in ledger.list_movements(
-            user_id=account.user_id,
-            account_id=account.id,
-        )
-    )
+    account.rebuild(_replayed(account, ledger))
     accounts.overwrite_balance(account)
 
 

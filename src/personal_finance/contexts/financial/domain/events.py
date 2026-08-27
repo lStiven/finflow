@@ -83,6 +83,21 @@ class AccountBalanceRebuilt(AccountEvent):
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountBalanceRestated(AccountEvent):
+    """The owner said what the account holds, and the opening balance was
+    solved backwards from the ledger to match.
+
+    Not a repair, which is what makes it a different fact from
+    `AccountBalanceRebuilt`: nothing drifted. The starting point was unknown
+    or wrong, and somebody supplied the one number they can actually check.
+    """
+
+    opening_balance: Balance
+    balance: Balance
+    movements_applied: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountClosed(AccountEvent):
     pass
 

@@ -11,6 +11,9 @@ from personal_finance.contexts.ingestion.domain.entities import (
     BankNotification,
     UserInbox,
 )
+from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
+    ForwardingConfirmation,
+)
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
 )
@@ -195,3 +198,21 @@ class QueuePublisher(Protocol):
     """
 
     def enqueue(self, message: ParseNotificationMessage) -> None: ...
+
+
+class ForwardingConfirmer(Protocol):
+    """Completes a Gmail forwarding request by following its confirmation link.
+
+    A port rather than a direct call because this is the one place ingestion
+    reaches out over the network to something that is not AWS, and the thing
+    it reaches is named by untrusted mail. Keeping it behind an interface is
+    what lets the poll loop be tested without one.
+    """
+
+    def confirm(self, confirmation: ForwardingConfirmation) -> bool:
+        """Follow the link. True when Google accepted it.
+
+        Returns rather than raises on a refusal: a link that has expired or
+        was already used is a normal outcome, not a failure of the poll.
+        """
+        ...

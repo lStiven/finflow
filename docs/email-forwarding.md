@@ -88,10 +88,14 @@ igual —:
 1. **Configuración** (⚙️) → **Ver toda la configuración** → pestaña
    **Reenvío y POP/IMAP**.
 2. **Agregar una dirección de reenvío** → pega la dirección del paso 2.
-3. Gmail manda un código de verificación **a esa dirección** — como es
-   nuestra cuenta, no la del usuario, es responsabilidad del operador del
-   despliegue confirmarlo la primera vez que se use esa cuenta de ingesta (no
-   por usuario, una sola vez por instalación).
+3. Gmail manda una solicitud de confirmación **a esa dirección**. Ya no hay
+   que hacer nada: el `ingest worker` la reconoce y la confirma solo, en su
+   siguiente pasada. El log lo cuenta aparte, como `confirmations=1`.
+
+   Es **una por usuario**, no una por instalación: cada quien tiene su propio
+   `+alias`, así que Gmail pide confirmación para cada uno. Antes eso
+   significaba que el operador tenía que entrar al buzón compartido a buscar
+   el enlace de cada persona, porque nadie más puede leer esa cuenta.
 4. Ya verificada, el usuario crea un **filtro**: "de:
    `alertasynotificaciones@an.notificacionesbancolombia.com`" → **Reenviar a**
    → su dirección.
@@ -114,6 +118,15 @@ recoge en su siguiente pasada (por defecto, cada
   por el banco de verdad. La dirección en sí es difícil de adivinar (deriva
   de un UUID completo), pero no hay verificación de autenticidad del correo
   entrante más allá de eso todavía.
+- **Confirmar un reenvío no concede nada nuevo.** Quien ya tenga la
+  dirección de un usuario puede escribirle directo; el reenvío es una ruta de
+  entrega, no un permiso. Lo que decide si un mensaje llega al ledger sigue
+  siendo el filtro de remitentes aprobados, igual en los dos casos.
+- **El enlace de confirmación se sigue con la correa corta.** Viene dentro de
+  un correo, que es entrada no confiable, así que está fijado por esquema,
+  host exacto (`mail-settings.google.com`) y el prefijo de ruta `vf-` que lo
+  distingue del enlace de *cancelar* que viene en el mismo mensaje. No se
+  siguen redirecciones. Un enlace que no cumpla todo eso no se pide.
 - **Nunca se lee el buzón del usuario.** El `ingest worker` solo abre la
   cuenta que el propio despliegue posee — nunca pide permiso sobre la cuenta
   de nadie más, porque nunca la toca.

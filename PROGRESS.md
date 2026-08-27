@@ -23,7 +23,7 @@ watching only what comes in and goes out. Declaring an account starts the
 association and is retroactive. Money that never emails can be entered by
 hand, and anything recorded can be corrected.
 
-Twenty-eight endpoints across the four contexts, the three SQS workers, the
+Twenty-nine endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
 canonical merchant behind the bank's text, and `GET /financial/summary`
@@ -45,9 +45,8 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-26 — Financial owns an `InstrumentKind`, so an account can no
-  longer be declared under a key no alert produces, and a card states its
-  limit separately from what it has spent.
+- 2026-08-27 — an account's balance can be corrected after the fact:
+  `PUT /financial/accounts/{id}/balance`.
 
 ## Next steps
 
@@ -280,6 +279,20 @@ frontend — see **Next steps**.
   recomputes the total last. A crash in between leaves a stale total, which
   `rebuild` repairs — the ledger is the authority and the balance is derived
   from it, which is exactly what makes that recoverable instead of lost.
+- **Restating a balance takes today's figure, not the opening one**
+  (2026-08-27). Declaring an account used to be a dead end for anybody who
+  could not remember what it held before the alerts already on record —
+  `opening_balance` was write-once at declaration, and getting it wrong meant
+  closing the account and redeclaring it. The endpoint deliberately asks for
+  the number the bank shows *now*, because that is the only half a person can
+  look up; the opening balance is solved backwards from the ledger. Rejected:
+  exposing `opening_balance` for editing, which is the same arithmetic with
+  the unknowable half facing the user. No movement is touched, so the ledger
+  stays the authority and a replay still reproduces the number. Both figures
+  go out in one `UpdateExpression` rather than `save` + `overwrite_balance`:
+  they are two halves of one sum, and a crash between two writes would leave
+  an opening balance that does not explain the balance beside it, with no
+  replay scheduled to notice.
 - **A movement's identity never moves with an edit.** It is derived from the
   bank's own statement, so a redelivery of a corrected alert still lands on
   the same row rather than arriving as a second expense. The first correction
@@ -558,6 +571,20 @@ frontend — see **Next steps**.
   editor could not have caught it: its errors on this file were all
   `Unresolved tag: !Sub`, the YAML extension not knowing CloudFormation's
   short forms, now settled with `yaml.customTags` in `.vscode/settings.json`.
+- **Gmail's forwarding confirmation is ingestion's own mail, not a
+  notification.** It goes to the user's `+alias`, so only the operator could
+  read it, and every new user waited on somebody fishing their link out by
+  hand. It is now recognised *before* the approved-sender filter, because that
+  filter would file it under an unapproved sender and discard its body — the
+  link with it. Following a URL that arrived in untrusted mail is the risk,
+  and it is pinned three ways: exact sender address (not the domain, which
+  also sends everything else Google mails anybody), scheme plus exact host
+  checked against the parsed hostname, and the `vf-` path prefix — the same
+  message carries the `uf-` *cancel* link one sentence away, and a loose match
+  would have made the feature quietly undo itself. Redirects are not followed.
+  What confirming does **not** do is widen access: anybody holding the alias
+  can already mail it directly, so forwarding is a delivery route rather than
+  a permission, and the approved-sender filter is the boundary either way.
 - **Declaring takes the enum; receiving keeps the bank's own words.** A real
   run lost five of six movements to one silent failure: a savings account
   declared with `instrument_kind: "savings"` — the *account* kind — while its

@@ -14,6 +14,9 @@ from personal_finance.contexts.ingestion.domain.entities import (
     BankNotification,
     UserInbox,
 )
+from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
+    ForwardingConfirmation,
+)
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -125,16 +128,35 @@ def _inbox(*, domains: frozenset[str] = frozenset({BANK_DOMAIN})) -> UserInbox:
     )
 
 
+class FakeConfirmer:
+    """Records what it was asked to confirm, and answers however told to."""
+
+    def __init__(self, *, accepts: bool = True, raises: bool = False) -> None:
+        self.confirmed: list[str] = []
+        self._accepts = accepts
+        self._raises = raises
+
+    def confirm(self, confirmation: ForwardingConfirmation) -> bool:
+        if self._raises:
+            raise RuntimeError("network is down")
+
+        self.confirmed.append(confirmation.url)
+
+        return self._accepts
+
+
 def _make(
     reader: FakeReader,
     *,
     inbox: UserInbox | None = None,
     queue: NullQueuePublisher | None = None,
+    confirmer: FakeConfirmer | None = None,
 ) -> tuple[PollIngestMailboxUseCase, NullQueuePublisher]:
     queue = queue if queue is not None else NullQueuePublisher()
     inboxes = InMemoryUserInboxRepository(inbox if inbox is not None else _inbox())
 
     use_case = PollIngestMailboxUseCase(
+        forwarding_confirmer=confirmer if confirmer is not None else FakeConfirmer(),
         reader=reader,
         receive_use_case=ReceiveBankNotificationUseCase(
             repository=InMemoryBankNotificationRepository(),
@@ -247,3 +269,104 @@ def test_one_failing_message_does_not_abandon_the_rest_of_the_batch() -> None:
     assert result.accepted == 2
     assert result.failed == 1
     assert len(queue.enqueued) == 2
+
+
+_CONFIRMATION_URL = "https://mail-settings.google.com/mail/vf-%5BANGjdJ-abc%5D-def"
+
+
+def _confirmation_email(message_id: str = "google-1") -> InboundEmail:
+    return InboundEmail(
+        recipient=EmailAddress(ALIAS),
+        sender=EmailAddress("forwarding-noreply@google.com"),
+        message_id=EmailMessageId(message_id),
+        subject="Confirmación de reenvío",
+        raw_content=(
+            "haz clic en el siguiente vínculo para confirmar la solicitud:\n"
+            f"{_CONFIRMATION_URL}\n"
+        ),
+        received_at=PosixTime.now(),
+    )
+
+
+def test_a_forwarding_request_is_confirmed_and_never_reaches_the_parser() -> None:
+    """The whole point: nobody has to fish this link out of the mailbox.
+
+    It must not take the bank-notification path either — that path would file
+    it under an unapproved sender and discard its body, link included.
+    """
+    reader = FakeReader(_confirmation_email())
+    confirmer = FakeConfirmer()
+    use_case, queue = _make(reader, confirmer=confirmer)
+
+    result = use_case.execute()
+
+    assert confirmer.confirmed == [_CONFIRMATION_URL]
+    assert result.confirmations == 1
+    # Not a notification by any counter, and nothing queued for parsing.
+    assert result.accepted == 0
+    assert queue.enqueued == []
+    assert len(reader.acked) == 1
+
+
+def test_a_confirmation_that_could_not_be_reached_is_left_for_the_next_poll() -> None:
+    """The link stays valid for days; a network blip should cost a retry, not
+    somebody's setup.
+    """
+    reader = FakeReader(_confirmation_email())
+    use_case, _ = _make(reader, confirmer=FakeConfirmer(raises=True))
+
+    result = use_case.execute()
+
+    assert result.failed == 1
+    assert result.confirmations == 0
+    # Unacknowledged, so the next poll still finds it new.
+    assert reader.acked == []
+
+
+def test_a_link_google_refuses_is_not_retried_forever() -> None:
+    """An expired or already-used link answers this way every time."""
+    reader = FakeReader(_confirmation_email())
+    use_case, _ = _make(reader, confirmer=FakeConfirmer(accepts=False))
+
+    result = use_case.execute()
+
+    assert result.confirmations == 1
+    assert len(reader.acked) == 1
+
+
+def test_bank_mail_in_the_same_batch_is_unaffected() -> None:
+    reader = FakeReader(_confirmation_email(), _email(message_id="bank-1"))
+    confirmer = FakeConfirmer()
+    use_case, queue = _make(reader, confirmer=confirmer)
+
+    result = use_case.execute()
+
+    assert result.confirmations == 1
+    assert result.accepted == 1
+    assert len(queue.enqueued) == 1
+    assert len(reader.acked) == 2
+
+
+def test_mail_forging_googles_address_still_cannot_reach_the_ledger() -> None:
+    """Anyone can write that `From`. It buys a fetch of a pinned Google URL and
+    nothing else — in particular it does not become a transaction.
+    """
+    forged = InboundEmail(
+        recipient=EmailAddress(ALIAS),
+        sender=EmailAddress("forwarding-noreply@google.com"),
+        message_id=EmailMessageId("forged-1"),
+        subject="Confirmación de reenvío",
+        raw_content="Bancolombia: Compraste COP1.000.000,00 en ATACANTE",
+        received_at=PosixTime.now(),
+    )
+    reader = FakeReader(forged)
+    confirmer = FakeConfirmer()
+    use_case, queue = _make(reader, confirmer=confirmer)
+
+    result = use_case.execute()
+
+    # No confirmation link in it, so it falls through to the ordinary path —
+    # where Google is not an approved sender, so it is filed and ignored.
+    assert confirmer.confirmed == []
+    assert result.confirmations == 0
+    assert queue.enqueued == []

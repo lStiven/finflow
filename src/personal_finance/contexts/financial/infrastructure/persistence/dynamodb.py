@@ -69,6 +69,7 @@ ACCOUNT_ID_ATTRIBUTE = "account_id"
 _LEDGER_ROW = 0
 BALANCE_ATTRIBUTE = "balance_amount"
 MOVEMENTS_APPLIED_ATTRIBUTE = "movements_applied"
+OPENING_BALANCE_ATTRIBUTE = "opening_balance"
 
 
 CONDITIONAL_CHECK_FAILED = "ConditionalCheckFailed"
@@ -142,7 +143,9 @@ def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
         "name": {"S": account.name},
         "kind": {"S": account.kind.value},
         "currency": {"S": account.currency.value},
-        "opening_balance": {"N": str(account.opening_balance.signed_amount)},
+        OPENING_BALANCE_ATTRIBUTE: {
+            "N": str(account.opening_balance.signed_amount),
+        },
         BALANCE_ATTRIBUTE: {"N": str(account.balance.signed_amount)},
         MOVEMENTS_APPLIED_ATTRIBUTE: {"N": str(account.movements_applied)},
         "opened_at": {"N": str(account.opened_at.as_epoch_seconds())},
@@ -193,7 +196,10 @@ def account_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Account:
         name=name,
         kind=_enum(AccountKind, kind, "account kind"),
         currency=money,
-        opening_balance=Balance.from_signed(_number(item, "opening_balance"), money),
+        opening_balance=Balance.from_signed(
+            _number(item, OPENING_BALANCE_ATTRIBUTE),
+            money,
+        ),
         balance=Balance.from_signed(_number(item, BALANCE_ATTRIBUTE), money),
         opened_at=PosixTime.from_epoch_seconds(int(_number(item, "opened_at"))),
         bank=_string(item, "bank") or None,
@@ -468,6 +474,33 @@ class DynamoDBAccountRepository:
                 f"{MOVEMENTS_APPLIED_ATTRIBUTE} = :applied"
             ),
             ExpressionAttributeValues={
+                ":balance": {"N": str(account.balance.signed_amount)},
+                ":applied": {"N": str(account.movements_applied)},
+            },
+        )
+
+    def restate_balance(self, account: Account) -> None:
+        """Write a balance its owner stated, and the opening balance behind it.
+
+        One `UpdateExpression` rather than `save` followed by
+        `overwrite_balance`: those two own different halves of the sum, and a
+        crash between them would leave an opening balance that does not
+        explain the balance beside it — inconsistent with nothing scheduled
+        to repair it, since a replay only runs when a movement moves. Naming
+        only these three attributes also leaves a concurrent movement's
+        `ADD` on everything else untouched, the same discipline
+        `overwrite_balance` keeps.
+        """
+        self._client.update_item(
+            TableName=self._table_name,
+            Key=_key(account.user_id, f"{ACCOUNT_PREFIX}{account.id.value}"),
+            UpdateExpression=(
+                f"SET {OPENING_BALANCE_ATTRIBUTE} = :opening, "
+                f"{BALANCE_ATTRIBUTE} = :balance, "
+                f"{MOVEMENTS_APPLIED_ATTRIBUTE} = :applied"
+            ),
+            ExpressionAttributeValues={
+                ":opening": {"N": str(account.opening_balance.signed_amount)},
                 ":balance": {"N": str(account.balance.signed_amount)},
                 ":applied": {"N": str(account.movements_applied)},
             },
