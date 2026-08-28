@@ -45,10 +45,11 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-28 — `sam build` proven to work end to end; the deploy recipes'
-  broken `--config-file` path fixed, and `infra/iam/finflow-deploy-policy.json`
-  written. Deploy still blocked on IAM: the configured user has no
-  CloudFormation, ECR, SSM or IAM access.
+- 2026-08-28 — workers were logging nothing on Lambda: `configure_logging`
+  called `basicConfig` without `force`, which does nothing once the managed
+  runtime has attached its own root handler, so every INFO line was dropped at
+  the root logger's WARNING default. Fixed and pinned by tests. `just
+  ecr-prune-*` added alongside it — see **Billing**.
 
 ## Next steps
 
@@ -702,13 +703,28 @@ frontend — see **Next steps**.
   there the mail is supposed to arrive the way production receives it.
   Production is refused outright: there the five are Lambda functions AWS
   invokes, and the `*-prod` recipes remain for driving one deliberately.
-- **The deploy will fail on IAM before it fails on anything in the template.**
-  `dev-proyecto-ddd`, the only credential here, is denied
-  `cloudformation:ListStacks` and `ssm:DescribeParameters`. Nothing to fix in
-  this repo — it is an account-side grant, and it blocks `deploy-dev` and
-  `deploy-prod` equally. Local runs against `.env.development` are unaffected:
-  they touch DynamoDB, SQS and EventBridge only, and read secrets from the
-  env file rather than SSM.
+- **The Web Adapter ships in all five images and is inert only by accident**
+  (2026-08-28, deferred). It is in the image, so it starts in the four
+  workers too, where there is no HTTP server for it to translate for. What
+  keeps it harmless is that its readiness probe against `:8000/health` never
+  passes, so it never reaches the point of claiming invocations — the workers
+  keep running on the normal Python runtime. The cost is noise: it retries
+  every 2s forever, and in `ingest`, the only worker held alive by a
+  schedule, that was 235 of 301 log lines in an hour. Measured at ~18 MB a
+  month against a 5 GB allowance, so this is legibility, not money, and it
+  was left alone until the logging fix showed how the logs actually read.
+  The fix, when it is worth it, is two final stages in the one Dockerfile
+  selected per function with `DockerBuildTarget` — cheaper than the "one
+  image, five functions" comment implies, since ECR already holds five
+  separate copies either way.
+- **The IAM block is cleared and `finflow-dev` is deployed** (2026-08-28).
+  `dev-proyecto-ddd` was granted what it lacked and the stack reached
+  `UPDATE_COMPLETE`; an alert forwarded that evening went mailbox to balance
+  through the five deployed functions. What is still denied is read-only and
+  incidental — `ce:GetCostAndUsage`, so the bill cannot be read from here, and
+  `ecr:GetLifecyclePolicy`, now in `infra/iam/finflow-deploy-policy.json` but
+  not yet granted, so `just ecr-prune-*` can write a policy it cannot read
+  back. Both are account-side grants with nothing to fix in this repo.
 
 
 ### Billing (2026-08-25)
@@ -744,6 +760,24 @@ frontend — see **Next steps**.
   Without the wait the second raises `ResourceInUseException` and the run dies
   partway through, leaving a table half-reconciled — and moto does not model
   `UPDATING`, so no test could have caught it.
+- **ECR is the only bill here that grows on its own, and SAM will not cap
+  it** (2026-08-28). `resolve_image_repos = true` does not push one image: it
+  creates one repository *per function* in a companion stack SAM generates,
+  and pushes a ~250 MB copy to each, so a deploy costs 1.26 GB and two
+  deploys had already left ten images. That companion stack declares a name,
+  tags and a repository policy and no `LifecyclePolicy`, so nothing ever
+  prunes — past the first-year 500 MB allowance this is cents today and a few
+  dollars a month, forever, after twenty deploys. `just ecr-prune-dev` /
+  `-prod` applies the cap out of band rather than declaring it in
+  `infra/template.yaml`, and that is the decision worth keeping: owning these
+  repositories in our own template means dropping `resolve_image_repos` and
+  declaring five `AWS::ECR::Repository` resources, which migrates where every
+  image is pushed to fix a bill of cents. CloudFormation leaves a
+  hand-applied policy alone precisely because the companion stack never
+  declares that property. Re-run it if a function is ever added.
+  Worth knowing before the CI pipeline is built: "promote the same image from
+  dev to prod" is harder than it sounds when SAM keeps five repositories per
+  account.
 - **The on-demand ceiling is a blast radius, not a budget.**
   `INGESTION_DYNAMODB_MAX_*_UNITS` caps requests per second per table and per
   index, so a runaway loop throttles instead of billing; pegged for a month it

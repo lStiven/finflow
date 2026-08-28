@@ -296,6 +296,54 @@ deploy-logs-prod name="ApiFunction":
     sam logs --stack-name finflow --name {{name}} \
         --profile finflow-production --tail
 
+# Every deploy pushes the image once per function — five copies of ~250 MB —
+# into five repositories SAM creates and then never prunes, so ECR storage
+# grows by the whole set on each run and is billed for as long as the account
+# exists. It is the only bill in this project that grows on its own.
+#
+# The policy attaches to the repositories, not to today's images, so it keeps
+# applying to later deploys and re-running this is a no-op. `keep` is how many
+# deploys back a rollback can still reach. Lambda serves a running function
+# from its own cached copy of the image, so expiring one here does not disturb
+# it — it removes the option of rolling back to it.
+
+# Cap each SAM repository at `keep` images, newest first.
+ecr-prune-dev keep="3": (_ecr-prune "finflow-dev" keep)
+
+# Cap each SAM repository at `keep` images, newest first.
+ecr-prune-prod keep="3": (_ecr-prune "finflow-production" keep)
+
+# Repositories are found by the tag SAM puts on them, not by name: the names
+# carry a hash of the stack that cannot be reproduced from here.
+_ecr-prune profile keep:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    policy=$(printf '{"rules":[{"rulePriority":1,"description":"Keep the %s most recent images; older ones are billed forever.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":%s},"action":{"type":"expire"}}]}' '{{keep}}' '{{keep}}')
+
+    capped=0
+    while read -r name arn; do
+        [ -n "$name" ] || continue
+
+        managed=$(aws ecr list-tags-for-resource --profile {{profile}} \
+            --resource-arn "$arn" \
+            --query "tags[?Key=='ManagedStackSource'].Value" --output text)
+
+        if [ "$managed" != "AwsSamCli" ]; then
+            echo "skipped  $name (not SAM-managed)"
+            continue
+        fi
+
+        aws ecr put-lifecycle-policy --profile {{profile}} \
+            --repository-name "$name" \
+            --lifecycle-policy-text "$policy" > /dev/null
+        echo "capped   $name at {{keep}} images"
+        capped=$((capped + 1))
+    done < <(aws ecr describe-repositories --profile {{profile}} \
+        --query 'repositories[].[repositoryName,repositoryArn]' --output text)
+
+    test "$capped" -gt 0 || { echo "No SAM-managed repositories found."; exit 1; }
+
 # Drive two users end to end and assert nothing of one reaches the other.
 # Reads ENV_FILE, so it runs against whichever environment you point it at.
 verify env_file=".env" *args: (_require-env env_file)

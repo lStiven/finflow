@@ -35,6 +35,22 @@ class _ExtraFieldsFormatter(logging.Formatter):
 
 
 def configure_logging(*, level: int = logging.INFO) -> None:
+    """Install the formatter above as the root logger's only handler.
+
+    `force=True` is what makes this work on Lambda, and it is not optional
+    there. The managed Python runtime attaches its own handler to the root
+    logger before any of this package is imported, and `basicConfig` is
+    documented to do nothing at all when the root logger already has one — no
+    error, no warning. Without `force` both arguments below are discarded: the
+    formatter never gets installed, and the level stays at the root logger's
+    WARNING default, which silently drops every `_logger.info(...)` in the
+    codebase. Every worker then looks idle in CloudWatch while doing its job,
+    and only failures are visible.
+
+    Off Lambda the root logger has no handlers yet, so `force` changes
+    nothing. Uvicorn is unaffected either way: it configures its own named
+    loggers, never the root one.
+    """
     handler = logging.StreamHandler()
     handler.setFormatter(_ExtraFieldsFormatter("%(levelname)s:%(name)s:%(message)s"))
-    logging.basicConfig(level=level, handlers=[handler])
+    logging.basicConfig(level=level, handlers=[handler], force=True)

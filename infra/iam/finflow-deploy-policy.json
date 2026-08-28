@@ -55,6 +55,7 @@
         "ecr:GetRepositoryPolicy",
         "ecr:DeleteRepositoryPolicy",
         "ecr:PutLifecyclePolicy",
+        "ecr:GetLifecyclePolicy",
         "ecr:TagResource",
         "ecr:ListTagsForResource",
         "ecr:BatchCheckLayerAvailability",
