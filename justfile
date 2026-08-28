@@ -211,8 +211,8 @@ provision-prod: (_require-env ".env.production")
 # Development: a real AWS account, every resource prefixed `dev-`
 # --------------------------------------------------
 
-# Create the `dev-` resources. Safe to run against the same account as
-# production: nothing it touches shares a name with anything there.
+# Create the `dev-` resources in the dev account named by .env.development.
+# Separate account from production, and prefixed on top of that.
 provision-dev: (_require-env ".env.development")
     {{dev_env}} uv run python -m personal_finance.shared.infrastructure.aws.provisioning
 
@@ -250,8 +250,8 @@ sam_dir := "infra"
 sam-validate:
     sam validate --lint --template {{sam_dir}}/template.yaml
 
-# What `sam-validate` would tell you, minus the SAM CLI and Docker daemon the
-# DevContainer does not have: cfn-lint plus SAM's own transform, over both environments.
+# Both environments in one pass, which `sam-validate` does not do: cfn-lint
+# plus SAM's own transform, once per parameter set. Needs no Docker.
 infra-check:
     PYTHONPATH=src uv run python scripts/check_template.py
 
@@ -268,15 +268,29 @@ deploy-prod: (_require-env ".env.production")
         --template {{sam_dir}}/template.yaml
     sam deploy --config-env production --config-file {{sam_dir}}/samconfig.toml
 
+# Split per environment on purpose: the two live in different AWS accounts, so
+# a single recipe with a default profile would read the wrong account whenever
+# the stack name and the credentials disagree.
+
 # The API's HTTPS address, and everything else the stack published.
-deploy-outputs stack="finflow" profile="finflow-production":
-    @aws cloudformation describe-stacks --stack-name {{stack}} \
-        --profile {{profile}} \
+deploy-outputs-dev:
+    @aws cloudformation describe-stacks --stack-name finflow-dev \
+        --profile finflow-dev \
         --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
 
-# Tail one function's logs, e.g. `just deploy-logs finflow FinancialFunction`.
-deploy-logs stack="finflow" name="ApiFunction":
-    sam logs --stack-name {{stack}} --name {{name}} --tail
+deploy-outputs-prod:
+    @aws cloudformation describe-stacks --stack-name finflow \
+        --profile finflow-production \
+        --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
+
+# Tail one function's logs, e.g. `just deploy-logs-prod FinancialFunction`.
+deploy-logs-dev name="ApiFunction":
+    sam logs --stack-name finflow-dev --name {{name}} \
+        --profile finflow-dev --tail
+
+deploy-logs-prod name="ApiFunction":
+    sam logs --stack-name finflow --name {{name}} \
+        --profile finflow-production --tail
 
 # Drive two users end to end and assert nothing of one reaches the other.
 # Reads ENV_FILE, so it runs against whichever environment you point it at.
@@ -284,7 +298,7 @@ verify env_file=".env" *args: (_require-env env_file)
     ENV_FILE={{env_file}} PYTHONPATH=src uv run python scripts/verify_flow.py {{args}}
 
 # Drive a *deployed* API over HTTP: HTTPS, cold start, the token the
-# deployment signed. The URL comes from `just deploy-outputs`. Add
+# deployment signed. The URL comes from `just deploy-outputs-dev`. Add
 # `--with-pipeline` to also forward one alert and wait for the deployed
 # workers to place it.
 smoke base_url *args: (_require-env ".env.development")

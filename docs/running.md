@@ -54,8 +54,10 @@ con **todo prefijado `dev-`** para que no pueda tocar los datos de producción
 porque el mensaje se borra antes de que producción lo lea. El prefijo lo
 aplica el código (`ENVIRONMENT=development`), no nueve variables a mano.
 
-Puede compartir cuenta y perfil de AWS con producción sin riesgo: lo que
-separa a los dos es el prefijo, no las credenciales.
+Vive en **su propia cuenta de AWS**, con su propio perfil (`finflow-dev`
+frente a `finflow-production`). El prefijo `dev-` sigue encima de eso: si
+alguna vez apuntas el entorno a la cuenta equivocada, los nombres tampoco
+coinciden con los de producción.
 
 **Los ficheros `.example`.** Cada `.env*` tiene su `.env*.example` **sí**
 versionado en git; los `.env*` reales están ignorados. El `.example` es la
@@ -259,6 +261,7 @@ el bus ya está separado.
 
 ```bash
 cp .env.development.example .env.development
+aws configure --profile finflow-dev   # la cuenta de dev, no la de producción
 # edita AWS_PROFILE, IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
 just provision-dev          # crea los recursos dev-*, una sola vez
 # pega en .env.development las cuatro URLs de cola que imprime
@@ -423,8 +426,28 @@ enganchan a colas que tienen que existir ya.
 ### Requisitos
 
 Docker y el [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-en la máquina que despliega, y los tres secretos ya puestos en Parameter
-Store:
+en la máquina que despliega. El DevContainer los trae: la feature
+`docker-outside-of-docker` le presta el daemon del host —no levanta uno
+propio— y `postCreateCommand` instala `sam` con `uv tool install
+aws-sam-cli`. Comprueba con `docker info` y `sam --version` antes de
+desplegar.
+
+Las credenciales **sobreviven a un rebuild**: `~/.aws` está montado en un
+volumen Docker con nombre (`finflow-v2-aws`, declarado en
+`.devcontainer/devcontainer.json`), no en la capa del contenedor.
+Configúralas una vez con `aws configure --profile ...` y siguen ahí.
+
+Es un volumen y **no** un bind mount del `~/.aws` del host, a propósito: así
+el contenedor no ve ninguna otra credencial tuya —solo las que crees dentro
+para este proyecto—, y nada aterriza en el workspace, donde únicamente
+`.gitignore` separaría una clave de un commit. Para empezar de cero:
+`docker volume rm finflow-v2-aws` y reconstruye.
+
+Si tu cuenta está detrás de IAM Identity Center, `aws configure sso` es
+preferible a `aws configure`: lo que queda guardado en el volumen es un token
+que caduca, no una clave de acceso permanente.
+
+Y los tres secretos ya puestos en Parameter Store:
 
 ```bash
 just secret-put /finflow/production/jwt-secret
@@ -438,10 +461,10 @@ just secret-put /finflow/production/llm-api-key
 aws sso login --profile finflow-production
 just provision-prod        # una vez, y cada vez que cambie una tabla o cola
 just deploy-prod           # construye la imagen y despliega las cinco funciones
-just deploy-outputs        # imprime la URL de la API
+just deploy-outputs-prod   # imprime la URL de la API
 ```
 
-`just deploy-outputs` devuelve algo como
+`just deploy-outputs-prod` devuelve algo como
 `https://abc123.lambda-url.us-east-1.on.aws/`. **Esa es la dirección de la
 app**: HTTPS ya resuelto, sin dominio, sin certificado y sin balanceador. Es
 la que va en el navegador del móvil y en la configuración del frontend.
@@ -457,7 +480,7 @@ contra la URL desplegada** —lo único que ejerce el arranque en frío, el
 adaptador, y que la API resolviera su secreto de firma en Parameter Store:
 
 ```bash
-just smoke $(just deploy-outputs finflow-dev | grep ApiUrl | awk '{print $4}')
+just smoke $(just deploy-outputs-dev | grep ApiUrl | awk '{print $4}')
 just smoke https://abc123.lambda-url.us-east-1.on.aws --with-pipeline
 ```
 
@@ -531,8 +554,8 @@ declarar ese nombre es competir con ella y el stack pierde en el segundo
 despliegue.
 
 ```bash
-just deploy-logs finflow ApiFunction        # seguir uno en vivo
-just deploy-logs finflow FinancialFunction
+just deploy-logs-prod ApiFunction        # seguir uno en vivo
+just deploy-logs-prod FinancialFunction  # y `-dev` para el otro entorno
 ```
 
 ### Lo que no se puede desplegar

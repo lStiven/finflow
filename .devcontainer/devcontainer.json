@@ -6,15 +6,25 @@
   },
   "remoteUser": "vscode",
   "workspaceFolder": "/workspaces/finflow_v2",
+  // `~/.aws` on a named volume so a rebuild does not take the credentials
+  // with it. A volume and not a bind mount of the host's `~/.aws` on purpose:
+  // nothing of the host's AWS configuration is exposed to this container, and
+  // nothing lands in the workspace, where only `.gitignore` would stand
+  // between a credential and a commit.
+  "mounts": [
+    "source=finflow-v2-aws,target=/home/vscode/.aws,type=volume"
+  ],
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1",
-    "UV_LINK_MODE": "copy"
+    "UV_LINK_MODE": "copy",
+    "SAM_CLI_TELEMETRY": "0"
   },
   "features": {
-    "ghcr.io/devcontainers/features/aws-cli:1.1.4": {}
+    "ghcr.io/devcontainers/features/aws-cli:1.1.4": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.0": {}
   },
-  "postCreateCommand": "uv tool install graphifyy && uv sync",
+  "postCreateCommand": "sudo chown vscode:vscode /home/vscode/.aws && chmod 700 /home/vscode/.aws && uv tool install graphifyy && uv tool install aws-sam-cli && uv sync",
   "customizations": {
     "vscode": {
       "extensions": [

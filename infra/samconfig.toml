@@ -20,7 +20,7 @@ parallel = true
 lint = true
 
 # ----------------------------------------------------------------------
-# development — the same AWS account as production, every resource `dev-`
+# development — its own AWS account, every resource still prefixed `dev-`
 # ----------------------------------------------------------------------
 [development.global.parameters]
 stack_name = "finflow-dev"
@@ -32,7 +32,7 @@ parallel = true
 [development.deploy.parameters]
 stack_name = "finflow-dev"
 region = "us-east-1"
-profile = "finflow-production"
+profile = "finflow-dev"
 capabilities = "CAPABILITY_IAM"
 # Lets SAM create and manage the ECR repository for the image.
 resolve_image_repos = true

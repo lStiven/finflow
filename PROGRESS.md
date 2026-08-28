@@ -36,17 +36,18 @@ schema for no real saving.
 
 Deployment is declared: five Lambda functions from one container image, in
 `infra/template.yaml`, with the API reachable over HTTPS through a Function
-URL and no domain to buy. Never actually built or deployed — this DevContainer
-has neither Docker nor the SAM CLI — so the first `just deploy-prod` is the
-real test.
+URL and no domain to buy. Never actually built or deployed, so the first
+`just deploy-dev` is the real test. The DevContainer can now run it: it
+borrows the host's Docker daemon and installs the SAM CLI (2026-08-28).
 
 What is missing for production is observability, a cap on LLM spending and the
 frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-28 — `just smoke <url>` drives a deployed API over HTTP, so a
-  deploy can be gated on something other than "it returned 200 once".
+- 2026-08-28 — development split onto its own AWS account (`finflow-dev`
+  profile), deploy-inspection recipes split per environment, and `~/.aws`
+  moved onto a named volume so a rebuild stops wiping the credentials.
 
 ## Next steps
 
@@ -57,9 +58,10 @@ frontend — see **Next steps**.
          DLQ depth. A bank changing its template would pile up in silence.
       2. **CI.** There is a Dockerfile, a SAM template and now a post-deploy
          gate (`just smoke`), but nothing builds or deploys automatically.
-         The image has never been built in this DevContainer — no Docker
-         daemon, no SAM CLI — so `just deploy-*` and `just sam-validate` stay
-         unverified here and the first real run is the test. The pipeline
+         The image has still never been built, but the DevContainer can
+         now build it: `docker-outside-of-docker` borrows the host daemon and
+         `sam` is installed by `postCreateCommand`. `sam validate --lint`
+         passes; `sam build` is the untested step. The pipeline
          worth building once that run succeeds: build the image **once**,
          deploy it to `finflow-dev`, `just smoke <dev-url> --with-pipeline`,
          then promote the same image to production behind a manual approval
@@ -464,6 +466,26 @@ frontend — see **Next steps**.
   (emulator), development (real AWS, everything prefixed `dev-`), production
   (bare names). Testing against production to avoid paying twice is exactly
   the thing worth spending a cent a month to prevent.
+- **The container's `~/.aws` is a named Docker volume (`finflow-v2-aws`), not
+  a bind mount of the host's.** The home directory is part of the container
+  layer, so every rebuild used to destroy the credentials; the documented
+  workaround was copying them into `.aws/` in the repo root, which put a
+  credential inside the git working tree with only `.gitignore` in front of
+  it. Bind-mounting the host's `~/.aws` was rejected for the opposite reason:
+  it would hand this container every AWS profile on the machine, including
+  ones that have nothing to do with Finflow. The volume exposes neither —
+  credentials are created inside and persist there until
+  `docker volume rm finflow-v2-aws`.
+- **development lives in its own AWS account** (profile `finflow-dev`,
+  separate from `finflow-production`), decided 2026-08-28. It was originally
+  specified as sharing production's account with only the `dev-` prefix
+  keeping them apart; the account boundary is now the primary separation and
+  the prefix is defence in depth — a wrong account no longer implies wrong
+  data, because the names do not collide either. The consequence to remember
+  is that everything account-scoped is now duplicated: the three SSM secrets
+  under `/finflow/development/*` must exist in the dev account, and any
+  recipe naming a profile has a `-dev` and a `-prod` form rather than one
+  recipe with a production default (`deploy-outputs-*`, `deploy-logs-*`).
 - **The prefix is applied in code, not by configuring nine names.** Tables,
   queues and the event bus all pass through `Environment.resource_prefix` in
   the settings validators, so `ENVIRONMENT=development` is the whole
@@ -588,10 +610,11 @@ frontend — see **Next steps**.
   and the bus; nothing was doing the same for secrets. Secrets also left
   `Globals`: a reference every function carries is a permission every function
   needs. Financial resolves none and is granted none.
-- **The template is checked here even though it cannot be deployed here.**
-  No SAM CLI and no Docker daemon in the DevContainer, so `sam validate` and
-  `sam build` do not run, and the first deploy would have been the first read
-  of the template. `just infra-check` runs cfn-lint plus SAM's own
+- **The template is checked without deploying it.** Written when the
+  DevContainer had no SAM CLI and no Docker, so the first deploy would have
+  been the first read of the template; it earns its place anyway, because it
+  transforms **both** parameter sets and `sam validate` transforms neither.
+  `just infra-check` runs cfn-lint plus SAM's own
   `samtranslator` transform — the second is what matters, because SAM's
   `Globals` accepts a fixed property list that no CloudFormation schema
   describes. It immediately found `PackageType: Image` there, which fails the
