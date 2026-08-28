@@ -11,6 +11,7 @@ either, it only drives the read/ack loop around it.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import logging
 
 from personal_finance.contexts.ingestion.application.commands import (
@@ -33,6 +34,16 @@ from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
 _logger = logging.getLogger(__name__)
 
 
+class ConfirmationOutcome(enum.Enum):
+    """What became of one forwarding confirmation link."""
+
+    CONFIRMED = "confirmed"
+    # Google answered, and said no. Nothing to retry.
+    REFUSED = "refused"
+    # Never got an answer. Worth another poll.
+    FAILED = "failed"
+
+
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class PollResult:
     fetched: int = 0
@@ -44,9 +55,15 @@ class PollResult:
     # Recording it durably raised — left unacknowledged on purpose, so the
     # next poll finds it still new and tries again.
     failed: int = 0
-    # Gmail forwarding requests this pass finished. Counted apart from
-    # `accepted` because nothing about them is a bank notification.
+    # Gmail forwarding requests Google accepted this pass. Counted apart from
+    # `accepted` because nothing about them is a bank notification, and apart
+    # from `refused_confirmations` because only this one means a user's
+    # forwarding is actually set up.
     confirmations: int = 0
+    # Links Google turned down — expired, already used. Acknowledged rather
+    # than retried, but counted on their own: reporting them as confirmations
+    # would tell an operator that somebody's setup finished when it did not.
+    refused_confirmations: int = 0
 
 
 class PollIngestMailboxUseCase:
@@ -80,20 +97,38 @@ class PollIngestMailboxUseCase:
         unknown_recipient = 0
         failed = 0
         confirmations = 0
+        refused_confirmations = 0
         handled: list[InboundEmail] = []
 
         for email in emails:
-            # Ahead of the bank-notification path on purpose: this message
-            # carries no transaction, comes from a sender nobody approved, and
-            # that filter would discard its body — the link with it.
-            confirmation = ForwardingConfirmation.from_email(
-                sender=email.sender,
-                raw_content=email.raw_content,
-            )
+            try:
+                # Ahead of the bank-notification path on purpose: this message
+                # carries no transaction, comes from a sender nobody approved,
+                # and that filter would discard its body — the link with it.
+                # Inside the guard because it reads untrusted mail: raising
+                # here would abandon the whole batch, and the messages already
+                # handled would never be acknowledged.
+                confirmation = ForwardingConfirmation.from_email(
+                    sender=email.sender,
+                    raw_content=email.raw_content,
+                )
+            except Exception:
+                _logger.exception(
+                    "failed to read an ingest message; left unacknowledged",
+                    extra={"message_id": email.message_id.value},
+                )
+                failed += 1
+
+                continue
 
             if confirmation is not None:
-                if self._confirm(confirmation, email):
+                outcome = self._confirm(confirmation, email)
+
+                if outcome is ConfirmationOutcome.CONFIRMED:
                     confirmations += 1
+                    handled.append(email)
+                elif outcome is ConfirmationOutcome.REFUSED:
+                    refused_confirmations += 1
                     handled.append(email)
                 else:
                     failed += 1
@@ -142,14 +177,21 @@ class PollIngestMailboxUseCase:
             unknown_recipient=unknown_recipient,
             failed=failed,
             confirmations=confirmations,
+            refused_confirmations=refused_confirmations,
         )
 
     def _confirm(
         self,
         confirmation: ForwardingConfirmation,
         email: InboundEmail,
-    ) -> bool:
-        """Follow one confirmation link, and never let it sink the batch."""
+    ) -> ConfirmationOutcome:
+        """Follow one confirmation link, and never let it sink the batch.
+
+        Three answers, not two: a link Google turned down is finished and must
+        be acknowledged, while one that could not be reached is not finished
+        and must not be. Reporting both as success is what would make the
+        counter an operator reads say a setup completed when it did not.
+        """
         try:
             accepted = self._forwarding_confirmer.confirm(confirmation)
         except Exception:
@@ -158,22 +200,24 @@ class PollIngestMailboxUseCase:
             # retry, not somebody's setup.
             _logger.exception(
                 "failed to confirm a forwarding request; left unacknowledged",
-                extra={"recipient": email.recipient.value},
+                extra={"message_id": email.message_id.value},
             )
 
-            return False
+            return ConfirmationOutcome.FAILED
 
         if accepted:
             _logger.info(
                 "forwarding confirmed",
-                extra={"recipient": email.recipient.value},
-            )
-        else:
-            # Acknowledged even so: an expired or already-used link answers
-            # this way every time, and retrying it forever would be noise.
-            _logger.warning(
-                "forwarding confirmation was refused",
-                extra={"recipient": email.recipient.value},
+                extra={"message_id": email.message_id.value},
             )
 
-        return True
+            return ConfirmationOutcome.CONFIRMED
+
+        # Acknowledged even so: an expired or already-used link answers this
+        # way every time, and retrying it forever would be noise.
+        _logger.warning(
+            "forwarding confirmation was refused",
+            extra={"message_id": email.message_id.value},
+        )
+
+        return ConfirmationOutcome.REFUSED

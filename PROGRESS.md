@@ -45,8 +45,8 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-27 — an account's balance can be corrected after the fact:
-  `PUT /financial/accounts/{id}/balance`.
+- 2026-08-28 — a refused forwarding link no longer counts as a confirmation,
+  and reading a message can no longer abandon the batch.
 
 ## Next steps
 
@@ -585,6 +585,13 @@ frontend — see **Next steps**.
   What confirming does **not** do is widen access: anybody holding the alias
   can already mail it directly, so forwarding is a delivery route rather than
   a permission, and the approved-sender filter is the boundary either way.
+  **Accepted risk: a 2xx is the only signal there is** (2026-08-28). Google
+  answers the link with an ordinary page, not an API, so an error page served
+  with status 200 — an expired or already-used link — is indistinguishable
+  from success and would be counted as a confirmation. Not solved; what was
+  fixed is the conflation beside it, since a link Google refuses at the HTTP
+  level now counts as `refused_confirmations` and never as `confirmations`,
+  which is the number that claims somebody's forwarding is set up.
 - **Declaring takes the enum; receiving keeps the bank's own words.** A real
   run lost five of six movements to one silent failure: a savings account
   declared with `instrument_kind: "savings"` — the *account* kind — while its

@@ -140,6 +140,7 @@ def main() -> None:
                         "unknown_recipient": result.unknown_recipient,
                         "failed": result.failed,
                         "confirmations": result.confirmations,
+                        "refused_confirmations": result.refused_confirmations,
                     },
                 )
 

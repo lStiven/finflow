@@ -92,6 +92,15 @@ igual —:
    que hacer nada: el `ingest worker` la reconoce y la confirma solo, en su
    siguiente pasada. El log lo cuenta aparte, como `confirmations=1`.
 
+   Si el enlace ya venció o alguien lo usó, Google lo rechaza: eso sale como
+   `refused_confirmations=1` y **no** como una confirmación, porque el
+   reenvío no quedó configurado. Es un contador distinto justamente para que
+   no se confundan. Con la salvedad de que Google contesta el enlace con una
+   página normal y no con una API: un 2xx es toda la señal que hay, así que
+   una página de error servida con estado 200 se leería como aceptada. Si el
+   log dice `confirmations=1` y el reenvío no quedó activo en Gmail, ese es
+   el caso — hay que rehacer el paso 2.
+
    Es **una por usuario**, no una por instalación: cada quien tiene su propio
    `+alias`, así que Gmail pide confirmación para cada uno. Antes eso
    significaba que el operador tenía que entrar al buzón compartido a buscar

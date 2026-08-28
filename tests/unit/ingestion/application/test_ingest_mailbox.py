@@ -1,5 +1,7 @@
 from collections.abc import Sequence
 
+import pytest
+
 from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
 )
@@ -324,13 +326,19 @@ def test_a_confirmation_that_could_not_be_reached_is_left_for_the_next_poll() ->
 
 
 def test_a_link_google_refuses_is_not_retried_forever() -> None:
-    """An expired or already-used link answers this way every time."""
+    """An expired or already-used link answers this way every time.
+
+    Acknowledged, so it is not retried — but never counted as a confirmation:
+    `confirmations` is what tells an operator a user's forwarding is set up,
+    and this one is not.
+    """
     reader = FakeReader(_confirmation_email())
     use_case, _ = _make(reader, confirmer=FakeConfirmer(accepts=False))
 
     result = use_case.execute()
 
-    assert result.confirmations == 1
+    assert result.confirmations == 0
+    assert result.refused_confirmations == 1
     assert len(reader.acked) == 1
 
 
@@ -370,3 +378,43 @@ def test_mail_forging_googles_address_still_cannot_reach_the_ledger() -> None:
     assert confirmer.confirmed == []
     assert result.confirmations == 0
     assert queue.enqueued == []
+
+
+def test_unreadable_mail_does_not_abandon_the_rest_of_the_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reading a message is parsing untrusted input, so it can raise.
+
+    When it does, the bank mail behind it must still be recorded and
+    acknowledged. Left outside the guard, one such message would abort the
+    pass before `ack` ran, so nothing would ever be acknowledged and the same
+    batch would come back forever.
+    """
+    poison = InboundEmail(
+        recipient=EmailAddress(ALIAS),
+        sender=EmailAddress(BANK_SENDER),
+        message_id=EmailMessageId("poison-1"),
+        subject="Alertas y Notificaciones",
+        raw_content="whatever it is about this one that cannot be read",
+        received_at=PosixTime.now(),
+    )
+    reader = FakeReader(poison, _email(message_id="bank-1"))
+    real = ForwardingConfirmation.from_email
+
+    def explode(*, sender: EmailAddress, raw_content: str) -> object:
+        if raw_content == poison.raw_content:
+            raise ValueError("unreadable")
+
+        return real(sender=sender, raw_content=raw_content)
+
+    monkeypatch.setattr(ForwardingConfirmation, "from_email", explode)
+
+    use_case, queue = _make(reader)
+
+    result = use_case.execute()
+
+    assert result.failed == 1
+    assert result.accepted == 1
+    assert len(queue.enqueued) == 1
+    # The poison message alone stays unacknowledged.
+    assert [email.message_id.value for email in reader.acked] == ["bank-1"]
