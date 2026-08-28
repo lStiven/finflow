@@ -14,9 +14,9 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+from typing import TYPE_CHECKING
 import uuid
 
-from mypy_boto3_sqs.client import SQSClient
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from personal_finance.contexts.merchant.application.commands import (
@@ -27,6 +27,10 @@ from personal_finance.contexts.merchant.application.handlers import (
 )
 from personal_finance.contexts.merchant.domain.value_objects import CounterpartyKind
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.client import SQSClient
 
 
 _logger = logging.getLogger(__name__)

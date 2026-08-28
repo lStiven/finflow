@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 import uuid
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
 
 PARTITION_KEY = "email"

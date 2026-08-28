@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
+from typing import TYPE_CHECKING
 
 from personal_finance.contexts.ingestion.domain.entities import UserInbox
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.shared.domain.value_objects import UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
 
 INBOX_PARTITION_KEY = "address"

@@ -34,8 +34,11 @@ stack_name = "finflow-dev"
 region = "us-east-1"
 profile = "finflow-dev"
 capabilities = "CAPABILITY_IAM"
-# Lets SAM create and manage the ECR repository for the image.
+# Lets SAM create and manage the ECR repository for the image. The companion
+# stack that holds it is uploaded to S3, so this needs a bucket too — hence
+# the managed one.
 resolve_image_repos = true
+resolve_s3 = true
 confirm_changeset = true
 parameter_overrides = [
     "EnvironmentName=development",
@@ -46,7 +49,7 @@ parameter_overrides = [
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
     "CorsOrigins=http://localhost:5173",
     # Cheaper on the free tier and plenty for a rehearsal environment.
-    "IngestScheduleExpression=rate(5 minutes)",
+    'IngestScheduleExpression="rate(5 minutes)"',
     "LogRetentionDays=7",
 ]
 
@@ -66,6 +69,7 @@ region = "us-east-1"
 profile = "finflow-production"
 capabilities = "CAPABILITY_IAM"
 resolve_image_repos = true
+resolve_s3 = true
 confirm_changeset = true
 parameter_overrides = [
     "EnvironmentName=production",
@@ -77,6 +81,6 @@ parameter_overrides = [
     # Empty until there is a frontend on its own origin. See
     # docs/frontend-integration.md.
     "CorsOrigins=",
-    "IngestScheduleExpression=rate(1 minute)",
+    'IngestScheduleExpression="rate(1 minute)"',
     "LogRetentionDays=30",
 ]

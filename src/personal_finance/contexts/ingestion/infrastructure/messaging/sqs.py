@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
-
-from mypy_boto3_sqs.client import SQSClient
+from typing import TYPE_CHECKING
 
 from personal_finance.contexts.ingestion.application.messages import (
     ParseNotificationMessage,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.client import SQSClient
 
 
 MESSAGE_SCHEMA_VERSION = 1

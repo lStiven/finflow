@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import functools
 import os
+from typing import TYPE_CHECKING
 
 import boto3
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_events.client import EventBridgeClient
-from mypy_boto3_sqs.client import SQSClient
-from mypy_boto3_ssm.client import SSMClient
 
 from personal_finance.shared.infrastructure.config.settings import (
     AwsSettings,
     get_aws_settings,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_events.client import EventBridgeClient
+    from mypy_boto3_sqs.client import SQSClient
+    from mypy_boto3_ssm.client import SSMClient
 
 
 def _on_lambda() -> bool:

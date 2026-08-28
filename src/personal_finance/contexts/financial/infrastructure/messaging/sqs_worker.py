@@ -12,8 +12,8 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+from typing import TYPE_CHECKING
 
-from mypy_boto3_sqs.client import SQSClient
 from pydantic import ValidationError
 
 from personal_finance.contexts.financial.application.handlers import (
@@ -27,6 +27,10 @@ from personal_finance.contexts.financial.infrastructure.messaging.inbound import
     TransactionExtractedDetail,
     UnsupportedPayloadVersionError,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.client import SQSClient
 
 
 _logger = logging.getLogger(__name__)

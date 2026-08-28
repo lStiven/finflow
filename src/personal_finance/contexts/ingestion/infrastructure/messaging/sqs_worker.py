@@ -3,9 +3,9 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+from typing import TYPE_CHECKING
 import uuid
 
-from mypy_boto3_sqs.client import SQSClient
 from pydantic import BaseModel, Field, ValidationError
 
 from personal_finance.contexts.ingestion.application.messages import (
@@ -23,6 +23,10 @@ from personal_finance.contexts.ingestion.infrastructure.messaging.sqs import (
     MESSAGE_SCHEMA_VERSION,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.client import SQSClient
 
 
 _logger = logging.getLogger(__name__)

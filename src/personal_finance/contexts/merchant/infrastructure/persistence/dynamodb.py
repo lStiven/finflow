@@ -20,10 +20,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 import datetime
+from typing import TYPE_CHECKING
 import uuid
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef, QueryInputTypeDef
 
 from personal_finance.contexts.merchant.domain.entities import Merchant
 from personal_finance.contexts.merchant.domain.value_objects import (
@@ -36,6 +34,11 @@ from personal_finance.contexts.merchant.domain.value_objects import (
     MerchantStatus,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef, QueryInputTypeDef
 
 
 PARTITION_KEY = "user_id"

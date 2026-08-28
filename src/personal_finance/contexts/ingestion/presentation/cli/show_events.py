@@ -15,15 +15,17 @@ from datetime import UTC, datetime
 import json
 import signal
 from types import FrameType
-from typing import Any, cast
-
-from mypy_boto3_sqs.client import SQSClient
+from typing import TYPE_CHECKING, Any, cast
 
 from personal_finance.shared.infrastructure.aws.session import get_sqs_client
 from personal_finance.shared.infrastructure.config.settings import (
     get_aws_settings,
     get_ingestion_settings,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.client import SQSClient
 
 
 MAX_MESSAGES_PER_POLL = 10

@@ -4,15 +4,18 @@ from collections.abc import Sequence
 import itertools
 import json
 import logging
-
-from mypy_boto3_events.client import EventBridgeClient
-from mypy_boto3_events.type_defs import PutEventsRequestEntryTypeDef
+from typing import TYPE_CHECKING
 
 from personal_finance.shared.application.integration import (
     IntegrationEvent,
     IntegrationEventTranslator,
 )
 from personal_finance.shared.domain.events import Event
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_events.client import EventBridgeClient
+    from mypy_boto3_events.type_defs import PutEventsRequestEntryTypeDef
 
 
 _logger = logging.getLogger(__name__)

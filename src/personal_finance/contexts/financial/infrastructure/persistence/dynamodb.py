@@ -28,13 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 import enum
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import (
-    AttributeValueTypeDef,
-    QueryInputTypeDef,
-    TransactWriteItemTypeDef,
-)
+from typing import TYPE_CHECKING
 
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -53,6 +47,15 @@ from personal_finance.shared.domain.value_objects import (
     PosixTime,
     UserId,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import (
+        AttributeValueTypeDef,
+        QueryInputTypeDef,
+        TransactWriteItemTypeDef,
+    )
 
 
 PARTITION_KEY = "user_id"

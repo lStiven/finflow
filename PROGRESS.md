@@ -45,9 +45,10 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-28 — development split onto its own AWS account (`finflow-dev`
-  profile), deploy-inspection recipes split per environment, and `~/.aws`
-  moved onto a named volume so a rebuild stops wiping the credentials.
+- 2026-08-28 — `sam build` proven to work end to end; the deploy recipes'
+  broken `--config-file` path fixed, and `infra/iam/finflow-deploy-policy.json`
+  written. Deploy still blocked on IAM: the configured user has no
+  CloudFormation, ECR, SSM or IAM access.
 
 ## Next steps
 
@@ -127,7 +128,18 @@ frontend — see **Next steps**.
 
 ## Open questions / blockers
 
-- none
+- **Deploy is blocked on IAM permissions.** `dev-proyecto-ddd` (the only user
+  configured, and both profiles resolve to it) can reach DynamoDB, SQS,
+  EventBridge, Lambda and Logs, but not CloudFormation, ECR, SSM or IAM —
+  the four `sam deploy` needs. Attach `infra/iam/finflow-deploy-policy.json`
+  from an admin identity to unblock. Never deployed yet, so the policy has
+  not been exercised against a real deploy.
+- **`finflow-dev` and `finflow-production` currently resolve to the same AWS
+  account and the same IAM user**, so the account separation recorded under
+  Environments is intended but not yet real. Until a second account exists,
+  the `dev-` prefix is again the only thing keeping the two apart, and the
+  comments claiming otherwise in `.env.development.example`,
+  `infra/samconfig.toml` and `docs/running.md` overstate the isolation.
 
 ## Decisions
 

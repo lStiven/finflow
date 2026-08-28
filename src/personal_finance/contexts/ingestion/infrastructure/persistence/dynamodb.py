@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 import uuid
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef, QueryInputTypeDef
 
 from personal_finance.contexts.ingestion.application.ports import NotificationSummary
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
@@ -17,6 +15,11 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     ProcessingStatus,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef, QueryInputTypeDef
 
 
 _SECONDS_PER_DAY = 86_400

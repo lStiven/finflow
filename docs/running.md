@@ -447,6 +447,34 @@ Si tu cuenta está detrás de IAM Identity Center, `aws configure sso` es
 preferible a `aws configure`: lo que queda guardado en el volumen es un token
 que caduca, no una clave de acceso permanente.
 
+### Permisos del usuario que despliega
+
+Desplegar necesita mucho más que correr la app. `just provision-*` solo toca
+DynamoDB, SQS y EventBridge; `sam deploy` además crea el stack, sube la imagen
+y crea los cinco roles de ejecución. Un usuario de plano de datos falla con
+`AccessDenied` a mitad del despliegue y deja el stack en `ROLLBACK`.
+
+`infra/iam/finflow-deploy-policy.json` es la política mínima para eso, acotada
+por prefijo: los stacks `finflow` y `finflow-dev`, los roles `finflow-*`, las
+funciones `finflow-*`, los grupos de logs `/finflow/*` y los parámetros
+`/finflow/*`. `iam:PassRole` está condicionado a `lambda.amazonaws.com`, así
+que el usuario no puede prestarle un rol a ningún otro servicio.
+
+Adjúntala con una identidad que **sí** tenga permisos de IAM (la consola con
+el usuario administrador, normalmente):
+
+```bash
+aws iam create-policy --policy-name FinflowDeploy \
+  --policy-document file://infra/iam/finflow-deploy-policy.json
+aws iam attach-user-policy --user-name <tu-usuario> \
+  --policy-arn arn:aws:iam::<cuenta>:policy/FinflowDeploy
+```
+
+Dos sitios quedan en `*` a propósito, y no por pereza: los repositorios de ECR
+los nombra el *companion stack* de SAM con un hash impredecible, y los
+*event source mappings* de SQS se identifican por UUID, no por nombre. No hay
+prefijo al que agarrarse en ninguno de los dos.
+
 Y los tres secretos ya puestos en Parameter Store:
 
 ```bash

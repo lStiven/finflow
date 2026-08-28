@@ -246,6 +246,10 @@ financial-worker-dev: (_require-env ".env.development")
 # point at queues that have to exist.
 
 sam_dir := "infra"
+# Absolute on purpose: `sam build` resolves `--config-file` relative to the
+# template's directory and `sam deploy` does not, so any relative path is wrong
+# for one of the two. `infra/samconfig.toml` sent build looking in infra/infra/.
+sam_config := justfile_directory() / "infra" / "samconfig.toml"
 
 sam-validate:
     sam validate --lint --template {{sam_dir}}/template.yaml
@@ -258,15 +262,15 @@ infra-check:
 # Build the image and deploy. Authenticate first, e.g. `aws sso login`.
 deploy-dev: (_require-env ".env.development")
     sam build --config-env development \
-        --config-file {{sam_dir}}/samconfig.toml \
+        --config-file {{sam_config}} \
         --template {{sam_dir}}/template.yaml
-    sam deploy --config-env development --config-file {{sam_dir}}/samconfig.toml
+    sam deploy --config-env development --config-file {{sam_config}}
 
 deploy-prod: (_require-env ".env.production")
     sam build --config-env production \
-        --config-file {{sam_dir}}/samconfig.toml \
+        --config-file {{sam_config}} \
         --template {{sam_dir}}/template.yaml
-    sam deploy --config-env production --config-file {{sam_dir}}/samconfig.toml
+    sam deploy --config-env production --config-file {{sam_config}}
 
 # Split per environment on purpose: the two live in different AWS accounts, so
 # a single recipe with a default profile would read the wrong account whenever

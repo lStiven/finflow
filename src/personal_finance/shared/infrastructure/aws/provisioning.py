@@ -11,20 +11,7 @@ import contextlib
 import dataclasses
 import json
 import time
-
-from mypy_boto3_dynamodb.client import DynamoDBClient
-from mypy_boto3_dynamodb.literals import ScalarAttributeTypeType
-from mypy_boto3_dynamodb.type_defs import (
-    AttributeDefinitionTypeDef,
-    CreateGlobalSecondaryIndexActionTypeDef,
-    KeySchemaElementTypeDef,
-    OnDemandThroughputTypeDef,
-    ProjectionTypeDef,
-    ProvisionedThroughputDescriptionTypeDef,
-    ProvisionedThroughputTypeDef,
-)
-from mypy_boto3_events.client import EventBridgeClient
-from mypy_boto3_sqs.client import SQSClient
+from typing import TYPE_CHECKING
 
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as FINANCIAL_PARTITION_KEY,
@@ -69,6 +56,22 @@ from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
     get_merchant_settings,
 )
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.client import DynamoDBClient
+    from mypy_boto3_dynamodb.literals import ScalarAttributeTypeType
+    from mypy_boto3_dynamodb.type_defs import (
+        AttributeDefinitionTypeDef,
+        CreateGlobalSecondaryIndexActionTypeDef,
+        KeySchemaElementTypeDef,
+        OnDemandThroughputTypeDef,
+        ProjectionTypeDef,
+        ProvisionedThroughputDescriptionTypeDef,
+        ProvisionedThroughputTypeDef,
+    )
+    from mypy_boto3_events.client import EventBridgeClient
+    from mypy_boto3_sqs.client import SQSClient
 
 
 TTL_ATTRIBUTE = "expires_at"

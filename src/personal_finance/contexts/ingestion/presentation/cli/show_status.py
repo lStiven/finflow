@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-
-from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
+from typing import TYPE_CHECKING
 
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     ALLOWED_ADDRESSES,
@@ -32,7 +31,11 @@ from personal_finance.shared.infrastructure.config.settings import (
 )
 
 
-Item = dict[str, AttributeValueTypeDef]
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
+
+
+type Item = dict[str, AttributeValueTypeDef]
 
 
 def _text(item: Item, key: str) -> str:
