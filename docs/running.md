@@ -449,6 +449,44 @@ la que va en el navegador del móvil y en la configuración del frontend.
 Para dev es lo mismo con `just provision-dev` y `just deploy-dev`, contra el
 stack `finflow-dev` y con todo prefijado `dev-`.
 
+### Comprobar que el despliegue sirve
+
+Que el `deploy` termine bien dice que CloudFormation creó cinco funciones, no
+que la aplicación funcione. Eso lo responde `just smoke`, que habla **por HTTP
+contra la URL desplegada** —lo único que ejerce el arranque en frío, el
+adaptador, y que la API resolviera su secreto de firma en Parameter Store:
+
+```bash
+just smoke $(just deploy-outputs finflow-dev | grep ApiUrl | awk '{print $4}')
+just smoke https://abc123.lambda-url.us-east-1.on.aws --with-pipeline
+```
+
+Tres profundidades, porque los entornos no pueden permitirse lo mismo:
+
+| | Qué hace | Qué necesita |
+|---|---|---|
+| por defecto | Un usuario desechable por ejecución: registro, dos cuentas, un movimiento a mano, y las lecturas de la primera pantalla. | Solo la URL. **Ninguna credencial de AWS.** |
+| `--with-pipeline` | Además reenvía una alerta y **espera** a que el movimiento aparezca. Es la comprobación de que las funciones worker están vivas. | Credenciales del entorno que nombre `ENV_FILE`. |
+| `--read-only` | Salud y el guardián de autenticación. Nada escribe. | Solo la URL. |
+
+`--with-pipeline` **no drena ninguna cola**, y esa es la diferencia con
+`just verify`: contra un despliegue, quienes consumen son los *event source
+mappings*, así que un segundo consumidor competiría con ellos por los mismos
+mensajes y el resultado dependería de quién ganara. El script mete la alerta y
+pregunta a la API hasta que el movimiento aparece.
+
+Producción se comprueba con `just smoke-prod <url>`, que fuerza
+`--read-only`: cada escritura deja un usuario que ningún endpoint puede
+borrar. Y no depende de que te acuerdes: el script le pregunta a `/health`
+contra qué despliegue está —`local`, `development` o `production`— y se niega
+a escribir si la respuesta es producción, sin mirar el fichero de entorno que
+cargó. `just smoke` lee `.env.development` sea cual sea la URL que le sigas
+poniendo, así que un guardián basado en ese fichero no guarda nada. Si el
+despliegue no dice qué es, tampoco escribe.
+
+Sale con código 0 solo si pasó todo, que es lo que permite usarlo como puerta
+en CI.
+
 ### Qué corre dónde
 
 | Función | Qué la despierta | Notas |

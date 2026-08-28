@@ -283,6 +283,18 @@ deploy-logs stack="finflow" name="ApiFunction":
 verify env_file=".env" *args: (_require-env env_file)
     ENV_FILE={{env_file}} PYTHONPATH=src uv run python scripts/verify_flow.py {{args}}
 
+# Drive a *deployed* API over HTTP: HTTPS, cold start, the token the
+# deployment signed. The URL comes from `just deploy-outputs`. Add
+# `--with-pipeline` to also forward one alert and wait for the deployed
+# workers to place it.
+smoke base_url *args: (_require-env ".env.development")
+    {{dev_env}} uv run python scripts/smoke.py {{base_url}} {{args}}
+
+# Production gets the read-only depth: every write leaves behind a user that
+# no endpoint can delete.
+smoke-prod base_url *args: (_require-env ".env.production")
+    {{prod_env}} uv run python scripts/smoke.py {{base_url}} --read-only {{args}}
+
 _require-env env_file:
     @test -f {{env_file}} || { \
         echo "Missing {{env_file}} — copy it from {{env_file}}.example"; \

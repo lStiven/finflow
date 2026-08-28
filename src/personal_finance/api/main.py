@@ -38,7 +38,14 @@ health_router = APIRouter(tags=["health"])
 
 @health_router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    """Alive, and which deployment this is.
+
+    The environment is here because the only other way to tell two stacks
+    apart is the URL, and a URL is exactly what gets pasted into the wrong
+    command. Anything about to write — `scripts/smoke.py` above all — asks the
+    deployment itself rather than trusting the env file it happened to load.
+    """
+    return {"status": "ok", "environment": get_aws_settings().environment.value}
 
 
 @asynccontextmanager

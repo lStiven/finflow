@@ -7,6 +7,8 @@ reads the ingest mailbox directly, in-process, no webhook involved. This
 guards against it drifting back into a real deployment.
 """
 
+from fastapi.testclient import TestClient
+
 from personal_finance.api.main import create_app
 
 
@@ -59,3 +61,18 @@ def test_merchants_survive_in_a_real_deployment() -> None:
     assert "/merchants" in paths
     assert "/merchants/{merchant_id}" in paths
     assert "/merchants/categories" in paths
+
+
+def test_health_names_the_environment_it_is_serving() -> None:
+    """The only other way to tell two deployments apart is the URL.
+
+    `scripts/smoke.py` refuses to write to production, and it can only do that
+    if the deployment says which one it is: the env file the script loaded is
+    about its own machine, not about the address it was handed.
+    """
+    response = TestClient(
+        create_app(expose_local_only_routes=False),
+    ).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "environment": "local"}

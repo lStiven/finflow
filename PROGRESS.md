@@ -45,8 +45,8 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-28 — a refused forwarding link no longer counts as a confirmation,
-  and reading a message can no longer abandon the batch.
+- 2026-08-28 — `just smoke <url>` drives a deployed API over HTTP, so a
+  deploy can be gated on something other than "it returned 200 once".
 
 ## Next steps
 
@@ -55,11 +55,16 @@ frontend — see **Next steps**.
       1. **Observability.** CloudWatch shipping is still deferred, so the
          workers log to stdout on a box nobody watches, and nothing alarms on
          DLQ depth. A bank changing its template would pile up in silence.
-      2. **CI.** There is a Dockerfile and a SAM template now, but nothing
-         builds or deploys them automatically, and the image has never been
-         built in this DevContainer — it has no Docker daemon and no SAM CLI,
-         so `just deploy-*` and `just sam-validate` are unverified here. The
-         first real run is the test.
+      2. **CI.** There is a Dockerfile, a SAM template and now a post-deploy
+         gate (`just smoke`), but nothing builds or deploys automatically.
+         The image has never been built in this DevContainer — no Docker
+         daemon, no SAM CLI — so `just deploy-*` and `just sam-validate` stay
+         unverified here and the first real run is the test. The pipeline
+         worth building once that run succeeds: build the image **once**,
+         deploy it to `finflow-dev`, `just smoke <dev-url> --with-pipeline`,
+         then promote the same image to production behind a manual approval
+         and `just smoke-prod <url>`. Building separately per environment
+         would mean what was tested is not what shipped.
       3. **A spending cap on the LLM** (see the standalone item below). The
          cheapest of the three and the only one that costs money while it is
          missing.
@@ -544,6 +549,29 @@ frontend — see **Next steps**.
   `VisibilityTimeout` (120s). With a model that can take 30s per message, ten
   per batch does not fit, so parse and merchant take three; financial calls no
   model and takes ten.
+- **A deployed environment needs its own end-to-end check, and it cannot be
+  `verify_flow.py`.** That script drives the app through `TestClient`, in
+  process: it proves the data holds together, and proves nothing about a
+  deployment — not the Function URL, not the cold start, not that the API
+  resolved its signing secret from Parameter Store. `scripts/smoke.py` crosses
+  the network for every call instead. Two constraints shaped it. It must not
+  drain a queue: against a deployment the event source mappings are the
+  consumers, and a second consumer in the script would race them for the same
+  messages, so it forwards one alert and *polls the API* until the movement
+  surfaces. And its user is random per run rather than fixed, because
+  `verify_flow`'s two people share a password written into a tracked file —
+  fine for an environment nobody else uses, not for anything reachable from
+  the internet. Writes are refused against production, since no endpoint can
+  delete a user afterwards; what production gets is `--read-only`.
+- **`/health` names its environment because a guard on local settings is not
+  a guard.** The first version of that refusal read `ENVIRONMENT` from the
+  loaded env file — but `just smoke` loads `.env.development` whatever URL
+  follows it, so aiming it at the production Function URL would have written
+  a permanent canary user into production with the check reporting success.
+  The deployment is now the one that answers the question, and the script
+  fails closed when it gets no answer. Same mismatch made `--with-pipeline`
+  able to publish an alert into one environment's queue while polling
+  another's API; it now refuses unless ENV_FILE and the target agree.
 - **Credentials must not be pinned on Lambda.** Lambda publishes its role's
   credentials as `AWS_*` environment variables, so settings read them like any
   other value and `build_session` passed them to boto3 as *static* strings.

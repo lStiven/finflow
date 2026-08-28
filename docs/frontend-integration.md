@@ -113,8 +113,13 @@ como si lo hubieran reenviado.
 
 ### 0. Salud
 
-`GET /health` → `{"status": "ok"}`. Sin autenticación. Útil para el splash o
-para decidir si mostrar "no hay conexión con el servidor".
+`GET /health` → `{"status": "ok", "environment": "production"}`. Sin
+autenticación. Útil para el splash o para decidir si mostrar "no hay conexión
+con el servidor". `environment` es `local`, `development` o `production`, y
+está para que quien va a escribir sepa contra qué despliegue está: es lo que
+usa `scripts/smoke.py` para negarse a registrar usuarios en producción. Un
+frontend puede ignorarlo, o usarlo para pintar un aviso cuando no es
+`production`.
 
 ### 1. Registro
 
