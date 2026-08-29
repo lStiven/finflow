@@ -65,8 +65,12 @@ aws-up:
         echo "moto listening on {{moto_endpoint}} (log: /tmp/moto_server.log)"; \
     fi
 
+# The brackets are not decoration: `just` runs this line through a shell whose
+# own command line contains the pattern, so a bare `-f moto_server` matches
+# that shell and kills it mid-recipe — moto stops, and the recipe dies by
+# signal 15 before it can say so. `[m]oto_server` cannot match itself.
 aws-down:
-    @pkill -f moto_server && echo "moto stopped" || echo "moto was not running"
+    @pkill -f "[m]oto_server" && echo "moto stopped" || echo "moto was not running"
 
 aws-provision: (_require-env ".env")
     {{local_env}} uv run python -m personal_finance.shared.infrastructure.aws.provisioning
