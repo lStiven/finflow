@@ -39,7 +39,7 @@ function LoginScreen() {
   }
 
   return (
-    <main className="flex min-h-[80dvh] flex-col justify-center">
+    <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-5 py-10">
       <header className="mb-10">
         <h1 className="text-3xl font-semibold tracking-tight">Finflow</h1>
         <p className="mt-2 text-sm text-muted">

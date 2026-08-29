@@ -49,3 +49,64 @@ export function formatMonthKey(key: string): string {
 export function nowInSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
+
+/**
+ * The UTC offset the display zone is on at that instant, in seconds.
+ *
+ * Read from the runtime's own tz database rather than hardcoded. Bogota has
+ * never observed DST, so today this is always -18000 — but the constant above
+ * is a constant, not a promise, and a zone that does shift would silently put
+ * the first and last hour of every month in the wrong bucket.
+ */
+function zoneOffsetSeconds(at: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: DISPLAY_TIMEZONE,
+    timeZoneName: "longOffset",
+  }).formatToParts(at);
+  const name = parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+  const match = /GMT([+-])(\d{2}):(\d{2})/.exec(name);
+  if (!match) return 0;
+  const [, sign, hours, minutes] = match;
+  return (sign === "-" ? -1 : 1) * (Number(hours) * 3600 + Number(minutes) * 60);
+}
+
+/** "2026-08" for the month it currently is in Bogota — the `key` the summary groups by. */
+export function currentMonthKey(at: Date = new Date()): string {
+  // en-CA renders ISO-shaped dates, so the parts need no reordering.
+  const [year, month] = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })
+    .format(at)
+    .split("-");
+  return `${year}-${month}`;
+}
+
+/** The bucket before this one, rolling the year over at January. */
+export function previousMonthKey(key: string): string {
+  const [year, month] = key.split("-").map(Number);
+  if (!year || !month) return key;
+  const earlier =
+    month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+  return `${earlier.year}-${String(earlier.month).padStart(2, "0")}`;
+}
+
+/**
+ * The half-open epoch-second range a month covers, as the backend reckons it.
+ *
+ * `to` is the first instant of the next month rather than the last of this
+ * one, because the endpoint's upper bound is exclusive. Naming the last
+ * second instead would drop anything that landed inside it.
+ */
+export function monthRange(key: string): { from: number; to: number } | null {
+  const [year, month] = key.split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return null;
+
+  const startUtc = Date.UTC(year, month - 1, 1) / 1000;
+  const nextUtc = Date.UTC(month === 12 ? year + 1 : year, month % 12, 1) / 1000;
+  // Those are midnights in UTC; shift them to midnight in the display zone.
+  const offset = zoneOffsetSeconds(new Date(startUtc * 1000));
+  return { from: startUtc - offset, to: nextUtc - offset };
+}

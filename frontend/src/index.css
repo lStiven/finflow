@@ -4,25 +4,45 @@
  * Dark first, and only dark for now.
  *
  * This is a money app opened on a phone, usually at night, usually for a few
- * seconds. One accent colour, a lot of negative space, and the number as the
- * largest thing on screen. Two directions of money get two hues and nothing
- * else does — if everything is coloured, the colour stops meaning anything.
+ * seconds. A lot of negative space, and the number as the largest thing on
+ * screen.
+ *
+ * Colour carries exactly two meanings and is spent nowhere else: money in,
+ * money out. The categorical ramp below is the one exception, and it is
+ * confined to charts and their legends — a slice needs to be told apart from
+ * its neighbour, which is a different job from saying what a figure means. If
+ * every row icon were tinted too, neither would read.
  */
 @theme {
-  --color-ink: oklch(0.09 0.005 265);
-  --color-surface: oklch(0.14 0.007 265);
-  --color-surface-raised: oklch(0.18 0.008 265);
-  --color-line: oklch(0.26 0.008 265);
+  --color-ink: oklch(0.08 0.009 285);
+  --color-surface: oklch(0.13 0.012 285);
+  --color-surface-raised: oklch(0.17 0.014 285);
+  --color-line: oklch(0.24 0.014 285);
 
-  --color-text: oklch(0.97 0.003 265);
-  --color-muted: oklch(0.68 0.012 265);
-  --color-faint: oklch(0.5 0.012 265);
+  --color-text: oklch(0.97 0.003 285);
+  --color-muted: oklch(0.68 0.012 285);
+  --color-faint: oklch(0.52 0.014 285);
 
-  --color-accent: oklch(0.82 0.17 158);
-  --color-accent-ink: oklch(0.2 0.06 158);
-  --color-incoming: oklch(0.82 0.17 158);
-  --color-outgoing: oklch(0.75 0.15 25);
+  --color-accent: oklch(0.64 0.24 349);
+  --color-accent-ink: oklch(0.99 0.01 349);
+  --color-accent-soft: oklch(0.32 0.12 349);
+
+  --color-incoming: oklch(0.78 0.18 158);
+  --color-outgoing: oklch(0.72 0.19 15);
   --color-warn: oklch(0.82 0.15 85);
+
+  /*
+   * Chart slices, ordered by how far apart they read rather than by hue. Six
+   * because a donut with more than six wedges stops being readable — the
+   * summary is asked for its top five and everything else lands in one
+   * remainder.
+   */
+  --color-chart-1: oklch(0.64 0.24 349);
+  --color-chart-2: oklch(0.78 0.13 205);
+  --color-chart-3: oklch(0.62 0.21 293);
+  --color-chart-4: oklch(0.78 0.17 158);
+  --color-chart-5: oklch(0.68 0.16 255);
+  --color-chart-6: oklch(0.55 0.02 285);
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
@@ -50,8 +70,6 @@
     background-color: var(--color-ink);
     color: var(--color-text);
     font-family: var(--font-sans);
-    /* The home-screen install is the delivery model; respect the notch. */
-    padding-bottom: env(safe-area-inset-bottom);
     -webkit-font-smoothing: antialiased;
   }
 

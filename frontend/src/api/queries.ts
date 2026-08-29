@@ -20,6 +20,9 @@ export type NetWorth = components["schemas"]["NetWorthResponse"];
 export type Transaction = components["schemas"]["TransactionResponse"];
 export type Notification = components["schemas"]["NotificationResponse"];
 export type RegisteredInbox = components["schemas"]["RegisteredInboxResponse"];
+export type Summary = components["schemas"]["SpendingSummaryResponse"];
+export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
+export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
 
 export const queryKeys = {
   accounts: ["accounts"] as const,

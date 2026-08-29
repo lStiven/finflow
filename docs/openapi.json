@@ -628,6 +628,52 @@
         "title": "InboxSendersPayload",
         "type": "object"
       },
+      "InboxSetupResponse": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/SetupStepResponse"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "unapproved_senders": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unapproved Senders",
+            "type": "array"
+          }
+        },
+        "required": [
+          "address",
+          "steps",
+          "current",
+          "ready",
+          "unapproved_senders"
+        ],
+        "title": "InboxSetupResponse",
+        "type": "object"
+      },
       "IngestionCatalogResponse": {
         "description": "Ingestion's vocabulary, for the screens that render or filter by it.\n\n`instrument_kinds` is the one a client sends rather than displays, and it\nis published from here rather than from Financial because these are the\nwords a bank alert arrives with. An account declared with any other\nspelling is accepted and then never matches an alert — silently, since\nnothing about that is an error.",
         "properties": {
@@ -658,13 +704,21 @@
             },
             "title": "Processing Statuses",
             "type": "array"
+          },
+          "setup_steps": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Setup Steps",
+            "type": "array"
           }
         },
         "required": [
           "processing_statuses",
           "ignored_reasons",
           "deferred_reasons",
-          "instrument_kinds"
+          "instrument_kinds",
+          "setup_steps"
         ],
         "title": "IngestionCatalogResponse",
         "type": "object"
@@ -1303,6 +1357,37 @@
           }
         },
         "title": "SetCreditLimitPayload",
+        "type": "object"
+      },
+      "SetupStepResponse": {
+        "description": "One step of connecting a bank.\n\n`at` is null for the two steps that are states rather than events (the\naddress exists, somebody is approved) — and for any step still open.",
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "done",
+          "at"
+        ],
+        "title": "SetupStepResponse",
         "type": "object"
       },
       "SpendingSummaryResponse": {
@@ -3072,6 +3157,33 @@
           }
         ],
         "summary": "List Notifications",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/ingestion/setup": {
+      "get": {
+        "description": "The caller's four steps, which of them are done, and what is next.",
+        "operationId": "get_setup_ingestion_setup_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxSetupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Setup",
         "tags": [
           "ingestion"
         ]

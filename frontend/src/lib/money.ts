@@ -142,3 +142,33 @@ export function describeBalance(
     label: "Disponible",
   };
 }
+
+/**
+ * A decimal string as a float, for geometry only — never for display.
+ *
+ * The rule everywhere else in this module is that money stays a string,
+ * because a float loses cents. A pie slice is the one place that genuinely
+ * needs a ratio, and an error of 1e-15 in an angle is not observable on a
+ * screen. Every figure drawn *beside* the chart still comes from the original
+ * string, so nothing a person reads has been through this.
+ */
+export function toChartValue(amount: string): number {
+  const value = Number(amount);
+  return Number.isFinite(value) ? Math.abs(value) : 0;
+}
+
+/**
+ * Percentage change between two decimal strings, or null when it cannot be one.
+ *
+ * A baseline of zero has no percentage — "up 100%" from nothing is a
+ * fabrication, and the screens show a plain caption instead. Like
+ * `toChartValue` this goes through floats, and for the same reason: the
+ * result is a rounded badge, not a figure anyone reconciles.
+ */
+export function percentChange(previous: string, current: string): number | null {
+  const before = Number(previous);
+  const after = Number(current);
+  if (!Number.isFinite(before) || !Number.isFinite(after)) return null;
+  if (before === 0) return null;
+  return ((after - before) / Math.abs(before)) * 100;
+}

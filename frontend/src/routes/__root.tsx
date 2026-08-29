@@ -9,9 +9,8 @@ export type RouterContext = {
 };
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  component: () => (
-    <div className="mx-auto min-h-dvh w-full max-w-lg px-5 pt-8 pb-16">
-      <Outlet />
-    </div>
-  ),
+  // No width here on purpose. A signed-in screen is framed by `AppShell`,
+  // which is a sidebar-plus-content layout at desktop widths; a max-width on
+  // the shared ancestor would cap that at phone size on every device.
+  component: () => <Outlet />,
 });
