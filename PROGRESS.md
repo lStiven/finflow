@@ -45,9 +45,10 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-29 — dead-letter alarms: an SNS topic and one CloudWatch alarm
-  per DLQ, so work that stops being processed stops being silent. Not yet
-  deployed — needs the widened deploy policy and an `AlertEmail`.
+- 2026-08-29 — merchant's worker caught up with Financial's: bounded
+  `occurred_at`, a counterparty guard that asks the normalizer, and a use-case
+  failure that no longer takes the batch with it. Financial's worker has unit
+  tests for the first time. `just verify` green, 90 checks.
 
 ## Next steps
 
@@ -111,7 +112,14 @@ frontend — see **Next steps**.
       refuse anything approved/held/in process. What is missing is
       confirmation against real authorization emails from each bank — the
       refusal wording was written without one in hand.
-- [ ] **The whole SQS worker is duplicated**, not just the envelope.
+- [ ] **The whole SQS worker is duplicated**, not just the envelope. *(The
+      behavioural gap between the two copies is closed as of 2026-08-29 and
+      both are unit-tested, so what is left is the extraction itself. Two
+      things found while closing it and worth carrying into that session:
+      `ingestion`'s parse worker still has no guard around its use case at
+      all, and `shared/infrastructure/messaging/lambda_batch.py::drain`
+      already states the rule the three copies each re-implement — it is the
+      shape the generic worker should take.)*
       `IntegrationEventEnvelope`, the source/detail-type constants, `_Outcome`,
       `PollResult`, `poll_once`, `_delete`, and both CLI runners' `_Stopper`
       and `main()` exist twice, in merchant and in Financial. It is transport,
@@ -501,6 +509,16 @@ frontend — see **Next steps**.
   that costs real data, and nothing reports it. Idempotent, so spelling the
   prefix into the variable as well is harmless. EventBridge *rules* are not
   prefixed — a rule name is unique per bus and the bus already is.
+- **A merchant sighting that fails after its claim is lost, deliberately.**
+  `ProcessedEventStore.claim` writes before the work, so a failure in between
+  spends the claim: the redelivery answers `DUPLICATE`, the message is
+  deleted, and no dead-letter alarm fires. Accepted because what is lost is
+  one sighting's counters and the next sighting of the same spelling recreates
+  the merchant, whereas double-counting would inflate a number the user reads.
+  Financial cannot make this trade and does not — its identity comes from the
+  movement's content, so a retry re-does the work correctly. Worth knowing
+  before anyone "fixes" merchant's worker to expect a dead-letter it will
+  never get.
 - **The dead-letter alarms name their queues instead of referencing them.**
   The template owns compute and `provisioning.py` owns the queues, so there is
   no `!Ref` to reach across. The consequence to remember: renaming a queue in

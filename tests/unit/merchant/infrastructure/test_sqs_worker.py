@@ -11,6 +11,7 @@ from typing import Any, cast
 import uuid
 
 from mypy_boto3_sqs.client import SQSClient
+import pytest
 
 from personal_finance.contexts.merchant.application.commands import (
     RecordSightingCommand,
@@ -69,6 +70,8 @@ def _envelope(
     detail_type: str = TRANSACTION_EXTRACTED,
     version: int = 1,
     kind: str = "card_purchase",
+    occurred_at: int = 1_700_000_000,
+    counterparty: str = "TIENDAS ARA 123",
 ) -> str:
     return json.dumps(
         {
@@ -84,8 +87,8 @@ def _envelope(
                     "direction": "outgoing",
                     "amount": "29259.00",
                     "currency": "COP",
-                    "occurred_at": 1_700_000_000,
-                    "counterparty": "TIENDAS ARA 123",
+                    "occurred_at": occurred_at,
+                    "counterparty": counterparty,
                 },
             },
         },
@@ -94,9 +97,10 @@ def _envelope(
 
 def _worker(
     *bodies: str,
-) -> tuple[SQSMerchantWorker, FakeSQSClient, RecordingUseCase]:
+    use_case: object | None = None,
+) -> tuple[SQSMerchantWorker, FakeSQSClient, Any]:
     client = FakeSQSClient(*bodies)
-    use_case = RecordingUseCase()
+    use_case = RecordingUseCase() if use_case is None else use_case
     worker = SQSMerchantWorker(
         client=cast(SQSClient, client),
         queue_url=QUEUE_URL,
@@ -155,3 +159,95 @@ def test_a_payload_version_this_worker_cannot_read_stays_on_the_queue() -> None:
     assert not use_case.commands
     # A newer deploy wrote it, and a newer worker may still pick it up.
     assert client.deleted == []
+
+
+class FailingUseCase:
+    """Whatever a repository does on a bad day."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def execute(self, command: RecordSightingCommand) -> ResolveMerchantResult:
+        del command
+        self.calls += 1
+
+        raise RuntimeError("DynamoDB said no")
+
+
+def test_a_use_case_failure_leaves_the_message_and_does_not_stop_the_batch() -> None:
+    worker, client, use_case = _worker(
+        _envelope(),
+        _envelope(),
+        use_case=FailingUseCase(),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    # Both were attempted: a failure on the first must not abandon the rest of
+    # the receive, whose messages would otherwise go unprocessed while the
+    # ones before them are already deleted.
+    assert use_case.calls == 2
+    assert result.rejected == 2
+    # Left on the queue, so they are retried and eventually dead-lettered.
+    assert client.deleted == []
+
+
+@pytest.mark.parametrize(
+    "occurred_at",
+    [
+        # Year 33658 — `datetime` raises `ValueError` here.
+        1_000_000_000_000,
+        # Past `time_t` — raises `OverflowError`, which is not a `ValueError`
+        # and would escape a guard written for one.
+        10_000_000_000_000_000_000,
+        -1_000_000_000_000,
+    ],
+)
+def test_a_timestamp_outside_epoch_range_is_dropped_not_raised(
+    occurred_at: int,
+) -> None:
+    worker, client, use_case = _worker(_envelope(occurred_at=occurred_at))
+
+    result = worker.poll_once(wait_seconds=0)
+
+    # Refused at the boundary, so the conversion is never reached. Before the
+    # bound existed this escaped the worker entirely and took the batch down.
+    assert result.rejected == 1
+    assert not use_case.commands
+    # Malformed, not early: no later deploy makes year 33658 readable.
+    assert client.deleted == ["receipt-0"]
+
+
+@pytest.mark.parametrize(
+    "counterparty",
+    [
+        # `min_length` counts spaces.
+        "   ",
+        # Punctuation survives `min_length` and normalizes to nothing.
+        "***",
+        # So does a script the normalizer does not keep.
+        "ПЯТЁРОЧКА",
+    ],
+)
+def test_a_counterparty_with_no_recognisable_text_is_refused_at_the_boundary(
+    counterparty: str,
+) -> None:
+    # Left to the domain each of these raises inside the use case, after the
+    # event id is claimed — spending the claim on work that never happened.
+    worker, client, use_case = _worker(_envelope(counterparty=counterparty))
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
+    assert not use_case.commands
+    assert client.deleted == ["receipt-0"]
+
+
+def test_an_accented_counterparty_is_not_mistaken_for_blank() -> None:
+    # The guard asks the normalizer, which folds accents rather than dropping
+    # them. A Colombian merchant list is full of these.
+    worker, _, use_case = _worker(_envelope(counterparty="ÉXITO"))
+
+    worker.poll_once(wait_seconds=0)
+
+    assert use_case.commands[0].counterparty == "ÉXITO"
