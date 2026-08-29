@@ -85,6 +85,12 @@ just seed              # usuario demo, alertas, cuentas y comercios ya poblados
 just dev               # API en http://localhost:8000
 ```
 
+> Esta guía describe **la API**, no el cliente. Ya existe un frontend en
+> `frontend/` que la consume: se levanta con `just web` y sus tipos se generan
+> desde `docs/openapi.json`, así que un endpoint que cambie aquí rompe su
+> compilación. Cómo levantarlo y contra qué backend apunta está en
+> [running.md → El frontend](running.md#el-frontend).
+
 `just seed` deja una cuenta con datos reales que ya recorrieron el pipeline
 completo: `demo@finflow.local` / `una frase larga de verdad`, tres cuentas,
 ocho movimientos (uno **sin asignar** a propósito) y seis comercios pendientes

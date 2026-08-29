@@ -11,6 +11,10 @@ Lo demás vive en otro sitio, a propósito:
 | Qué endpoints hay y en qué orden se llaman | [frontend-integration.md](frontend-integration.md) |
 | Probar la API a mano, sin `curl` | [postman/](postman/README.md) |
 | Cómo un usuario conecta su banco | [email-forwarding.md](email-forwarding.md) |
+| Trabajar dentro del frontend | [../frontend/README.md](../frontend/README.md) |
+
+Esta guía cubre **las dos mitades**: el backend y el frontend que lo consume
+— ver [El frontend](#el-frontend).
 
 Todo se ejecuta dentro del DevContainer, en `/workspaces/finflow_v2`.
 `just --list` es la fuente de verdad de las tareas disponibles.
@@ -45,6 +49,13 @@ variable `ENV_FILE` lo decide, y cada recipe de `just` ya la fija por ti:
 Los ficheros `.env` configuran lo que corre **desde tu máquina**. Lo que corre
 **desplegado** son cinco funciones Lambda, y su configuración vive en
 `infra/template.yaml` — ver [Desplegar en Lambda](#desplegar-en-lambda).
+
+**El frontend no sigue esta tabla, y conviene saberlo antes de perder una
+tarde.** No tiene tres entornos: tiene dos modos de Vite (`dev` y `build`), y
+a qué backend habla no lo decide `ENVIRONMENT` sino una sola variable,
+`VITE_API_BASE_URL`. Los dos lados se configuran por separado y **nada avisa
+si no coinciden**: `just dev` puede estar levantado en el 8000 mientras el
+frontend habla con AWS. Ver [El frontend](#el-frontend).
 
 **Por qué tres y no dos.** DynamoDB on-demand cobra por petición, así que
 probar contra producción para no pagar dos veces es exactamente lo que no hay
@@ -401,6 +412,100 @@ App Password vacía la API arranca, pero el `ingest worker` se niega a arrancar
 
 Paso a paso de cómo cada usuario conecta su banco a esa cuenta, en
 [email-forwarding.md](email-forwarding.md).
+
+---
+
+## El frontend
+
+`frontend/` es una SPA estática: Vite, React y TypeScript. No tiene entornos
+propios ni lee `ENV_FILE`. Tiene **dos modos de Vite**, y cada uno lee su
+fichero:
+
+| Comando | Modo | Fichero que lee | Para qué |
+|---|---|---|---|
+| `just web` | development | `frontend/.env.development` | Servidor de desarrollo con recarga en caliente |
+| `just web-build` | production | `frontend/.env.production` | Construye `dist/` para publicar |
+
+Solo hay una variable que importe: **`VITE_API_BASE_URL`**, y es la que decide
+contra qué backend habla. Los tres entornos del backend no son tres
+configuraciones del frontend, son tres valores de esa variable:
+
+| Contra qué quieres integrar | `VITE_API_BASE_URL` |
+|---|---|
+| Local (`just up` / `just dev`) | `http://localhost:8000` |
+| Development desplegado | la `ApiUrl` de `just deploy-outputs-dev` |
+| Producción desplegada | la `ApiUrl` de `just deploy-outputs-prod` |
+
+```bash
+cp frontend/.env.example frontend/.env.development   # trae localhost:8000
+just web-install                                     # una vez
+just web                                             # http://localhost:5173
+```
+
+**Todo lo que pongas en esos ficheros viaja dentro del bundle.** No son
+secretos: cualquiera que abra la app puede leerlos. Nunca metas ahí una clave.
+
+### Lo que se rompe y no lo parece
+
+**El frontend no sabe si el backend está levantado, y la interfaz pinta
+igual.** Es una SPA: el HTML y el JavaScript se sirven desde Vite, no desde la
+API. Si `VITE_API_BASE_URL` apunta a un sitio que no responde, verás la
+pantalla de login perfectamente dibujada y el fallo solo aparecerá al enviar
+el formulario. Una interfaz que pinta no dice nada sobre el backend.
+
+**Apuntar a un entorno y levantar otro no da ningún error.** `just dev` en el
+8000 y `frontend/.env.development` con la URL de AWS conviven sin quejarse: el
+frontend habla con AWS y tu API local no recibe una sola petición. Como
+`frontend/.env.development` está en `.gitignore`, tampoco lo ves en un `git
+diff`. Si dudas, la respuesta está en la pestaña **Network** del navegador —
+mira el dominio de las peticiones, no el de la pestaña.
+
+**La cuenta demo solo existe en local.** `just seed` siembra el emulador de
+moto. En development y en producción no hay nada que sembrar, así que
+`demo@finflow.local` **no existe ahí** y el login devuelve 401 *Invalid email
+or password*. Contra un entorno desplegado hay que **registrarse** desde la
+propia pantalla de registro, una vez.
+
+**El origen del frontend tiene que estar en `API_CORS_ORIGINS` del backend.**
+El puerto 5173 ya viene puesto en las plantillas, y por eso `vite.config.ts`
+lo fija con `strictPort`: un puerto que se mueva solo produce un error de CORS
+que parece un fallo del cliente. Si sirves el frontend desde otro origen —otro
+puerto, un túnel, un dominio— hay que añadirlo **y volver a desplegar** el
+backend. Un origen ausente falla en el *preflight*, antes de que tu código vea
+nada.
+
+**La URL que Vite imprime como `Network` (`172.17.x.x`) no funciona desde el
+navegador del host.** Es la dirección del contenedor en la red interna de
+Docker. Abre siempre `http://localhost:5173`. Está explicado, con el orden de
+diagnóstico, en [`frontend/README.md`](../frontend/README.md).
+
+### El contrato entre las dos mitades
+
+`docs/openapi.json` se genera desde los routers de Python, y de ahí salen los
+tipos TypeScript. Después de tocar cualquier router o modelo de respuesta:
+
+```bash
+just web-types    # regenera docs/openapi.json y src/api/schema.d.ts
+just check-all    # las dos mitades: prepare + openapi-check + web-check
+```
+
+Si no lo haces, `just openapi-check` falla porque el contrato versionado ya no
+es el que produce el código. Ese es el punto del montaje: un endpoint que
+cambia rompe la compilación del frontend en vez de romper una pantalla.
+
+### Publicarlo todavía no está resuelto
+
+`just web-build` deja un `dist/` estático, pero **nada en `infra/template.yaml`
+lo publica**: no hay bucket de S3 ni CloudFront. Hoy el frontend solo corre en
+el servidor de desarrollo, contra el backend que le digas. Publicarlo es
+trabajo pendiente, no un paso que falte documentar.
+
+Cuando llegue, hay que resolver dos cosas a la vez: `frontend/.env.production`
+con la URL real de la API, y el origen desde el que se sirva añadido a
+`API_CORS_ORIGINS`. `just web-build` se niega a correr sin
+`frontend/.env.production`, a propósito: sin él Vite mete `undefined` en el
+bundle y la app revienta al cargar, un fallo que solo descubriría quien
+despliega.
 
 ---
 

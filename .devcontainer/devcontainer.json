@@ -14,6 +14,32 @@
   "mounts": [
     "source=finflow-v2-aws,target=/home/vscode/.aws,type=volume"
   ],
+  // `forwardPorts` (editor-tunnel detection) was tried first and did not
+  // reach the browser reliably even after a rebuild, so this is real Docker
+  // port publishing instead — it does not depend on the editor at all.
+  // Docker Desktop's WSL2 backend forwards published ports to Windows
+  // localhost on its own.
+  //
+  // Both are needed together. With only 5173 published the page loads and
+  // every API call from it fails, because the fetch happens in the host's
+  // browser, not in the container.
+  //
+  // Needs the container recreated to take effect, refuses to start if either
+  // port is already taken on the host, and only works because `just dev` and
+  // `just web` both listen on 0.0.0.0 — a 127.0.0.1 bind is invisible to a
+  // published port.
+  "appPort": ["5173:5173", "8000:8000"],
+  "portsAttributes": {
+    "5173": {
+      "label": "frontend (vite)",
+      "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "api (fastapi)",
+      "onAutoForward": "silent"
+    }
+  },
+
   "containerEnv": {
     "PYTHONUNBUFFERED": "1",
     "PYTHONDONTWRITEBYTECODE": "1",

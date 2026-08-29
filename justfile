@@ -181,9 +181,15 @@ secret-put name env_file=".env.production": (_require-env env_file)
     print('stored', os.environ['FINFLOW_SECRET_NAME'])"
     @echo "put this in {{env_file}}:  ssm:{{name}}"
 
+# `--host 0.0.0.0` matches `run-dev` and `run-prod`, which already bind it.
+# The default 127.0.0.1 is reachable through the editor's port tunnel but not
+# through a published Docker port, so the odd one out was the recipe most
+# likely to be running when a browser cannot connect.
+#
 # Local: hot reload, against the emulator.
 dev: (_require-env ".env")
-    {{local_env}} uv run fastapi dev src/personal_finance/api/main.py
+    {{local_env}} uv run fastapi dev src/personal_finance/api/main.py \
+        --host 0.0.0.0 --port 8000
 
 # --------------------------------------------------
 # The whole stack, one terminal
@@ -423,6 +429,14 @@ web-check:
 
 web-fix:
     cd {{frontend_dir}} && npm run fix
+
+# `npm audit` for vulnerabilities, plus the import-aware deprecation check
+# that `web-check` already runs. The `frontend-auditor` subagent does the
+# reading around these; this is the part that is just a command.
+#
+# Audit the frontend's dependencies.
+web-audit:
+    cd {{frontend_dir}} && npm audit && npm run check:deprecated
 
 # Both halves, for a commit that touches the seam.
 check-all: prepare openapi-check web-check

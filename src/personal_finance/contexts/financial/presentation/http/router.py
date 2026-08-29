@@ -1110,7 +1110,9 @@ def _known_category(
         return category
 
     raise HTTPException(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        # Renamed in Starlette 1.x to match RFC 9110, which calls 422
+        # "Unprocessable Content". Same number, same response.
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         detail=f"Unknown category: {category!r}",
     )
 

@@ -51,12 +51,14 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-29 — the frontend exists: `frontend/` (Vite + React + TS, TanStack
-  Query and Router, Tailwind v4, Biome, Vitest), typed from a generated
-  `docs/openapi.json`, with login/register and the accounts dashboard working
-  against `just dev` and the seeded data. A `/code-review` pass caught the
-  session/router invalidation bug and the login 401 message before either
-  reached a screen. `just check-all` green (778 Python, 26 TypeScript).
+- 2026-08-29 — the docs cover both halves. `running.md` was backend-only and
+  predated the frontend; it now has an **El frontend** section (the two Vite
+  modes, the single `VITE_API_BASE_URL`, what breaks silently, and that
+  publishing it is unsolved), reached from `frontend/README.md` and
+  `frontend-integration.md`. Same pass fixed `just web` not reaching the
+  browser: the port chain was already correct — proved with
+  `host.docker.internal:5173` → 200 from inside the container — and the
+  browser was on Vite's Docker-internal `172.17.x.x` URL.
 
 ## Next steps
 
@@ -838,6 +840,93 @@ rest of the frontend — see **Next steps**.
   passing through a float, months grouped in Bogota. Components are left
   untested on purpose for now: they are still changing shape, and the rules
   they must not break are asserted underneath them.
+
+- **The frontend's guardrails live in `.claude/`, which is gitignored.** The
+  `frontend-auditor` subagent and the `frontend/**` quality-gate rule are
+  therefore per-machine, not part of a clone. That matches how
+  `.claude/rules/quality-gate.md` already worked for Python and is fine while
+  this is a one-developer project — but a second checkout gets neither, and
+  nothing announces their absence. Un-ignoring `.claude/agents/` and
+  `.claude/rules/` is the fix on the day that matters.
+
+- **The DevContainer publishes its ports at the Docker level; it does not
+  rely on the editor's tunnel** (2026-08-29). A devcontainer publishes
+  nothing at the Docker level by default — `docker inspect` showed
+  `PortBindings: {}` — and reaches the host browser only through the
+  editor's auto-detected tunnel. Leaving that to detection is what made both
+  URLs Vite prints dead: `localhost:5173` had nothing behind it on the host,
+  and the `172.17.x.x` address it advertises is internal to Docker's bridge
+  and never routable from Windows. `forwardPorts` was tried first —
+  declaring the ports without publishing them, so the tunnel would not
+  depend on auto-detection — and still did not come up reliably even after a
+  rebuild, so it was replaced with `appPort`, which publishes them as real
+  Docker ports and does not depend on the editor at all. 8000 is published
+  alongside 5173 because the API call happens in the host's browser, not in
+  the container, so publishing only the page would load a screen where
+  everything fails. Works only because both dev servers bind 0.0.0.0, and
+  takes effect only on a full rebuild, not a restart.
+
+- **"The frontend does not come up" was the wrong URL, and the port work
+  underneath it was already correct** (2026-08-29). Three container rebuilds
+  went into this. What ended it was measuring the chain instead of changing
+  it: `docker ps` showed `0.0.0.0:5173->5173`, Vite was listening on
+  `*:5173`, and — the line that settles it — `curl
+  http://host.docker.internal:5173/` from inside the container returned 200.
+  `host.docker.internal` *is* the Windows host, so the host could reach the
+  page all along. The browser was pointed at `172.17.0.2:5173`, the
+  "Network" URL Vite prints: the container's address on Docker's bridge,
+  routable only inside Docker, and dead from the host by design. It fails as
+  ERR_CONNECTION_REFUSED, which is also what an unpublished port looks like,
+  so it read as "the rebuild did not work" every time.
+
+  Keep that diagnostic order. Every earlier round changed configuration
+  first and never established which hop was broken, which is why a working
+  chain kept getting rebuilt. A `configureServer` plugin in `vite.config.ts`
+  now prints, under the URL list, that the Network one is not routable —
+  the advice has to sit where the misleading URL is, not in a README.
+
+- **Vite's host check has to be off for this project's delivery model**
+  (2026-08-29). Separate from the above and found while measuring it: Vite
+  answers `localhost` and bare IPs and refuses every *name* with "Blocked
+  request. This host is not allowed." The editor's tunnel, an mDNS name and
+  a phone on the LAN all arrive under a name, so all three were dead ends.
+  `server.allowedHosts: true`, and the same for `preview`, which repeats the
+  check against the built bundle. No rebuild is involved: Vite reloads its
+  own config.
+
+  Set to `true` rather than a list because the hosts that have to work are
+  not knowable in advance — a tunnel URL is generated per session. The check
+  guards against a hostile page pointing a domain it owns at 127.0.0.1 to
+  read the dev server's source; accepted, because the dev server holds no
+  secret this repo does not, it is never what gets deployed, and the product
+  is explicitly meant to be opened from a phone.
+
+- **The deprecation check is import-aware, and that is not a detail.** Two
+  cheaper designs were tried and both produce noise instead of findings.
+  *File-level matching*: `@tanstack/react-router`'s `fileRoute.d.ts` carries
+  `@deprecated` on the `FileRoute` class while this project uses
+  `createFileRoute` from the same file. *Bare symbol matching*: `@types/node`
+  deprecates things called `format`, `parse` and `register`, none of which are
+  the ones this code uses. Only a symbol imported *from the package that
+  deprecates it* is a finding — and the package to look in is usually
+  `@types/*`, not the runtime one. A hand-rolled sweep that checked `react`
+  but not `@types/react` reported the frontend clean while `FormEvent` sat in
+  the login form; that miss is why this is a committed script inside
+  `just web-check` rather than something a person remembers to run.
+
+  What it deliberately does not cover, because it cannot do so without noise:
+  deprecated *members* of a type we do use (a field on a live interface is
+  not an import), and globals that are never imported. Those stay the
+  `frontend-auditor` subagent's job, which reads rather than matches.
+
+- **The auditor confirms symbols, never files.** A `.d.ts` containing
+  `@deprecated` says nothing about what this project calls: at the time of
+  writing `@tanstack/react-router`'s `fileRoute.d.ts` carries the tag on the
+  `FileRoute` class while we use `createFileRoute` from the same file, and
+  `tailwind-merge`'s tags sit on Tailwind *class names* (`container`), not on
+  `twMerge`. Both would be false positives under file-level matching, which
+  is why the agent is told to read the declaration the tag sits on before
+  reporting anything.
 
 - **No component library yet.** The primitives in `src/components/ui/` are a
   handful of hand-written files. shadcn/ui is the intended destination — it

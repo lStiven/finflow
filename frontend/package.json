@@ -9,10 +9,11 @@
     "dev": "vite",
     "build": "tsc --build && vite build",
     "preview": "vite preview",
-    "check": "biome check . && tsc --build && vitest run",
+    "check": "biome check . && tsc --build && node scripts/check-deprecated.mjs && vitest run",
     "fix": "biome check --write .",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:deprecated": "node scripts/check-deprecated.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.2",
