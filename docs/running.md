@@ -586,6 +586,38 @@ just deploy-logs-prod ApiFunction        # seguir uno en vivo
 just deploy-logs-prod FinancialFunction  # y `-dev` para el otro entorno
 ```
 
+### Avisos cuando algo deja de procesarse
+
+Un mensaje llega a una cola de fallos (`-dlq`) **después** de que SQS ya lo
+reintentara, así que uno solo no es un hipo: es trabajo que nunca se hará si
+nadie mira. El silencio era el fallo más peligroso — si un banco cambia su
+plantilla, no se vacía ninguna cola y nadie ve ningún error.
+
+La plantilla crea un tema SNS y tres alarmas, una por cada DLQ: `parse`,
+`merchant` y `financial`. Cualquier mensaje en cualquiera de ellas dispara un
+correo.
+
+El destinatario es el parámetro `AlertEmail` en `infra/samconfig.toml`, uno
+por entorno. **Vacío despliega igual**, pero entonces las alarmas publican en
+un tema que nadie lee, que es exactamente el estado que esto venía a arreglar.
+
+```toml
+"AlertEmail=tu-correo@ejemplo.com",
+```
+
+Tras el primer despliegue con un correo puesto, **AWS te manda un mensaje de
+confirmación de la suscripción**. Hasta que pulses ese enlace no llega ningún
+aviso, y la alarma parecerá funcionar. Es el paso que más se olvida.
+
+Dos detalles del diseño, por si algún día extrañan:
+
+- Las alarmas usan `Maximum`, no `Average`. Un mensaje que entra y se drena
+  dentro del mismo periodo se promedia hasta casi cero y no reportaría nada.
+- Las colas son plano de datos y las crea `provisioning.py`, así que las
+  alarmas las nombran en vez de referenciarlas. Renombrar una cola allí deja
+  aquí una alarma vigilando un nombre que ya no existe — y una alarma sobre
+  una cola inexistente informa `INSUFFICIENT_DATA`, no un error.
+
 ### Lo que no se puede desplegar
 
 Dos cosas siguen siendo manuales, y ninguna es código: crear la cuenta de

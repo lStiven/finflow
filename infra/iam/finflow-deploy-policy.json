@@ -239,6 +239,46 @@
         "arn:aws:s3:::aws-sam-cli-managed-default*",
         "arn:aws:s3:::aws-sam-cli-managed-default*/*"
       ]
+    },
+    {
+      "Sid": "DeadLetterAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:us-east-1:*:alarm:finflow-*"
+    },
+    {
+      "Sid": "DescribeAlarmsIsNotResourceScopable",
+      "Effect": "Allow",
+      "Action": "cloudwatch:DescribeAlarms",
+      "Resource": "*"
+    },
+    {
+      "Sid": "TheAlertTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:us-east-1:*:finflow-*"
+    },
+    {
+      "Sid": "UnsubscribeTakesTheSubscriptionNotTheTopic",
+      "Effect": "Allow",
+      "Action": "sns:Unsubscribe",
+      "Resource": "*"
     }
   ]
 }

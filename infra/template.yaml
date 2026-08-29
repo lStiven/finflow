@@ -71,6 +71,17 @@ Parameters:
       the Lambda free tier — almost entirely invocations that find an empty
       mailbox — so it is the first dial to turn if that ever matters.
 
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Where a dead-letter alarm is sent. Empty creates the topic but no
+      subscription, which is a deployable state and a useless one: the alarm
+      fires into a topic nobody reads. Set it.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
 Globals:
   Function:
     # `PackageType` is deliberately absent: SAM's Globals accepts a fixed list
@@ -472,6 +483,99 @@ Resources:
       LogGroupName: !Sub "/finflow/${AWS::StackName}/financial"
       RetentionInDays: !Ref LogRetentionDays
 
+  # ------------------------------------------------------------------
+  # Dead letters — the only thing that says processing stopped
+  # ------------------------------------------------------------------
+  # A message reaches a DLQ after SQS has already retried it, so one message
+  # is not a blip: it is work that will never be done unless somebody looks.
+  # Silence was the failure mode worth closing first — a bank changing its
+  # email template drains no queue and raises no error anyone sees.
+  #
+  # The queues are the data plane and `provisioning.py` owns them, so these
+  # alarms name them rather than reference them. That is the cost of the split
+  # and it is paid here: a queue renamed there leaves an alarm watching a name
+  # that no longer exists, and an alarm on a queue that does not exist reports
+  # INSUFFICIENT_DATA, not an error.
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-alerts"
+      DisplayName: Finflow alerts
+
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  ParseDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-parse-dead-letters"
+      AlarmDescription: >
+        An email was read but could not be parsed, even after retries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ResourcePrefix}parse-notifications-dlq"
+      # Maximum, not Average: a single message arriving and being drained
+      # inside the period averages back to nearly zero and reports nothing.
+      Statistic: Maximum
+      # SQS publishes these every five minutes; a shorter period would only
+      # produce gaps.
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      # An idle queue publishes no data points at all, which must not read as
+      # a breach.
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  MerchantDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-merchant-dead-letters"
+      AlarmDescription: >
+        A parsed transaction never reached merchant normalisation.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ResourcePrefix}merchant-events-dlq"
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  FinancialDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-financial-dead-letters"
+      AlarmDescription: >
+        A movement never reached the ledger, so a balance is understated.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ResourcePrefix}financial-events-dlq"
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
 Outputs:
   ApiUrl:
     Description: >
@@ -482,3 +586,9 @@ Outputs:
   ApiFunctionName:
     Description: For `sam logs -n <name>`.
     Value: !Ref ApiFunction
+
+  AlertTopicArn:
+    Description: >
+      Where the dead-letter alarms publish. Subscribe a second endpoint here
+      rather than editing the alarms.
+    Value: !Ref AlertTopic

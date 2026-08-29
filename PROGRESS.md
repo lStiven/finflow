@@ -45,26 +45,26 @@ frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-28 — workers were logging nothing on Lambda: `configure_logging`
-  called `basicConfig` without `force`, which does nothing once the managed
-  runtime has attached its own root handler, so every INFO line was dropped at
-  the root logger's WARNING default. Fixed and pinned by tests. `just
-  ecr-prune-*` added alongside it — see **Billing**.
+- 2026-08-29 — dead-letter alarms: an SNS topic and one CloudWatch alarm
+  per DLQ, so work that stops being processed stops being silent. Not yet
+  deployed — needs the widened deploy policy and an `AlertEmail`.
 
 ## Next steps
 
 - [ ] **Next: what production actually needs.** In order of what hurts
       soonest:
-      1. **Observability.** CloudWatch shipping is still deferred, so the
-         workers log to stdout on a box nobody watches, and nothing alarms on
-         DLQ depth. A bank changing its template would pile up in silence.
+      1. **Observability.** Closed, pending one manual step. Logs go to
+         `/finflow/<stack>/<name>`, and three CloudWatch alarms — one per DLQ
+         — publish to an SNS topic on any message at all. What remains is not
+         code: `AlertEmail` must be set in `infra/samconfig.toml` per
+         environment, and the SNS subscription confirmed from the email AWS
+         sends, or the alarms page nobody.
       2. **CI.** There is a Dockerfile, a SAM template and now a post-deploy
          gate (`just smoke`), but nothing builds or deploys automatically.
-         The image has still never been built, but the DevContainer can
-         now build it: `docker-outside-of-docker` borrows the host daemon and
-         `sam` is installed by `postCreateCommand`. `sam validate --lint`
-         passes; `sam build` is the untested step. The pipeline
-         worth building once that run succeeds: build the image **once**,
+         `sam build`, `sam deploy` and the `finflow-dev` stack have all now
+         run for real from the DevContainer, so nothing here is untested any
+         more — it is simply manual. The pipeline worth building:
+         build the image **once**,
          deploy it to `finflow-dev`, `just smoke <dev-url> --with-pipeline`,
          then promote the same image to production behind a manual approval
          and `just smoke-prod <url>`. Building separately per environment
@@ -129,12 +129,6 @@ frontend — see **Next steps**.
 
 ## Open questions / blockers
 
-- **Deploy is blocked on IAM permissions.** `dev-proyecto-ddd` (the only user
-  configured, and both profiles resolve to it) can reach DynamoDB, SQS,
-  EventBridge, Lambda and Logs, but not CloudFormation, ECR, SSM or IAM —
-  the four `sam deploy` needs. Attach `infra/iam/finflow-deploy-policy.json`
-  from an admin identity to unblock. Never deployed yet, so the policy has
-  not been exercised against a real deploy.
 - **`finflow-dev` and `finflow-production` currently resolve to the same AWS
   account and the same IAM user**, so the account separation recorded under
   Environments is intended but not yet real. Until a second account exists,
@@ -507,6 +501,13 @@ frontend — see **Next steps**.
   that costs real data, and nothing reports it. Idempotent, so spelling the
   prefix into the variable as well is harmless. EventBridge *rules* are not
   prefixed — a rule name is unique per bus and the bus already is.
+- **The dead-letter alarms name their queues instead of referencing them.**
+  The template owns compute and `provisioning.py` owns the queues, so there is
+  no `!Ref` to reach across. The consequence to remember: renaming a queue in
+  `provisioning.py` silently orphans an alarm, and an alarm over a queue that
+  does not exist sits in `INSUFFICIENT_DATA` rather than failing — it looks
+  healthy. Rejected the alternative of moving the queues into the template,
+  which would leave the local moto environment with no way to exist.
 - **The `dev-` prefix does not cover the ingest mailbox, and nothing else
   does either.** It namespaces AWS resources; the mailbox is a Gmail account.
   The reader searches `UNSEEN` and marks `\Seen`, so a local or dev

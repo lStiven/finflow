@@ -45,6 +45,8 @@ parameter_overrides = [
     "ResourcePrefix=dev-",
     "IngestMailboxAddress=finflowingest@gmail.com",
     "JwtSecretParameter=/finflow/development/jwt-secret",
+    # Empty deploys, but the dead-letter alarms then page nobody.
+    "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
     "CorsOrigins=http://localhost:5173",
@@ -76,6 +78,8 @@ parameter_overrides = [
     "ResourcePrefix=",
     "IngestMailboxAddress=finflowingest@gmail.com",
     "JwtSecretParameter=/finflow/production/jwt-secret",
+    # Empty deploys, but the dead-letter alarms then page nobody.
+    "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
     # Empty until there is a frontend on its own origin. See
