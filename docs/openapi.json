@@ -1,0 +1,3569 @@
+{
+  "components": {
+    "schemas": {
+      "AccessTokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "access_token",
+          "expires_at"
+        ],
+        "title": "AccessTokenResponse",
+        "type": "object"
+      },
+      "AccountKind": {
+        "description": "What kind of account this is.\n\nExplicit string values: the kind is persisted, so reordering the members\nmust not rewrite anybody's data.",
+        "enum": [
+          "savings",
+          "checking",
+          "cash",
+          "investment",
+          "credit_card",
+          "loan",
+          "mortgage"
+        ],
+        "title": "AccountKind",
+        "type": "string"
+      },
+      "AccountKindOption": {
+        "description": "An account kind, and which side of net worth it lands on.\n\n`category` is derived from the kind and never chosen, so a client can\ngroup the dropdown — and say \"money you owe\" against a balance — without\nduplicating the rule that decides it.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "category"
+        ],
+        "title": "AccountKindOption",
+        "type": "object"
+      },
+      "AccountListResponse": {
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "net_worth": {
+            "items": {
+              "$ref": "#/components/schemas/NetWorthResponse"
+            },
+            "title": "Net Worth",
+            "type": "array"
+          }
+        },
+        "required": [
+          "accounts",
+          "net_worth"
+        ],
+        "title": "AccountListResponse",
+        "type": "object"
+      },
+      "AccountResponse": {
+        "properties": {
+          "available": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available"
+          },
+          "balance": {
+            "title": "Balance",
+            "type": "string"
+          },
+          "bank": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bank"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "credit_limit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "instruments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Instruments",
+            "type": "array"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "movements_applied": {
+            "title": "Movements Applied",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "opened_at": {
+            "title": "Opened At",
+            "type": "integer"
+          },
+          "opening_balance": {
+            "title": "Opening Balance",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "category",
+          "currency",
+          "balance",
+          "opening_balance",
+          "credit_limit",
+          "available",
+          "movements_applied",
+          "opened_at",
+          "closed_at",
+          "bank",
+          "instruments"
+        ],
+        "title": "AccountResponse",
+        "type": "object"
+      },
+      "AccountScope": {
+        "enum": [
+          "open",
+          "closed",
+          "all"
+        ],
+        "title": "AccountScope",
+        "type": "string"
+      },
+      "AliasResponse": {
+        "description": "One child: a spelling that resolves to this merchant.",
+        "properties": {
+          "fingerprint": {
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "integer"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "integer"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "raw_text": {
+            "title": "Raw Text",
+            "type": "string"
+          },
+          "root_key": {
+            "title": "Root Key",
+            "type": "string"
+          },
+          "times_seen": {
+            "title": "Times Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "raw_text",
+          "root_key",
+          "origin",
+          "times_seen",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "AliasResponse",
+        "type": "object"
+      },
+      "CatalogOption": {
+        "description": "One admissible value, and something to put beside it in a dropdown.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "CatalogOption",
+        "type": "object"
+      },
+      "CategoryListResponse": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryResponse"
+            },
+            "title": "Categories",
+            "type": "array"
+          }
+        },
+        "required": [
+          "categories"
+        ],
+        "title": "CategoryListResponse",
+        "type": "object"
+      },
+      "CategoryResponse": {
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "CategoryResponse",
+        "type": "object"
+      },
+      "Currency": {
+        "enum": [
+          "COP",
+          "USD"
+        ],
+        "title": "Currency",
+        "type": "string"
+      },
+      "CurrentUserResponse": {
+        "properties": {
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "CurrentUserResponse",
+        "type": "object"
+      },
+      "EditMerchantPayload": {
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MerchantCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "title": "EditMerchantPayload",
+        "type": "object"
+      },
+      "EditTransactionPayload": {
+        "description": "A correction. Everything omitted is left alone.\n\nOn a movement that came from a bank alert, the first correction keeps what\nthe bank said: `stated` on the response is how a reader tells the two\napart afterwards.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "counterparty": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detach": {
+            "default": false,
+            "title": "Detach",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          }
+        },
+        "title": "EditTransactionPayload",
+        "type": "object"
+      },
+      "EnterTransactionPayload": {
+        "description": "Money that moved without an alert to announce it.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "bank": {
+            "default": "",
+            "maxLength": 512,
+            "title": "Bank",
+            "type": "string"
+          },
+          "counterparty": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MovementDirection"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "direction",
+          "amount",
+          "occurred_at",
+          "counterparty"
+        ],
+        "title": "EnterTransactionPayload",
+        "type": "object"
+      },
+      "FinancialCatalogResponse": {
+        "description": "Every vocabulary this context's endpoints accept.\n\n`instrument_kinds` is the one that is not an account kind and is the one\npeople reach for anyway: a savings account is `savings`, but the alerts it\nsends name the instrument `account`. Offer it as its own list, never a\ntext field.",
+        "properties": {
+          "account_categories": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Account Categories",
+            "type": "array"
+          },
+          "account_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/AccountKindOption"
+            },
+            "title": "Account Kinds",
+            "type": "array"
+          },
+          "account_scopes": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Account Scopes",
+            "type": "array"
+          },
+          "currencies": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Currencies",
+            "type": "array"
+          },
+          "instrument_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Instrument Kinds",
+            "type": "array"
+          },
+          "movement_directions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Movement Directions",
+            "type": "array"
+          },
+          "summary_groupings": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Summary Groupings",
+            "type": "array"
+          },
+          "transaction_origins": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Transaction Origins",
+            "type": "array"
+          },
+          "transaction_statuses": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Transaction Statuses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_kinds",
+          "instrument_kinds",
+          "account_categories",
+          "currencies",
+          "movement_directions",
+          "transaction_origins",
+          "transaction_statuses",
+          "account_scopes",
+          "summary_groupings"
+        ],
+        "title": "FinancialCatalogResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InboxSendersPayload": {
+        "description": "The senders approved for the caller's one forwarding address.\n\nNo address here — it is assigned automatically and never chosen by a\ncaller. Both lists may be empty, which approves nothing: a forwarding\naddress with no approved sender reads nothing, the safe default rather\nthan a broken one.",
+        "properties": {
+          "allowed_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Addresses",
+            "type": "array"
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Domains",
+            "type": "array"
+          }
+        },
+        "title": "InboxSendersPayload",
+        "type": "object"
+      },
+      "IngestionCatalogResponse": {
+        "description": "Ingestion's vocabulary, for the screens that render or filter by it.\n\n`instrument_kinds` is the one a client sends rather than displays, and it\nis published from here rather than from Financial because these are the\nwords a bank alert arrives with. An account declared with any other\nspelling is accepted and then never matches an alert — silently, since\nnothing about that is an error.",
+        "properties": {
+          "deferred_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Deferred Reasons",
+            "type": "array"
+          },
+          "ignored_reasons": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Ignored Reasons",
+            "type": "array"
+          },
+          "instrument_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Instrument Kinds",
+            "type": "array"
+          },
+          "processing_statuses": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Processing Statuses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "processing_statuses",
+          "ignored_reasons",
+          "deferred_reasons",
+          "instrument_kinds"
+        ],
+        "title": "IngestionCatalogResponse",
+        "type": "object"
+      },
+      "InstrumentKind": {
+        "description": "The sort of card or account a movement arrived through.\n\nFinancial's own vocabulary, mapped at the boundary from whatever the\npublishing context calls its instruments — the same arrangement as\n`MovementDirection`. Neither context gets to change the other's meaning by\nediting its own.\n\nNot the same thing as `AccountKind`, and the difference is the whole point\nof this type existing. `AccountKind` is what the owner calls the account;\nthis is what the *bank* calls the thing the money moved through, and only\nthese words ever appear in an alert. A savings account is declared\n`SAVINGS` and its transfers arrive as `ACCOUNT` — spelling the fingerprint\nwith the account kind produces a key no alert can ever match, and the\nowner finds out only by noticing that nothing was ever assigned.",
+        "enum": [
+          "credit_card",
+          "debit_card",
+          "savings_account",
+          "checking_account",
+          "account"
+        ],
+        "title": "InstrumentKind",
+        "type": "string"
+      },
+      "LinkInstrumentPayload": {
+        "description": "Teach an account another of the names its alerts arrive under.\n\nOne real account emails as a debit card for purchases and as an account\nnumber for transfers, under different last four digits. Both have to be\nlinked or half its movements wait forever.",
+        "properties": {
+          "bank": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Bank",
+            "type": "string"
+          },
+          "instrument_kind": {
+            "$ref": "#/components/schemas/InstrumentKind"
+          },
+          "last_four": {
+            "pattern": "^\\d{4,}$",
+            "title": "Last Four",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bank",
+          "instrument_kind",
+          "last_four"
+        ],
+        "title": "LinkInstrumentPayload",
+        "type": "object"
+      },
+      "LoginPayload": {
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginPayload",
+        "type": "object"
+      },
+      "MerchantCatalogResponse": {
+        "description": "Every vocabulary this context's endpoints accept or return.\n\n`categories` repeats what `GET /merchants/categories` already answers.\nThat endpoint stays: it is what a client already calls, and one list in\ntwo places costs nothing next to breaking it.",
+        "properties": {
+          "alias_origins": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Alias Origins",
+            "type": "array"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "counterparty_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Counterparty Kinds",
+            "type": "array"
+          },
+          "sorts": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Sorts",
+            "type": "array"
+          },
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Statuses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "categories",
+          "sorts",
+          "statuses",
+          "alias_origins",
+          "counterparty_kinds"
+        ],
+        "title": "MerchantCatalogResponse",
+        "type": "object"
+      },
+      "MerchantCategory": {
+        "description": "What kind of spending this merchant represents.\n\nExplicit string values: the category is persisted and shown in a dropdown,\nso reordering the members must not rewrite anybody's data.",
+        "enum": [
+          "uncategorized",
+          "groceries",
+          "restaurants",
+          "transport",
+          "fuel",
+          "shopping",
+          "entertainment",
+          "subscriptions",
+          "utilities",
+          "health",
+          "education",
+          "travel",
+          "fees",
+          "transfers",
+          "income",
+          "other"
+        ],
+        "title": "MerchantCategory",
+        "type": "string"
+      },
+      "MerchantDetailResponse": {
+        "properties": {
+          "alias_count": {
+            "title": "Alias Count",
+            "type": "integer"
+          },
+          "aliases": {
+            "items": {
+              "$ref": "#/components/schemas/AliasResponse"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "integer"
+          },
+          "needs_review": {
+            "title": "Needs Review",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "times_seen": {
+            "title": "Times Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "category",
+          "status",
+          "needs_review",
+          "alias_count",
+          "times_seen",
+          "first_seen",
+          "last_seen",
+          "aliases"
+        ],
+        "title": "MerchantDetailResponse",
+        "type": "object"
+      },
+      "MerchantListResponse": {
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "merchants": {
+            "items": {
+              "$ref": "#/components/schemas/personal_finance__contexts__merchant__presentation__http__router__MerchantResponse"
+            },
+            "title": "Merchants",
+            "type": "array"
+          },
+          "needs_review": {
+            "title": "Needs Review",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "merchants",
+          "total",
+          "needs_review",
+          "limit",
+          "offset"
+        ],
+        "title": "MerchantListResponse",
+        "type": "object"
+      },
+      "MerchantSort": {
+        "enum": [
+          "name",
+          "last_seen",
+          "times_seen"
+        ],
+        "title": "MerchantSort",
+        "type": "string"
+      },
+      "MergeMerchantsPayload": {
+        "description": "The merchant in the path survives and takes everything this one had.",
+        "properties": {
+          "absorbed_merchant_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Absorbed Merchant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "absorbed_merchant_id"
+        ],
+        "title": "MergeMerchantsPayload",
+        "type": "object"
+      },
+      "MoveAliasPayload": {
+        "description": "Reattach one child to a different parent.",
+        "properties": {
+          "fingerprint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "target_merchant_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Target Merchant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "target_merchant_id"
+        ],
+        "title": "MoveAliasPayload",
+        "type": "object"
+      },
+      "MovementDirection": {
+        "description": "Which way the money went, in Financial's own vocabulary.\n\nIngestion has an enum that happens to look identical today. Mapping\nbetween them at the boundary is the point: neither context gets to change\nthe other's meaning by editing its own.",
+        "enum": [
+          "outgoing",
+          "incoming"
+        ],
+        "title": "MovementDirection",
+        "type": "string"
+      },
+      "NetWorthResponse": {
+        "properties": {
+          "assets": {
+            "title": "Assets",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "liabilities": {
+            "title": "Liabilities",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "assets",
+          "liabilities",
+          "total"
+        ],
+        "title": "NetWorthResponse",
+        "type": "object"
+      },
+      "NotificationListResponse": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "notifications": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationResponse"
+            },
+            "title": "Notifications",
+            "type": "array"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "notifications",
+          "total",
+          "counts",
+          "limit",
+          "offset"
+        ],
+        "title": "NotificationListResponse",
+        "type": "object"
+      },
+      "NotificationResponse": {
+        "description": "One arrival. No body: a list never shows the email itself, and two of\nthe states below discarded theirs on purpose.",
+        "properties": {
+          "deferred_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deferred Reason"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "received_at": {
+            "title": "Received At",
+            "type": "integer"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "message_id",
+          "sender",
+          "subject",
+          "status",
+          "deferred_reason",
+          "received_at"
+        ],
+        "title": "NotificationResponse",
+        "type": "object"
+      },
+      "OpenAccountPayload": {
+        "description": "Declare an account.\n\nGive it an instrument and every alert arriving under that bank and those\nlast four digits lands here — including the ones that already arrived and\nhave been waiting. Leave it out for what never emails: cash, a mortgage.",
+        "properties": {
+          "bank": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bank"
+          },
+          "credit_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "instrument_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InstrumentKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind"
+          },
+          "last_four": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4,}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Four"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "opening_balance": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opening Balance"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "OpenAccountPayload",
+        "type": "object"
+      },
+      "ProcessingStatus": {
+        "description": "Explicit string values: this enum is persisted and serialized, so the\nstored representation must survive a reordering of the members.",
+        "enum": [
+          "received",
+          "queued",
+          "processing",
+          "processed",
+          "pending_fallback",
+          "failed",
+          "ignored"
+        ],
+        "title": "ProcessingStatus",
+        "type": "string"
+      },
+      "RegisterPayload": {
+        "description": "Registration, plus the same optional sender approval `PATCH\n/identity/inbox` accepts — set here to skip a second call, or leave\nempty and approve senders later. The forwarding address itself is\nassigned regardless of whether any sender is named here.",
+        "properties": {
+          "allowed_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Addresses",
+            "type": "array"
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Domains",
+            "type": "array"
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "RegisterPayload",
+        "type": "object"
+      },
+      "RegisteredInboxResponse": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "allowed_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Addresses",
+            "type": "array"
+          },
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Domains",
+            "type": "array"
+          }
+        },
+        "required": [
+          "address",
+          "allowed_domains",
+          "allowed_addresses"
+        ],
+        "title": "RegisteredInboxResponse",
+        "type": "object"
+      },
+      "RenameAccountPayload": {
+        "properties": {
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RenameAccountPayload",
+        "type": "object"
+      },
+      "RestateBalancePayload": {
+        "description": "What the account holds **now** — the figure the bank shows today.\n\nNot the opening balance: that one is derived from this and the movements\nalready recorded, because it is the half nobody can look up. Signed, so\nan overdrawn account and an overpaid card can both be stated.",
+        "properties": {
+          "balance": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": -1000000000000000.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Balance"
+          }
+        },
+        "required": [
+          "balance"
+        ],
+        "title": "RestateBalancePayload",
+        "type": "object"
+      },
+      "SetCreditLimitPayload": {
+        "description": "State or restate what a card may owe. `null` clears it.",
+        "properties": {
+          "credit_limit": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Limit"
+          }
+        },
+        "title": "SetCreditLimitPayload",
+        "type": "object"
+      },
+      "SpendingSummaryResponse": {
+        "properties": {
+          "group_by": {
+            "title": "Group By",
+            "type": "string"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/SummaryGroupResponse"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "group_by",
+          "timezone",
+          "totals",
+          "groups"
+        ],
+        "title": "SpendingSummaryResponse",
+        "type": "object"
+      },
+      "SpendingTotalsResponse": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "incoming": {
+            "title": "Incoming",
+            "type": "string"
+          },
+          "movements": {
+            "title": "Movements",
+            "type": "integer"
+          },
+          "net": {
+            "title": "Net",
+            "type": "string"
+          },
+          "outgoing": {
+            "title": "Outgoing",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "incoming",
+          "outgoing",
+          "net",
+          "movements"
+        ],
+        "title": "SpendingTotalsResponse",
+        "type": "object"
+      },
+      "SplitAliasPayload": {
+        "description": "Pull one child out into a merchant of its own.",
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MerchantCategory"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "fingerprint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Fingerprint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint"
+        ],
+        "title": "SplitAliasPayload",
+        "type": "object"
+      },
+      "StatedResponse": {
+        "description": "What the bank said, before anybody corrected it.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "counterparty": {
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amount",
+          "currency",
+          "occurred_at",
+          "counterparty"
+        ],
+        "title": "StatedResponse",
+        "type": "object"
+      },
+      "SummaryGroupResponse": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "movements": {
+            "title": "Movements",
+            "type": "integer"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "totals",
+          "movements"
+        ],
+        "title": "SummaryGroupResponse",
+        "type": "object"
+      },
+      "SummaryGrouping": {
+        "description": "Which question a summary answers.",
+        "enum": [
+          "month",
+          "category",
+          "merchant",
+          "account"
+        ],
+        "title": "SummaryGrouping",
+        "type": "string"
+      },
+      "TransactionListResponse": {
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionResponse"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "transactions",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "TransactionListResponse",
+        "type": "object"
+      },
+      "TransactionOrigin": {
+        "description": "Where a movement came from, which decides what may be trusted about it.\n\nA bank alert states a fact somebody else recorded; a manual entry is the\nuser's own claim. Automatic payments that never email are exactly why the\nsecond exists.",
+        "enum": [
+          "bank_alert",
+          "manual"
+        ],
+        "title": "TransactionOrigin",
+        "type": "string"
+      },
+      "TransactionResponse": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "bank": {
+            "title": "Bank",
+            "type": "string"
+          },
+          "counterparty": {
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/personal_finance__contexts__financial__presentation__http__router__MerchantResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "integer"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "stated": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StatedResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "direction",
+          "amount",
+          "currency",
+          "occurred_at",
+          "counterparty",
+          "bank",
+          "origin",
+          "status",
+          "account_id",
+          "note",
+          "stated",
+          "merchant"
+        ],
+        "title": "TransactionResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "personal_finance__contexts__financial__presentation__http__router__MerchantResponse": {
+        "description": "The canonical merchant behind this movement's counterparty text.\n\nJoined when the answer is read, never stored on the movement: the grouping\nbelongs to Merchant and a user can change it, so a rename or a merge shows\nup on every past movement at once with nothing to re-process.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "needs_review": {
+            "title": "Needs Review",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "category",
+          "needs_review"
+        ],
+        "title": "MerchantResponse",
+        "type": "object"
+      },
+      "personal_finance__contexts__merchant__presentation__http__router__MerchantResponse": {
+        "properties": {
+          "alias_count": {
+            "title": "Alias Count",
+            "type": "integer"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "integer"
+          },
+          "needs_review": {
+            "title": "Needs Review",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "times_seen": {
+            "title": "Times Seen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "category",
+          "status",
+          "needs_review",
+          "alias_count",
+          "times_seen",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "MerchantResponse",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Finflow",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/financial/accounts": {
+      "get": {
+        "operationId": "list_accounts_financial_accounts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AccountScope",
+              "default": "open"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Accounts",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "operationId": "open_account_financial_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenAccountPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Open Account",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}": {
+      "get": {
+        "operationId": "get_account_financial_accounts__account_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Account",
+        "tags": [
+          "financial"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_account_financial_accounts__account_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameAccountPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename Account",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/balance": {
+      "put": {
+        "description": "Correct what this account holds, without touching a single movement.\n\nFor the ordinary case of declaring an account and not knowing what it\nheld before the alerts Finflow already has: open it at zero, then send\nthe figure the bank shows today. The opening balance is solved backwards\nso the ledger still adds up to it, every movement keeps counting exactly\nonce, and net worth follows from the corrected number.\n\nPUT because the body carries the whole fact. Allowed on a closed account:\ncorrecting what was already there is not new money moving.",
+        "operationId": "restate_balance_financial_accounts__account_id__balance_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestateBalancePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restate Balance",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/close": {
+      "post": {
+        "description": "Stop taking movements, keeping the history and the balance.\n\nNot a delete: a closed account still explains past spending, and a\npaid-off loan closing at zero is exactly what should stay visible.",
+        "operationId": "close_account_financial_accounts__account_id__close_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Close Account",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/credit-limit": {
+      "put": {
+        "description": "State or restate what this card may owe.\n\nPUT rather than PATCH: the body carries the whole fact, and sending no\nlimit clears it rather than leaving the old one in place.",
+        "operationId": "set_credit_limit_financial_accounts__account_id__credit_limit_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCreditLimitPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Credit Limit",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/instruments": {
+      "post": {
+        "description": "Add another card or account number whose alerts belong here.\n\nOne real account emails as a debit card for purchases and as an account\nnumber for transfers. Linking is always the owner's call — inferring it\nwould be guessing about somebody's money — and it adopts the movements\nalready waiting under that key.",
+        "operationId": "link_instrument_financial_accounts__account_id__instruments_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkInstrumentPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Instrument",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/catalog": {
+      "get": {
+        "description": "What a client may send, so a form cannot offer what the API rejects.\n\nUnauthenticated like the merchant catalogue beside it: this is the shape\nof the API, not anybody's data, and a client needs it to render the form\nthat a session is created from.",
+        "operationId": "get_catalog_financial_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Catalog",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/net-worth": {
+      "get": {
+        "description": "Assets minus liabilities, one figure per currency held.\n\nEmpty for somebody who declared no accounts, which is an ordinary answer:\nthey are watching what comes in and goes out, not a net position.",
+        "operationId": "get_net_worth_financial_net_worth_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NetWorthResponse"
+                  },
+                  "title": "Response Get Net Worth Financial Net Worth Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Net Worth",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/summary": {
+      "get": {
+        "description": "What a period adds up to, broken down by month, category, merchant or\naccount — and totalled per currency, never across them.\n\nIt takes the same filters as `/transactions`, so any bucket here can be\nopened as a list by repeating the query with the bucket's key. `timezone`\nonly affects `month`, and it matters: a purchase at 8pm on the 31st falls\nin the next month once it is read in UTC.",
+        "operationId": "summarize_spending_financial_summary_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "group_by",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SummaryGrouping",
+              "default": "month"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unassigned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unassigned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TransactionOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "merchant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merchant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Summarize Spending",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/transactions": {
+      "get": {
+        "description": "Movements, newest first, each with the merchant behind its text.\n\n`merchant_id` and `category` are Merchant's answer, so a movement whose\ncounterparty nobody has resolved yet matches neither — it is unknown, not\nuncategorized. `from` is included and `to` is not, so two consecutive\nmonths can be asked for without one movement landing in both.",
+        "operationId": "list_transactions_financial_transactions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unassigned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unassigned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TransactionOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "merchant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merchant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Transactions",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Record money the bank never emailed about.\n\nAn automatic payment, cash, a transfer that produced no alert. The account\nis optional: somebody watching only what comes in and goes out has none.",
+        "operationId": "enter_transaction_financial_transactions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnterTransactionPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Enter Transaction",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/transactions/{transaction_id}": {
+      "get": {
+        "operationId": "get_transaction_financial_transactions__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Transaction",
+        "tags": [
+          "financial"
+        ]
+      },
+      "patch": {
+        "operationId": "edit_transaction_financial_transactions__transaction_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditTransactionPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Transaction",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Alive, and which deployment this is.\n\nThe environment is here because the only other way to tell two stacks\napart is the URL, and a URL is exactly what gets pasted into the wrong\ncommand. Anything about to write — `scripts/smoke.py` above all — asks the\ndeployment itself rather than trusting the env file it happened to load.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/identity/inbox": {
+      "get": {
+        "description": "The caller's forwarding address, and who is currently approved to send\nto it. Whose inbox to read comes from the verified token, never from the\nrequest.",
+        "operationId": "get_inbox_identity_inbox_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredInboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Inbox",
+        "tags": [
+          "identity"
+        ]
+      },
+      "patch": {
+        "description": "Replace who may send to the caller's forwarding address.\n\nA full replacement, not a merge: the lists sent here become the whole\napproved set. Leave both empty and the address is approved for nobody —\nconnected in the sense of existing, but reading nothing.",
+        "operationId": "update_approved_senders_identity_inbox_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxSendersPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredInboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Approved Senders",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/login": {
+      "post": {
+        "operationId": "login_identity_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/me": {
+      "get": {
+        "operationId": "me_identity_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/register": {
+      "post": {
+        "description": "Create an account and assign it a forwarding address.\n\nThe address itself never appears in this response — it depends only on\nthe new account's id, so `GET /identity/inbox` right after this call\nalready has it.",
+        "operationId": "register_identity_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/ingestion/catalog": {
+      "get": {
+        "description": "What this context's states are called, and what an instrument may be.",
+        "operationId": "get_catalog_ingestion_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestionCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Catalog",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/ingestion/notifications": {
+      "get": {
+        "description": "The caller's bank mail, newest first.\n\nAn empty list is an ordinary answer: it means nothing has been forwarded\nyet, or the forwarding rule is not doing what its owner thinks it is.",
+        "operationId": "list_notifications_ingestion_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ProcessingStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Notifications",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/merchants": {
+      "get": {
+        "operationId": "list_merchants_merchants_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MerchantCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "needs_review",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Needs Review"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/MerchantSort",
+              "default": "last_seen"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Merchants",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/catalog": {
+      "get": {
+        "description": "What a client may send, and what the words in a response mean.",
+        "operationId": "get_catalog_merchants_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Catalog",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/categories": {
+      "get": {
+        "description": "The category vocabulary, for a dropdown that cannot drift from it.",
+        "operationId": "list_categories_merchants_categories_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Categories",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/{merchant_id}": {
+      "get": {
+        "operationId": "get_merchant_merchants__merchant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Merchant",
+        "tags": [
+          "merchants"
+        ]
+      },
+      "patch": {
+        "description": "Rename a merchant, recategorize it, or both.\n\nEither counts as reviewing it: a user who named a merchant has looked at\nwhat it is, so it leaves the review queue.",
+        "operationId": "edit_merchant_merchants__merchant_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMerchantPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Merchant",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/{merchant_id}/aliases/move": {
+      "post": {
+        "description": "Move one spelling to another merchant, and return the new parent.\n\nThe correction is permanent: from here on that spelling resolves by exact\nmatch, and no rule re-derives where it belongs.",
+        "operationId": "move_alias_merchants__merchant_id__aliases_move_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveAliasPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Move Alias",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/{merchant_id}/aliases/split": {
+      "post": {
+        "description": "Pull one spelling out into a merchant of its own, and return it.",
+        "operationId": "split_alias_merchants__merchant_id__aliases_split_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitAliasPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Split Alias",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/{merchant_id}/confirm": {
+      "post": {
+        "description": "Accept a merchant as it stands, guessed children included.",
+        "operationId": "confirm_merchant_merchants__merchant_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Merchant",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/{merchant_id}/merge": {
+      "post": {
+        "description": "Fold one merchant into the one named in the path, which survives.",
+        "operationId": "merge_merchants_merchants__merchant_id__merge_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "merchant_id",
+            "required": true,
+            "schema": {
+              "title": "Merchant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeMerchantsPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MerchantDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Merge Merchants",
+        "tags": [
+          "merchants"
+        ]
+      }
+    }
+  }
+}

@@ -15,6 +15,8 @@ Complementos, no sustitutos de esta guía:
 | [email-forwarding.md](email-forwarding.md) | El contrato de la bandeja de entrada, en detalle. |
 | [postman/](postman/README.md) | Los 27 requests listos para importar en Postman o Bruno. |
 | `http://localhost:8000/docs` | OpenAPI en vivo. Es la fuente de verdad de esquemas y códigos. |
+| [openapi.json](openapi.json) | El mismo contrato, exportado y versionado (`just openapi`). De aquí salen los tipos TypeScript del frontend. |
+| [frontend/](../frontend/README.md) | La app que consume todo esto. Cómo levantarla y regenerar los tipos. |
 
 ---
 

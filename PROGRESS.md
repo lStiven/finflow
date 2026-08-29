@@ -40,15 +40,23 @@ URL and no domain to buy. Never actually built or deployed, so the first
 `just deploy-dev` is the real test. The DevContainer can now run it: it
 borrows the host's Docker daemon and installs the SAM CLI (2026-08-28).
 
+The frontend has started. `frontend/` holds a Vite + React + TypeScript SPA
+whose types are generated from the API's own OpenAPI document, so a router
+change in Python fails the TypeScript build rather than a screen in a browser.
+Session, money and date handling, and the first two screens (login/register
+and the accounts dashboard) run against the local emulator.
+
 What is missing for production is observability, a cap on LLM spending and the
-frontend — see **Next steps**.
+rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-29 — merchant's worker caught up with Financial's: bounded
-  `occurred_at`, a counterparty guard that asks the normalizer, and a use-case
-  failure that no longer takes the batch with it. Financial's worker has unit
-  tests for the first time. `just verify` green, 90 checks.
+- 2026-08-29 — the frontend exists: `frontend/` (Vite + React + TS, TanStack
+  Query and Router, Tailwind v4, Biome, Vitest), typed from a generated
+  `docs/openapi.json`, with login/register and the accounts dashboard working
+  against `just dev` and the seeded data. A `/code-review` pass caught the
+  session/router invalidation bug and the login 401 message before either
+  reached a screen. `just check-all` green (778 Python, 26 TypeScript).
 
 ## Next steps
 
@@ -73,9 +81,13 @@ frontend — see **Next steps**.
       3. **A spending cap on the LLM** (see the standalone item below). The
          cheapest of the three and the only one that costs money while it is
          missing.
-      4. **The frontend**, deliberately deferred until the backend settles.
-         Its integration contract is written up in
-         `docs/frontend-integration.md`.
+      4. **The rest of the frontend.** The foundation is in (`just web`);
+         what is left is screens, not plumbing: movements with their filters,
+         the connect-your-bank screen (forwarding address, approved senders,
+         what actually arrived), merchant review, the spending summary, and
+         manual entry. `docs/frontend-integration.md` is still the contract
+         each of them has to honour. Nothing is deployed: no hosting is
+         provisioned and `API_CORS_ORIGINS` names only localhost.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -745,6 +757,93 @@ frontend — see **Next steps**.
   not yet granted, so `just ecr-prune-*` can write a policy it cannot read
   back. Both are account-side grants with nothing to fix in this repo.
 
+
+### Frontend (2026-08-29)
+
+- **A static SPA, not a server-rendered framework.** Vite + React +
+  TypeScript, built to static files. Next.js was the reflex and was rejected:
+  SSR earns its complexity through SEO and cookie sessions, and this has
+  neither — every screen is behind a bearer token the client attaches itself,
+  and the audience is the author and a few friends. What it would have added
+  is a Node server to run and a framework that churns, against a project whose
+  stated goal is being cheap to maintain. Serving the SPA from the API's own
+  Lambda with `StaticFiles` was also considered — it would remove CORS
+  entirely — and rejected because it puts the frontend inside the container
+  image, making a CSS change a Lambda redeploy.
+
+- **One repository, `frontend/` beside `src/`.** The coupling between the two
+  halves is the OpenAPI contract, and in one repo a changed endpoint, the
+  regenerated types and the calling code are one commit that `git bisect` can
+  reason about. Two repos would buy independent teams, separate access control
+  and decoupled release cadence — none of which exist here. Deliberately *not*
+  a monorepo toolchain: no pnpm workspaces, no Turborepo, no Nx. There is no
+  shared JavaScript package to hoist when the other half is Python.
+
+- **`docs/openapi.json` is committed, and generated from the app rather than
+  curled from a running server** (`just openapi`). CI has no server to curl,
+  and a schema fetched from whatever happened to be running cannot be told
+  apart from a stale one. It is built with `expose_local_only_routes=False`
+  so the generated client cannot offer `POST /ingestion/bank-notifications` —
+  the one call the integration guide forbids. `just openapi-check` fails when
+  it drifts, which is how an endpoint changed without regenerating gets
+  caught before the TypeScript build does.
+
+- **Money is formatted by `Intl.NumberFormat` from the decimal string, with no
+  decimal library.** `format()` accepts a string and keeps full precision, so
+  nothing in the client ever calls `Number()` — verified against
+  `9007199254740993.99`, which a float rounds and this does not. TypeScript
+  types the overload as a template literal that no `string` satisfies, so the
+  cast is guarded by a regex: a non-numeric value renders as its raw text
+  instead of throwing a `RangeError` that would take a whole screen of
+  balances down. No arithmetic helpers exist on purpose — `GET
+  /financial/summary` returns totals pre-summed, and the day the client needs
+  to add money is the day to reach for a decimal library, not to teach that
+  module unsafe arithmetic.
+
+- **Biome instead of ESLint plus Prettier**, for the frontend only. One
+  dependency and one config replacing roughly eight, which is the same
+  argument as everything else here. Root JSON and YAML stay with Prettier,
+  which already handled them.
+
+- **`src/routeTree.gen.ts` is committed** even though it is generated. It is
+  produced by the Vite plugin during a dev run or a build, so ignoring it
+  would mean a fresh clone cannot typecheck until someone builds first. The
+  diff noise is limited to when routes are added or removed.
+
+- **Node is pinned in the DevContainer** (`node:1` feature, version 24) rather
+  than left to whatever the base image carries, for the same reason `uv.lock`
+  exists: a rebuild must not silently move the toolchain.
+
+- **A session change must invalidate the router, not just update its
+  context.** `RouterProvider` merges a new context without re-running
+  `beforeLoad`, so handing the guards a new session leaves them believing the
+  old one: signing in bounced straight back to `/login`, and signing out left
+  the dashboard mounted until a cleared cache refetched into a 401. One
+  `useEffect` in `RoutedApp` calling `router.invalidate()` on every session
+  change is what drives all three transitions — in, out, and a 401 arriving
+  from a screen nobody navigated away from, which had no handler at all.
+  Screens therefore do **not** navigate after logging in; the guard's own
+  redirect does it, and doing both races.
+
+- **A 401 from `/identity/login` or `/identity/register` is not an expired
+  session.** The client middleware skips its clear-and-redirect for those two
+  paths, and the message for any 401 is a fixed Spanish one rather than the
+  server's body: the API returns an identical 401 for an unknown email, a
+  wrong password and a malformed one precisely so the interface cannot tell
+  them apart, so there is nothing in that body worth showing.
+
+- **The frontend has a test runner, and it covers `lib/money.ts` and
+  `lib/dates.ts` only.** Those two files hold the rules that a screen cannot
+  be trusted to re-derive — the liability sign and its caption, no value ever
+  passing through a float, months grouped in Bogota. Components are left
+  untested on purpose for now: they are still changing shape, and the rules
+  they must not break are asserted underneath them.
+
+- **No component library yet.** The primitives in `src/components/ui/` are a
+  handful of hand-written files. shadcn/ui is the intended destination — it
+  copies components into the repo rather than adding a dependency — but
+  pulling Radix in for a button and a card would be paying its cost before
+  anything needs a dialog or a dropdown.
 
 ### Billing (2026-08-25)
 

@@ -25,6 +25,12 @@ docs/
 infra/
 *.md
 
+# The frontend is a separate artifact: it deploys to a CDN, never into
+# this image. Excluded for the build context, not the image — `node_modules`
+# alone would be hundreds of megabytes sent to the daemon on every build.
+frontend/
+node_modules/
+
 .coverage
 .coverage.*
 htmlcov/

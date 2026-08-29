@@ -365,6 +365,68 @@ smoke base_url *args: (_require-env ".env.development")
 smoke-prod base_url *args: (_require-env ".env.production")
     {{prod_env}} uv run python scripts/smoke.py {{base_url}} --read-only {{args}}
 
+# --------------------------------------------------
+# The API contract, and the frontend that consumes it
+# --------------------------------------------------
+#
+# `docs/openapi.json` is the seam between the two halves of this repo. The
+# frontend's TypeScript types are generated from it, so an endpoint that
+# changes without regenerating shows up as a dirty working tree (`openapi-check`)
+# and then as a compile error in `web-check` — never as a broken screen.
+
+frontend_dir := justfile_directory() / "frontend"
+
+# The local-only bank webhook is deliberately left out of it: the frontend
+# must never learn that route exists.
+#
+# Write the production-shaped OpenAPI document to docs/openapi.json.
+openapi *args: (_require-env ".env")
+    @{{local_env}} uv run python scripts/export_openapi.py {{args}}
+
+# Fail if the committed contract is not what the code would produce.
+openapi-check: (_require-env ".env")
+    @{{local_env}} uv run python scripts/export_openapi.py --check
+
+# Run this after touching any router or response model.
+#
+# Regenerate the frontend's TypeScript types from the contract.
+web-types: openapi
+    cd {{frontend_dir}} && npx openapi-typescript ../docs/openapi.json \
+        -o src/api/schema.d.ts
+
+web-install:
+    cd {{frontend_dir}} && npm install
+
+# The port is fixed at 5173 because that origin is already in
+# API_CORS_ORIGINS; a port that drifts looks like a bug in the client. Needs
+# the API up (`just dev`, or `just up` for the whole pipeline).
+#
+# Run the frontend dev server.
+web:
+    cd {{frontend_dir}} && npm run dev
+
+# `vite build` runs in production mode, so it reads `.env.production` and
+# ignores `.env.development`. Without one, VITE_API_BASE_URL is inlined as
+# `undefined` and the bundle throws the moment it loads — a white screen that
+# only whoever deploys it would discover.
+#
+# Build the frontend for deployment.
+web-build: (_require-env "frontend/.env.production")
+    cd {{frontend_dir}} && npm run build
+
+# Kept out of `just prepare` on purpose: that recipe is the fast Python loop,
+# and waiting on Node to find out that a Python test failed is the wrong trade.
+#
+# Format check, lint and typecheck the frontend.
+web-check:
+    cd {{frontend_dir}} && npm run check
+
+web-fix:
+    cd {{frontend_dir}} && npm run fix
+
+# Both halves, for a commit that touches the seam.
+check-all: prepare openapi-check web-check
+
 _require-env env_file:
     @test -f {{env_file}} || { \
         echo "Missing {{env_file}} — copy it from {{env_file}}.example"; \
