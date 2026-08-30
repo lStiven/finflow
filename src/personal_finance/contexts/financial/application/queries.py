@@ -642,3 +642,328 @@ def _zone(name: str) -> dt.tzinfo:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError) as error:
         raise ValueError(f"Unknown timezone: {name!r}") from error
+
+
+# ----------------------------------------------------------------- history
+
+
+MAX_HISTORY_MONTHS = 36
+DEFAULT_HISTORY_MONTHS = 12
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MonthlyPoint:
+    """One month of the run, closed off at the end of what it actually covers."""
+
+    key: str
+    starts_at: PosixTime
+    # Exclusive, and for the month still being lived it is *now* rather than
+    # the month's end: the totals and the net worth beside it both stop here,
+    # so the three always describe the same window.
+    ends_at: PosixTime
+    partial: bool
+    totals: Sequence[SpendingTotals]
+    # What everything was worth at `ends_at`. Replayed from the ledger, never
+    # stored.
+    net_worth: Sequence[NetWorth]
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class PeriodComparison:
+    """This month so far, against the same stretch of the month before it.
+
+    Aligned by day of the month rather than by elapsed time: on the 15th this
+    is the 1st to the 15th against the 1st to the 15th, which is what somebody
+    means by "versus last month". Comparing a month three days old against a
+    finished one is the mistake this exists to prevent — it reports spending
+    down by most of it every month and is right about nothing.
+    """
+
+    key: str
+    starts_at: PosixTime
+    through: PosixTime
+    previous_key: str
+    previous_starts_at: PosixTime
+    previous_through: PosixTime
+    # The previous month ran out of days first — the 31st against a February.
+    # The window is its whole length, and saying so is the caller's job.
+    clamped: bool
+    totals: Sequence[SpendingTotals]
+    previous_totals: Sequence[SpendingTotals]
+    net_worth: Sequence[NetWorth]
+    previous_net_worth: Sequence[NetWorth]
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class FinancialHistory:
+    timezone: str
+    # Oldest first, so a client draws it without reversing anything.
+    months: Sequence[MonthlyPoint]
+    comparison: PeriodComparison
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class HistoryQuery:
+    user_id: UserId
+    months: int = DEFAULT_HISTORY_MONTHS
+    timezone: str = DEFAULT_TIMEZONE
+    # Injectable so a test can stand at a chosen instant. Production leaves it
+    # None and the clock answers.
+    now: PosixTime | None = None
+
+
+class ReadFinancialHistoryUseCase:
+    """How this user's money has moved month by month, and how the current
+    month compares with the one before it.
+
+    Nothing here is stored or scheduled. Restating what an account holds
+    solves its opening balance backwards, so `opening_balance` plus every
+    movement up to an instant *is* the balance at that instant — history is a
+    replay of the ledger, and a snapshot table would only be a second copy to
+    keep in step.
+
+    The consequence worth knowing: this is the best current reconstruction of
+    the past, not a log of what was believed at the time. Declaring an account
+    today, or correcting a balance, changes what last March reports — which is
+    right, and is the same property that makes adoption retroactive.
+    """
+
+    def __init__(
+        self,
+        *,
+        ledger: TransactionLedger,
+        accounts: AccountRepository,
+    ) -> None:
+        self._ledger = ledger
+        self._accounts = accounts
+
+    def execute(self, query: HistoryQuery) -> FinancialHistory:
+        zone = _zone(query.timezone)
+        span = max(1, min(query.months, MAX_HISTORY_MONTHS))
+
+        now = query.now or PosixTime.from_epoch_seconds(
+            int(dt.datetime.now(tz=dt.UTC).timestamp()),
+        )
+        instant = dt.datetime.fromtimestamp(now.as_epoch_seconds(), tz=zone)
+
+        # Closed accounts count: a card paid off and closed changes nothing,
+        # and one closed holding money is money that is still somewhere.
+        held = list(self._accounts.list_by_user(query.user_id))
+        movements = sorted(
+            self._ledger.list_all(query.user_id),
+            key=lambda movement: movement.occurred_at.as_epoch_seconds(),
+        )
+
+        keys = _month_keys(instant, span)
+        bounds = {key: _month_bounds(zone, key) for key in keys}
+        current = keys[-1]
+        previous_key, previous_through, clamped = _previous_window(zone, instant)
+        here = int(instant.timestamp())
+
+        # Every instant a balance is needed at, resolved in one forward walk
+        # over the ledger instead of one walk per account per instant.
+        checkpoints = sorted(
+            {here, int(previous_through.timestamp())}
+            | {
+                min(int(bounds[key][1].timestamp()), here)
+                if key == current
+                else int(bounds[key][1].timestamp())
+                for key in keys
+            },
+        )
+        worth = _net_worth_timeline(held, movements, checkpoints)
+
+        months: list[MonthlyPoint] = []
+        for key in keys:
+            starts, ends = bounds[key]
+            partial = key == current
+            # The lived month stops at now, so its totals and its net worth
+            # cover the same window — and match the comparison's, which a
+            # client shows beside them.
+            closes = (
+                min(int(ends.timestamp()), here)
+                if partial
+                else int(
+                    ends.timestamp(),
+                )
+            )
+            months.append(
+                MonthlyPoint(
+                    key=key,
+                    starts_at=PosixTime.from_epoch_seconds(int(starts.timestamp())),
+                    ends_at=PosixTime.from_epoch_seconds(closes),
+                    partial=partial,
+                    totals=_totals(
+                        _between(movements, int(starts.timestamp()), closes),
+                    ),
+                    net_worth=worth[closes],
+                ),
+            )
+
+        previous_starts = _month_bounds(zone, previous_key)[0]
+        current_starts = bounds[current][0]
+
+        return FinancialHistory(
+            timezone=query.timezone,
+            months=months,
+            comparison=PeriodComparison(
+                key=current,
+                starts_at=PosixTime.from_epoch_seconds(int(current_starts.timestamp())),
+                through=now,
+                previous_key=previous_key,
+                previous_starts_at=PosixTime.from_epoch_seconds(
+                    int(previous_starts.timestamp()),
+                ),
+                previous_through=PosixTime.from_epoch_seconds(
+                    int(previous_through.timestamp()),
+                ),
+                clamped=clamped,
+                totals=_totals(
+                    _between(movements, int(current_starts.timestamp()), here),
+                ),
+                previous_totals=_totals(
+                    _between(
+                        movements,
+                        int(previous_starts.timestamp()),
+                        int(previous_through.timestamp()),
+                    ),
+                ),
+                net_worth=worth[here],
+                previous_net_worth=worth[int(previous_through.timestamp())],
+            ),
+        )
+
+
+def _month_keys(instant: dt.datetime, span: int) -> list[str]:
+    """The `"2026-08"` of each of the last `span` months, oldest first.
+
+    Walked as year and month integers rather than as datetimes: arithmetic on
+    a calendar is exact, while stepping by days through local midnights is
+    where daylight saving gets a chance to move a boundary.
+    """
+    year, month = instant.year, instant.month
+    keys: list[str] = []
+    for _ in range(span):
+        keys.append(f"{year:04d}-{month:02d}")
+        year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+    return list(reversed(keys))
+
+
+def _month_bounds(zone: dt.tzinfo, key: str) -> tuple[dt.datetime, dt.datetime]:
+    """The instants a month starts and ends at, in that zone. End exclusive."""
+    year, month = (int(part) for part in key.split("-"))
+    following = (year + 1, 1) if month == 12 else (year, month + 1)
+    return _local_midnight(zone, year, month), _local_midnight(zone, *following)
+
+
+def _local_midnight(zone: dt.tzinfo, year: int, month: int) -> dt.datetime:
+    """The first instant of a month, in a zone that may not have a midnight.
+
+    Havana and Asunción have both started daylight saving *at* midnight on the
+    1st, so that local time does not exist and attaching a zone to it names an
+    instant an hour from where it should be. Round-tripping through UTC
+    resolves it to a real instant, and every zone without that problem is
+    untouched.
+    """
+    naive = dt.datetime(year, month, 1, tzinfo=zone)
+    return naive.astimezone(dt.UTC).astimezone(zone)
+
+
+def _previous_window(
+    zone: dt.tzinfo,
+    instant: dt.datetime,
+) -> tuple[str, dt.datetime, bool]:
+    """Where the same stretch of the previous month ends, and whether it ran out.
+
+    Returns its key, that instant, and whether the previous month was too
+    short to reach the same day — the 31st against a February, which stops at
+    the end of it because there is nowhere else honest to stop.
+    """
+    year, month = (
+        (instant.year - 1, 12)
+        if instant.month == 1
+        else (instant.year, instant.month - 1)
+    )
+    key = f"{year:04d}-{month:02d}"
+    starts, ends = _month_bounds(zone, key)
+
+    last_day = (ends - dt.timedelta(days=1)).astimezone(zone).day
+    if instant.day > last_day:
+        return key, ends, True
+
+    same_day = starts.replace(
+        day=instant.day,
+        hour=instant.hour,
+        minute=instant.minute,
+        second=instant.second,
+    )
+    return key, same_day.astimezone(dt.UTC).astimezone(zone), False
+
+
+def _between(
+    movements: Sequence[Transaction],
+    floor: int,
+    ceiling: int,
+) -> list[Transaction]:
+    """Half-open: `floor` counts, `ceiling` does not."""
+    return [
+        movement
+        for movement in movements
+        if floor <= movement.occurred_at.as_epoch_seconds() < ceiling
+    ]
+
+
+def _net_worth_timeline(
+    accounts: Sequence[Account],
+    movements: Sequence[Transaction],
+    checkpoints: Sequence[int],
+) -> dict[int, Sequence[NetWorth]]:
+    """What everything was worth at each instant, in one pass over the ledger.
+
+    Exclusive, matching the half-open month buckets: a movement dated exactly
+    at a boundary belongs to the month starting there, so it must not already
+    be counted in the one closing there.
+
+    Unassigned movements move nothing — no account claimed them, so they
+    belong to no balance. They still appear in the totals, because money did
+    move, which is why the two figures can disagree and should.
+    """
+    queued: dict[AccountId, list[Transaction]] = {
+        account.id: [] for account in accounts
+    }
+    for movement in movements:
+        waiting = queued.get(movement.account_id) if movement.account_id else None
+        if waiting is not None:
+            waiting.append(movement)
+
+    cursors: dict[AccountId, int] = {account.id: 0 for account in accounts}
+    running = {account.id: account.opening_balance for account in accounts}
+    timeline: dict[int, Sequence[NetWorth]] = {}
+
+    for at in sorted(checkpoints):
+        for account in accounts:
+            waiting = queued[account.id]
+            index = cursors[account.id]
+            start = index
+            while (
+                index < len(waiting)
+                and waiting[index].occurred_at.as_epoch_seconds() < at
+            ):
+                index += 1
+            if index > start:
+                running[account.id] = account.balance_after(
+                    [row.as_movement() for row in waiting[start:index]],
+                    starting=running[account.id],
+                )
+            cursors[account.id] = index
+
+        # A copy each time, so answering a question never edits the account
+        # that answered it.
+        timeline[at] = _net_worth(
+            [
+                dataclasses.replace(account, balance=running[account.id])
+                for account in accounts
+            ],
+        )
+
+    return timeline

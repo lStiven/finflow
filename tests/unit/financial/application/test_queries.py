@@ -9,8 +9,11 @@ import pytest
 
 from personal_finance.contexts.financial.application.ports import MerchantAttribution
 from personal_finance.contexts.financial.application.queries import (
+    FinancialHistory,
+    HistoryQuery,
     ListTransactionsUseCase,
     MovementFilter,
+    ReadFinancialHistoryUseCase,
     SummarizeSpendingUseCase,
     SummaryGrouping,
     SummaryQuery,
@@ -39,7 +42,7 @@ AUGUST_MIDDAY = 1_787_500_000  # 2026-08-21 15:46 UTC / 10:46 Bogotá
 AUGUST_LAST_NIGHT = 1_788_224_400  # 2026-09-01 01:00 UTC / 2026-08-31 20:00 Bogotá
 JULY_MIDDAY = 1_784_900_000  # 2026-07-22 UTC
 
-SEPTEMBER_START = 1_788_246_000  # 2026-09-01 00:00 Bogotá
+SEPTEMBER_START = 1_788_238_800  # 2026-09-01 00:00 Bogotá
 
 
 class InMemoryLedger:
@@ -622,3 +625,222 @@ def test_somebody_with_no_movements_gets_an_empty_but_valid_summary(
 
     assert summary.totals == []
     assert summary.groups == []
+
+
+# ------------------------------------------------------------------- history
+
+# 2026-08-15 12:00 Bogotá. Halfway through August, which is what makes the
+# comparison window a real one rather than a whole month.
+AUGUST_FIFTEENTH = 1_786_813_200
+JULY_FIFTH = 1_783_270_800
+JULY_TWENTY_FIFTH = 1_784_998_800
+AUGUST_FIFTH = 1_785_949_200
+# 2026-03-31 12:00 Bogotá — the day of the month February cannot answer.
+MARCH_THIRTY_FIRST = 1_774_976_400
+
+
+def _history(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    *,
+    at: int = AUGUST_FIFTEENTH,
+    months: int = 3,
+) -> FinancialHistory:
+    return ReadFinancialHistoryUseCase(ledger=ledger, accounts=accounts).execute(
+        HistoryQuery(
+            user_id=USER_ID,
+            months=months,
+            now=PosixTime.from_epoch_seconds(at),
+        ),
+    )
+
+
+def test_history_returns_a_bucket_per_month_oldest_first(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    history = _history(ledger, accounts, months=3)
+
+    assert [point.key for point in history.months] == ["2026-06", "2026-07", "2026-08"]
+    assert [point.partial for point in history.months] == [False, False, True]
+
+
+def test_the_month_being_lived_is_the_only_partial_one(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    history = _history(ledger, accounts, months=2)
+
+    assert history.months[-1].partial is True
+    assert history.months[-1].key == "2026-08"
+
+
+def test_a_month_totals_only_its_own_movements(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="JULIO", amount="30000", when=JULY_FIFTH)
+    _spend(ledger, counterparty="AGOSTO", amount="50000", when=AUGUST_FIFTH)
+
+    history = _history(ledger, accounts, months=2)
+    july, august = history.months
+
+    assert july.totals[0].outgoing == Decimal("30000")
+    assert august.totals[0].outgoing == Decimal("50000")
+
+
+def test_net_worth_is_replayed_to_each_month_end(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """The point of the whole endpoint: a balance for a month that has passed,
+    reconstructed rather than stored.
+    """
+    account = _declare(accounts, "Ahorros")
+    _spend(
+        ledger,
+        counterparty="NOMINA",
+        amount="100000",
+        when=JULY_MIDDAY,
+        direction=MovementDirection.INCOMING,
+        account_id=account.id,
+    )
+    _spend(
+        ledger,
+        counterparty="MERCADO",
+        amount="40000",
+        when=AUGUST_FIFTH,
+        account_id=account.id,
+    )
+
+    history = _history(ledger, accounts, months=2)
+    july, august = history.months
+
+    # July closed up 100.000; August has spent 40.000 of it back.
+    assert july.net_worth[0].total == Decimal("100000")
+    assert august.net_worth[0].total == Decimal("60000")
+
+
+def test_a_movement_no_account_claimed_moves_no_balance(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _declare(accounts, "Ahorros")
+    _spend(ledger, counterparty="SIN CUENTA", amount="70000", when=JULY_MIDDAY)
+
+    history = _history(ledger, accounts, months=2)
+
+    assert history.months[0].totals[0].outgoing == Decimal("70000")
+    assert history.months[0].net_worth[0].total == Decimal(0)
+
+
+def test_the_comparison_covers_the_same_days_of_the_previous_month(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Standing on the 15th, July's window has to stop on the 15th too.
+
+    Against the whole of July the answer would be "spending is down", every
+    month, until the very last day of it.
+    """
+    _spend(ledger, counterparty="JULIO 5", amount="10000", when=JULY_FIFTH)
+    _spend(ledger, counterparty="JULIO 25", amount="90000", when=JULY_TWENTY_FIFTH)
+    _spend(ledger, counterparty="AGOSTO 5", amount="20000", when=AUGUST_FIFTH)
+
+    comparison = _history(ledger, accounts).comparison
+
+    assert comparison.key == "2026-08"
+    assert comparison.previous_key == "2026-07"
+    assert comparison.clamped is False
+    assert comparison.totals[0].outgoing == Decimal("20000")
+    # Only the 5th; the 25th is past the 15th and stays out.
+    assert comparison.previous_totals[0].outgoing == Decimal("10000")
+
+
+def test_a_month_the_previous_one_is_too_short_for_is_flagged(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    comparison = _history(ledger, accounts, at=MARCH_THIRTY_FIRST).comparison
+
+    assert comparison.key == "2026-03"
+    assert comparison.previous_key == "2026-02"
+    assert comparison.clamped is True
+    # Clamped to the whole of February rather than running into March.
+    assert comparison.previous_through == comparison.starts_at
+
+
+def test_history_is_capped_rather_than_refused(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    assert len(_history(ledger, accounts, months=999).months) == 36
+    assert len(_history(ledger, accounts, months=0).months) == 1
+
+
+AUGUST_START = 1_785_560_400  # 2026-08-01 00:00 Bogotá
+AUGUST_TWENTIETH = 1_787_245_200  # 2026-08-20 12:00 Bogotá
+
+
+def test_a_movement_on_a_boundary_opens_the_month_it_starts(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """A date-only entry lands on local midnight, which is a boundary.
+
+    Counting it in the closing net worth of the month before would put money
+    in July that a client can see was spent in August — the totals and the
+    balance would disagree about the same row.
+    """
+    account = _declare(accounts, "Ahorros")
+    _spend(
+        ledger,
+        counterparty="MEDIANOCHE",
+        amount="25000",
+        when=AUGUST_START,
+        direction=MovementDirection.INCOMING,
+        account_id=account.id,
+    )
+
+    history = _history(ledger, accounts, months=2)
+    july, august = history.months
+
+    assert july.totals == []
+    assert july.net_worth[0].total == Decimal(0)
+    assert august.totals[0].incoming == Decimal("25000")
+    assert august.net_worth[0].total == Decimal("25000")
+
+
+def test_the_lived_month_stops_at_now_like_the_comparison_does(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Nothing validates `occurred_at`, so a date later this month is ordinary.
+
+    The partial bucket and the comparison carry the same key, so a client puts
+    them side by side. Totalling the whole calendar month in one and stopping
+    at now in the other makes the same month report two different figures.
+    """
+    account = _declare(accounts, "Ahorros")
+    _spend(
+        ledger,
+        counterparty="HOY",
+        amount="10000",
+        when=AUGUST_FIFTH,
+        account_id=account.id,
+    )
+    _spend(
+        ledger,
+        counterparty="MAS TARDE",
+        amount="70000",
+        when=AUGUST_TWENTIETH,
+        account_id=account.id,
+    )
+
+    history = _history(ledger, accounts)
+    lived = history.months[-1]
+
+    assert lived.key == history.comparison.key
+    assert lived.totals[0].outgoing == Decimal("10000")
+    assert lived.totals == list(history.comparison.totals)
+    assert lived.net_worth == list(history.comparison.net_worth)

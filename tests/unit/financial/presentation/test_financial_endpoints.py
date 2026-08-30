@@ -17,6 +17,7 @@ from personal_finance.contexts.financial.application.queries import (
     GetTransactionUseCase,
     ListAccountsUseCase,
     ListTransactionsUseCase,
+    ReadFinancialHistoryUseCase,
     SummarizeSpendingUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
@@ -31,6 +32,7 @@ from personal_finance.contexts.financial.presentation.http.router import (
     get_manage_accounts_use_case,
     get_manage_transactions_use_case,
     get_merchant_directory,
+    get_read_history_use_case,
     get_summarize_spending_use_case,
     get_transaction_use_case,
     router,
@@ -234,6 +236,9 @@ def client() -> TestClient:
             accounts=accounts,
             merchants=directory,
         )
+    )
+    app.dependency_overrides[get_read_history_use_case] = lambda: (
+        ReadFinancialHistoryUseCase(ledger=ledger, accounts=accounts)
     )
 
     return TestClient(app)
@@ -577,6 +582,50 @@ def test_transactions_can_be_filtered_down_to_the_ones_waiting(
     assert everything["total"] == 2
     assert waiting["total"] == 1
     assert waiting["transactions"][0]["counterparty"] == "ALMUERZO"
+
+
+def test_history_answers_the_dashboard_in_one_call(client: TestClient) -> None:
+    account = _declare(client)
+    _enter(client, account_id=account["id"], amount="50000")
+
+    history = client.get("/financial/history", params={"months": 3}).json()
+
+    assert [point["key"] for point in history["months"]][-1] == history["comparison"][
+        "key"
+    ]
+    assert len(history["months"]) == 3
+    # Only the month being lived is partial.
+    assert [point["partial"] for point in history["months"]] == [False, False, True]
+    assert history["comparison"]["previous_key"] != history["comparison"]["key"]
+
+
+def test_history_replays_a_balance_rather_than_reading_a_snapshot(
+    client: TestClient,
+) -> None:
+    account = _declare(client)
+    _enter(
+        client,
+        account_id=account["id"],
+        direction="incoming",
+        amount="80000",
+        counterparty="NOMINA",
+    )
+
+    history = client.get("/financial/history", params={"months": 1}).json()
+    current = history["months"][-1]["net_worth"]
+
+    assert current[0]["total"] == "80000"
+
+
+def test_history_refuses_a_span_it_will_not_serve(client: TestClient) -> None:
+    assert client.get("/financial/history", params={"months": 0}).status_code == 422
+    assert client.get("/financial/history", params={"months": 999}).status_code == 422
+
+
+def test_history_refuses_a_timezone_it_cannot_read(client: TestClient) -> None:
+    response = client.get("/financial/history", params={"timezone": "Mars/Olympus"})
+
+    assert response.status_code == 400
 
 
 def test_transactions_can_be_filtered_by_direction(client: TestClient) -> None:

@@ -51,12 +51,12 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-30 — the interface got its art direction: ground at `#07080D`,
-  cards at `#0D0F17` on an `#1B1E2A` hairline, and neon spent only on hover,
-  selection and the KPIs. Figures count up once on arrival, the ring sweeps
-  in, KPI tiles carry a monthly sparkline and open the movements behind them,
-  and the sidebar's active item is a magenta-to-violet wash. Backend
-  `just prepare` green (820 tests), frontend gate green (47 tests).
+- 2026-08-30 — `GET /financial/history` answers the dashboard in one call:
+  month-by-month totals and net worth, plus this month against the same days
+  of the last one. Net worth is replayed from the ledger rather than stored —
+  restating a balance solves the opening balance backwards, so opening plus
+  movements up to an instant *is* the balance then. `just prepare` green (834
+  tests).
 
 ## Next steps
 
@@ -90,6 +90,15 @@ rest of the frontend — see **Next steps**.
          `docs/frontend-integration.md` is still the contract each of them has
          to honour. Nothing is deployed: no hosting is provisioned and
          `API_CORS_ORIGINS` names only localhost.
+- [ ] **`GET /identity/me` cannot name the user.** The dashboard design has a
+      profile block; the endpoint returns `user_id` and nothing else, and the
+      `users` table is partitioned by **email**, so there is no way to read a
+      user by id without a new global secondary index. Two options, neither
+      done: add that index (a provisioning change, and a cost that recurs), or
+      carry the email as a JWT claim issued at login — no index, no read per
+      page load, and it goes stale only on an email change, which no endpoint
+      offers. There is no display name anywhere in the domain; showing one
+      means a new field and a screen to edit it.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -377,6 +386,40 @@ rest of the frontend — see **Next steps**.
   needs a restart.
 
 ### Financial (write side, 2026-08-24)
+
+- **History is replayed, never stored** (2026-08-30). `GET /financial/history`
+  reconstructs what everything was worth at any past instant instead of
+  writing snapshots. It works because `restate_balance` solves
+  `opening_balance` backwards, which makes `opening_balance + movements ≤ t`
+  the balance at `t` by construction. A snapshot table was rejected: it needs
+  a schedule, it costs writes forever, and it would be a second copy to keep
+  in step with a ledger that is already the authority. The accepted
+  consequence is that history is the *current best reconstruction of the
+  past*, not a log of what was believed then — declaring an account today
+  changes what last March reports, which is the same property that makes
+  adoption retroactive.
+
+- **The month comparison is aligned by day of the month** (2026-08-30). On the
+  15th it is the 1st–15th against the 1st–15th. Comparing a young month
+  against a finished one was rejected outright: it reports spending down by
+  most of it every month and is right about nothing. A rolling 30-day window
+  was also considered and rejected — statistically smoother, but every other
+  surface in this product is month-shaped and "vs mes pasado" would stop
+  being true. When the previous month is too short to reach the same day —
+  the 31st against a February — the window is its whole length and `clamped`
+  says so, because a client captioning it "vs julio" needs to caption that
+  case differently.
+
+- **Everything in one forward walk, and half-open throughout** (2026-08-30).
+  Balances are folded once across a sorted ledger with a cursor per account
+  (`Account.balance_after(..., starting=)`), not replayed per account per
+  month — the naive version was ~380 passes over every transaction at
+  `months=36`, on an endpoint meant to be polled. Boundaries are exclusive to
+  match the month buckets, so a date-only movement landing on local midnight
+  opens the month it starts rather than closing the one before. Month
+  boundaries are stepped as year/month integers and resolved through UTC,
+  because Havana and Asunción have started daylight saving *at* midnight on
+  the 1st and that local time does not exist.
 
 - **The balance moves by DynamoDB's `ADD`, never by writing a number back.**
   A read-then-write loses one of two movements landing in the same instant,

@@ -265,6 +265,31 @@ class Account(AggregateRoot[AccountId]):
     # only kept for reference. Unknown which local banks do this — left open
     # deliberately rather than guessed at.
 
+    def balance_after(
+        self,
+        movements: Iterable[LedgerMovement],
+        *,
+        starting: Balance | None = None,
+    ) -> Balance:
+        """What this account would hold having applied exactly these movements.
+
+        Pure: it answers a question without becoming the answer. Two callers
+        need it and neither should own a second copy of the rule — `rebuild`
+        repairs the running total with it, and reading history replays the
+        ledger up to a past instant with it. Because the opening balance is
+        solved backwards whenever somebody restates what an account holds,
+        `opening_balance` plus every movement up to an instant *is* the
+        balance at that instant; there is nothing to snapshot.
+
+        `starting` resumes from a balance already reached, so a caller walking
+        a run of instants folds each movement once instead of replaying the
+        whole ledger per instant. Left out, it starts where the account did.
+        """
+        balance = self.opening_balance if starting is None else starting
+        for movement in movements:
+            balance = self._moved(balance, movement)
+        return balance
+
     def rebuild(self, movements: Iterable[LedgerMovement]) -> None:
         """Recompute the balance from the ledger, oldest movement first.
 
@@ -272,20 +297,16 @@ class Account(AggregateRoot[AccountId]):
         keeps the incremental balance honest: if replaying the ledger does not
         reproduce it, the number was wrong and now it is not.
         """
-        balance = self.opening_balance
-        applied = 0
-
         # Replayed into locals, not onto the account: a movement in the wrong
         # currency must abort the repair, not leave half of one behind. A
         # replay is not new money moving either, so it records one event at
         # the end rather than one per movement — and a closed account can
         # still be repaired.
-        for movement in movements:
-            balance = self._moved(balance, movement)
-            applied += 1
+        replayed = list(movements)
+        balance = self.balance_after(replayed)
 
         self.balance = balance
-        self.movements_applied = applied
+        self.movements_applied = len(replayed)
         self.record_event(
             AccountBalanceRebuilt(
                 account_id=self.id,

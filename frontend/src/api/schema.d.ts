@@ -164,6 +164,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read History
+         * @description How this money has moved month by month, and how this month compares.
+         *
+         *     Nothing here is stored or scheduled. Restating what an account holds
+         *     solves its opening balance backwards, so the opening balance plus every
+         *     movement up to an instant *is* the balance at that instant — history is a
+         *     replay of the ledger rather than a snapshot table to keep in step.
+         *
+         *     So this is the current best reconstruction of the past, not a log of what
+         *     was believed at the time: declaring an account today, or correcting a
+         *     balance, changes what last March reports. That is the same property that
+         *     makes adoption retroactive, and it is right.
+         *
+         *     The comparison is aligned by day of the month rather than by whole months.
+         *     Against a finished previous month, a month three days old always reports
+         *     spending down by most of it — true, and useless.
+         */
+        get: operations["read_history_financial_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/net-worth": {
         parameters: {
             query?: never;
@@ -826,6 +860,14 @@ export interface components {
             /** Transaction Statuses */
             transaction_statuses: components["schemas"]["CatalogOption"][];
         };
+        /** FinancialHistoryResponse */
+        FinancialHistoryResponse: {
+            comparison: components["schemas"]["PeriodComparisonResponse"];
+            /** Months */
+            months: components["schemas"]["MonthlyPointResponse"][];
+            /** Timezone */
+            timezone: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1000,6 +1042,21 @@ export interface components {
             /** Absorbed Merchant Id */
             absorbed_merchant_id: string;
         };
+        /** MonthlyPointResponse */
+        MonthlyPointResponse: {
+            /** Ends At */
+            ends_at: number;
+            /** Key */
+            key: string;
+            /** Net Worth */
+            net_worth: components["schemas"]["NetWorthResponse"][];
+            /** Partial */
+            partial: boolean;
+            /** Starts At */
+            starts_at: number;
+            /** Totals */
+            totals: components["schemas"]["SpendingTotalsResponse"][];
+        };
         /**
          * MoveAliasPayload
          * @description Reattach one child to a different parent.
@@ -1090,6 +1147,38 @@ export interface components {
             name: string;
             /** Opening Balance */
             opening_balance?: number | string | null;
+        };
+        /**
+         * PeriodComparisonResponse
+         * @description This month so far against the same stretch of the month before it.
+         *
+         *     Aligned by day of the month: on the 15th, the 1st to the 15th against the
+         *     1st to the 15th. Comparing a young month against a finished one reports
+         *     spending down by most of it, every month, and is right about nothing.
+         */
+        PeriodComparisonResponse: {
+            /** Clamped */
+            clamped: boolean;
+            /** Key */
+            key: string;
+            /** Net Worth */
+            net_worth: components["schemas"]["NetWorthResponse"][];
+            /** Previous Key */
+            previous_key: string;
+            /** Previous Net Worth */
+            previous_net_worth: components["schemas"]["NetWorthResponse"][];
+            /** Previous Starts At */
+            previous_starts_at: number;
+            /** Previous Through */
+            previous_through: number;
+            /** Previous Totals */
+            previous_totals: components["schemas"]["SpendingTotalsResponse"][];
+            /** Starts At */
+            starts_at: number;
+            /** Through */
+            through: number;
+            /** Totals */
+            totals: components["schemas"]["SpendingTotalsResponse"][];
         };
         /**
          * ProcessingStatus
@@ -1621,6 +1710,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FinancialCatalogResponse"];
+                };
+            };
+        };
+    };
+    read_history_financial_history_get: {
+        parameters: {
+            query?: {
+                months?: number;
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancialHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

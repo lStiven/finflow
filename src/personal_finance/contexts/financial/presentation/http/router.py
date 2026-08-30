@@ -44,17 +44,24 @@ from personal_finance.contexts.financial.application.handlers import (
 )
 from personal_finance.contexts.financial.application.ports import MerchantDirectory
 from personal_finance.contexts.financial.application.queries import (
+    DEFAULT_HISTORY_MONTHS,
     DEFAULT_PAGE_SIZE,
     DEFAULT_TIMEZONE,
+    MAX_HISTORY_MONTHS,
     MAX_PAGE_SIZE,
     AccountScope,
     AttributedTransaction,
+    FinancialHistory,
     GetAccountUseCase,
     GetTransactionUseCase,
+    HistoryQuery,
     ListAccountsUseCase,
     ListTransactionsUseCase,
+    MonthlyPoint,
     MovementFilter,
     NetWorth,
+    PeriodComparison,
+    ReadFinancialHistoryUseCase,
     SpendingSummary,
     SpendingTotals,
     SummarizeSpendingUseCase,
@@ -257,6 +264,51 @@ class SpendingSummaryResponse(BaseModel):
     # movement count — ordering by amount would compare two currencies, which
     # nothing here has a rate for.
     groups: list[SummaryGroupResponse]
+
+
+class MonthlyPointResponse(BaseModel):
+    key: str
+    starts_at: int
+    # Exclusive, so two consecutive months never claim the same movement.
+    ends_at: int
+    # The month still being lived. Its totals cover part of a month and must
+    # not be charted as a finished one.
+    partial: bool
+    totals: list[SpendingTotalsResponse]
+    # What everything was worth when the month closed — or right now, for the
+    # partial one. Replayed from the ledger, never stored.
+    net_worth: list[NetWorthResponse]
+
+
+class PeriodComparisonResponse(BaseModel):
+    """This month so far against the same stretch of the month before it.
+
+    Aligned by day of the month: on the 15th, the 1st to the 15th against the
+    1st to the 15th. Comparing a young month against a finished one reports
+    spending down by most of it, every month, and is right about nothing.
+    """
+
+    key: str
+    starts_at: int
+    through: int
+    previous_key: str
+    previous_starts_at: int
+    previous_through: int
+    # The previous month ran out of days first — the 31st against a February.
+    # The window is the whole of it, and a client that says "vs julio" should
+    # say something else here.
+    clamped: bool
+    totals: list[SpendingTotalsResponse]
+    previous_totals: list[SpendingTotalsResponse]
+    net_worth: list[NetWorthResponse]
+    previous_net_worth: list[NetWorthResponse]
+
+
+class FinancialHistoryResponse(BaseModel):
+    timezone: str
+    # Oldest first, so a client charts it without reversing anything.
+    months: list[MonthlyPointResponse]
+    comparison: PeriodComparisonResponse
 
 
 # ---------------------------------------------------------------- payloads
@@ -537,6 +589,10 @@ def get_summarize_spending_use_case() -> SummarizeSpendingUseCase:
     return _build_summarize_spending()
 
 
+def get_read_history_use_case() -> ReadFinancialHistoryUseCase:
+    return ReadFinancialHistoryUseCase(ledger=build_ledger(), accounts=build_accounts())
+
+
 def get_merchant_directory() -> MerchantDirectory:
     return build_merchant_directory()
 
@@ -766,6 +822,46 @@ def close_account(
         )
 
     return _account_response(account)
+
+
+@router.get("/history", response_model=FinancialHistoryResponse)
+def read_history(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ReadFinancialHistoryUseCase,
+        Depends(get_read_history_use_case),
+    ],
+    months: Annotated[int, Query(ge=1, le=MAX_HISTORY_MONTHS)] = DEFAULT_HISTORY_MONTHS,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> FinancialHistoryResponse:
+    """How this money has moved month by month, and how this month compares.
+
+    Nothing here is stored or scheduled. Restating what an account holds
+    solves its opening balance backwards, so the opening balance plus every
+    movement up to an instant *is* the balance at that instant — history is a
+    replay of the ledger rather than a snapshot table to keep in step.
+
+    So this is the current best reconstruction of the past, not a log of what
+    was believed at the time: declaring an account today, or correcting a
+    balance, changes what last March reports. That is the same property that
+    makes adoption retroactive, and it is right.
+
+    The comparison is aligned by day of the month rather than by whole months.
+    Against a finished previous month, a month three days old always reports
+    spending down by most of it — true, and useless.
+    """
+    with _domain_errors():
+        history = use_case.execute(
+            HistoryQuery(
+                user_id=user_id,
+                months=months,
+                # Refused here rather than deep in the replay, and refused the
+                # same way `/summary` refuses it.
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    return _history_response(history)
 
 
 @router.get("/net-worth", response_model=list[NetWorthResponse])
@@ -1201,6 +1297,45 @@ def _group_response(group: SummaryGroup) -> SummaryGroupResponse:
         label=group.label,
         totals=[_totals_response(figure) for figure in group.totals],
         movements=group.movements,
+    )
+
+
+def _history_response(history: FinancialHistory) -> FinancialHistoryResponse:
+    return FinancialHistoryResponse(
+        timezone=history.timezone,
+        months=[_month_response(point) for point in history.months],
+        comparison=_comparison_response(history.comparison),
+    )
+
+
+def _month_response(point: MonthlyPoint) -> MonthlyPointResponse:
+    return MonthlyPointResponse(
+        key=point.key,
+        starts_at=point.starts_at.as_epoch_seconds(),
+        ends_at=point.ends_at.as_epoch_seconds(),
+        partial=point.partial,
+        totals=[_totals_response(figure) for figure in point.totals],
+        net_worth=[_net_worth_response(figure) for figure in point.net_worth],
+    )
+
+
+def _comparison_response(comparison: PeriodComparison) -> PeriodComparisonResponse:
+    return PeriodComparisonResponse(
+        key=comparison.key,
+        starts_at=comparison.starts_at.as_epoch_seconds(),
+        through=comparison.through.as_epoch_seconds(),
+        previous_key=comparison.previous_key,
+        previous_starts_at=comparison.previous_starts_at.as_epoch_seconds(),
+        previous_through=comparison.previous_through.as_epoch_seconds(),
+        clamped=comparison.clamped,
+        totals=[_totals_response(figure) for figure in comparison.totals],
+        previous_totals=[
+            _totals_response(figure) for figure in comparison.previous_totals
+        ],
+        net_worth=[_net_worth_response(figure) for figure in comparison.net_worth],
+        previous_net_worth=[
+            _net_worth_response(figure) for figure in comparison.previous_net_worth
+        ],
     )
 
 

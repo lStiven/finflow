@@ -1145,6 +1145,42 @@
           "response": []
         },
         {
+          "name": "Financial history",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/history?months=12&timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "months",
+                  "value": "12",
+                  "description": "How many months back, 1-36"
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Which zone decides where a month starts"
+                }
+              ]
+            },
+            "description": "Month-by-month totals and net worth replayed from the ledger, plus this month against the same days of the previous one. Net worth is reconstructed, never stored: restating a balance solves the opening balance backwards, so opening plus movements up to an instant is the balance at that instant."
+          },
+          "response": []
+        },
+        {
           "name": "List transactions",
           "request": {
             "method": "GET",

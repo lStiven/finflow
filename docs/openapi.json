@@ -594,6 +594,31 @@
         "title": "FinancialCatalogResponse",
         "type": "object"
       },
+      "FinancialHistoryResponse": {
+        "properties": {
+          "comparison": {
+            "$ref": "#/components/schemas/PeriodComparisonResponse"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/MonthlyPointResponse"
+            },
+            "title": "Months",
+            "type": "array"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timezone",
+          "months",
+          "comparison"
+        ],
+        "title": "FinancialHistoryResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -977,6 +1002,50 @@
         "title": "MergeMerchantsPayload",
         "type": "object"
       },
+      "MonthlyPointResponse": {
+        "properties": {
+          "ends_at": {
+            "title": "Ends At",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "net_worth": {
+            "items": {
+              "$ref": "#/components/schemas/NetWorthResponse"
+            },
+            "title": "Net Worth",
+            "type": "array"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "starts_at": {
+            "title": "Starts At",
+            "type": "integer"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "starts_at",
+          "ends_at",
+          "partial",
+          "totals",
+          "net_worth"
+        ],
+        "title": "MonthlyPointResponse",
+        "type": "object"
+      },
       "MoveAliasPayload": {
         "description": "Reattach one child to a different parent.",
         "properties": {
@@ -1215,6 +1284,82 @@
           "kind"
         ],
         "title": "OpenAccountPayload",
+        "type": "object"
+      },
+      "PeriodComparisonResponse": {
+        "description": "This month so far against the same stretch of the month before it.\n\nAligned by day of the month: on the 15th, the 1st to the 15th against the\n1st to the 15th. Comparing a young month against a finished one reports\nspending down by most of it, every month, and is right about nothing.",
+        "properties": {
+          "clamped": {
+            "title": "Clamped",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "net_worth": {
+            "items": {
+              "$ref": "#/components/schemas/NetWorthResponse"
+            },
+            "title": "Net Worth",
+            "type": "array"
+          },
+          "previous_key": {
+            "title": "Previous Key",
+            "type": "string"
+          },
+          "previous_net_worth": {
+            "items": {
+              "$ref": "#/components/schemas/NetWorthResponse"
+            },
+            "title": "Previous Net Worth",
+            "type": "array"
+          },
+          "previous_starts_at": {
+            "title": "Previous Starts At",
+            "type": "integer"
+          },
+          "previous_through": {
+            "title": "Previous Through",
+            "type": "integer"
+          },
+          "previous_totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Previous Totals",
+            "type": "array"
+          },
+          "starts_at": {
+            "title": "Starts At",
+            "type": "integer"
+          },
+          "through": {
+            "title": "Through",
+            "type": "integer"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "starts_at",
+          "through",
+          "previous_key",
+          "previous_starts_at",
+          "previous_through",
+          "clamped",
+          "totals",
+          "previous_totals",
+          "net_worth",
+          "previous_net_worth"
+        ],
+        "title": "PeriodComparisonResponse",
         "type": "object"
       },
       "ProcessingStatus": {
@@ -2281,6 +2426,68 @@
           }
         },
         "summary": "Get Catalog",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/history": {
+      "get": {
+        "description": "How this money has moved month by month, and how this month compares.\n\nNothing here is stored or scheduled. Restating what an account holds\nsolves its opening balance backwards, so the opening balance plus every\nmovement up to an instant *is* the balance at that instant — history is a\nreplay of the ledger rather than a snapshot table to keep in step.\n\nSo this is the current best reconstruction of the past, not a log of what\nwas believed at the time: declaring an account today, or correcting a\nbalance, changes what last March reports. That is the same property that\nmakes adoption retroactive, and it is right.\n\nThe comparison is aligned by day of the month rather than by whole months.\nAgainst a finished previous month, a month three days old always reports\nspending down by most of it — true, and useless.",
+        "operationId": "read_history_financial_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "months",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 36,
+              "minimum": 1,
+              "title": "Months",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read History",
         "tags": [
           "financial"
         ]
