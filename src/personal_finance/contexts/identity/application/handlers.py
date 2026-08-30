@@ -6,9 +6,11 @@ import uuid
 from personal_finance.contexts.identity.application.commands import (
     LoginCommand,
     RegisterUserCommand,
+    UpdateProfileCommand,
 )
 from personal_finance.contexts.identity.application.ports import (
     AccessToken,
+    AuthenticatedUser,
     InboxRegistrar,
     PasswordHasher,
     TokenIssuer,
@@ -18,19 +20,32 @@ from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.exceptions import (
     EmailAlreadyRegisteredError,
     InvalidCredentialsError,
+    UserNotFoundError,
 )
 from personal_finance.contexts.identity.domain.policies import (
     validate_password_strength,
 )
-from personal_finance.contexts.identity.domain.value_objects import Email
+from personal_finance.contexts.identity.domain.value_objects import Email, PersonName
 from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class UserProfile:
+    """What an account looks like to its own owner. No password material of
+    any kind, hashed or otherwise.
+    """
+
+    user_id: UserId
+    email: Email
+    name: PersonName | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class RegisterUserResult:
     user_id: UserId
     email: Email
+    name: PersonName | None
     access_token: AccessToken
 
 
@@ -71,6 +86,7 @@ class RegisterUserUseCase:
             email=Email(command.email),
             password_hash=self._hasher.hash(command.password),
             registered_at=PosixTime.now(),
+            name=PersonName(command.name) if command.name is not None else None,
         )
         stored = self._repository.add_if_new(user)
 
@@ -89,7 +105,8 @@ class RegisterUserUseCase:
         return RegisterUserResult(
             user_id=user.id,
             email=user.email,
-            access_token=self._token_issuer.issue(user.id),
+            name=user.name,
+            access_token=self._token_issuer.issue(_as_authenticated(user)),
         )
 
 
@@ -124,5 +141,73 @@ class LoginUseCase:
 
         return LoginResult(
             user_id=user.id,
-            access_token=self._token_issuer.issue(user.id),
+            access_token=self._token_issuer.issue(_as_authenticated(user)),
         )
+
+
+class GetProfileUseCase:
+    """Reads back the caller's own account.
+
+    Answers from storage rather than from the access token: the token's own
+    claims are a snapshot of the moment it was issued, so after a rename only
+    a stored record still tells the truth.
+    """
+
+    def __init__(self, *, repository: UserRepository) -> None:
+        self._repository = repository
+
+    def execute(self, *, caller: AuthenticatedUser) -> UserProfile:
+        user = _load_own_account(self._repository, caller)
+
+        return UserProfile(user_id=user.id, email=user.email, name=user.name)
+
+
+class UpdateProfileUseCase:
+    """Changes what the caller is called, and nothing else.
+
+    Only the name is editable: the email is the account's identity and the
+    key its record is stored under, so moving it is a migration rather than
+    an edit and is deliberately not offered here.
+    """
+
+    def __init__(self, *, repository: UserRepository) -> None:
+        self._repository = repository
+
+    def execute(
+        self,
+        *,
+        caller: AuthenticatedUser,
+        command: UpdateProfileCommand,
+    ) -> UserProfile:
+        user = _load_own_account(self._repository, caller)
+        user.rename(PersonName(command.name))
+
+        if not self._repository.rename(user):
+            # Lost a race with the account being removed between the read and
+            # the write; the conditional write is what makes that detectable.
+            raise UserNotFoundError("No account found for this token")
+
+        return UserProfile(user_id=user.id, email=user.email, name=user.name)
+
+
+def _as_authenticated(user: User) -> AuthenticatedUser:
+    return AuthenticatedUser(user_id=user.id, email=user.email, name=user.name)
+
+
+def _load_own_account(
+    repository: UserRepository,
+    caller: AuthenticatedUser,
+) -> User:
+    """Fetch the account a verified token names, refusing anything else.
+
+    The token carries both the id and the email, and the record is stored
+    under the email — so the id is checked against what came back. They can
+    only disagree if the address was reassigned to another account after the
+    token was issued, and that token must not reach the new one.
+    """
+    user = repository.find_by_email(caller.email)
+
+    if user is None or user.id != caller.user_id:
+        raise UserNotFoundError("No account found for this token")
+
+    return user

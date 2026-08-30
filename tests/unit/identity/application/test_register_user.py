@@ -6,6 +6,7 @@ from personal_finance.contexts.identity.application.commands import RegisterUser
 from personal_finance.contexts.identity.application.handlers import RegisterUserUseCase
 from personal_finance.contexts.identity.application.ports import (
     AccessToken,
+    AuthenticatedUser,
     InboxRegistration,
     RegisteredInbox,
 )
@@ -41,6 +42,16 @@ class InMemoryUserRepository:
     def find_by_email(self, email: Email) -> User | None:
         return self.by_email.get(email)
 
+    def rename(self, user: User) -> bool:
+        stored = self.by_email.get(user.email)
+
+        if stored is None or stored.id != user.id:
+            return False
+
+        stored.name = user.name
+
+        return True
+
 
 class FakeHasher:
     def hash(self, password: str) -> PasswordHash:
@@ -52,14 +63,14 @@ class FakeHasher:
 
 class FakeTokenIssuer:
     def __init__(self) -> None:
-        self.issued_for: list[UserId] = []
+        self.issued_for: list[AuthenticatedUser] = []
 
-    def issue(self, user_id: UserId) -> AccessToken:
-        self.issued_for.append(user_id)
+    def issue(self, user: AuthenticatedUser) -> AccessToken:
+        self.issued_for.append(user)
 
         return AccessToken(value="a-token", expires_at=PosixTime.now())
 
-    def verify(self, token: str) -> UserId:
+    def verify(self, token: str) -> AuthenticatedUser:
         raise NotImplementedError
 
 

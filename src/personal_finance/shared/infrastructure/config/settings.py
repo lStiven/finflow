@@ -460,7 +460,7 @@ class IdentitySettings(BaseSettings):
     # startup instead of signing every token with a well-known value.
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
-    access_token_ttl_minutes: int = 60 * 24
+    access_token_ttl_minutes: int = 1
 
     @model_validator(mode="after")
     def _namespace_resources(self) -> Self:

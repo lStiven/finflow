@@ -4,7 +4,11 @@ from typing import TYPE_CHECKING
 import uuid
 
 from personal_finance.contexts.identity.domain.entities import User
-from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
+from personal_finance.contexts.identity.domain.value_objects import (
+    Email,
+    PasswordHash,
+    PersonName,
+)
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
@@ -14,6 +18,11 @@ if TYPE_CHECKING:
 
 
 PARTITION_KEY = "email"
+USER_ID_ATTRIBUTE = "user_id"
+# `name` is a DynamoDB reserved word, so every expression that touches it has
+# to reach it through an expression-attribute name.
+NAME_ATTRIBUTE = "name"
+_NAME_PLACEHOLDER = "#name"
 
 
 class CorruptUserItemError(Exception):
@@ -30,25 +39,35 @@ def _read_string(item: dict[str, AttributeValueTypeDef], key: str) -> str:
 
 
 def to_item(user: User) -> dict[str, AttributeValueTypeDef]:
-    return {
+    item: dict[str, AttributeValueTypeDef] = {
         PARTITION_KEY: {"S": user.email.value},
-        "user_id": {"S": str(user.id.value)},
+        USER_ID_ATTRIBUTE: {"S": str(user.id.value)},
         "password_hash": {"S": user.password_hash.value},
         "registered_at": {"N": str(user.registered_at.as_epoch_seconds())},
     }
+
+    if user.name is not None:
+        # Written only when there is one: an account without a name has no
+        # attribute here rather than an empty string standing in for it.
+        item[NAME_ATTRIBUTE] = {"S": user.name.value}
+
+    return item
 
 
 def to_entity(item: dict[str, AttributeValueTypeDef]) -> User:
     """Rebuild the aggregate from a stored item, with no pending events: what
     a previous attempt already published must never be replayed.
     """
+    name = item.get(NAME_ATTRIBUTE, {}).get("S")
+
     return User(
-        id=UserId(value=uuid.UUID(_read_string(item, "user_id"))),
+        id=UserId(value=uuid.UUID(_read_string(item, USER_ID_ATTRIBUTE))),
         email=Email(_read_string(item, PARTITION_KEY)),
         password_hash=PasswordHash(_read_string(item, "password_hash")),
         registered_at=PosixTime.from_epoch_seconds(
             int(item.get("registered_at", {}).get("N", "0")),
         ),
+        name=PersonName(name) if name else None,
     )
 
 
@@ -81,6 +100,40 @@ class DynamoDBUserRepository:
             return self.find_by_email(user.email)
 
         return None
+
+    def rename(self, user: User) -> bool:
+        """Set the stored name in place, leaving every other attribute alone.
+
+        An `UpdateItem` rather than a `PutItem` of the whole aggregate: the
+        password hash is not part of this change, so it is never rewritten
+        from a copy that may have gone stale since it was read.
+        """
+        name = user.name
+
+        if name is None:
+            raise ValueError("Cannot store an absent name")
+
+        try:
+            self._client.update_item(
+                TableName=self._table_name,
+                Key={PARTITION_KEY: {"S": user.email.value}},
+                UpdateExpression=f"SET {_NAME_PLACEHOLDER} = :name",
+                # The id guard is what keeps this from landing on an account
+                # that took over the address after the caller read theirs.
+                ConditionExpression=(
+                    f"attribute_exists({PARTITION_KEY}) "
+                    f"AND {USER_ID_ATTRIBUTE} = :user_id"
+                ),
+                ExpressionAttributeNames={_NAME_PLACEHOLDER: NAME_ATTRIBUTE},
+                ExpressionAttributeValues={
+                    ":name": {"S": name.value},
+                    ":user_id": {"S": str(user.id.value)},
+                },
+            )
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+        return True
 
     def find_by_email(self, email: Email) -> User | None:
         response = self._client.get_item(

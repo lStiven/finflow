@@ -376,14 +376,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Me */
+        /**
+         * Me
+         * @description The caller's own account, read from storage rather than from the token
+         *     it arrived with: after a rename the token still carries the old name until
+         *     the next login, and this endpoint is what the client trusts instead.
+         */
         get: operations["me_identity_me_get"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update Profile
+         * @description Change the caller's name. Whose account is edited comes from the
+         *     verified token, never from the request, so there is no id to pass and no
+         *     one else's account to reach.
+         *
+         *     The access token in hand keeps its old `name` claim until it expires —
+         *     it is a snapshot of issuing time, and this response is the current truth.
+         */
+        patch: operations["update_profile_identity_me_patch"];
         trace?: never;
     };
     "/identity/register": {
@@ -772,6 +786,10 @@ export interface components {
         Currency: "COP" | "USD";
         /** CurrentUserResponse */
         CurrentUserResponse: {
+            /** Email */
+            email: string;
+            /** Name */
+            name?: string | null;
             /** User Id */
             user_id: string;
         };
@@ -1201,6 +1219,8 @@ export interface components {
             allowed_domains?: string[];
             /** Email */
             email: string;
+            /** Name */
+            name?: string | null;
             /** Password */
             password: string;
         };
@@ -1366,6 +1386,14 @@ export interface components {
             stated: components["schemas"]["StatedResponse"] | null;
             /** Status */
             status: string;
+        };
+        /**
+         * UpdateProfilePayload
+         * @description Only the name: the email is the account's identity, not a field.
+         */
+        UpdateProfilePayload: {
+            /** Name */
+            name: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -2071,6 +2099,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    update_profile_identity_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProfilePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

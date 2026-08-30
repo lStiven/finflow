@@ -11,10 +11,14 @@ from personal_finance.contexts.identity.application.commands import (
     LoginCommand,
     RegisterUserCommand,
     UpdateApprovedSendersCommand,
+    UpdateProfileCommand,
 )
 from personal_finance.contexts.identity.application.handlers import (
+    GetProfileUseCase,
     LoginUseCase,
     RegisterUserUseCase,
+    UpdateProfileUseCase,
+    UserProfile,
 )
 from personal_finance.contexts.identity.application.inbox_handlers import (
     GetInboxUseCase,
@@ -24,6 +28,7 @@ from personal_finance.contexts.identity.application.integration_events import (
     IdentityIntegrationEventTranslator,
 )
 from personal_finance.contexts.identity.application.ports import (
+    AuthenticatedUser,
     InboxRegistration,
     RegisteredInbox,
 )
@@ -31,8 +36,10 @@ from personal_finance.contexts.identity.domain.exceptions import (
     EmailAlreadyRegisteredError,
     InvalidAccessTokenError,
     InvalidCredentialsError,
+    UserNotFoundError,
 )
 from personal_finance.contexts.identity.domain.policies import WeakPasswordError
+from personal_finance.contexts.identity.domain.value_objects import PersonName
 from personal_finance.contexts.identity.infrastructure.inbox.ingestion_inbox_registrar import (  # noqa: E501
     IngestionInboxRegistrar,
 )
@@ -119,6 +126,13 @@ class RegisterPayload(InboxSendersPayload):
 
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=256)
+    # Optional: an account is identified by its email. Skipping it here leaves
+    # the account nameless until `PATCH /identity/me` sets one.
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=PersonName.MAX_LENGTH,
+    )
 
 
 class LoginPayload(BaseModel):
@@ -133,8 +147,16 @@ class AccessTokenResponse(BaseModel):
     expires_at: int
 
 
+class UpdateProfilePayload(BaseModel):
+    """Only the name: the email is the account's identity, not a field."""
+
+    name: str = Field(min_length=1, max_length=PersonName.MAX_LENGTH)
+
+
 class CurrentUserResponse(BaseModel):
     user_id: str
+    email: str
+    name: str | None = None
 
 
 class RegisteredInboxResponse(BaseModel):
@@ -240,6 +262,16 @@ def _build_login_use_case() -> LoginUseCase:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_get_profile_use_case() -> GetProfileUseCase:
+    return GetProfileUseCase(repository=_build_user_repository())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_update_profile_use_case() -> UpdateProfileUseCase:
+    return UpdateProfileUseCase(repository=_build_user_repository())
+
+
+@functools.lru_cache(maxsize=1)
 def _build_update_approved_senders_use_case() -> UpdateApprovedSendersUseCase:
     return UpdateApprovedSendersUseCase(inbox_registrar=_build_inbox_registrar())
 
@@ -257,6 +289,14 @@ def get_login_use_case() -> LoginUseCase:
     return _build_login_use_case()
 
 
+def get_profile_use_case() -> GetProfileUseCase:
+    return _build_get_profile_use_case()
+
+
+def get_update_profile_use_case() -> UpdateProfileUseCase:
+    return _build_update_profile_use_case()
+
+
 def get_update_approved_senders_use_case() -> UpdateApprovedSendersUseCase:
     return _build_update_approved_senders_use_case()
 
@@ -269,13 +309,13 @@ def get_token_issuer() -> JWTTokenIssuer:
     return _build_token_issuer()
 
 
-def get_current_user_id(
+def get_current_user(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
         Depends(_bearer_scheme),
     ],
     token_issuer: Annotated[JWTTokenIssuer, Depends(get_token_issuer)],
-) -> UserId:
+) -> AuthenticatedUser:
     unauthorized = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing or invalid access token",
@@ -289,6 +329,15 @@ def get_current_user_id(
         return token_issuer.verify(credentials.credentials)
     except InvalidAccessTokenError as error:
         raise unauthorized from error
+
+
+def get_current_user_id(
+    user: Annotated[AuthenticatedUser, Depends(get_current_user)],
+) -> UserId:
+    """The caller's id alone — what every other context asks for, so a router
+    that only scopes data by user never has to hold the rest of the claims.
+    """
+    return user.user_id
 
 
 def _as_response(
@@ -324,6 +373,7 @@ def register(
             RegisterUserCommand(
                 email=payload.email,
                 password=payload.password,
+                name=payload.name,
                 inbox=payload.to_registration(),
             ),
         )
@@ -429,6 +479,61 @@ def _inbox_response(inbox: RegisteredInbox) -> RegisteredInboxResponse:
 
 @router.get("/me", response_model=CurrentUserResponse)
 def me(
-    user_id: Annotated[UserId, Depends(get_current_user_id)],
+    caller: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    use_case: Annotated[GetProfileUseCase, Depends(get_profile_use_case)],
 ) -> CurrentUserResponse:
-    return CurrentUserResponse(user_id=str(user_id.value))
+    """The caller's own account, read from storage rather than from the token
+    it arrived with: after a rename the token still carries the old name until
+    the next login, and this endpoint is what the client trusts instead.
+    """
+    try:
+        return _profile_response(use_case.execute(caller=caller))
+    except UserNotFoundError as error:
+        raise _account_is_gone() from error
+
+
+@router.patch("/me", response_model=CurrentUserResponse)
+def update_profile(
+    payload: UpdateProfilePayload,
+    caller: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    use_case: Annotated[UpdateProfileUseCase, Depends(get_update_profile_use_case)],
+) -> CurrentUserResponse:
+    """Change the caller's name. Whose account is edited comes from the
+    verified token, never from the request, so there is no id to pass and no
+    one else's account to reach.
+
+    The access token in hand keeps its old `name` claim until it expires —
+    it is a snapshot of issuing time, and this response is the current truth.
+    """
+    try:
+        profile = use_case.execute(
+            caller=caller,
+            command=UpdateProfileCommand(name=payload.name),
+        )
+    except UserNotFoundError as error:
+        raise _account_is_gone() from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    return _profile_response(profile)
+
+
+def _profile_response(profile: UserProfile) -> CurrentUserResponse:
+    return CurrentUserResponse(
+        user_id=str(profile.user_id.value),
+        email=profile.email.value,
+        name=profile.name.value if profile.name is not None else None,
+    )
+
+
+def _account_is_gone() -> HTTPException:
+    """A token that verifies for an account that no longer exists. Not a 401:
+    the credential is genuine, the account behind it is not there.
+    """
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="No account found for this token",
+    )

@@ -316,13 +316,29 @@
       },
       "CurrentUserResponse": {
         "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "user_id": {
             "title": "User Id",
             "type": "string"
           }
         },
         "required": [
-          "user_id"
+          "user_id",
+          "email"
         ],
         "title": "CurrentUserResponse",
         "type": "object"
@@ -1399,6 +1415,19 @@
             "title": "Email",
             "type": "string"
           },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "password": {
             "maxLength": 256,
             "minLength": 8,
@@ -1856,6 +1885,22 @@
           "merchant"
         ],
         "title": "TransactionResponse",
+        "type": "object"
+      },
+      "UpdateProfilePayload": {
+        "description": "Only the name: the email is the account's identity, not a field.",
+        "properties": {
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "UpdateProfilePayload",
         "type": "object"
       },
       "ValidationError": {
@@ -3235,6 +3280,7 @@
     },
     "/identity/me": {
       "get": {
+        "description": "The caller's own account, read from storage rather than from the token\nit arrived with: after a rename the token still carries the old name until\nthe next login, and this endpoint is what the client trusts instead.",
         "operationId": "me_identity_me_get",
         "responses": {
           "200": {
@@ -3254,6 +3300,51 @@
           }
         ],
         "summary": "Me",
+        "tags": [
+          "identity"
+        ]
+      },
+      "patch": {
+        "description": "Change the caller's name. Whose account is edited comes from the\nverified token, never from the request, so there is no id to pass and no\none else's account to reach.\n\nThe access token in hand keeps its old `name` claim until it expires —\nit is a snapshot of issuing time, and this response is the current truth.",
+        "operationId": "update_profile_identity_me_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfilePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Profile",
         "tags": [
           "identity"
         ]

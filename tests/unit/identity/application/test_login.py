@@ -2,11 +2,14 @@ import pytest
 
 from personal_finance.contexts.identity.application.commands import LoginCommand
 from personal_finance.contexts.identity.application.handlers import LoginUseCase
-from personal_finance.contexts.identity.application.ports import AccessToken
+from personal_finance.contexts.identity.application.ports import (
+    AccessToken,
+    AuthenticatedUser,
+)
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.exceptions import InvalidCredentialsError
 from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
-from personal_finance.shared.domain.value_objects import PosixTime, UserId
+from personal_finance.shared.domain.value_objects import PosixTime
 
 
 EMAIL = "person@example.com"
@@ -23,6 +26,9 @@ class InMemoryUserRepository:
     def find_by_email(self, email: Email) -> User | None:
         return self.by_email.get(email)
 
+    def rename(self, user: User) -> bool:
+        raise NotImplementedError
+
 
 class FakeHasher:
     def __init__(self) -> None:
@@ -38,12 +44,12 @@ class FakeHasher:
 
 
 class FakeTokenIssuer:
-    def issue(self, user_id: UserId) -> AccessToken:
+    def issue(self, user: AuthenticatedUser) -> AccessToken:
         return AccessToken(
-            value=f"token-for-{user_id.value}", expires_at=PosixTime.now()
+            value=f"token-for-{user.user_id.value}", expires_at=PosixTime.now()
         )
 
-    def verify(self, token: str) -> UserId:
+    def verify(self, token: str) -> AuthenticatedUser:
         raise NotImplementedError
 
 

@@ -19,3 +19,10 @@ class InvalidAccessTokenError(IdentityDomainError):
     a different secret. Callers must treat every case as simply "not
     authenticated" rather than branching on which one it was.
     """
+
+
+class UserNotFoundError(IdentityDomainError):
+    """Raised when an operation targets an account that is not there —
+    reachable in practice only for a token whose account was deleted after it
+    was issued.
+    """

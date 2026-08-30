@@ -1,8 +1,13 @@
 import pytest
 
 from personal_finance.contexts.identity.domain.entities import User
-from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
+from personal_finance.contexts.identity.domain.value_objects import (
+    Email,
+    PasswordHash,
+    PersonName,
+)
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
+    NAME_ATTRIBUTE,
     PARTITION_KEY,
     CorruptUserItemError,
     to_entity,
@@ -54,3 +59,26 @@ def test_corrupt_item_is_rejected_with_a_named_error() -> None:
 
     with pytest.raises(CorruptUserItemError, match="password_hash"):
         to_entity(item)
+
+
+def test_an_account_with_no_name_stores_no_name_attribute() -> None:
+    # Absent rather than an empty string: nothing has to distinguish the two
+    # when reading the item back.
+    assert NAME_ATTRIBUTE not in to_item(_user())
+
+
+def test_the_name_survives_the_round_trip() -> None:
+    user = _user()
+    user.rename(PersonName("Ada Lovelace"))
+
+    restored = to_entity(to_item(user))
+
+    assert restored.name == PersonName("Ada Lovelace")
+
+
+def test_an_item_written_before_names_existed_still_reads_back() -> None:
+    # Every account stored before this attribute existed has no name, and
+    # must keep working rather than failing to load.
+    item = to_item(_user())
+
+    assert to_entity(item).name is None

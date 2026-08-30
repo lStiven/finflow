@@ -51,12 +51,10 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-30 — `GET /financial/history` answers the dashboard in one call:
-  month-by-month totals and net worth, plus this month against the same days
-  of the last one. Net worth is replayed from the ledger rather than stored —
-  restating a balance solves the opening balance backwards, so opening plus
-  movements up to an instant *is* the balance then. `just prepare` green (834
-  tests).
+- 2026-08-30 — An account can be named, and say who it belongs to. `name` is
+  optional on the user, the access token carries `email` and `name` beside
+  `sub`, and `GET`/`PATCH /identity/me` read and change it. `just prepare`
+  green (873 tests), `just verify` green (90 checks) against the emulator.
 
 ## Next steps
 
@@ -90,15 +88,6 @@ rest of the frontend — see **Next steps**.
          `docs/frontend-integration.md` is still the contract each of them has
          to honour. Nothing is deployed: no hosting is provisioned and
          `API_CORS_ORIGINS` names only localhost.
-- [ ] **`GET /identity/me` cannot name the user.** The dashboard design has a
-      profile block; the endpoint returns `user_id` and nothing else, and the
-      `users` table is partitioned by **email**, so there is no way to read a
-      user by id without a new global secondary index. Two options, neither
-      done: add that index (a provisioning change, and a cost that recurs), or
-      carry the email as a JWT claim issued at login — no index, no read per
-      page load, and it goes stale only on an email change, which no endpoint
-      offers. There is no display name anywhere in the domain; showing one
-      means a new field and a screen to edit it.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -495,6 +484,24 @@ rest of the frontend — see **Next steps**.
   Financial asks the directory for the vocabulary and returns 422. An unknown
   merchant id stays an empty page on purpose: saying it does not exist would
   tell a stranger whether it is somebody else's.
+
+### Identity (2026-08-30)
+
+- **The access token names its holder, and that is what reaches the record.**
+  The `users` table is partitioned by **email**, so reading an
+  account by id needed a global secondary index — a provisioning change and a
+  recurring cost — for what is, at this scale, one lookup. Rejected in favour
+  of carrying `email` in the token beside `sub`: `PATCH /identity/me` resolves
+  the record by that claim and then checks the loaded id against `sub`, so a
+  token cannot reach an address that was reassigned after it was issued. This
+  only holds while the email is immutable, which is why editing it is not
+  offered — moving the partition key is a migration, not an edit, and would
+  have to be designed as one. `name` rides along in the token for the client
+  to render at login, but it is a snapshot of issuing time: `GET /identity/me`
+  reads storage, so a rename shows up there immediately and in the token only
+  at the next login. Accepted cost: `verify` now requires the `email` claim,
+  so every token issued before this change is refused — one forced login for
+  everybody, chosen over accepting a token that cannot reach its own account.
 
 ### Operations
 

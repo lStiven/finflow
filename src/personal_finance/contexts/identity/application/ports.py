@@ -4,7 +4,11 @@ import dataclasses
 from typing import Protocol
 
 from personal_finance.contexts.identity.domain.entities import User
-from personal_finance.contexts.identity.domain.value_objects import Email, PasswordHash
+from personal_finance.contexts.identity.domain.value_objects import (
+    Email,
+    PasswordHash,
+    PersonName,
+)
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
@@ -22,6 +26,16 @@ class UserRepository(Protocol):
         ...
 
     def find_by_email(self, email: Email) -> User | None: ...
+
+    def rename(self, user: User) -> bool:
+        """Write `user.name` onto the stored record, in place.
+
+        Guarded by the account's id as well as its email, so it can only ever
+        touch the record the caller actually loaded — never one that replaced
+        it in between. Returns False when nothing matched, which the caller
+        reads as "that account is gone".
+        """
+        ...
 
 
 class PasswordHasher(Protocol):
@@ -41,15 +55,33 @@ class AccessToken:
     expires_at: PosixTime
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AuthenticatedUser:
+    """Who a verified token says is calling.
+
+    The email travels in the token as well as the id because identity's own
+    records are keyed by email: carrying it means an authenticated request
+    can reach its account without a second index to look the address up. It
+    is only ever read back out of a signature this deployment produced, never
+    off the wire. The name rides along for the client's benefit — a snapshot
+    taken when the token was issued, so a rename does not show up in it until
+    the next login; `GET /identity/me` is the authoritative answer.
+    """
+
+    user_id: UserId
+    email: Email
+    name: PersonName | None = None
+
+
 class TokenIssuer(Protocol):
     """Port for issuing and verifying the bearer token a client uses to prove
     it already authenticated as a given user.
     """
 
-    def issue(self, user_id: UserId) -> AccessToken: ...
+    def issue(self, user: AuthenticatedUser) -> AccessToken: ...
 
-    def verify(self, token: str) -> UserId:
-        """Return the user id the token was issued for.
+    def verify(self, token: str) -> AuthenticatedUser:
+        """Return who the token was issued for.
 
         Raises for a token that is missing, malformed, expired, or signed
         with a different secret — the caller treats all of those as

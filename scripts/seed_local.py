@@ -52,6 +52,7 @@ from personal_finance.shared.infrastructure.config.settings import get_aws_setti
 
 
 DEFAULT_EMAIL = "demo@finflow.local"
+DEFAULT_NAME = "Demo"
 # Long enough for the password policy, and printed at the end: this account
 # exists to be logged into by hand.
 DEFAULT_PASSWORD = "una frase larga de verdad"
@@ -265,6 +266,7 @@ def _authenticate(client: TestClient, *, email: str, password: str) -> str:
         json={
             "email": email,
             "password": password,
+            "name": DEFAULT_NAME,
             "allowed_domains": [BANK_DOMAIN],
         },
     )

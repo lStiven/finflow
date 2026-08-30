@@ -61,7 +61,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
+                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"name\": \"Your Name\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -78,7 +78,7 @@
                     "register"
                   ]
                 },
-                "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. `allowed_domains`/`allowed_addresses` are optional — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
+                "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. `name` is optional — an account is identified by its email, and a name can be set later via `PATCH /identity/me`. `allowed_domains`/`allowed_addresses` are optional too — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
               },
               "response": []
             },
@@ -151,7 +151,44 @@
                     "me"
                   ]
                 },
-                "description": "Whoever the bearer token verifies as."
+                "description": "The account the bearer token verifies as: id, email and name. Read from storage, so a name changed through `PATCH /identity/me` shows up here immediately — the token itself keeps the `name` it was issued with until the next login."
+              },
+              "response": []
+            },
+            {
+              "name": "Update profile",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Your Name\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/identity/me",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "me"
+                  ]
+                },
+                "description": "Changes the caller's name — the only editable field for now, since the email is the account's identity. Whose account is edited comes from the token, so there is no id to pass. Returns the updated account, the same shape as `GET /identity/me`."
               },
               "response": []
             }
