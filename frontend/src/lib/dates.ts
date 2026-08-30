@@ -110,3 +110,70 @@ export function monthRange(key: string): { from: number; to: number } | null {
   const offset = zoneOffsetSeconds(new Date(startUtc * 1000));
   return { from: startUtc - offset, to: nextUtc - offset };
 }
+
+/**
+ * An epoch second as the value a `datetime-local` input expects.
+ *
+ * The input has no timezone of its own — it shows whatever wall-clock string
+ * it is given — so the conversion has to be explicit in both directions or a
+ * movement drifts by the offset every time somebody opens the form and saves
+ * without touching the field.
+ */
+export function toLocalInput(epochSeconds: number): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(toDate(epochSeconds));
+
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "00";
+
+  return `${value("year")}-${value("month")}-${value("day")}T${value("hour")}:${value("minute")}`;
+}
+
+/** The inverse: a wall-clock string in the display zone, back to epoch seconds. */
+export function fromLocalInput(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+
+  // Read as if the wall clock were UTC, then slide by the zone's offset at
+  // that moment. Two steps because the offset itself depends on the instant.
+  const asUtc =
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+    ) / 1000;
+  return asUtc - zoneOffsetSeconds(new Date(asUtc * 1000));
+}
+
+/** The `"2026-08"` bucket an instant falls in, for grouping a list by month. */
+export function monthKeyOf(epochSeconds: number): string {
+  return currentMonthKey(toDate(epochSeconds));
+}
+
+/**
+ * A month as the two `YYYY-MM-DD` bounds the movement list filters on.
+ *
+ * Both ends inclusive, because that is what the date inputs mean: the list
+ * turns the upper one into the following midnight itself.
+ */
+export function monthDayRange(key: string): { from: string; to: string } | null {
+  const [year, month] = key.split("-").map(Number);
+  if (!year || !month || month < 1 || month > 12) return null;
+  // Day zero of the next month is the last day of this one.
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const padded = String(month).padStart(2, "0");
+  return {
+    from: `${year}-${padded}-01`,
+    to: `${year}-${padded}-${String(last).padStart(2, "0")}`,
+  };
+}

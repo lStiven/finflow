@@ -11,6 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as TransaccionesIndexRouteImport } from './routes/transacciones/index'
+import { Route as TransaccionesTransactionIdRouteImport } from './routes/transacciones/$transactionId'
+import { Route as TransaccionesNuevaRouteImport } from './routes/transacciones/nueva'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +25,75 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TransaccionesIndexRoute = TransaccionesIndexRouteImport.update({
+  id: '/transacciones/',
+  path: '/transacciones/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TransaccionesTransactionIdRoute =
+  TransaccionesTransactionIdRouteImport.update({
+    id: '/transacciones/$transactionId',
+    path: '/transacciones/$transactionId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const TransaccionesNuevaRoute = TransaccionesNuevaRouteImport.update({
+  id: '/transacciones/nueva',
+  path: '/transacciones/nueva',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
+  '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
+  '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/transacciones': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
+  '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/transacciones/$transactionId'
+    | '/transacciones/nueva'
+    | '/transacciones/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login'
-  id: '__root__' | '/' | '/login'
+  to:
+    | '/'
+    | '/login'
+    | '/transacciones/$transactionId'
+    | '/transacciones/nueva'
+    | '/transacciones'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/transacciones/$transactionId'
+    | '/transacciones/nueva'
+    | '/transacciones/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
+  TransaccionesNuevaRoute: typeof TransaccionesNuevaRoute
+  TransaccionesIndexRoute: typeof TransaccionesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +112,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/transacciones/': {
+      id: '/transacciones/'
+      path: '/transacciones'
+      fullPath: '/transacciones/'
+      preLoaderRoute: typeof TransaccionesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/transacciones/$transactionId': {
+      id: '/transacciones/$transactionId'
+      path: '/transacciones/$transactionId'
+      fullPath: '/transacciones/$transactionId'
+      preLoaderRoute: typeof TransaccionesTransactionIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/transacciones/nueva': {
+      id: '/transacciones/nueva'
+      path: '/transacciones/nueva'
+      fullPath: '/transacciones/nueva'
+      preLoaderRoute: typeof TransaccionesNuevaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
+  TransaccionesNuevaRoute: TransaccionesNuevaRoute,
+  TransaccionesIndexRoute: TransaccionesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

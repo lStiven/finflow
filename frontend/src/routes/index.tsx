@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -10,7 +10,6 @@ import {
 import {
   type Account,
   accountsQuery,
-  type NetWorth,
   type SpendingTotals,
   type SummaryGroup,
   summaryQuery,
@@ -18,7 +17,9 @@ import {
   transactionsQuery,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
+import { CountUpMoney } from "@/components/CountUpMoney";
 import { Donut, type Slice } from "@/components/charts/Donut";
+import { Sparkline } from "@/components/charts/Sparkline";
 import { Money } from "@/components/Money";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
@@ -26,6 +27,7 @@ import {
   currentMonthKey,
   formatDate,
   formatMonthKey,
+  monthDayRange,
   monthRange,
   nowInSeconds,
   previousMonthKey,
@@ -35,6 +37,9 @@ import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/mone
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
 const MAX_SLICES = 5;
+const HOUR = 3600;
+/** Enough months for a shape, few enough that each one is still a segment. */
+const TREND_MONTHS = 8;
 
 /**
  * The window the screen reports on, resolved per render.
@@ -52,7 +57,14 @@ function currentPeriod() {
   const month = currentMonthKey();
   const range = monthRange(month);
   const previous = monthRange(previousMonthKey(month));
-  const elapsed = range ? nowInSeconds() - range.from : 0;
+  /*
+   * Rounded down to the hour. Taken to the second, this lands in the query
+   * key, so the previous-month summary would be a different query on every
+   * render: the loader's prefetch would never be the component's cache hit,
+   * the screen would suspend and refetch, and the cache would grow an entry
+   * per second the tab stayed open.
+   */
+  const elapsed = range ? Math.floor((nowInSeconds() - range.from) / HOUR) * HOUR : 0;
   return {
     month,
     range,
@@ -68,12 +80,28 @@ export const Route = createFileRoute("/")({
   },
   loader: ({ context }) => {
     const { range, previousToDate } = currentPeriod();
+    // `staleTime: "static"` so coming back to the dashboard paints from cache
+    // instead of blocking the route on six refetches; the 30s default makes
+    // every navigation back here wait on the network.
     return Promise.all([
-      context.queryClient.query(accountsQuery("open")),
-      context.queryClient.query(summaryQuery("month", range ?? {})),
-      context.queryClient.query(summaryQuery("month", previousToDate ?? {})),
-      context.queryClient.query(summaryQuery("category", range ?? {})),
-      context.queryClient.query(transactionsQuery({ limit: RECENT_LIMIT })),
+      context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
+      context.queryClient.query({
+        ...summaryQuery("month", range ?? {}),
+        staleTime: "static",
+      }),
+      context.queryClient.query({
+        ...summaryQuery("month", previousToDate ?? {}),
+        staleTime: "static",
+      }),
+      context.queryClient.query({ ...summaryQuery("month"), staleTime: "static" }),
+      context.queryClient.query({
+        ...summaryQuery("category", range ?? {}),
+        staleTime: "static",
+      }),
+      context.queryClient.query({
+        ...transactionsQuery({ limit: RECENT_LIMIT }),
+        staleTime: "static",
+      }),
     ]);
   },
   component: Dashboard,
@@ -87,6 +115,7 @@ function Dashboard() {
   const { data: byPrevious } = useSuspenseQuery(
     summaryQuery("month", previousToDate ?? {}),
   );
+  const { data: everyMonth } = useSuspenseQuery(summaryQuery("month"));
   const { data: byCategory } = useSuspenseQuery(summaryQuery("category", range ?? {}));
   const { data: recent } = useSuspenseQuery(transactionsQuery({ limit: RECENT_LIMIT }));
 
@@ -102,6 +131,15 @@ function Dashboard() {
 
   const thisMonth = totalsFor(byMonth.groups, month, currency);
   const lastMonth = totalsFor(byPrevious.groups, previousMonthKey(month), currency);
+  const trend = monthlyTrend(everyMonth.groups, currency);
+  /*
+   * The tiles report month to date, so the list they open has to be bounded
+   * the same way. Without this, tapping "Gastos" shows every expense ever
+   * recorded under a figure that covers this month — two different numbers,
+   * one of them apparently wrong.
+   */
+  const days = monthDayRange(month);
+  const monthSearch = days ? { from: days.from, to: days.to } : {};
 
   return (
     <AppShell>
@@ -113,18 +151,18 @@ function Dashboard() {
               Aquí tienes un resumen de tus finanzas.
             </p>
           </div>
-          <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs">
+          <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs capitalize">
             {formatMonthKey(month)}
           </p>
         </header>
 
         <section
           aria-label="Cifras del mes"
-          className="grid grid-cols-2 gap-3 lg:grid-cols-4"
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
         >
-          <StatTile label="Patrimonio" icon={Wallet} tint="accent">
+          <StatTile label="Patrimonio" icon={Wallet} hue="violet">
             {primary ? (
-              <Money
+              <CountUpMoney
                 amount={primary.total}
                 currency={primary.currency}
                 size="md"
@@ -138,15 +176,27 @@ function Dashboard() {
           <StatTile
             label="Ingresos"
             icon={ArrowDownLeft}
-            tint="incoming"
+            hue="green"
+            to={{
+              to: "/transacciones",
+              search: { ...monthSearch, direction: "incoming" },
+            }}
             caption={
               <Delta
                 previous={lastMonth?.incoming}
                 current={thisMonth?.incoming ?? "0"}
               />
             }
+            chart={
+              trend.length > 1 ? (
+                <Sparkline
+                  values={trend.map((entry) => entry.incoming)}
+                  className="text-incoming"
+                />
+              ) : null
+            }
           >
-            <Money
+            <CountUpMoney
               amount={thisMonth?.incoming ?? "0"}
               currency={currency}
               size="md"
@@ -157,7 +207,11 @@ function Dashboard() {
           <StatTile
             label="Gastos"
             icon={ArrowUpRight}
-            tint="outgoing"
+            hue="accent"
+            to={{
+              to: "/transacciones",
+              search: { ...monthSearch, direction: "outgoing" },
+            }}
             caption={
               <Delta
                 previous={lastMonth?.outgoing}
@@ -165,8 +219,16 @@ function Dashboard() {
                 lowerIsBetter
               />
             }
+            chart={
+              trend.length > 1 ? (
+                <Sparkline
+                  values={trend.map((entry) => entry.outgoing)}
+                  className="text-accent"
+                />
+              ) : null
+            }
           >
-            <Money
+            <CountUpMoney
               amount={thisMonth?.outgoing ?? "0"}
               currency={currency}
               size="md"
@@ -174,9 +236,9 @@ function Dashboard() {
             />
           </StatTile>
 
-          <StatTile label="Deuda" icon={TrendingDown} tint="neutral">
+          <StatTile label="Deuda" icon={TrendingDown} hue="cyan">
             {primary ? (
-              <Money
+              <CountUpMoney
                 amount={primary.liabilities}
                 currency={primary.currency}
                 size="md"
@@ -189,7 +251,7 @@ function Dashboard() {
         </section>
 
         {otherCurrencies.length > 0 ? (
-          <p className="-mt-4 text-faint text-xs">
+          <p className="-mt-5 text-faint text-xs">
             Además tienes saldos en{" "}
             {otherCurrencies.map((entry) => entry.currency).join(", ")}. Se muestran
             aparte porque no existe una tasa de cambio para sumarlos.
@@ -197,15 +259,16 @@ function Dashboard() {
         ) : null}
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <CategoryCard groups={byCategory.groups} currency={currency} />
+          <CategoryCard
+            groups={byCategory.groups}
+            currency={currency}
+            previousOutgoing={lastMonth?.outgoing}
+            month={month}
+          />
           <RecentCard transactions={recent.transactions} />
         </div>
 
-        <AccountList
-          accounts={accounts.accounts}
-          others={otherCurrencies}
-          currency={currency}
-        />
+        <AccountList accounts={accounts.accounts} currency={currency} />
       </div>
     </AppShell>
   );
@@ -219,6 +282,29 @@ function totalsFor(
 ): SpendingTotals | null {
   const group = groups.find((candidate) => candidate.key === key);
   return group?.totals.find((total) => total.currency === currency) ?? null;
+}
+
+/**
+ * The last few months, oldest first, for the shapes behind the KPIs.
+ *
+ * Through floats like every other chart value — these drive a polyline, and
+ * no figure beside them comes from here.
+ */
+function monthlyTrend(
+  groups: SummaryGroup[],
+  currency: string,
+): { incoming: number; outgoing: number }[] {
+  return groups
+    .filter((group) => group.key !== null)
+    .sort((left, right) => String(left.key).localeCompare(String(right.key)))
+    .slice(-TREND_MONTHS)
+    .map((group) => {
+      const totals = group.totals.find((total) => total.currency === currency);
+      return {
+        incoming: totals ? toChartValue(totals.incoming) : 0,
+        outgoing: totals ? toChartValue(totals.outgoing) : 0,
+      };
+    });
 }
 
 /**
@@ -241,8 +327,10 @@ function Delta({
   const change = percentChange(previous, current);
   if (change === null) return null;
 
-  const rounded = Math.round(change);
-  if (rounded === 0) return <span className="text-faint">Igual que el mes pasado</span>;
+  const rounded = Math.round(change * 10) / 10;
+  if (rounded === 0) {
+    return <span className="text-faint">Igual que el mes pasado</span>;
+  }
 
   const good = lowerIsBetter ? rounded < 0 : rounded > 0;
   return (
@@ -256,25 +344,60 @@ function Delta({
 function CategoryCard({
   groups,
   currency,
+  previousOutgoing,
+  month,
 }: {
   groups: SummaryGroup[];
   currency: string;
+  previousOutgoing?: string;
+  month: string;
 }) {
   const slices = toSlices(groups, currency);
+  const biggest = slices.parts[0];
+  const change =
+    previousOutgoing === undefined
+      ? null
+      : percentChange(previousOutgoing, slices.total);
 
   return (
-    <Card className="flex flex-col gap-5">
+    <Card glow="violet" lift={false} className="flex flex-col gap-5">
       <h2 className="font-medium">Gastos por categoría</h2>
-      {slices.length === 0 ? (
+
+      {slices.parts.length === 0 ? (
         <Empty>Todavía no hay gastos registrados este mes.</Empty>
       ) : (
-        <Donut slices={slices.parts} total={slices.total} currency={currency} />
+        <>
+          <Donut slices={slices.parts} total={slices.total} currency={currency} />
+
+          {/* The two readings the ring cannot make on its own. */}
+          <dl className="mt-auto grid grid-cols-2 gap-3 border-line/70 border-t pt-4 text-sm">
+            <div className="min-w-0">
+              <dt className="text-faint text-xs">Mayor gasto</dt>
+              <dd className="mt-0.5 truncate">{biggest?.label ?? "—"}</dd>
+            </div>
+            <div className="min-w-0 text-right">
+              <dt className="text-faint text-xs">Frente al mes pasado</dt>
+              <dd className="mt-0.5">
+                {change === null ? (
+                  <span className="text-faint">Sin comparación</span>
+                ) : (
+                  <span className={change > 0 ? "text-outgoing" : "text-incoming"}>
+                    {Math.abs(Math.round(change))}% {change > 0 ? "más" : "menos"} que{" "}
+                    <span className="capitalize">
+                      {formatMonthKey(previousMonthKey(month)).split(" ")[0]}
+                    </span>
+                  </span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        </>
       )}
     </Card>
   );
 }
 
-type Slices = { parts: Slice[]; total: string; length: number };
+type Slices = { parts: Slice[]; total: string };
 
 /**
  * Outgoing money per category, largest first, with the tail folded into one
@@ -297,7 +420,7 @@ function toSlices(groups: SummaryGroup[], currency: string): Slices {
     .sort((left, right) => right.value - left.value);
 
   const sum = rows.reduce((running, row) => running + row.value, 0);
-  if (sum === 0) return { parts: [], total: "0", length: 0 };
+  if (sum === 0) return { parts: [], total: "0" };
 
   const head = rows.slice(0, MAX_SLICES);
   const tail = rows.slice(MAX_SLICES);
@@ -320,61 +443,73 @@ function toSlices(groups: SummaryGroup[], currency: string): Slices {
     });
   }
 
-  return { parts, total: sum.toFixed(2), length: parts.length };
+  return { parts, total: sum.toFixed(2) };
 }
 
 function RecentCard({ transactions }: { transactions: Transaction[] }) {
   return (
-    <Card className="flex flex-col gap-4">
-      <h2 className="font-medium">Movimientos recientes</h2>
+    <Card glow="cyan" lift={false} className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-medium">Movimientos recientes</h2>
+        <Link
+          to="/transacciones"
+          className="rounded-lg border border-line px-2.5 py-1 text-muted text-xs transition-colors duration-150 hover:border-accent/40 hover:text-text"
+        >
+          Ver todos
+        </Link>
+      </div>
+
       {transactions.length === 0 ? (
         <Empty>
           Cuando tu banco te avise de un movimiento, aparecerá aquí sin que tengas que
           escribir nada.
         </Empty>
       ) : (
-        <ul className="flex flex-col">
+        <ul className="-mx-2 flex flex-col">
           {transactions.map((movement) => (
-            <li
-              key={movement.id}
-              className="flex items-center gap-3 border-line/60 border-b py-3 last:border-0 last:pb-0"
-            >
-              <span
-                aria-hidden
-                className={
-                  movement.direction === "incoming"
-                    ? "grid size-9 shrink-0 place-items-center rounded-lg bg-chart-4/15 text-incoming"
-                    : "grid size-9 shrink-0 place-items-center rounded-lg bg-chart-1/15 text-outgoing"
-                }
+            <li key={movement.id}>
+              <Link
+                to="/transacciones/$transactionId"
+                params={{ transactionId: movement.id }}
+                className="group flex items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised"
               >
-                {movement.direction === "incoming" ? (
-                  <ArrowDownLeft className="size-4" />
-                ) : (
-                  <ArrowUpRight className="size-4" />
-                )}
-              </span>
+                <span
+                  aria-hidden
+                  className={
+                    movement.direction === "incoming"
+                      ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
+                      : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
+                  }
+                >
+                  {movement.direction === "incoming" ? (
+                    <ArrowDownLeft className="size-3.5" />
+                  ) : (
+                    <ArrowUpRight className="size-3.5" />
+                  )}
+                </span>
 
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm">
-                  {movement.merchant?.display_name ?? movement.counterparty}
-                </p>
-                <p className="mt-0.5 truncate text-faint text-xs">
-                  {formatDate(movement.occurred_at)}
-                  {movement.account_id ? null : " · sin asignar"}
-                </p>
-              </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">
+                    {movement.merchant?.display_name ?? movement.counterparty}
+                  </p>
+                  <p className="truncate text-faint text-xs">
+                    {formatDate(movement.occurred_at)}
+                    {movement.account_id ? null : " · sin asignar"}
+                  </p>
+                </div>
 
-              <Money
-                amount={
-                  movement.direction === "outgoing"
-                    ? `-${movement.amount}`
-                    : movement.amount
-                }
-                currency={movement.currency}
-                signed
-                size="sm"
-                tone={movement.direction === "incoming" ? "positive" : "plain"}
-              />
+                <Money
+                  amount={
+                    movement.direction === "outgoing"
+                      ? `-${movement.amount}`
+                      : movement.amount
+                  }
+                  currency={movement.currency}
+                  signed
+                  size="sm"
+                  tone={movement.direction === "incoming" ? "positive" : "plain"}
+                />
+              </Link>
             </li>
           ))}
         </ul>
@@ -385,17 +520,15 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
 
 function AccountList({
   accounts,
-  others,
   currency,
 }: {
   accounts: Account[];
-  others: NetWorth[];
   /** The one the tiles above report in — not whichever account sorts first. */
   currency: string;
 }) {
   if (accounts.length === 0) {
     return (
-      <Card className="flex flex-col items-start gap-3">
+      <Card glow="accent" className="flex flex-col items-start gap-3">
         <Landmark className="size-5 text-accent" aria-hidden />
         <div>
           <h2 className="font-medium">Todavía no declaraste ninguna cuenta</h2>
@@ -408,6 +541,8 @@ function AccountList({
       </Card>
     );
   }
+
+  const mixed = accounts.some((account) => account.currency !== currency);
 
   return (
     <section className="flex flex-col gap-3">
@@ -423,8 +558,22 @@ function AccountList({
             account.currency,
             account.category,
           );
+          const owed = account.category === "liability";
           return (
-            <Card key={account.id} className="flex items-center justify-between gap-4">
+            <Card
+              key={account.id}
+              glow={owed ? "accent" : "cyan"}
+              className="relative flex items-center justify-between gap-4 overflow-hidden"
+            >
+              {/* What kind of account this is, said in one hairline. */}
+              <span
+                aria-hidden
+                className={
+                  owed
+                    ? "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent"
+                    : "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan/50 to-transparent"
+                }
+              />
               <div className="min-w-0">
                 <p className="truncate font-medium">{account.name}</p>
                 <p className="mt-0.5 text-faint text-xs">{label}</p>
@@ -434,7 +583,7 @@ function AccountList({
           );
         })}
       </div>
-      {others.length > 0 ? (
+      {mixed ? (
         <p className="text-faint text-xs">
           Los totales de arriba cubren {currency} únicamente.
         </p>

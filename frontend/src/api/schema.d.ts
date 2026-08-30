@@ -1654,6 +1654,7 @@ export interface operations {
                 account_id?: string | null;
                 unassigned?: boolean | null;
                 origin?: components["schemas"]["TransactionOrigin"] | null;
+                direction?: components["schemas"]["MovementDirection"] | null;
                 search?: string | null;
                 merchant_id?: string | null;
                 category?: string | null;
@@ -1691,6 +1692,7 @@ export interface operations {
                 account_id?: string | null;
                 unassigned?: boolean | null;
                 origin?: components["schemas"]["TransactionOrigin"] | null;
+                direction?: components["schemas"]["MovementDirection"] | null;
                 search?: string | null;
                 merchant_id?: string | null;
                 category?: string | null;

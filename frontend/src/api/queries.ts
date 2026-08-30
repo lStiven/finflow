@@ -23,6 +23,9 @@ export type RegisteredInbox = components["schemas"]["RegisteredInboxResponse"];
 export type Summary = components["schemas"]["SpendingSummaryResponse"];
 export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
 export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
+export type Merchant =
+  components["schemas"]["personal_finance__contexts__merchant__presentation__http__router__MerchantResponse"];
+export type CategoryOption = components["schemas"]["CategoryResponse"];
 
 export const queryKeys = {
   accounts: ["accounts"] as const,
@@ -90,6 +93,7 @@ export type TransactionFilters = {
   merchant_id?: string;
   category?: string;
   origin?: "bank_alert" | "manual";
+  direction?: "incoming" | "outgoing";
   search?: string;
   from?: number;
   to?: number;
@@ -110,6 +114,17 @@ export const transactionsQuery = (filters: TransactionFilters = {}) =>
       ),
   });
 
+export const transactionQuery = (transactionId: string) =>
+  queryOptions({
+    queryKey: [...queryKeys.transactions, "detail", transactionId],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/transactions/{transaction_id}", {
+          params: { path: { transaction_id: transactionId } },
+        }),
+      ),
+  });
+
 export const summaryQuery = (
   groupBy: "month" | "category" | "merchant" | "account",
   filters: Omit<TransactionFilters, "limit" | "offset"> = {},
@@ -123,6 +138,13 @@ export const summaryQuery = (
         }),
       ),
   });
+
+/** Enough merchants to populate a filter, newest activity first. */
+export const merchantsForFilterQuery = queryOptions({
+  queryKey: [...queryKeys.merchants, "filter"],
+  queryFn: () => unwrap(api.GET("/merchants", { params: { query: { limit: 100 } } })),
+  staleTime: 5 * 60_000,
+});
 
 /* --------------------------------------------------------------- ingestion */
 
@@ -191,6 +213,64 @@ export function useCreateAccount(): UseMutationResult<
       client.invalidateQueries({ queryKey: queryKeys.accounts });
       client.invalidateQueries({ queryKey: queryKeys.transactions });
       client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+type EnterTransactionBody = components["schemas"]["EnterTransactionPayload"];
+
+/**
+ * Money that never emailed, entered by hand.
+ *
+ * Not retried anywhere — `main.tsx` turns retries off for every mutation
+ * because two POSTs are two expenses, and this is the endpoint that rule
+ * exists for. Success invalidates the balances as well as the list: a manual
+ * movement lands on an account and moves it.
+ */
+export function useCreateTransaction(): UseMutationResult<
+  Transaction,
+  Error,
+  EnterTransactionBody
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EnterTransactionBody) =>
+      unwrap(api.POST("/financial/transactions", { body })),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+type EditTransactionBody = components["schemas"]["EditTransactionPayload"];
+
+/**
+ * A correction. Every field is optional and only what is sent changes.
+ *
+ * `detach` is the one that is not a value but an instruction: it takes the
+ * movement off its account, which recomputes that balance. Sending
+ * `account_id` and `detach` together is contradictory, so the form offers one
+ * or the other and never both.
+ */
+export function useEditTransaction(
+  transactionId: string,
+): UseMutationResult<Transaction, Error, EditTransactionBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EditTransactionBody) =>
+      unwrap(
+        api.PATCH("/financial/transactions/{transaction_id}", {
+          params: { path: { transaction_id: transactionId } },
+          body,
+        }),
+      ),
+    onSuccess: (data) => {
+      client.setQueryData([...queryKeys.transactions, "detail", transactionId], data);
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
     },
   });
 }

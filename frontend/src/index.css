@@ -1,48 +1,47 @@
 @import "tailwindcss";
 
 /*
- * Dark first, and only dark for now.
+ * Dark first, and only dark.
  *
- * This is a money app opened on a phone, usually at night, usually for a few
- * seconds. A lot of negative space, and the number as the largest thing on
- * screen.
+ * The working rule is 80% calm, 20% neon: the ground and the surfaces stay
+ * sober, and colour appears only where somebody should look or act — a hover,
+ * a selection, an active state, a KPI. Everything glowing at once is the same
+ * as nothing glowing.
  *
- * Colour carries exactly two meanings and is spent nowhere else: money in,
- * money out. The categorical ramp below is the one exception, and it is
- * confined to charts and their legends — a slice needs to be told apart from
- * its neighbour, which is a different job from saying what a figure means. If
- * every row icon were tinted too, neither would read.
+ * Three hues carry meaning and nothing else does: magenta for what is primary
+ * and for money leaving, green for money arriving, cyan for the secondary and
+ * for chart data. The categorical ramp is the one exception and is confined to
+ * chart slices and their legends, where telling a wedge from its neighbour is
+ * a different job from saying what a figure means.
  */
 @theme {
-  --color-ink: oklch(0.08 0.009 285);
-  --color-surface: oklch(0.13 0.012 285);
-  --color-surface-raised: oklch(0.17 0.014 285);
-  --color-line: oklch(0.24 0.014 285);
+  --color-ink: #07080d;
+  --color-surface: #0d0f17;
+  --color-surface-raised: #141826;
+  --color-line: #1b1e2a;
 
   --color-text: oklch(0.97 0.003 285);
   --color-muted: oklch(0.68 0.012 285);
-  --color-faint: oklch(0.52 0.014 285);
+  --color-faint: oklch(0.5 0.014 285);
 
   --color-accent: oklch(0.64 0.24 349);
   --color-accent-ink: oklch(0.99 0.01 349);
   --color-accent-soft: oklch(0.32 0.12 349);
+  --color-violet: oklch(0.62 0.21 293);
+  --color-cyan: oklch(0.78 0.13 205);
 
   --color-incoming: oklch(0.78 0.18 158);
-  --color-outgoing: oklch(0.72 0.19 15);
+  --color-outgoing: oklch(0.66 0.25 8);
   --color-warn: oklch(0.82 0.15 85);
 
-  /*
-   * Chart slices, ordered by how far apart they read rather than by hue. Six
-   * because a donut with more than six wedges stops being readable — the
-   * summary is asked for its top five and everything else lands in one
-   * remainder.
-   */
   --color-chart-1: oklch(0.64 0.24 349);
   --color-chart-2: oklch(0.78 0.13 205);
   --color-chart-3: oklch(0.62 0.21 293);
   --color-chart-4: oklch(0.78 0.17 158);
   --color-chart-5: oklch(0.68 0.16 255);
   --color-chart-6: oklch(0.55 0.02 285);
+
+  --radius-card: 1.15rem;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
 
@@ -52,9 +51,9 @@
   --text-numeral--letter-spacing: -0.035em;
   --text-numeral--font-weight: 600;
 
-  --text-numeral-sm: 1.375rem;
+  --text-numeral-sm: 1.75rem;
   --text-numeral-sm--line-height: 1.1;
-  --text-numeral-sm--letter-spacing: -0.02em;
+  --text-numeral-sm--letter-spacing: -0.025em;
   --text-numeral-sm--font-weight: 600;
 }
 
@@ -85,5 +84,138 @@
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Charts draw themselves once, on arrival. Nothing here loops. */
+  @keyframes sweep {
+    from {
+      /*
+       * The dash length, not the offset. Offsetting by a whole pattern period
+       * is a no-op — the wedge travels round the ring and lands exactly where
+       * it began. Growing the visible dash from zero is what "sweeps in"
+       * actually means. Only `from` is named, so the resting value stays
+       * whatever the element already carries.
+       */
+      stroke-dasharray: 0 var(--sweep-circumference);
+    }
+  }
+
+  @keyframes trace {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  /*
+   * Movement is decoration; nothing depends on it being seen.
+   *
+   * `!important` is the point rather than a shortcut: the durations it has to
+   * beat are Tailwind utilities sitting on the elements themselves, and a
+   * plain declaration in a base layer loses to every one of them.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      /* biome-ignore-start lint/complexity/noImportantStyles: see above */
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+      /* biome-ignore-end lint/complexity/noImportantStyles: see above */
+    }
+  }
+}
+
+@layer components {
+  /*
+   * A resting surface. At rest it is almost flat — a hairline of light along
+   * the top edge, where a real surface would catch the room, and a contact
+   * shadow so faint it reads as a seam rather than a shadow. On a ground this
+   * dark, a heavier drop shadow reads as dirt.
+   */
+  .surface {
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.035),
+      0 1px 2px oklch(0 0 0 / 0.4);
+    transition:
+      box-shadow 190ms cubic-bezier(0.4, 0, 0.2, 1),
+      border-color 190ms cubic-bezier(0.4, 0, 0.2, 1),
+      transform 190ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /*
+   * The neon, and the only place it lives on a card. One card at a time,
+   * because it follows the pointer — which is what keeps 20% from becoming
+   * 100%.
+   */
+  .surface:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in oklch, var(--glow, var(--color-line)) 35%, transparent);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.07),
+      0 6px 16px -6px oklch(0 0 0 / 0.55),
+      0 0 26px -10px var(--glow, transparent);
+  }
+
+  /* A card that does nothing when clicked should not rise as if it would. */
+  .surface-static:hover {
+    transform: none;
+  }
+
+  .surface:active {
+    transform: translateY(0);
+    transition-duration: 70ms;
+  }
+
+  .glow-accent {
+    --glow: var(--color-accent);
+  }
+  .glow-cyan {
+    --glow: var(--color-cyan);
+  }
+  .glow-green {
+    --glow: var(--color-incoming);
+  }
+  .glow-violet {
+    --glow: var(--color-violet);
+  }
+
+  /*
+   * Depth behind the content without anything to look at: two very wide,
+   * very dilute pools, one magenta and one cyan, fixed so they do not travel
+   * with the scroll.
+   */
+  .aurora {
+    background-image:
+      radial-gradient(
+        60rem 40rem at 15% -10%,
+        oklch(0.64 0.24 349 / 0.06),
+        transparent 60%
+      ),
+      radial-gradient(
+        55rem 35rem at 95% 0%,
+        oklch(0.62 0.21 293 / 0.05),
+        transparent 60%
+      );
+    background-attachment: fixed;
+  }
+
+  .rise {
+    animation: rise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 }

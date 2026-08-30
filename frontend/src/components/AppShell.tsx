@@ -28,12 +28,12 @@ type Destination = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   /** Absent until the screen exists — rendered as pending, never as a dead link. */
-  to?: "/";
+  to?: "/" | "/transacciones";
 };
 
 const DESTINATIONS: Destination[] = [
   { label: "Resumen", icon: LayoutGrid, to: "/" },
-  { label: "Transacciones", icon: ArrowLeftRight },
+  { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
   { label: "Cuentas", icon: Wallet },
   { label: "Reportes", icon: BarChart3 },
   { label: "Comercios", icon: Store },
@@ -48,7 +48,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-dvh lg:flex">
       <Rail />
       <div className="min-w-0 flex-1">
-        <main className="mx-auto w-full max-w-6xl px-4 pt-6 pb-32 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
+        <main className="aurora rise mx-auto w-full max-w-6xl px-4 pt-6 pb-32 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
           {children}
         </main>
       </div>
@@ -84,10 +84,11 @@ function Rail() {
             <Link
               key={label}
               to={to}
-              activeOptions={{ exact: true }}
-              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text"
+              activeOptions={{ exact: to === "/" }}
+              className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-muted text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
               activeProps={{
-                className: "bg-accent-soft text-text font-medium",
+                className:
+                  "border-accent/25 bg-gradient-to-r from-accent/18 via-violet/12 to-transparent font-medium text-text",
                 "aria-current": "page",
               }}
             >
@@ -132,7 +133,7 @@ function Pending({
   icon: ComponentType<{ className?: string }>;
   compact?: boolean;
 }) {
-  const shared = "text-faint cursor-not-allowed";
+  const shared = "cursor-not-allowed text-faint/55";
   return (
     <button
       type="button"
@@ -150,7 +151,11 @@ function Pending({
     >
       <Icon className={compact ? "size-5" : "size-4 shrink-0"} />
       {label}
-      {compact ? null : <span className="ml-auto text-[0.625rem]">Pronto</span>}
+      {compact ? null : (
+        <span className="ml-auto text-[0.5625rem] text-faint/50 uppercase tracking-wider">
+          Pronto
+        </span>
+      )}
     </button>
   );
 }
@@ -165,22 +170,15 @@ function Bar() {
         <BarItem key={item.label} item={item} />
       ))}
 
-      {/*
-        The action the design anchors the bar on. It stays visible and
-        disabled while the screens it would open do not exist — removing it
-        would reflow the whole bar the moment they land.
-      */}
+      {/* The action the design anchors the bar on. */}
       <div className="relative w-16 shrink-0">
-        <button
-          type="button"
-          disabled
-          aria-disabled
-          title="Registrar un movimiento — próximamente"
-          className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent-soft text-muted"
+        <Link
+          to="/transacciones/nueva"
+          className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent text-accent-ink"
         >
           <Plus className="size-6" />
           <span className="sr-only">Registrar un movimiento</span>
-        </button>
+        </Link>
       </div>
 
       {BAR.slice(2).map((item) => (
@@ -198,7 +196,7 @@ function BarItem({ item }: { item: Destination }) {
   return (
     <Link
       to={to}
-      activeOptions={{ exact: true }}
+      activeOptions={{ exact: to === "/" }}
       className="flex flex-1 flex-col items-center gap-1 py-2 text-[0.6875rem] text-muted transition-colors"
       activeProps={{ className: "text-accent", "aria-current": "page" }}
     >

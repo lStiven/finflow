@@ -4,8 +4,11 @@ import {
   formatDate,
   formatDateTime,
   formatMonthKey,
+  fromLocalInput,
+  monthDayRange,
   monthRange,
   previousMonthKey,
+  toLocalInput,
 } from "@/lib/dates";
 
 describe("dates", () => {
@@ -66,5 +69,54 @@ describe("month buckets", () => {
   it("refuses a malformed key rather than inventing a range", () => {
     expect(monthRange("nope")).toBeNull();
     expect(monthRange("2026-13")).toBeNull();
+  });
+});
+
+describe("datetime-local round trip", () => {
+  /**
+   * The input carries no zone. Rendering in UTC and reading back as Bogota —
+   * or the reverse — moves every movement by five hours each time the edit
+   * form is opened and saved untouched.
+   */
+  it("renders an instant as the Bogota wall clock", () => {
+    // 2026-08-20T17:00:00Z is 12:00 in Bogota.
+    expect(toLocalInput(Date.UTC(2026, 7, 20, 17, 0, 0) / 1000)).toBe(
+      "2026-08-20T12:00",
+    );
+  });
+
+  it("reads a Bogota wall clock back to the same instant", () => {
+    expect(fromLocalInput("2026-08-20T12:00")).toBe(
+      Date.UTC(2026, 7, 20, 17, 0, 0) / 1000,
+    );
+  });
+
+  it("survives a round trip untouched", () => {
+    const instant = Date.UTC(2026, 0, 31, 3, 45, 0) / 1000;
+    expect(fromLocalInput(toLocalInput(instant))).toBe(instant);
+  });
+
+  it("refuses a malformed value rather than guessing an instant", () => {
+    expect(fromLocalInput("")).toBeNull();
+    expect(fromLocalInput("20/08/2026")).toBeNull();
+  });
+});
+
+describe("monthDayRange", () => {
+  it("spans the whole month, both ends inclusive", () => {
+    expect(monthDayRange("2026-08")).toEqual({
+      from: "2026-08-01",
+      to: "2026-08-31",
+    });
+  });
+
+  it("knows how long February is on a leap year", () => {
+    expect(monthDayRange("2028-02")?.to).toBe("2028-02-29");
+    expect(monthDayRange("2026-02")?.to).toBe("2026-02-28");
+  });
+
+  it("refuses a malformed key rather than inventing a month", () => {
+    expect(monthDayRange("2026-13")).toBeNull();
+    expect(monthDayRange("nope")).toBeNull();
   });
 });

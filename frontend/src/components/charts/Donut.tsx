@@ -6,6 +6,7 @@
  * layout engine, a tooltip system and a tick formatter that this never uses.
  */
 
+import type { CSSProperties } from "react";
 import { Money } from "@/components/Money";
 import { cn } from "@/lib/cn";
 
@@ -41,7 +42,7 @@ const DOT_COLOURS = [
   "bg-chart-6",
 ] as const;
 
-const RADIUS = 60;
+const RADIUS = 62;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 export function Donut({
@@ -62,11 +63,11 @@ export function Donut({
       <div className="relative shrink-0">
         <svg
           viewBox="0 0 160 160"
-          className="size-40"
+          className="size-44 sm:size-48"
           role="img"
           aria-label={`Gastos por categoría, total ${total} ${currency}`}
         >
-          <g transform="rotate(-90 80 80)" fill="none" strokeWidth="18">
+          <g transform="rotate(-90 80 80)" fill="none" strokeWidth="17">
             <circle cx="80" cy="80" r={RADIUS} className="stroke-surface-raised" />
             {slices.map((slice, index) => {
               const dash = slice.share * CIRCUMFERENCE;
@@ -81,6 +82,13 @@ export function Donut({
                   className={SLICE_COLOURS[index % SLICE_COLOURS.length]}
                   strokeDasharray={`${dash} ${CIRCUMFERENCE - dash}`}
                   strokeDashoffset={offset}
+                  style={
+                    {
+                      // Each wedge grows from nothing, once, in ring order.
+                      "--sweep-circumference": CIRCUMFERENCE,
+                      animation: `sweep 620ms cubic-bezier(0.16, 1, 0.3, 1) ${index * 70}ms both`,
+                    } as CSSProperties
+                  }
                 />
               );
             })}

@@ -2417,6 +2417,22 @@
           },
           {
             "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MovementDirection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
             "name": "search",
             "required": false,
             "schema": {
@@ -2562,6 +2578,22 @@
                 }
               ],
               "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MovementDirection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
             }
           },
           {

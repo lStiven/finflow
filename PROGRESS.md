@@ -51,12 +51,12 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-29 — onboarding state, backend half. `GET /ingestion/setup` answers
-  which of the four steps of connecting a bank are done and what is next,
-  derived on every call from two milestones now written on the inbox record
-  (`forwarding_confirmed_at`, `first_accepted_at`). Confirming a Gmail
-  forwarding request is attributed to the alias it was addressed to and
-  refused for aliases nobody registered. `just prepare` green (810 tests).
+- 2026-08-30 — the interface got its art direction: ground at `#07080D`,
+  cards at `#0D0F17` on an `#1B1E2A` hairline, and neon spent only on hover,
+  selection and the KPIs. Figures count up once on arrival, the ring sweeps
+  in, KPI tiles carry a monthly sparkline and open the movements behind them,
+  and the sidebar's active item is a magenta-to-violet wash. Backend
+  `just prepare` green (820 tests), frontend gate green (47 tests).
 
 ## Next steps
 
@@ -81,14 +81,15 @@ rest of the frontend — see **Next steps**.
       3. **A spending cap on the LLM** (see the standalone item below). The
          cheapest of the three and the only one that costs money while it is
          missing.
-      4. **The rest of the frontend.** The foundation is in (`just web`);
-         what is left is screens, not plumbing: movements with their filters,
-         the connect-your-bank wizard (four steps against
-         `GET /ingestion/setup`, polled while it is open, not blocking the
-         rest of the app — a persistent bar in the shell until `ready`),
-         merchant review, the spending summary, and manual entry. `docs/frontend-integration.md` is still the contract
-         each of them has to honour. Nothing is deployed: no hosting is
-         provisioned and `API_CORS_ORIGINS` names only localhost.
+      4. **The rest of the frontend.** The foundation is in (`just web`), and
+         the dashboard and the whole Transacciones surface are done. What is
+         left is screens, not plumbing: accounts, the connect-your-bank wizard
+         (four steps against `GET /ingestion/setup`, polled while it is open,
+         not blocking the rest of the app — a persistent bar in the shell
+         until `ready`), merchant review, and the spending summary.
+         `docs/frontend-integration.md` is still the contract each of them has
+         to honour. Nothing is deployed: no hosting is provisioned and
+         `API_CORS_ORIGINS` names only localhost.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -786,6 +787,63 @@ rest of the frontend — see **Next steps**.
 
 
 ### Frontend (2026-08-29)
+
+- **80% calm, 20% neon.** The ground and the surfaces stay sober; colour
+  appears only where somebody should look or act. Three hues carry meaning —
+  magenta for what is primary and for money leaving, green for money
+  arriving, cyan for the secondary and for chart data — and the glow lives on
+  `:hover`, which is what keeps one card lit at a time rather than all of
+  them. At rest a card is nearly flat: a hairline of light on its top edge and
+  a contact shadow that reads as a seam, because a heavy drop shadow on a
+  ground this dark reads as dirt.
+
+- **A figure may count up; a figure at rest may not be a float.**
+  `CountUpMoney` interpolates through a float for the frames in between and
+  only those — the moment it lands, and for anyone who asked for reduced
+  motion, it renders the original decimal string through `Money`. It also
+  seeds its state at zero rather than null: the effect runs after the first
+  paint, so starting from the real amount would show the final figure, snap
+  to zero and count up to it again.
+
+- **A KPI that opens a list must bound it the same way.** The tiles report
+  month to date, so the link they carry passes that month's date range.
+  Without it, tapping "Gastos" showed every expense ever recorded beneath a
+  figure covering one month — two numbers that cannot both be right.
+
+- **Elevation on dark is a highlight, not a shadow.** A darker smudge under
+  a dark card reads as dirt, so what separates a surface here is the hairline
+  of light along its top edge where a real one would catch the room; the
+  shadow underneath only anchors it. Two `.surface` rules carry it, and the
+  lift is a separate class — only what can be clicked moves, because a static
+  tile that reacts invites a click that does nothing. `prefers-reduced-motion`
+  turns all of it off, and its `!important` is deliberate: the durations it
+  has to beat are Tailwind utilities on the elements themselves, which a plain
+  base-layer declaration loses to.
+
+- **The correction body is a pure function with its own tests**
+  (`lib/correction.ts`). Three rules of `PATCH /financial/transactions/{id}`
+  are invisible in the payload's shape and each one had already produced a
+  bug: amount and currency must travel together (either alone is a 422), the
+  empty string clears a note while `null` means "leave it", and `account_id`
+  and `detach` are refused together. Building the body inline in the form is
+  what let those slip; it is testable now.
+
+- **The transaction filters live in the URL, not in state.** A filtered list
+  is something people send to themselves and come back to, and the back
+  button has to undo a filter rather than leave the screen — so `apply()`
+  pushes history instead of replacing it, and only pagination and the search
+  box behave differently. It also lets the route loader fetch exactly what
+  will be rendered. The cost is that every filter is a navigation.
+
+- **A correction sends only what changed, and compares fields as rendered.**
+  Every field on `PATCH /financial/transactions/{id}` is optional, so posting
+  the whole form back would rewrite what nobody touched — and would send
+  `account_id` beside `detach`, which contradict each other. The subtle half
+  is `occurred_at`: the `datetime-local` input holds minutes, so a movement
+  recorded at 12:30:45 reads back as 12:30. Comparing instants would send a
+  45-second "correction" every time the form was opened for something else,
+  permanently splitting the movement from its `stated` record. The comparison
+  is therefore string-against-string, on what the field actually shows.
 
 - **Charts may use floats; nothing a person reads may.** `money.ts` refuses
   arithmetic on purpose — a float loses cents and this is a ledger. The
