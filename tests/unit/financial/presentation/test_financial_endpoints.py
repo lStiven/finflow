@@ -579,6 +579,40 @@ def test_transactions_can_be_filtered_down_to_the_ones_waiting(
     assert waiting["transactions"][0]["counterparty"] == "ALMUERZO"
 
 
+def test_transactions_can_be_filtered_by_direction(client: TestClient) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="50000")
+    _enter(client, direction="incoming", counterparty="PAGO NOMINA", amount="20000")
+
+    incoming = client.get("/financial/transactions?direction=incoming").json()
+    outgoing = client.get("/financial/transactions?direction=outgoing").json()
+
+    assert incoming["total"] == 1
+    assert incoming["transactions"][0]["counterparty"] == "PAGO NOMINA"
+    assert outgoing["total"] == 1
+    assert outgoing["transactions"][0]["counterparty"] == "TIENDAS ARA"
+
+
+def test_the_summary_takes_direction_too(client: TestClient) -> None:
+    # The list and the summary share one filter set so a bucket can be opened
+    # as the movements behind it. A filter on only one of them breaks that.
+    _enter(client, counterparty="TIENDAS ARA", amount="50000")
+    _enter(client, direction="incoming", counterparty="PAGO NOMINA", amount="20000")
+
+    summary = client.get(
+        "/financial/summary",
+        params={"direction": "incoming"},
+    ).json()
+
+    assert summary["totals"][0]["incoming"] == "20000"
+    assert summary["totals"][0]["outgoing"] == "0"
+
+
+def test_a_direction_that_is_not_one_is_refused(client: TestClient) -> None:
+    response = client.get("/financial/transactions?direction=sideways")
+
+    assert response.status_code == 422
+
+
 def test_transactions_can_be_searched_by_what_the_bank_wrote(
     client: TestClient,
 ) -> None:

@@ -128,6 +128,11 @@ class MovementFilter:
     # declared none.
     unassigned: bool | None = None
     origin: TransactionOrigin | None = None
+    # Money in or money out. Its own filter rather than a category, because
+    # direction is a property of the movement while a category is Merchant's
+    # answer about the counterparty — `income` the category and `incoming` the
+    # direction disagree on a refund.
+    direction: MovementDirection | None = None
     search: str | None = None
     # The merchant behind the counterparty text, and the kind of spending it
     # is. Both are Merchant's answer, joined on the way through, so a
@@ -467,6 +472,11 @@ def _narrow(
 
     if criteria.origin is not None:
         found = [movement for movement in found if movement.origin is criteria.origin]
+
+    if criteria.direction is not None:
+        found = [
+            movement for movement in found if movement.direction is criteria.direction
+        ]
 
     if criteria.since is not None:
         floor = criteria.since.as_epoch_seconds()
