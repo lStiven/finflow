@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from personal_finance.contexts.ingestion.domain.entities import UserInbox
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 if TYPE_CHECKING:
@@ -18,6 +18,11 @@ INBOX_PARTITION_KEY = "address"
 USER_ID_ATTRIBUTE = "user_id"
 ALLOWED_ADDRESSES = "allowed_addresses"
 ALLOWED_DOMAINS = "allowed_domains"
+# Epoch seconds, written once each and never cleared. Absent on every inbox
+# registered before they existed, which reads back as "not yet" — the same
+# answer as a user who has genuinely not got there.
+FORWARDING_CONFIRMED_AT = "forwarding_confirmed_at"
+FIRST_ACCEPTED_AT = "first_accepted_at"
 
 # Listing one user's inboxes is a secondary access path: the table is keyed by
 # address because that is what an arriving email carries. A scan would answer
@@ -44,24 +49,13 @@ def _read_string_list(item: dict[str, AttributeValueTypeDef], key: str) -> list[
     return values
 
 
-def to_item(inbox: UserInbox) -> dict[str, AttributeValueTypeDef]:
-    policy = inbox.sender_policy
+def _read_time(
+    item: dict[str, AttributeValueTypeDef],
+    key: str,
+) -> PosixTime | None:
+    raw = item.get(key, {}).get("N")
 
-    return {
-        INBOX_PARTITION_KEY: {"S": inbox.address.value},
-        USER_ID_ATTRIBUTE: {"S": str(inbox.user_id.value)},
-        ALLOWED_ADDRESSES: {
-            "L": [
-                {"S": value}
-                for value in sorted(
-                    address.value for address in policy.allowed_addresses
-                )
-            ],
-        },
-        ALLOWED_DOMAINS: {
-            "L": [{"S": domain} for domain in sorted(policy.allowed_domains)],
-        },
-    }
+    return PosixTime.from_epoch_seconds(int(raw)) if raw else None
 
 
 def to_entity(item: dict[str, AttributeValueTypeDef]) -> UserInbox:
@@ -83,6 +77,8 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> UserInbox:
             ),
             allowed_domains=frozenset(_read_string_list(item, ALLOWED_DOMAINS)),
         ),
+        forwarding_confirmed_at=_read_time(item, FORWARDING_CONFIRMED_AT),
+        first_accepted_at=_read_time(item, FIRST_ACCEPTED_AT),
     )
 
 
@@ -142,4 +138,90 @@ class DynamoDBUserInboxRepository:
                 return inboxes
 
     def save(self, inbox: UserInbox) -> None:
-        self._client.put_item(TableName=self._table_name, Item=to_item(inbox))
+        """Write the fields a user (or their registration) owns, and only
+        those.
+
+        An update rather than a `put_item`: the milestones live on this same
+        item and are written by the ingest worker, so replacing the record
+        wholesale here would let somebody editing their approved senders
+        erase a forwarding confirmation that landed in between — a checkmark
+        that never comes back, because Google does not send the mail twice.
+        """
+        policy = inbox.sender_policy
+        self._client.update_item(
+            TableName=self._table_name,
+            Key={INBOX_PARTITION_KEY: {"S": inbox.address.value}},
+            UpdateExpression=(
+                f"SET {USER_ID_ATTRIBUTE} = :user_id, "
+                f"{ALLOWED_ADDRESSES} = :addresses, "
+                f"{ALLOWED_DOMAINS} = :domains"
+            ),
+            ExpressionAttributeValues={
+                ":user_id": {"S": str(inbox.user_id.value)},
+                ":addresses": {
+                    "L": [
+                        {"S": value}
+                        for value in sorted(
+                            address.value for address in policy.allowed_addresses
+                        )
+                    ],
+                },
+                ":domains": {
+                    "L": [{"S": domain} for domain in sorted(policy.allowed_domains)],
+                },
+            },
+        )
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        return self._mark_once(
+            address=address,
+            attribute=FORWARDING_CONFIRMED_AT,
+            at=confirmed_at,
+        )
+
+    def mark_first_accepted(
+        self,
+        *,
+        address: EmailAddress,
+        accepted_at: PosixTime,
+    ) -> bool:
+        return self._mark_once(
+            address=address,
+            attribute=FIRST_ACCEPTED_AT,
+            at=accepted_at,
+        )
+
+    def _mark_once(
+        self,
+        *,
+        address: EmailAddress,
+        attribute: str,
+        at: PosixTime,
+    ) -> bool:
+        """Set one milestone without disturbing anything else on the item.
+
+        `if_not_exists` rather than a plain assignment: mail is delivered at
+        least once, so the same confirmation may be handled twice, and the
+        honest answer to "when did this happen" is the first time, not the
+        retry. The condition is what keeps an alias nobody registered from
+        being conjured into an inbox by a write.
+        """
+        try:
+            self._client.update_item(
+                TableName=self._table_name,
+                Key={INBOX_PARTITION_KEY: {"S": address.value}},
+                UpdateExpression=(f"SET {attribute} = if_not_exists({attribute}, :at)"),
+                ConditionExpression=f"attribute_exists({INBOX_PARTITION_KEY})",
+                ExpressionAttributeValues={
+                    ":at": {"N": str(at.as_epoch_seconds())},
+                },
+            )
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+        return True

@@ -293,6 +293,30 @@
           "response": []
         },
         {
+          "name": "Setup progress",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ingestion/setup",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ingestion",
+                "setup"
+              ]
+            },
+            "description": "How far the authenticated caller got connecting their bank, for the screen that walks them through it. Four steps — `address_assigned`, `senders_approved`, `forwarding_confirmed`, `first_alert` — each with `done` and, for the two that are events rather than states, `at` (epoch seconds). `current` names the step to point at, or is null once there is nothing left; `ready` says expenses are arriving on their own right now, which does not require a Gmail confirmation — somebody forwarding each alert by hand is connected too. `unapproved_senders` names whoever is being turned away by the allow-list, the one failure that looks exactly like silence from a screen; it is empty once `ready`.\n\nNothing here is stored progress: there is no endpoint to advance a step. The state is derived from the inbox record on every call, so it is the same in every browser and cannot drift from what the mailbox did. Two of the four steps close in a worker — Google confirms a forwarding request by mailing an address only this deployment can read — which is why this is cheap enough to poll while a user watches the screen."
+          },
+          "response": []
+        },
+        {
           "name": "Local testing",
           "item": [
             {

@@ -48,6 +48,13 @@ class UserInbox(ValueObject):
     user_id: UserId
     address: EmailAddress
     sender_policy: AuthorizedSenderPolicy
+    # Two milestones of connecting a bank, kept here rather than derived from
+    # the notification table: answering "is this account receiving expenses
+    # yet?" is a question a screen asks on a timer, and reading one item is
+    # what makes that affordable. Both are written once and never cleared —
+    # they record that something happened, not that it is still true.
+    forwarding_confirmed_at: PosixTime | None = None
+    first_accepted_at: PosixTime | None = None
 
 
 @dataclass(slots=True)

@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import dataclasses
 
 import pytest
 
@@ -6,6 +7,7 @@ from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
 )
 from personal_finance.contexts.ingestion.application.ingest_handlers import (
+    ConfirmForwardingUseCase,
     PollIngestMailboxUseCase,
 )
 from personal_finance.contexts.ingestion.application.messages import (
@@ -71,7 +73,51 @@ class InMemoryUserInboxRepository:
         return [inbox for inbox in self.inboxes.values() if inbox.user_id == user_id]
 
     def save(self, inbox: UserInbox) -> None:
-        self.inboxes[inbox.address] = inbox
+        # Like the real one: the milestones belong to another writer, and
+        # this must not carry a stale copy of them back over the record.
+        stored = self.inboxes.get(inbox.address)
+        self.inboxes[inbox.address] = dataclasses.replace(
+            inbox,
+            forwarding_confirmed_at=(
+                stored.forwarding_confirmed_at if stored else None
+            ),
+            first_accepted_at=stored.first_accepted_at if stored else None,
+        )
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, forwarding_confirmed_at=confirmed_at)
+
+    def mark_first_accepted(
+        self,
+        *,
+        address: EmailAddress,
+        accepted_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, first_accepted_at=accepted_at)
+
+    def _mark(self, address: EmailAddress, **milestone: PosixTime) -> bool:
+        inbox = self.inboxes.get(address)
+
+        if inbox is None:
+            return False
+
+        # First write wins, as `if_not_exists` does in DynamoDB.
+        already_set = {
+            field: value
+            for field, value in milestone.items()
+            if getattr(inbox, field) is not None
+        }
+        self.inboxes[address] = dataclasses.replace(
+            inbox,
+            **{k: v for k, v in milestone.items() if k not in already_set},
+        )
+
+        return True
 
 
 class InMemoryBankNotificationRepository:
@@ -153,18 +199,26 @@ def _make(
     inbox: UserInbox | None = None,
     queue: NullQueuePublisher | None = None,
     confirmer: FakeConfirmer | None = None,
+    inboxes: InMemoryUserInboxRepository | None = None,
 ) -> tuple[PollIngestMailboxUseCase, NullQueuePublisher]:
     queue = queue if queue is not None else NullQueuePublisher()
-    inboxes = InMemoryUserInboxRepository(inbox if inbox is not None else _inbox())
+    inboxes = (
+        inboxes
+        if inboxes is not None
+        else InMemoryUserInboxRepository(inbox if inbox is not None else _inbox())
+    )
 
     use_case = PollIngestMailboxUseCase(
-        forwarding_confirmer=confirmer if confirmer is not None else FakeConfirmer(),
         reader=reader,
         receive_use_case=ReceiveBankNotificationUseCase(
             repository=InMemoryBankNotificationRepository(),
             inbox_repository=inboxes,
             queue_publisher=queue,
             event_publisher=NullEventPublisher(),
+        ),
+        confirm_use_case=ConfirmForwardingUseCase(
+            inbox_repository=inboxes,
+            confirmer=confirmer if confirmer is not None else FakeConfirmer(),
         ),
     )
 
@@ -418,3 +472,141 @@ def test_unreadable_mail_does_not_abandon_the_rest_of_the_batch(
     assert len(queue.enqueued) == 1
     # The poison message alone stays unacknowledged.
     assert [email.message_id.value for email in reader.acked] == ["bank-1"]
+
+
+def test_a_confirmation_marks_the_inbox_it_was_addressed_to() -> None:
+    """The whole reason this is recorded: the user's own screen has no other
+    way to learn that the step it is waiting on just closed.
+    """
+    inboxes = InMemoryUserInboxRepository(_inbox())
+    email = _confirmation_email()
+    use_case, _ = _make(FakeReader(email), inboxes=inboxes)
+
+    use_case.execute()
+
+    confirmed = inboxes.inboxes[EmailAddress(ALIAS)].forwarding_confirmed_at
+    assert confirmed == email.received_at
+
+
+def test_a_refused_link_marks_nothing() -> None:
+    inboxes = InMemoryUserInboxRepository(_inbox())
+    use_case, _ = _make(
+        FakeReader(_confirmation_email()),
+        inboxes=inboxes,
+        confirmer=FakeConfirmer(accepts=False),
+    )
+
+    use_case.execute()
+
+    assert inboxes.inboxes[EmailAddress(ALIAS)].forwarding_confirmed_at is None
+
+
+def test_a_forwarding_request_for_an_unregistered_alias_is_never_followed() -> None:
+    """Confirming it would route a stranger's mail into the one mailbox this
+    deployment reads, on the say-so of an email. Acknowledged so it does not
+    come round every poll, and counted apart so a trickle of them is visible.
+    """
+    stranger = InboundEmail(
+        recipient=EmailAddress("finflowingest+nobody@gmail.com"),
+        sender=EmailAddress("forwarding-noreply@google.com"),
+        message_id=EmailMessageId("google-2"),
+        subject="Confirmación de reenvío",
+        raw_content=f"confirma la solicitud:\n{_CONFIRMATION_URL}\n",
+        received_at=PosixTime.now(),
+    )
+    reader = FakeReader(stranger)
+    confirmer = FakeConfirmer()
+    use_case, _ = _make(reader, confirmer=confirmer)
+
+    result = use_case.execute()
+
+    assert confirmer.confirmed == []
+    assert result.unclaimed_confirmations == 1
+    assert result.confirmations == 0
+    assert len(reader.acked) == 1
+
+
+def test_the_first_accepted_alert_marks_the_inbox() -> None:
+    inboxes = InMemoryUserInboxRepository(_inbox())
+    first = _email(message_id="m1")
+    reader = FakeReader(first, _email(message_id="m2"))
+    use_case, _ = _make(reader, inboxes=inboxes)
+
+    use_case.execute()
+
+    # The earliest one, not the last handled: this is when the account
+    # started receiving expenses.
+    assert inboxes.inboxes[EmailAddress(ALIAS)].first_accepted_at == first.received_at
+
+
+def test_mail_from_an_unapproved_sender_does_not_mark_the_inbox() -> None:
+    """It arrived and was thrown away. Saying the setup finished on the
+    strength of that is exactly the lie this flag exists to avoid.
+    """
+    inboxes = InMemoryUserInboxRepository(_inbox())
+    reader = FakeReader(_email(message_id="m1", sender="someone@else.com"))
+    use_case, _ = _make(reader, inboxes=inboxes)
+
+    use_case.execute()
+
+    assert inboxes.inboxes[EmailAddress(ALIAS)].first_accepted_at is None
+
+
+class ExplodingInboxRepository(InMemoryUserInboxRepository):
+    """Storage is briefly down for the first lookup of the poll — which is the
+    confirmation's, since it is first in the batch.
+    """
+
+    def __init__(self, *inboxes: UserInbox) -> None:
+        super().__init__(*inboxes)
+        self._calls = 0
+
+    def find_by_address(self, address: EmailAddress) -> UserInbox | None:
+        self._calls += 1
+
+        if self._calls == 1:
+            raise RuntimeError("dynamodb is down")
+
+        return super().find_by_address(address)
+
+
+def test_a_confirmation_that_cannot_be_looked_up_spares_the_rest_of_the_batch() -> None:
+    """The bank mail beside it was already recorded; abandoning the whole
+    batch would leave it unacknowledged and re-read next poll.
+    """
+    reader = FakeReader(_confirmation_email(), _email(message_id="bank-1"))
+    use_case, queue = _make(reader, inboxes=ExplodingInboxRepository(_inbox()))
+
+    result = use_case.execute()
+
+    assert result.failed == 1
+    assert result.accepted == 1
+    assert len(queue.enqueued) == 1
+    # Only the message that was handled: the confirmation stays looking new.
+    assert [email.message_id.value for email in reader.acked] == ["bank-1"]
+
+
+class UnmarkableInboxRepository(InMemoryUserInboxRepository):
+    """The link was followed and accepted; recording it fails."""
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        raise RuntimeError("dynamodb is down")
+
+
+def test_a_confirmation_whose_mark_fails_is_still_acknowledged() -> None:
+    """The link is spent by now — Google refuses it a second time and never
+    sends the mail again — so retrying could only lose the confirmation too.
+    """
+    reader = FakeReader(_confirmation_email())
+    use_case, _ = _make(reader, inboxes=UnmarkableInboxRepository(_inbox()))
+
+    result = use_case.execute()
+
+    assert result.confirmations == 1
+    assert result.failed == 0
+    assert len(reader.acked) == 1

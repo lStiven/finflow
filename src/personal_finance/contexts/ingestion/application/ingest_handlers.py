@@ -25,10 +25,13 @@ from personal_finance.contexts.ingestion.application.ports import (
     ForwardingConfirmer,
     InboundEmail,
     IngestMailboxReader,
+    UserInboxRepository,
 )
 from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
     ForwardingConfirmation,
 )
+from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
+from personal_finance.shared.domain.value_objects import PosixTime
 
 
 _logger = logging.getLogger(__name__)
@@ -42,6 +45,110 @@ class ConfirmationOutcome(enum.Enum):
     REFUSED = "refused"
     # Never got an answer. Worth another poll.
     FAILED = "failed"
+    # Addressed to an alias no user owns. Nothing was fetched.
+    UNCLAIMED = "unclaimed"
+
+
+class ConfirmForwardingUseCase:
+    """Finishes a Gmail forwarding request aimed at one user's alias.
+
+    The order matters and is the point of this being a use case rather than a
+    call to the confirmer: the alias is resolved to a registered inbox
+    **before** the link is followed. An alias nobody owns is not ours to set
+    up — confirming it would route a stranger's mail into the one mailbox
+    this deployment reads, on the say-so of an email. It is the same rule the
+    intake path already applies to bank alerts, which records nothing for a
+    recipient it cannot attribute.
+
+    Confirming also leaves a mark on the inbox, which is what lets the user's
+    own screen say the step is done. Without it the fact lived only in a log
+    line nobody but the operator can read.
+    """
+
+    def __init__(
+        self,
+        *,
+        inbox_repository: UserInboxRepository,
+        confirmer: ForwardingConfirmer,
+    ) -> None:
+        self._inbox_repository = inbox_repository
+        self._confirmer = confirmer
+
+    def execute(
+        self,
+        *,
+        recipient: EmailAddress,
+        confirmation: ForwardingConfirmation,
+        confirmed_at: PosixTime,
+    ) -> ConfirmationOutcome:
+        """Follow one link, and never let it sink the batch that called it.
+
+        Four answers, not two. A link Google turned down is finished and must
+        be acknowledged; one that could not be reached is not finished and
+        must not be; one for an unknown alias was never ours to follow.
+        Reporting any of those as success is what would make the counter an
+        operator reads say a setup completed when it did not.
+        """
+        inbox = self._inbox_repository.find_by_address(recipient)
+
+        if inbox is None:
+            _logger.warning(
+                "ignoring a forwarding request for an unregistered alias",
+                extra={"recipient": recipient.value},
+            )
+
+            return ConfirmationOutcome.UNCLAIMED
+
+        try:
+            accepted = self._confirmer.confirm(confirmation)
+        except Exception:
+            # The caller leaves the mail unacknowledged, so the next poll
+            # finds it still new: the link stays valid for days and a network
+            # blip should cost a retry, not somebody's setup.
+            _logger.exception(
+                "failed to confirm a forwarding request",
+                extra={"recipient": recipient.value},
+            )
+
+            return ConfirmationOutcome.FAILED
+
+        if not accepted:
+            # Acknowledged even so: an expired or already-used link answers
+            # this way every time, and retrying it forever would be noise.
+            _logger.warning(
+                "forwarding confirmation was refused",
+                extra={"recipient": recipient.value},
+            )
+
+            return ConfirmationOutcome.REFUSED
+
+        # After the fetch, not before: the step this records is "Google
+        # accepted", and a mark written on the way there would be a checkmark
+        # for something that had not happened yet.
+        #
+        # Guarded, and still CONFIRMED if it fails. The link has been spent by
+        # now — Google refuses it a second time and never sends the mail
+        # again — so retrying the message could only lose the confirmation as
+        # well as the mark. What is lost is a checkmark, not the forwarding
+        # rule itself: it is set up, and the first alert that arrives closes
+        # the step that actually decides `ready`.
+        try:
+            self._inbox_repository.mark_forwarding_confirmed(
+                address=inbox.address,
+                confirmed_at=confirmed_at,
+            )
+        except Exception:
+            _logger.exception(
+                "forwarding was confirmed but the inbox could not be marked",
+                extra={"recipient": recipient.value},
+            )
+
+        _logger.info(
+            "forwarding confirmed",
+            extra={"recipient": recipient.value},
+        )
+
+        return ConfirmationOutcome.CONFIRMED
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -64,6 +171,10 @@ class PollResult:
     # than retried, but counted on their own: reporting them as confirmations
     # would tell an operator that somebody's setup finished when it did not.
     refused_confirmations: int = 0
+    # Forwarding requests aimed at an alias no user owns: never followed,
+    # acknowledged so they do not come round again. A steady trickle here is
+    # somebody trying to route their mail through this deployment.
+    unclaimed_confirmations: int = 0
 
 
 class PollIngestMailboxUseCase:
@@ -84,11 +195,11 @@ class PollIngestMailboxUseCase:
         *,
         reader: IngestMailboxReader,
         receive_use_case: ReceiveBankNotificationUseCase,
-        forwarding_confirmer: ForwardingConfirmer,
+        confirm_use_case: ConfirmForwardingUseCase,
     ) -> None:
         self._reader = reader
         self._receive_use_case = receive_use_case
-        self._forwarding_confirmer = forwarding_confirmer
+        self._confirm_use_case = confirm_use_case
 
     def execute(self) -> PollResult:
         emails = self._reader.fetch_new()
@@ -98,6 +209,7 @@ class PollIngestMailboxUseCase:
         failed = 0
         confirmations = 0
         refused_confirmations = 0
+        unclaimed_confirmations = 0
         handled: list[InboundEmail] = []
 
         for email in emails:
@@ -122,13 +234,38 @@ class PollIngestMailboxUseCase:
                 continue
 
             if confirmation is not None:
-                outcome = self._confirm(confirmation, email)
+                try:
+                    outcome = self._confirm_use_case.execute(
+                        recipient=email.recipient,
+                        confirmation=confirmation,
+                        # When the request landed, not when this poll got
+                        # round to it: the poll interval is an implementation
+                        # detail and has no business shifting the time a user
+                        # is shown.
+                        confirmed_at=email.received_at,
+                    )
+                except Exception:
+                    # Guarded like the bank path beside it. That use case
+                    # swallows a failure of its own network call, but it also
+                    # reads storage, and one transient DynamoDB error must not
+                    # abandon a batch whose other messages are already
+                    # recorded and still waiting to be acknowledged.
+                    _logger.exception(
+                        "failed to handle a forwarding request; left unacknowledged",
+                        extra={"message_id": email.message_id.value},
+                    )
+                    failed += 1
+
+                    continue
 
                 if outcome is ConfirmationOutcome.CONFIRMED:
                     confirmations += 1
                     handled.append(email)
                 elif outcome is ConfirmationOutcome.REFUSED:
                     refused_confirmations += 1
+                    handled.append(email)
+                elif outcome is ConfirmationOutcome.UNCLAIMED:
+                    unclaimed_confirmations += 1
                     handled.append(email)
                 else:
                     failed += 1
@@ -178,46 +315,5 @@ class PollIngestMailboxUseCase:
             failed=failed,
             confirmations=confirmations,
             refused_confirmations=refused_confirmations,
+            unclaimed_confirmations=unclaimed_confirmations,
         )
-
-    def _confirm(
-        self,
-        confirmation: ForwardingConfirmation,
-        email: InboundEmail,
-    ) -> ConfirmationOutcome:
-        """Follow one confirmation link, and never let it sink the batch.
-
-        Three answers, not two: a link Google turned down is finished and must
-        be acknowledged, while one that could not be reached is not finished
-        and must not be. Reporting both as success is what would make the
-        counter an operator reads say a setup completed when it did not.
-        """
-        try:
-            accepted = self._forwarding_confirmer.confirm(confirmation)
-        except Exception:
-            # Unacknowledged, so the next poll finds the mail still new: the
-            # link stays valid for days and a network blip should cost a
-            # retry, not somebody's setup.
-            _logger.exception(
-                "failed to confirm a forwarding request; left unacknowledged",
-                extra={"message_id": email.message_id.value},
-            )
-
-            return ConfirmationOutcome.FAILED
-
-        if accepted:
-            _logger.info(
-                "forwarding confirmed",
-                extra={"message_id": email.message_id.value},
-            )
-
-            return ConfirmationOutcome.CONFIRMED
-
-        # Acknowledged even so: an expired or already-used link answers this
-        # way every time, and retrying it forever would be noise.
-        _logger.warning(
-            "forwarding confirmation was refused",
-            extra={"message_id": email.message_id.value},
-        )
-
-        return ConfirmationOutcome.REFUSED

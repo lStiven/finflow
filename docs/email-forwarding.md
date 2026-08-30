@@ -90,7 +90,15 @@ igual —:
 2. **Agregar una dirección de reenvío** → pega la dirección del paso 2.
 3. Gmail manda una solicitud de confirmación **a esa dirección**. Ya no hay
    que hacer nada: el `ingest worker` la reconoce y la confirma solo, en su
-   siguiente pasada. El log lo cuenta aparte, como `confirmations=1`.
+   siguiente pasada. El log lo cuenta aparte, como `confirmations=1`, y la
+   marca queda en el inbox del usuario — que es lo que hace que su propia
+   pantalla se entere (ver el paso 5).
+
+   Solo se sigue el enlace si el destinatario es un alias **registrado**.
+   Una solicitud dirigida a `finflowingest+loquesea@gmail.com` no se pide
+   nunca: confirmarla enrutaría el correo de un tercero hacia el único buzón
+   que este despliegue lee, porque lo pidió un correo. Se descarta y se cuenta
+   como `unclaimed_confirmations`.
 
    Si el enlace ya venció o alguien lo usó, Google lo rechaza: eso sale como
    `refused_confirmations=1` y **no** como una confirmación, porque el
@@ -112,6 +120,65 @@ igual —:
 A partir de ahí, cada alerta nueva se copia sola. El `ingest worker` la
 recoge en su siguiente pasada (por defecto, cada
 `INGESTION_INGEST_POLL_INTERVAL_SECONDS` segundos — 60 por defecto).
+
+## 5. Saber en qué paso va el usuario
+
+```
+GET /ingestion/setup
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "address": "finflowingest+8f3c1a2b9e7d4f0a8b6c5d4e3f2a1b0c@gmail.com",
+  "steps": [
+    { "key": "address_assigned",    "done": true,  "at": null },
+    { "key": "senders_approved",    "done": true,  "at": null },
+    { "key": "forwarding_confirmed","done": true,  "at": 1756400000 },
+    { "key": "first_alert",         "done": false, "at": null }
+  ],
+  "current": "first_alert",
+  "ready": false,
+  "unapproved_senders": []
+}
+```
+
+Existe porque **dos de los cuatro pasos terminan donde el usuario no ve
+nada**: Google confirma mandando un correo a un buzón que solo lee este
+despliegue, y la primera alerta la recoge un worker. Antes ese hecho vivía
+solo en una línea de log.
+
+- **Nada de esto es progreso guardado.** No hay endpoint para avanzar un
+  paso: el estado se deriva del registro del inbox en cada llamada. Un
+  contador escrito por el cliente estaría mal en cuanto la misma persona
+  abriera otro navegador, y no sabría nada de lo que pasa en el buzón.
+- **Los pasos son booleanos independientes, no una cadena.** Mucha gente
+  configura el reenvío antes de aprobar a nadie; `current` es simplemente el
+  primero que falta.
+- **`ready` no es "todos los pasos en verde".** Es que los gastos están
+  entrando solos ahora mismo: una primera alerta aceptada y algún remitente
+  todavía aprobado. Quien reenvía cada alerta a mano está conectado y nunca
+  va a tener una confirmación que mostrar.
+- **`unapproved_senders`** nombra a quien está llegando y siendo descartado
+  por no estar aprobado — el único fallo que desde una pantalla se ve
+  idéntico a que no llegue nada. Se recalcula contra la lista actual, así que
+  un remitente aprobado hace un minuto ya no aparece.
+- Las dos marcas (`forwarding_confirmed_at`, `first_accepted_at`) se escriben
+  una sola vez, con escrituras condicionales que no tocan el resto del
+  registro: el worker las pone mientras el usuario puede estar editando sus
+  remitentes desde el navegador, y un `put` completo por cualquiera de los dos
+  lados borraría lo del otro.
+- Una cuenta anterior a estas marcas se rellena sola: la primera vez que
+  alguien pide este endpoint sin `first_accepted_at`, el mismo recorrido que
+  busca remitentes rechazados escribe la marca si encuentra correo aceptado.
+  Es la única escritura que hace una lectura, y ocurre una vez por cuenta —
+  sin ella esas cuentas dirían "todavía no llega nada" para siempre y pagarían
+  ese recorrido en cada sondeo.
+- El inbox se busca **por dirección** (que deriva del `user_id`), no por el
+  índice `by_user`, que es de consistencia eventual: preguntado por ahí un
+  instante después del registro puede contestar que el usuario no tiene inbox,
+  justo en la primera pantalla que abre una cuenta nueva. El índice queda como
+  respaldo para un registro anterior al buzón de ingesta actual.
 
 ## Lo que hay que saber sobre este modelo
 
@@ -147,7 +214,7 @@ recoge en su siguiente pasada (por defecto, cada
 | `401` | Falta o es inválido el `Authorization: Bearer`. | — |
 | `409` | `POST /identity/register` con un email ya registrado. | `{"detail": "An account with this email already exists"}` |
 | `422` | Cuerpo inválido (contraseña débil, dirección de remitente sin `@`). | `{"detail": "..."}` |
-| `404` | `GET`/`PATCH /identity/inbox` para una cuenta sin inbox — no debería ocurrir nunca en la práctica, el registro siempre la crea. | `{"detail": "No inbox found for this account"}` |
+| `404` | `GET`/`PATCH /identity/inbox` o `GET /ingestion/setup` para una cuenta sin inbox — no debería ocurrir nunca en la práctica, el registro siempre la crea. | `{"detail": "No inbox found for this account"}` |
 
 ## Lo que el cliente nunca ve ni maneja
 

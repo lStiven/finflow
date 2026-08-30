@@ -419,6 +419,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ingestion/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Setup
+         * @description The caller's four steps, which of them are done, and what is next.
+         */
+        get: operations["get_setup_ingestion_setup_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/merchants": {
         parameters: {
             query?: never;
@@ -826,6 +846,19 @@ export interface components {
             /** Allowed Domains */
             allowed_domains?: string[];
         };
+        /** InboxSetupResponse */
+        InboxSetupResponse: {
+            /** Address */
+            address: string;
+            /** Current */
+            current: string | null;
+            /** Ready */
+            ready: boolean;
+            /** Steps */
+            steps: components["schemas"]["SetupStepResponse"][];
+            /** Unapproved Senders */
+            unapproved_senders: string[];
+        };
         /**
          * IngestionCatalogResponse
          * @description Ingestion's vocabulary, for the screens that render or filter by it.
@@ -845,6 +878,8 @@ export interface components {
             instrument_kinds: components["schemas"]["CatalogOption"][];
             /** Processing Statuses */
             processing_statuses: components["schemas"]["CatalogOption"][];
+            /** Setup Steps */
+            setup_steps: components["schemas"]["CatalogOption"][];
         };
         /**
          * InstrumentKind
@@ -1113,6 +1148,21 @@ export interface components {
         SetCreditLimitPayload: {
             /** Credit Limit */
             credit_limit?: number | string | null;
+        };
+        /**
+         * SetupStepResponse
+         * @description One step of connecting a bank.
+         *
+         *     `at` is null for the two steps that are states rather than events (the
+         *     address exists, somebody is approved) — and for any step still open.
+         */
+        SetupStepResponse: {
+            /** At */
+            at: number | null;
+            /** Done */
+            done: boolean;
+            /** Key */
+            key: string;
         };
         /** SpendingSummaryResponse */
         SpendingSummaryResponse: {
@@ -1984,6 +2034,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_setup_ingestion_setup_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxSetupResponse"];
                 };
             };
         };

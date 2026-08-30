@@ -51,14 +51,12 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-29 — the docs cover both halves. `running.md` was backend-only and
-  predated the frontend; it now has an **El frontend** section (the two Vite
-  modes, the single `VITE_API_BASE_URL`, what breaks silently, and that
-  publishing it is unsolved), reached from `frontend/README.md` and
-  `frontend-integration.md`. Same pass fixed `just web` not reaching the
-  browser: the port chain was already correct — proved with
-  `host.docker.internal:5173` → 200 from inside the container — and the
-  browser was on Vite's Docker-internal `172.17.x.x` URL.
+- 2026-08-29 — onboarding state, backend half. `GET /ingestion/setup` answers
+  which of the four steps of connecting a bank are done and what is next,
+  derived on every call from two milestones now written on the inbox record
+  (`forwarding_confirmed_at`, `first_accepted_at`). Confirming a Gmail
+  forwarding request is attributed to the alias it was addressed to and
+  refused for aliases nobody registered. `just prepare` green (810 tests).
 
 ## Next steps
 
@@ -85,9 +83,10 @@ rest of the frontend — see **Next steps**.
          missing.
       4. **The rest of the frontend.** The foundation is in (`just web`);
          what is left is screens, not plumbing: movements with their filters,
-         the connect-your-bank screen (forwarding address, approved senders,
-         what actually arrived), merchant review, the spending summary, and
-         manual entry. `docs/frontend-integration.md` is still the contract
+         the connect-your-bank wizard (four steps against
+         `GET /ingestion/setup`, polled while it is open, not blocking the
+         rest of the app — a persistent bar in the shell until `ready`),
+         merchant review, the spending summary, and manual entry. `docs/frontend-integration.md` is still the contract
          each of them has to honour. Nothing is deployed: no hosting is
          provisioned and `API_CORS_ORIGINS` names only localhost.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
@@ -175,6 +174,32 @@ rest of the frontend — see **Next steps**.
   is what eventually moved the whole account off provisioned capacity — see
   **Billing** below.
 
+- **Onboarding progress is derived, never stored** (2026-08-29).
+  `GET /ingestion/setup` recomputes four steps from the inbox record on every
+  call; there is no endpoint that advances one and no field a client writes.
+  A step counter written by a screen is wrong the moment the same person
+  opens a second browser, and it cannot see the half of this that happens in
+  a mailbox. What made deriving it affordable is keeping the two facts that
+  *are* events on the inbox item — `forwarding_confirmed_at` and
+  `first_accepted_at` — so the answer costs one read rather than a walk
+  through everything the account ever received; the screen polls it while
+  somebody watches. Rejected: reusing the notification reader's counts, which
+  is the same answer at a cost that grows with the account's whole history.
+  `ready` deliberately does not require the Gmail confirmation — somebody
+  forwarding each alert by hand is connected and will never have one — but
+  does require the allow-list to still approve somebody.
+- **The two milestones are conditional updates, and `save` stopped being a
+  `put_item`** (2026-08-29). Both writers touch the same inbox item: the
+  ingest worker marking a confirmation, and its owner editing approved
+  senders from a browser. A full-item write from either side erased the
+  other, and a lost confirmation never comes back — Google does not send the
+  mail twice.
+- **A forwarding request for an unregistered alias is never confirmed**
+  (2026-08-29). It used to be: any Gmail confirmation that reached the
+  mailbox got its link followed. Confirming one routes a stranger's mail into
+  the only mailbox this deployment reads, on the say-so of an email, so the
+  alias is now resolved to a registered inbox first and the rest are
+  acknowledged and counted (`unclaimed_confirmations`) without a fetch.
 - **Email forwarding, not Gmail OAuth** (2026-08-22, reversal to the original
   plan). Every user forwards bank mail to `finflowingest+<user_id>@gmail.com`,
   one shared account read over IMAP + App Password. Killed the entire OAuth
@@ -761,6 +786,30 @@ rest of the frontend — see **Next steps**.
 
 
 ### Frontend (2026-08-29)
+
+- **Charts may use floats; nothing a person reads may.** `money.ts` refuses
+  arithmetic on purpose — a float loses cents and this is a ledger. The
+  Resumen's donut broke that rule twice, knowingly and in one direction only:
+  `toChartValue` for slice angles and `percentChange` for the vs-last-month
+  badge. Both are ratios rendered as geometry or a rounded percentage, where
+  an error of 1e-15 is not observable; every *figure* beside them still comes
+  from the original decimal string. The one visible leak is the "Otros" wedge,
+  whose amount is a float sum — acceptable because each exact amount is one
+  category away. If a screen ever needs a total it can be held to, add a
+  decimal library rather than widening this exception.
+
+- **The month comparison is same-distance, not month-against-month.** The
+  dashboard asks the summary for two windows: this month to date, and the
+  same number of seconds into the previous month. The obvious version —
+  comparing a three-day-old month against a complete one — makes every 1st
+  report spending "down 100%", which is arithmetically true and destroys
+  trust in every other number on the screen. Costs one extra query.
+
+- **Navigation shows the screens that do not exist yet, disabled.** Six
+  destinations are listed from the first release; five are `aria-disabled`
+  with a "próximamente" title until their screen lands. A nav that grows an
+  item per release reads as instability, and a link that goes nowhere reads
+  as a bug.
 
 - **A static SPA, not a server-rendered framework.** Vite + React +
   TypeScript, built to static files. Next.js was the reflex and was rejected:

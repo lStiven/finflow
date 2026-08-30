@@ -1,3 +1,4 @@
+import dataclasses
 import json
 
 from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -53,6 +54,32 @@ class InMemoryUserInboxRepository:
 
     def save(self, inbox: UserInbox) -> None:
         self.inboxes[inbox.address] = inbox
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, forwarding_confirmed_at=confirmed_at)
+
+    def mark_first_accepted(
+        self,
+        *,
+        address: EmailAddress,
+        accepted_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, first_accepted_at=accepted_at)
+
+    def _mark(self, address: EmailAddress, **milestone: PosixTime) -> bool:
+        inbox = self.inboxes.get(address)
+
+        if inbox is None:
+            return False
+
+        self.inboxes[address] = dataclasses.replace(inbox, **milestone)
+
+        return True
 
 
 def _inbox(

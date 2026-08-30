@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import dataclasses
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -24,7 +25,7 @@ from personal_finance.contexts.ingestion.presentation.http.router import (
     router,
 )
 from personal_finance.shared.domain.events import Event
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 ENDPOINT = "/ingestion/bank-notifications"
@@ -44,7 +45,51 @@ class InMemoryUserInboxRepository:
         return [inbox for inbox in self.inboxes.values() if inbox.user_id == user_id]
 
     def save(self, inbox: UserInbox) -> None:
-        self.inboxes[inbox.address] = inbox
+        # Like the real one: the milestones belong to another writer, and
+        # this must not carry a stale copy of them back over the record.
+        stored = self.inboxes.get(inbox.address)
+        self.inboxes[inbox.address] = dataclasses.replace(
+            inbox,
+            forwarding_confirmed_at=(
+                stored.forwarding_confirmed_at if stored else None
+            ),
+            first_accepted_at=stored.first_accepted_at if stored else None,
+        )
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, forwarding_confirmed_at=confirmed_at)
+
+    def mark_first_accepted(
+        self,
+        *,
+        address: EmailAddress,
+        accepted_at: PosixTime,
+    ) -> bool:
+        return self._mark(address, first_accepted_at=accepted_at)
+
+    def _mark(self, address: EmailAddress, **milestone: PosixTime) -> bool:
+        inbox = self.inboxes.get(address)
+
+        if inbox is None:
+            return False
+
+        # First write wins, as `if_not_exists` does in DynamoDB.
+        already_set = {
+            field: value
+            for field, value in milestone.items()
+            if getattr(inbox, field) is not None
+        }
+        self.inboxes[address] = dataclasses.replace(
+            inbox,
+            **{k: v for k, v in milestone.items() if k not in already_set},
+        )
+
+        return True
 
 
 def _inbox(

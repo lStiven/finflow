@@ -88,6 +88,7 @@ class ReceiveBankNotificationUseCase:
             notification.pull_events()
             notification = stored
 
+        self._mark_first_accepted(inbox, notification)
         self._enqueue_if_pending(notification)
         self._event_publisher.publish(notification.pull_events())
 
@@ -117,6 +118,34 @@ class ReceiveBankNotificationUseCase:
             notification.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
 
         return notification
+
+    def _mark_first_accepted(
+        self,
+        inbox: UserInbox,
+        notification: BankNotification,
+    ) -> None:
+        """Record the moment this inbox first let something through.
+
+        Written here rather than counted later because of who asks: the
+        screen that walks a new user through connecting their bank polls
+        "am I receiving expenses yet?" every few seconds, and that has to
+        cost one item read, not a pass over everything the account ever
+        received. One write per account — after the first alert the field is
+        set and this does nothing.
+
+        A duplicate still counts: it means an accepted email did arrive, and
+        the repository keeps the earliest timestamp either way.
+        """
+        if (
+            inbox.first_accepted_at is not None
+            or notification.status is ProcessingStatus.IGNORED
+        ):
+            return
+
+        self._inbox_repository.mark_first_accepted(
+            address=inbox.address,
+            accepted_at=notification.received_at,
+        )
 
     def _enqueue_if_pending(self, notification: BankNotification) -> None:
         """Queue the notification for parsing unless it was ignored or an

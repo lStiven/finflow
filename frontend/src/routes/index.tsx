@@ -69,11 +69,11 @@ export const Route = createFileRoute("/")({
   loader: ({ context }) => {
     const { range, previousToDate } = currentPeriod();
     return Promise.all([
-      context.queryClient.ensureQueryData(accountsQuery("open")),
-      context.queryClient.ensureQueryData(summaryQuery("month", range ?? {})),
-      context.queryClient.ensureQueryData(summaryQuery("month", previousToDate ?? {})),
-      context.queryClient.ensureQueryData(summaryQuery("category", range ?? {})),
-      context.queryClient.ensureQueryData(transactionsQuery({ limit: RECENT_LIMIT })),
+      context.queryClient.query(accountsQuery("open")),
+      context.queryClient.query(summaryQuery("month", range ?? {})),
+      context.queryClient.query(summaryQuery("month", previousToDate ?? {})),
+      context.queryClient.query(summaryQuery("category", range ?? {})),
+      context.queryClient.query(transactionsQuery({ limit: RECENT_LIMIT })),
     ]);
   },
   component: Dashboard,

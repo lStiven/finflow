@@ -30,6 +30,7 @@ from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
     NotificationQuery,
 )
+from personal_finance.contexts.ingestion.domain.setup import SetupStep
 from personal_finance.contexts.ingestion.domain.transactions import InstrumentKind
 from personal_finance.contexts.ingestion.domain.value_objects import (
     NotificationDeferredReason,
@@ -64,6 +65,9 @@ class IngestionCatalogResponse(BaseModel):
     ignored_reasons: list[CatalogOption]
     deferred_reasons: list[CatalogOption]
     instrument_kinds: list[CatalogOption]
+    # In the order a connect-your-bank screen shows them, which is the one
+    # place that order gets decided.
+    setup_steps: list[CatalogOption]
 
 
 class NotificationResponse(BaseModel):
@@ -123,6 +127,7 @@ def get_catalog() -> IngestionCatalogResponse:
         ignored_reasons=options(NotificationIgnoredReason),
         deferred_reasons=options(NotificationDeferredReason),
         instrument_kinds=options(InstrumentKind),
+        setup_steps=options(SetupStep),
     )
 
 

@@ -21,6 +21,9 @@ from personal_finance.contexts.ingestion.presentation.http.router import (
     get_use_case,
     router as ingestion_webhook_router,
 )
+from personal_finance.contexts.ingestion.presentation.http.setup import (
+    router as ingestion_setup_router,
+)
 from personal_finance.contexts.merchant.presentation.http.router import (
     router as merchant_router,
 )
@@ -101,6 +104,7 @@ def create_app(
     # how somebody finds out that what they forwarded arrived, or why nothing
     # came of it.
     app.include_router(ingestion_notifications_router)
+    app.include_router(ingestion_setup_router)
 
     if expose_local_only_routes:
         # Real intake never calls this: a user forwards bank email to their

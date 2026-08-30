@@ -44,7 +44,14 @@ def test_one_tick_polls_once_and_reports_the_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     use_case = FakeUseCase(
-        PollResult(fetched=3, accepted=2, duplicates=1, unknown_recipient=0, failed=0),
+        PollResult(
+            fetched=3,
+            accepted=2,
+            duplicates=1,
+            unknown_recipient=0,
+            failed=0,
+            confirmations=1,
+        ),
     )
     _install(monkeypatch, use_case)
 
@@ -57,6 +64,11 @@ def test_one_tick_polls_once_and_reports_the_counts(
         "duplicates": 1,
         "unknown_recipient": 0,
         "failed": 0,
+        # Reported apart from `accepted`: a confirmed forwarding request is
+        # somebody's setup finishing, not a movement.
+        "confirmations": 1,
+        "refused_confirmations": 0,
+        "unclaimed_confirmations": 0,
     }
 
 

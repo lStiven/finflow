@@ -10,7 +10,7 @@ from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_d
     USER_ID_ATTRIBUTE,
     DynamoDBUserInboxRepository,
 )
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 from personal_finance.shared.infrastructure.aws.provisioning import (
     SecondaryIndex,
     provision_table,
@@ -156,3 +156,77 @@ def test_provisioning_the_index_twice_is_safe(
     described = dynamodb_client.describe_table(TableName=TABLE_NAME)["Table"]
 
     assert len(described.get("GlobalSecondaryIndexes", [])) == 1
+
+
+CONFIRMED_AT = PosixTime.from_epoch_seconds(1_756_400_000)
+LATER = PosixTime.from_epoch_seconds(1_756_500_000)
+
+
+def test_a_confirmed_forwarding_rule_reads_back(
+    repository: DynamoDBUserInboxRepository,
+) -> None:
+    repository.save(_inbox(address="a@inbound.test"))
+
+    assert (
+        repository.mark_forwarding_confirmed(
+            address=EmailAddress("a@inbound.test"),
+            confirmed_at=CONFIRMED_AT,
+        )
+        is True
+    )
+
+    inbox = repository.find_by_user(USER_ID)[0]
+    assert inbox.forwarding_confirmed_at == CONFIRMED_AT
+    assert inbox.first_accepted_at is None
+
+
+def test_a_milestone_keeps_the_first_time_it_happened(
+    repository: DynamoDBUserInboxRepository,
+) -> None:
+    """Mail is delivered at least once, so the same confirmation can be
+    handled twice. The honest answer is the first time, not the retry.
+    """
+    repository.save(_inbox(address="a@inbound.test"))
+    repository.mark_first_accepted(
+        address=EmailAddress("a@inbound.test"),
+        accepted_at=CONFIRMED_AT,
+    )
+    repository.mark_first_accepted(
+        address=EmailAddress("a@inbound.test"),
+        accepted_at=LATER,
+    )
+
+    assert repository.find_by_user(USER_ID)[0].first_accepted_at == CONFIRMED_AT
+
+
+def test_an_alias_nobody_registered_is_not_conjured_into_an_inbox(
+    repository: DynamoDBUserInboxRepository,
+) -> None:
+    marked = repository.mark_forwarding_confirmed(
+        address=EmailAddress("nobody@inbound.test"),
+        confirmed_at=CONFIRMED_AT,
+    )
+
+    assert marked is False
+    assert repository.find_by_address(EmailAddress("nobody@inbound.test")) is None
+
+
+def test_editing_approved_senders_does_not_erase_a_confirmation(
+    repository: DynamoDBUserInboxRepository,
+) -> None:
+    """The two writers run at once — the ingest worker marking a confirmation
+    while its owner edits their senders in a browser. A full-item write here
+    would drop a checkmark that never comes back, because Google does not
+    send the mail twice.
+    """
+    repository.save(_inbox(address="a@inbound.test"))
+    repository.mark_forwarding_confirmed(
+        address=EmailAddress("a@inbound.test"),
+        confirmed_at=CONFIRMED_AT,
+    )
+
+    repository.save(_inbox(address="a@inbound.test", domains=frozenset({"other.com"})))
+
+    inbox = repository.find_by_user(USER_ID)[0]
+    assert inbox.forwarding_confirmed_at == CONFIRMED_AT
+    assert inbox.sender_policy.allowed_domains == frozenset({"other.com"})

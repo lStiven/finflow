@@ -34,6 +34,13 @@ class PollSummary(TypedDict):
     duplicates: int
     unknown_recipient: int
     failed: int
+    # The control-plane half of a poll. Reported here as well as in the log
+    # because in a deployment this handler *is* the worker, and a forwarding
+    # request that Google refused is a user stuck on a step with nothing in
+    # the movement counters to show for it.
+    confirmations: int
+    refused_confirmations: int
+    unclaimed_confirmations: int
 
 
 @functools.lru_cache(maxsize=1)
@@ -70,6 +77,9 @@ def handler(_event: object, _context: object) -> PollSummary:
                 "duplicates": result.duplicates,
                 "unknown_recipient": result.unknown_recipient,
                 "failed": result.failed,
+                "confirmations": result.confirmations,
+                "refused_confirmations": result.refused_confirmations,
+                "unclaimed_confirmations": result.unclaimed_confirmations,
             },
         )
 
@@ -79,4 +89,7 @@ def handler(_event: object, _context: object) -> PollSummary:
         "duplicates": result.duplicates,
         "unknown_recipient": result.unknown_recipient,
         "failed": result.failed,
+        "confirmations": result.confirmations,
+        "refused_confirmations": result.refused_confirmations,
+        "unclaimed_confirmations": result.unclaimed_confirmations,
     }

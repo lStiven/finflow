@@ -210,6 +210,68 @@ Reglas que la UI tiene que respetar:
    de sus remitentes (`alertas@`, `notificaciones@`) mucho más que el dominio.
    Sugiere aprobar el dominio.
 
+#### `GET /ingestion/setup` — en qué paso va el usuario
+
+La pantalla anterior tiene un problema: **dos de sus cuatro pasos terminan
+donde el usuario no puede ver nada**. Google confirma la solicitud de reenvío
+mandando un correo a una dirección que solo lee este despliegue, y la primera
+alerta la recoge un worker. Sin esto la pantalla solo podría decir "ya te
+avisaremos", que es la parte de todo onboarding que se siente rota aunque
+funcione.
+
+```http
+GET /ingestion/setup
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "address": "finflowingest+b3a5e8f242c74822b1713f7d615df8e6@gmail.com",
+  "steps": [
+    { "key": "address_assigned",    "done": true,  "at": null },
+    { "key": "senders_approved",    "done": true,  "at": null },
+    { "key": "forwarding_confirmed","done": true,  "at": 1756400000 },
+    { "key": "first_alert",         "done": false, "at": null }
+  ],
+  "current": "first_alert",
+  "ready": false,
+  "unapproved_senders": []
+}
+```
+
+- **No hay endpoint para avanzar un paso, y no lo habrá.** El estado se
+  deriva del registro del inbox en cada llamada, así que es el mismo en todos
+  los navegadores y no puede desfasarse de lo que hizo el buzón. Un contador
+  que escribiera el front estaría mal en cuanto la misma persona abriera otra
+  pestaña.
+- **`current`** es el paso al que apuntar, o `null` cuando no queda nada — así
+  la UI nunca tiene que sacar "terminado" de un valor que por lo demás
+  significa "haz esto".
+- **`ready`** significa que los gastos están entrando solos **ahora mismo**.
+  No es "todos los pasos en verde": quien reenvía cada alerta a mano está
+  conectado y nunca va a tener una confirmación que mostrar. Lo que sí exige
+  es que siga habiendo algún remitente aprobado — vaciar la lista lo devuelve
+  a `false` aunque ya hubiera llegado una alerta.
+- **`unapproved_senders`** son los remitentes cuyo correo llegó y se descartó
+  por no estar aprobado. Es el fallo que desde una pantalla se ve idéntico al
+  silencio, y la UI debería ofrecer aprobarlos de un clic (`PATCH
+  /identity/inbox` con la lista actual **más** ese remitente). Llega vacío
+  cuando `ready`.
+- **Los sub-pasos que el backend no puede observar** — copiar la dirección,
+  crear el filtro en Gmail — viven en el cliente y no deben bloquear nada: el
+  paso verificable que hay detrás se pone en verde solo.
+- **Es barato de sondear**: una lectura de un ítem mientras la respuesta
+  todavía cambia. Un `refetchInterval` de unos segundos mientras la pantalla
+  está abierta y el paso 3 o 4 sigue pendiente, y parar al llegar a `ready`.
+  Como no hay push, esta es la única forma de que el checkmark aparezca solo
+  mientras el usuario mira. El worker sondea el buzón cada 60 s por defecto,
+  así que la confirmación puede tardar ese orden de tiempo en aparecer.
+- **404** si la cuenta no tiene inbox. El registro siempre crea uno, así que
+  significa que el registro se perdió, no que esté pendiente.
+
+Las etiquetas de los cuatro pasos salen de `GET /ingestion/catalog`
+(`setup_steps`), como el resto de vocabularios.
+
 ### 4. Qué pasa cuando llega un correo
 
 Esto no lo dispara el frontend, pero determina qué puede prometer la interfaz.
@@ -797,7 +859,7 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | GET | `/identity/inbox` | ✔ | Dirección de reenvío + remitentes aprobados. |
 | PATCH | `/identity/inbox` | ✔ | Reemplazar los remitentes aprobados. |
 | GET | `/financial/catalog` | — | Vocabularios de Financial, para poblar formularios. |
-| GET | `/ingestion/catalog` | — | Estados de una notificación y sus razones. |
+| GET | `/ingestion/catalog` | — | Estados de una notificación, sus razones y los pasos del alta. |
 | GET | `/merchants/catalog` | — | Vocabularios de Merchant. |
 | GET | `/merchants/categories` | — | Solo categorías. Lo cubre `/merchants/catalog`; se mantiene por compatibilidad. |
 | GET | `/merchants` | ✔ | Listar/buscar/filtrar comercios. |
@@ -820,6 +882,7 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |
 | PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. |
+| GET | `/ingestion/setup` | ✔ | En qué paso va conectando su banco, y si ya recibe gastos solo. |
 | GET | `/ingestion/notifications` | ✔ | Qué llegó al alias del usuario y en qué estado quedó. |
 | POST | `/ingestion/bank-notifications` | — | **Solo local.** Simular un correo. No es una ruta del producto. |
 

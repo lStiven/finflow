@@ -111,7 +111,43 @@ class UserInboxRepository(Protocol):
         ...
 
     def save(self, inbox: UserInbox) -> None:
-        """Create or replace the inbox registered for its address."""
+        """Create the inbox, or update the address, owner and approved senders
+        of the one already registered.
+
+        Only those fields: the two milestones below are written by a different
+        path, on a different schedule, and an implementation that replaced the
+        whole record here would erase a confirmation that landed a moment
+        earlier.
+        """
+        ...
+
+    def mark_forwarding_confirmed(
+        self,
+        *,
+        address: EmailAddress,
+        confirmed_at: PosixTime,
+    ) -> bool:
+        """Record that Google confirmed a forwarding request for `address`.
+
+        False when no inbox owns the address, having written nothing. Must
+        keep the earliest timestamp and must not touch the approved senders:
+        this runs in the ingest worker while its owner may be editing them
+        from a browser.
+        """
+        ...
+
+    def mark_first_accepted(
+        self,
+        *,
+        address: EmailAddress,
+        accepted_at: PosixTime,
+    ) -> bool:
+        """Record that an email got past this inbox's sender filter.
+
+        Same contract as `mark_forwarding_confirmed`: first write wins, the
+        rest of the record is left alone, and a missing inbox is False rather
+        than an exception.
+        """
         ...
 
 

@@ -17,6 +17,7 @@ from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
 )
 from personal_finance.contexts.ingestion.application.ingest_handlers import (
+    ConfirmForwardingUseCase,
     PollIngestMailboxUseCase,
 )
 from personal_finance.contexts.ingestion.infrastructure.events import (
@@ -89,7 +90,10 @@ def build_use_case() -> PollIngestMailboxUseCase:
     )
 
     return PollIngestMailboxUseCase(
-        forwarding_confirmer=HttpForwardingConfirmer(),
+        confirm_use_case=ConfirmForwardingUseCase(
+            inbox_repository=inbox_repository,
+            confirmer=HttpForwardingConfirmer(),
+        ),
         reader=ImapIngestMailboxReader(
             host=settings.ingest_mailbox_host,
             port=settings.ingest_mailbox_port,
@@ -141,6 +145,7 @@ def main() -> None:
                         "failed": result.failed,
                         "confirmations": result.confirmations,
                         "refused_confirmations": result.refused_confirmations,
+                        "unclaimed_confirmations": result.unclaimed_confirmations,
                     },
                 )
 
