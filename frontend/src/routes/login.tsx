@@ -259,6 +259,8 @@ function LoginScreen() {
             Al continuar aceptas que Finflow lea los correos que le reenvíes, y solo
             esos.
           </p>
+
+          <MobileSteps mode={mode} />
         </section>
       </main>
 
@@ -268,8 +270,58 @@ function LoginScreen() {
 }
 
 /**
+ * The three steps again, under the form, on every width the panel is hidden at.
+ *
+ * `Panel` stays hidden *above* the fields for the reason its own comment
+ * gives. But registering is the one mode where the middle step — reenvía el
+ * correo de tu banco — is the part of Finflow nobody guesses, and living
+ * inside `hidden lg:block` meant it had never once been seen on a phone,
+ * which is the browser this is delivered to. So it rides underneath instead:
+ * the form keeps the fold and the explanation is a scroll away rather than
+ * absent.
+ *
+ * Only when registering. The login panel is a pitch, and somebody coming back
+ * to sign in did not arrive to read one.
+ *
+ * Renders `COPY.register.points`, the same array the panel does — one set of
+ * words, so the two can never drift into saying different things.
+ */
+function MobileSteps({ mode }: { mode: Mode }) {
+  if (mode !== "register") return null;
+
+  const copy = COPY.register;
+
+  return (
+    <section className="mt-9 lg:hidden">
+      <h2 className="font-medium text-sm">{copy.panelTitle}</h2>
+
+      {/* No list marker: each title already carries its own number. */}
+      <ul className="mt-4 flex flex-col gap-4">
+        {copy.points.map(({ icon: Icon, title, body }) => (
+          <li key={title} className="flex items-start gap-3">
+            <span
+              aria-hidden
+              className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border border-line bg-surface"
+            >
+              <Icon className="size-3.5 text-cyan" />
+            </span>
+            <span className="min-w-0">
+              <span className="block font-medium text-sm">{title}</span>
+              <span className="mt-0.5 block text-muted text-sm leading-relaxed">
+                {body}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
  * The half that is not a form. Hidden on phones, where it would push the
- * fields below the fold to say something nobody came here to read.
+ * fields below the fold to say something nobody came here to read —
+ * `MobileSteps` is what carries the registering half of it there instead.
  */
 function Panel({ mode }: { mode: Mode }) {
   const copy = COPY[mode];

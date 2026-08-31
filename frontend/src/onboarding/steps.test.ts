@@ -155,6 +155,31 @@ describe("resolving onboarding", () => {
     ).toBe(false);
   });
 
+  it("welcomes once, and then never again", () => {
+    expect(resolveOnboarding(setup(), acks()).welcome).toBe(true);
+    expect(resolveOnboarding(setup(), acks({ welcomeSeen: true })).welcome).toBe(false);
+  });
+
+  /*
+   * Somebody signing in on a second browser with everything already
+   * connected: the acks are empty there, so only the server half can tell
+   * this apart from a brand-new account.
+   */
+  it("never welcomes an account whose expenses are already arriving", () => {
+    expect(resolveOnboarding(setup({ ready: true }), acks()).welcome).toBe(false);
+  });
+
+  /*
+   * Both dialogs are mounted from the shell at once, so the guarantee that
+   * keeps them from stacking has to be the state itself, not their order.
+   */
+  it("never welcomes and celebrates at the same time", () => {
+    for (const ready of [false, true]) {
+      const state = resolveOnboarding(setup({ ready }), acks());
+      expect(state.welcome && state.celebrate).toBe(false);
+    }
+  });
+
   it("never celebrates a setup that is not finished", () => {
     expect(resolveOnboarding(setup({ sendersApproved: true }), acks()).celebrate).toBe(
       false,

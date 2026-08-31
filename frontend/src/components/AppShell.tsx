@@ -31,6 +31,7 @@ import { BetaMark } from "@/components/BetaMark";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
 import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
+import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { cn } from "@/lib/cn";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
@@ -72,6 +73,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
       <Bar />
+      <WelcomeDialog />
       <ReadyDialog />
     </div>
   );

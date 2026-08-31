@@ -58,11 +58,10 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — `/cuentas` closed its two gaps: an account's balance can be
-  restated and an account can be closed, alongside renaming and the credit
-  limit, behind scope tabs so a closed one stays reachable. Approved senders
-  can now be removed, not only added. Every category and origin the user
-  reads is Spanish. `just web-check` green (135).
+- 2026-08-31 — A new account is met by something instead of an empty
+  dashboard: `WelcomeDialog` says what Finflow needs before it can do
+  anything and opens the guide, or is closed and never returns. The banner
+  keeps the step from there on. `just web-check` green (139).
 
 ## Next steps
 
@@ -961,7 +960,10 @@ rest of the frontend — see **Next steps**.
   facts and deliberately has no field a client writes, so the screen adds
   nothing to it. What it keeps locally is only what nobody else can observe:
   the explanation was read, the address was copied, the Gmail rule was
-  claimed, the "you are connected" message was shown once. Putting those in
+  claimed, the welcome was shown once, the "you are connected" message was
+  shown once. The two dialogs are mirror images — `welcome` needs `ready`
+  false and `celebrate` needs it true — so the shell mounts both and they can
+  never stack. Putting those in
   the same record as verified facts would mix a claim with a proof, and each
   stage says which of the two it is ("Verificado" against "Hecho"). Stated
   cost: signing in on another browser replays the reading, never the work.

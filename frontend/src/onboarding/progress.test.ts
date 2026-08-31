@@ -75,6 +75,27 @@ describe("onboarding acknowledgements", () => {
     expect(readAcks(USER)).toEqual(NO_ACKS);
   });
 
+  /*
+   * An entry written before `welcomeSeen` existed reads as false, so somebody
+   * who left the setup pending under an older build is welcomed once. That is
+   * the behaviour we want rather than a migration to write: they are exactly
+   * the people the dialog is for.
+   */
+  it("reads an entry from a build with no welcomeSeen as not welcomed", () => {
+    stubStorage({
+      [`finflow.onboarding.${USER}`]: JSON.stringify({
+        introSeen: true,
+        addressCopied: true,
+      }),
+    });
+
+    expect(readAcks(USER)).toEqual({
+      ...NO_ACKS,
+      introSeen: true,
+      addressCopied: true,
+    });
+  });
+
   it("treats a non-object entry as nothing acknowledged", () => {
     stubStorage({ [`finflow.onboarding.${USER}`]: '["introSeen"]' });
 

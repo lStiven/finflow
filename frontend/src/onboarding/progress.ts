@@ -18,6 +18,8 @@
  */
 
 export type OnboardingAcks = {
+  /** Was welcomed, once, on the first visit after the account existed. */
+  welcomeSeen: boolean;
   /** Read "cómo funciona". */
   introSeen: boolean;
   /** Took the forwarding address. */
@@ -30,6 +32,7 @@ export type OnboardingAcks = {
 };
 
 export const NO_ACKS: OnboardingAcks = {
+  welcomeSeen: false,
   introSeen: false,
   addressCopied: false,
   gmailSubmitted: false,
@@ -68,6 +71,7 @@ export function readAcks(userId: string): OnboardingAcks {
     // to something absurd — degrades to "not done" instead of putting a
     // string where the screen expects a boolean.
     return {
+      welcomeSeen: parsed.welcomeSeen === true,
       introSeen: parsed.introSeen === true,
       addressCopied: parsed.addressCopied === true,
       gmailSubmitted: parsed.gmailSubmitted === true,

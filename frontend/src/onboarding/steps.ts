@@ -55,6 +55,13 @@ export type OnboardingState = {
   total: number;
   /** Whether to show the "everything is connected" message — once, ever. */
   celebrate: boolean;
+  /**
+   * Whether to welcome somebody and point them at the first step — once,
+   * ever. Never at the same time as `celebrate`: one needs `complete` false
+   * and the other needs it true, so the shell can mount both without ever
+   * stacking two dialogs.
+   */
+  welcome: boolean;
   address: string;
   addressStatus: AddressStatus;
   /** Senders whose mail arrived and was discarded for not being approved. */
@@ -105,6 +112,10 @@ export function resolveOnboarding(
     doneCount: stages.filter((stage) => stage.done).length,
     total: stages.length,
     celebrate: complete && !acks.readyCelebrated,
+    // Guarded on `complete` for the same reason `celebrate` is, the other way
+    // round: somebody signing in on a new browser with everything already
+    // connected must not be walked through connecting it.
+    welcome: !complete && !acks.welcomeSeen,
     address: setup.address,
     addressStatus: addressStatusOf({ complete, forwardingConfirmed }),
     unapprovedSenders: setup.unapproved_senders,
