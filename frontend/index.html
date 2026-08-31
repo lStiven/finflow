@@ -6,6 +6,35 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0a0a0b" />
     <!--
+      Derived from `brand/finflow-logo.png` by `brand/build-icons.py`, which is
+      run by hand and its output committed — a clone serves these without
+      needing an image toolchain. The .ico carries 16/32/48 for tab and
+      bookmarks; the touch icon is opaque and zoomed past the frame because iOS
+      applies its own corner mask, and this tile is rounder than that mask.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-title" content="Finflow" />
+
+    <!--
+      The link preview. Relative rather than absolute because the address
+      belongs to the CloudFront distribution, which the bundle is not told —
+      every scraper this is shared through resolves it against the page URL.
+      A deployment on its own domain should make these absolute.
+    -->
+    <meta name="description" content="Tu dinero fluye. Finflow lo entiende" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Finflow" />
+    <meta property="og:title" content="Finflow" />
+    <meta property="og:description" content="Tu dinero fluye. Finflow lo entiende" />
+    <meta property="og:image" content="/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="El logo de Finflow" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <!--
       One webfont, for one word. The beta mark is the only place a script face
       appears; everything else rides the system sans stack, so this is a
       single small file and `cursive` covers it if the request never lands.

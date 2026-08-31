@@ -65,11 +65,11 @@ step, and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — Hosting for the frontend, declared: private bucket, Origin
-  Access Control, CloudFront with the SPA fallback that deep links need, and
-  `just web-deploy-*`. The API is told its own frontend's origin by the
-  template rather than by a copied parameter. `just infra-check` and `just
-  web-check` green (139); nothing deployed yet.
+- 2026-08-31 — The app wears its own brand: favicon, Apple touch icon,
+  manifest, link-preview card and the mark itself on the rail, the login panel
+  and the welcome dialog, all derived from the supplied artwork by
+  `frontend/brand/build-icons.py`. `just web-check` green (139); `just prepare`
+  clean apart from one pre-existing pyright error in `gemini.py`.
 
 ## Next steps
 
@@ -992,6 +992,43 @@ step, and a cap on LLM spending — see **Next steps**.
   not yet granted, so `just ecr-prune-*` can write a policy it cannot read
   back. Both are account-side grants with nothing to fix in this repo.
 
+
+### Brand assets (2026-08-31)
+
+The artwork is two generated PNGs and there is no vector, so the icon set is
+resampled from `frontend/brand/finflow-logo.png` rather than redrawn. A traced
+SVG was tried first and rejected: hand-tracing produced a recognisably
+different mark, and a logo that drifts from the one the owner approved is
+worse than a slightly soft 16px.
+
+The sources live in `frontend/brand/`, not `frontend/public/`: everything in
+`public/` is copied verbatim into the bundle, and the two originals are 3 MB
+nobody would ever download on purpose. `build-icons.py` is run by hand and its
+output committed, so a clone needs no image toolchain to serve the icons.
+
+Two things the script does that are not obvious. It premultiplies by alpha
+before resampling — outside the tile the source is transparent *black*, and
+resampling the colour channels alone averages that into a dark fringe that at
+16px is most of the mark. And the Apple touch icon is zoomed to 122%: iOS
+masks with a 22.4% corner radius while this tile's own radius is 27.4%, so at
+1:1 the flat fill would show as four dark notches outside the artwork.
+
+The social card is composed, not cropped. The artwork is square and the card
+is not; a centre-crop to 1200x630 leaves the wordmark 38px from the edge, so
+the square is scaled until the lockup sits at 63% of the height and the gap
+either side is filled by stretching the artwork's own outermost columns. The
+backdrop there is a smooth vignette, so the seam has nothing to show. JPEG,
+because lossless costs half a megabyte for a picture scrapers downsample.
+
+`display: standalone` in the manifest is a deliberate choice, not a default —
+added to a home-screen install it drops the browser chrome. Reverting it is a
+one-line change if that turns out to be the wrong call for a web app people
+also open as a tab.
+
+The slogan lives only in metadata — `<meta description>`, `og:description`,
+the manifest — and nowhere on screen. That is a gap, not an oversight: no
+placement was agreed. The `og:*` URLs are relative because the address belongs
+to the CloudFront distribution and the bundle is not told it.
 
 ### Frontend (2026-08-29)
 

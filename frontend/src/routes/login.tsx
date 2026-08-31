@@ -14,6 +14,7 @@ import type { ComponentType, ReactNode } from "react";
 import { type SubmitEvent, useState } from "react";
 import { useAuth } from "@/auth/AuthContext";
 import { BetaMark } from "@/components/BetaMark";
+import { Logo } from "@/components/Logo";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
@@ -329,12 +330,7 @@ function Panel({ mode }: { mode: Mode }) {
   return (
     <section className="hidden lg:block">
       <div className="flex items-center gap-3">
-        <span
-          aria-hidden
-          className="pulse-ring grid size-11 place-items-center rounded-2xl bg-accent/15 ring-1 ring-accent/30"
-        >
-          <Wallet className="size-5 text-accent" />
-        </span>
+        <Logo className="pulse-ring size-12" />
         <span className="wordmark-lit font-semibold text-3xl tracking-tight">
           Finflow
         </span>

@@ -1,5 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowRight, Ban, Mail, Wallet } from "lucide-react";
+import { ArrowRight, Ban, Mail } from "lucide-react";
+import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/Button";
 import { STAGE_COPY } from "@/onboarding/copy";
 import { useOnboarding } from "@/onboarding/useOnboarding";
@@ -39,12 +40,7 @@ export function WelcomeDialog() {
       className="fixed inset-0 z-50 grid place-items-center bg-ink/80 p-5 backdrop-blur-sm"
     >
       <div className="rise surface w-full max-w-md rounded-card border border-accent/30 bg-surface p-7">
-        <span
-          aria-hidden
-          className="pulse-ring mx-auto grid size-14 place-items-center rounded-2xl bg-accent/15 ring-1 ring-accent/30"
-        >
-          <Wallet className="size-6 text-accent" />
-        </span>
+        <Logo className="pulse-ring mx-auto size-16" />
 
         <h2
           id="welcome-title"

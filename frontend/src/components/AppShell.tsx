@@ -28,6 +28,7 @@ import type { ComponentType, ReactNode } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
 import { BetaMark } from "@/components/BetaMark";
+import { Logo } from "@/components/Logo";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
 import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
@@ -144,12 +145,7 @@ function Dot({ className }: { className?: string }) {
 function Wordmark({ className }: { className?: string }) {
   return (
     <span className={cn("flex items-center gap-2", className)}>
-      <span
-        aria-hidden
-        className="grid size-8 place-items-center rounded-lg bg-accent text-accent-ink"
-      >
-        <BarChart3 className="size-4" />
-      </span>
+      <Logo className="size-8" />
       <span className="text-base font-semibold tracking-tight">Finflow</span>
     </span>
   );
