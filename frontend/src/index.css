@@ -66,9 +66,16 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  /*
+   * The ground is `html`'s, and deliberately only `html`'s: a background on
+   * the root element is propagated to the canvas, behind everything, while
+   * the same declaration on `body` paints as an ordinary block background —
+   * which comes *after* negative stacking contexts in the painting order and
+   * so hides the plasma (`.plasma`, `-z-10`) completely. The page is still
+   * ink either way.
+   */
   body {
     margin: 0;
-    background-color: var(--color-ink);
     color: var(--color-text);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
@@ -123,58 +130,68 @@
   }
 
   /*
-   * The authenticated app is 80% calm. The door is the one room that may
-   * announce itself, so the login and register screens get a ground that
-   * moves: three very dilute pools drifting on their own cycles, a grid
-   * panning behind them, and one beam crossing every half minute.
+   * The plasma.
    *
-   * All of it is transform and opacity — no layout, no paint of anything a
-   * screen reader can reach — and none of it uses a fill mode, so under
-   * `prefers-reduced-motion` every element simply rests at the base state its
-   * own class already describes.
+   * Four wide pools — pink, violet, cyan, magenta — travelling across each
+   * other while they turn and breathe. Each one runs `alternate`, so it walks
+   * its path out and back rather than snapping home at the end of a cycle,
+   * and the four periods are near-coprime: an arrangement takes far longer to
+   * repeat than any single pool's round trip.
+   *
+   * Nothing here blinks, sparkles or pulses. What should read on screen is
+   * light moving in a room, not an effect playing. All of it is transform, so
+   * no layer ever costs a layout, and none carries a fill mode — under
+   * `prefers-reduced-motion` each pool rests at the position its own class
+   * describes, which is a composed still rather than a half-drawn frame.
+   *
+   * The screens set the tempo through `--plasma-tempo`, never by redefining
+   * these: the door runs them slowly, the signed-in app slower again.
    */
-  @keyframes drift-a {
-    50% {
-      transform: translate3d(8vw, 6vh, 0) scale(1.12);
-    }
-  }
-
-  @keyframes drift-b {
-    50% {
-      transform: translate3d(-7vw, 8vh, 0) scale(0.9);
-    }
-  }
-
-  @keyframes drift-c {
-    50% {
-      transform: translate3d(5vw, -7vh, 0) scale(1.08);
-    }
-  }
-
-  @keyframes grid-pan {
-    to {
-      background-position:
-        56px 56px,
-        56px 56px;
-    }
-  }
-
-  @keyframes beam {
-    /*
-     * Off-screen at both ends and invisible at both ends: the sweep should
-     * read as a passing reflection, not as a bar that parks at one edge.
-     */
+  @keyframes move-pink {
     0% {
-      transform: translate3d(-60vw, 0, 0) rotate(14deg);
-      opacity: 0;
+      transform: translate(-4%, -2%) rotate(0deg) scale(0.94);
     }
-    12%,
     45% {
-      opacity: 1;
+      transform: translate(28%, 13%) rotate(48deg) scale(1.1);
     }
     100% {
-      transform: translate3d(60vw, 0, 0) rotate(14deg);
-      opacity: 0;
+      transform: translate(12%, 38%) rotate(115deg) scale(0.98);
+    }
+  }
+
+  @keyframes move-violet {
+    0% {
+      transform: translate(4%, 0) rotate(0deg) scale(1.04);
+    }
+    50% {
+      transform: translate(-24%, 22%) rotate(-62deg) scale(0.92);
+    }
+    100% {
+      transform: translate(-4%, 36%) rotate(-128deg) scale(1.08);
+    }
+  }
+
+  @keyframes move-cyan {
+    0% {
+      transform: translate(0, 8%) rotate(0deg) scale(0.92);
+    }
+    50% {
+      transform: translate(-28%, -26%) rotate(55deg) scale(1.08);
+    }
+    100% {
+      transform: translate(8%, -44%) rotate(118deg) scale(0.96);
+    }
+  }
+
+  @keyframes move-magenta {
+    0% {
+      transform: translate(-8%, 10%) scale(0.88);
+    }
+    50% {
+      transform: translate(18%, -26%) scale(1.14);
+    }
+    100% {
+      transform: translate(-12%, -42%) scale(0.94);
     }
   }
 
@@ -267,26 +284,6 @@
     --glow: var(--color-violet);
   }
 
-  /*
-   * Depth behind the content without anything to look at: two very wide,
-   * very dilute pools, one magenta and one cyan, fixed so they do not travel
-   * with the scroll.
-   */
-  .aurora {
-    background-image:
-      radial-gradient(
-        60rem 40rem at 15% -10%,
-        oklch(0.64 0.24 349 / 0.06),
-        transparent 60%
-      ),
-      radial-gradient(
-        55rem 35rem at 95% 0%,
-        oklch(0.62 0.21 293 / 0.05),
-        transparent 60%
-      );
-    background-attachment: fixed;
-  }
-
   .rise {
     animation: rise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -294,95 +291,179 @@
 
 @layer components {
   /*
-   * The animated ground behind the door screens. Each piece rests at the
-   * state its own declarations describe, and the animation only departs from
-   * it and comes back — which is what makes freezing them (reduced motion)
-   * leave a composed still rather than a half-drawn frame.
+   * The ground itself, in two strengths.
+   *
+   * `.plasma-door` is login and register: the plasma is the point there, so
+   * it runs at full strength on a ground of its own and somebody waiting on a
+   * form has something to look at. `.plasma-ambient` is every signed-in
+   * screen — the same four pools at a tenth of the strength, slower again,
+   * and masked out of the middle of the viewport so the colour stays in the
+   * empty margins and never sits under a table or a balance.
+   *
+   * Both share every layer and every movement; only `--plasma-opacity` and
+   * `--plasma-tempo` differ. Two separate grounds would have let the door and
+   * the app drift into looking like two products.
    */
-  .orb {
+  .plasma {
+    --plasma-opacity: 1;
+    --plasma-tempo: 1;
+    opacity: var(--plasma-opacity);
+    /*
+     * The pools blend on `screen`, and `screen` against the page underneath
+     * would wash out whatever is scrolling past. Isolating the container
+     * keeps the blending among the pools themselves, which is where the
+     * effect lives.
+     */
+    isolation: isolate;
+  }
+
+  .plasma-door {
+    --plasma-tempo: 1.7;
+    /* Not flat ink: a dark violet lift in the middle, so the pools sit in
+     * something rather than on top of a void. */
+    background-image:
+      radial-gradient(circle at 50% 45%, oklch(0.24 0.06 293 / 0.38), transparent 55%),
+      linear-gradient(
+        145deg,
+        var(--color-ink) 0%,
+        oklch(0.16 0.02 275) 48%,
+        #04050a 100%
+      );
+  }
+
+  .plasma-ambient {
+    --plasma-opacity: 0.1;
+    --plasma-tempo: 2.8;
+    /*
+     * The inverse of a vignette: clear through the middle, where the content
+     * column lives, and lit only towards the edges. Dimming alone would still
+     * leave colour under a figure; this keeps it off the reading area
+     * entirely.
+     */
+    mask-image: radial-gradient(
+      115% 95% at 50% 45%,
+      transparent 0%,
+      transparent 42%,
+      #000 88%
+    );
+  }
+
+  /*
+   * One pool. Not a circle: the radii are deliberately mismatched so the
+   * shape reads as something organic, and each pool turns as it travels, so
+   * the silhouette keeps changing without anything having to redraw.
+   */
+  .plasma-blob {
     position: absolute;
-    border-radius: 9999px;
-    filter: blur(64px);
+    border-radius: 48% 52% 63% 37% / 54% 42% 58% 46%;
+    filter: blur(72px);
+    mix-blend-mode: screen;
     will-change: transform;
   }
 
   /*
-   * Hue lives on its own classes rather than in a utility: a gradient stop
-   * carries a slash for its alpha, and an arbitrary Tailwind value reads that
-   * slash as an opacity modifier.
+   * Size, place and hue live together on each pool's own class: they are one
+   * decision, and a gradient stop carries a slash for its alpha, which an
+   * arbitrary Tailwind value would read as an opacity modifier.
+   *
+   * Two colour stops each, not one — a bright core falling to a mid tone and
+   * only then to nothing. That second stop is what makes the pools read as
+   * plasma rather than as blurred discs.
    */
-  .orb-magenta {
+  .plasma-pink {
+    width: 58vw;
+    height: 70vh;
+    top: -12vh;
+    left: -10vw;
     background-image: radial-gradient(
-      circle at 50% 50%,
-      oklch(0.64 0.24 349 / 0.32),
-      transparent 68%
+      circle at 42% 40%,
+      oklch(0.64 0.29 349 / 0.92),
+      oklch(0.52 0.25 316 / 0.45) 44%,
+      transparent 72%
     );
-  }
-  .orb-violet {
-    background-image: radial-gradient(
-      circle at 50% 50%,
-      oklch(0.62 0.21 293 / 0.28),
-      transparent 68%
-    );
-  }
-  .orb-cyan {
-    background-image: radial-gradient(
-      circle at 50% 50%,
-      oklch(0.78 0.13 205 / 0.22),
-      transparent 68%
-    );
+    animation: move-pink calc(15s * var(--plasma-tempo)) ease-in-out infinite alternate;
   }
 
-  /* Darkens the edges so the pools never touch the viewport border. */
-  .neon-vignette {
+  .plasma-violet {
+    width: 64vw;
+    height: 72vh;
+    top: -16vh;
+    right: -12vw;
     background-image: radial-gradient(
-      75% 65% at 50% 45%,
-      transparent 40%,
-      var(--color-ink) 100%
+      circle at 50% 45%,
+      oklch(0.55 0.29 293 / 0.86),
+      oklch(0.38 0.22 288 / 0.42) 46%,
+      transparent 72%
     );
+    animation: move-violet calc(19s * var(--plasma-tempo)) ease-in-out infinite
+      alternate;
   }
 
-  .orb-a {
-    animation: drift-a 26s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  .plasma-cyan {
+    width: 58vw;
+    height: 65vh;
+    right: 2vw;
+    bottom: -24vh;
+    background-image: radial-gradient(
+      circle at 48% 42%,
+      oklch(0.8 0.14 205 / 0.72),
+      oklch(0.55 0.12 235 / 0.34) 44%,
+      transparent 72%
+    );
+    animation: move-cyan calc(17s * var(--plasma-tempo)) ease-in-out infinite alternate;
   }
-  .orb-b {
-    animation: drift-b 32s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-  }
-  .orb-c {
-    animation: drift-c 38s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+
+  .plasma-magenta {
+    width: 42vw;
+    height: 52vh;
+    bottom: -20vh;
+    left: 30vw;
+    background-image: radial-gradient(
+      circle,
+      oklch(0.6 0.26 344 / 0.57),
+      oklch(0.44 0.24 305 / 0.28) 50%,
+      transparent 74%
+    );
+    animation: move-magenta calc(22s * var(--plasma-tempo)) ease-in-out infinite
+      alternate;
   }
 
   /*
-   * A grid, dilute enough to read as texture. Masked to fade out towards the
-   * edges so it never meets the viewport border as a hard line.
+   * A phone is doing this on a fraction of the GPU and on a quarter of the
+   * area, where a 72px radius is most of the viewport anyway.
    */
-  .neon-grid {
-    background-image:
-      repeating-linear-gradient(
-        to right,
-        oklch(0.78 0.13 205 / 0.07) 0 1px,
-        transparent 1px 56px
-      ),
-      repeating-linear-gradient(
-        to bottom,
-        oklch(0.64 0.24 349 / 0.06) 0 1px,
-        transparent 1px 56px
-      );
-    mask-image: radial-gradient(70% 60% at 50% 40%, #000 30%, transparent 100%);
-    animation: grid-pan 24s linear infinite;
+  @media (max-width: 640px) {
+    .plasma-blob {
+      filter: blur(52px);
+    }
   }
 
-  .neon-beam {
-    background-image: linear-gradient(
-      90deg,
-      transparent,
-      oklch(0.78 0.13 205 / 0.14),
-      oklch(0.64 0.24 349 / 0.1),
-      transparent
+  /* Darkens the edges so the pools never touch the viewport border. */
+  .plasma-shade {
+    background-image:
+      radial-gradient(
+        circle at 50% 48%,
+        transparent 5%,
+        oklch(0.02 0.005 275 / 0.08) 46%,
+        oklch(0.02 0.005 275 / 0.72) 100%
+      ),
+      linear-gradient(to bottom, oklch(0 0 0 / 0.05), oklch(0 0 0 / 0.22));
+  }
+
+  /*
+   * A film of grain over the whole thing. Static, and on `soft-light` at 3.5%
+   * so it never reads as texture in its own right — its job is to break up
+   * the banding that a gradient this wide shows on an 8-bit panel.
+   */
+  .plasma-grain {
+    opacity: 0.035;
+    background-image: repeating-radial-gradient(
+      circle at 20% 30%,
+      #fff 0 1px,
+      transparent 1px 4px
     );
-    transform: translate3d(-60vw, 0, 0) rotate(14deg);
-    opacity: 0;
-    animation: beam 19s ease-in-out infinite;
+    background-size: 11px 11px;
+    mix-blend-mode: soft-light;
   }
 
   /* The wordmark on the door, lit from a gradient that keeps moving. */

@@ -1,32 +1,63 @@
 /**
- * The moving ground behind the login and register screens.
+ * The moving ground behind every screen.
  *
- * Deliberately the one place in the app that does this. Everything past the
- * door follows the 80/20 rule and stays still; the door is where somebody is
- * waiting on a form rather than reading a figure, so it is the one screen a
- * little motion costs nothing.
+ * One plasma, two strengths. On the door — login and register — it is the
+ * point: four wide pools of pink, violet, cyan and magenta drifting and
+ * turning across each other, visible enough to give the screen a personality
+ * while somebody is waiting on a form rather than reading a figure. Past the
+ * door the same ground survives at a tenth of that and a good deal slower,
+ * masked away from the middle of the viewport so it only ever lights the
+ * empty margins. What it should read as there is the room the numbers sit in,
+ * not something happening on screen.
+ *
+ * Deliberately no particles, no sweeps, no pulsing: every layer only travels,
+ * turns and breathes, on cycles long enough (25s to 37s at the door, over a
+ * minute in the app, and each one walking its path out and back) that the
+ * loop never announces itself.
  *
  * Purely decorative and marked as such: nothing here is focusable, nothing
- * carries meaning, and every layer animates on transform or opacity alone so
- * it never triggers layout. `prefers-reduced-motion` is handled globally in
+ * carries meaning, and every layer animates on transform alone so it never
+ * triggers layout. `prefers-reduced-motion` is handled globally in
  * `index.css` — with no fill mode on any of these animations, each layer
  * simply rests where its own class puts it, which is a composed still rather
  * than a frozen half-frame.
+ *
+ * Sizes and positions live in the stylesheet beside each pool's hue rather
+ * than as utilities here: they are one decision per pool, and the gradients
+ * cannot be expressed as utilities anyway.
  */
-export function NeonBackdrop() {
+
+import { cn } from "@/lib/cn";
+
+type Variant = "door" | "ambient";
+
+export function NeonBackdrop({ variant = "door" }: { variant?: Variant }) {
+  const door = variant === "door";
+
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed inset-0 -z-10 overflow-hidden bg-ink"
+      className={cn(
+        "plasma pointer-events-none fixed inset-0 -z-10 overflow-hidden",
+        door ? "plasma-door" : "plasma-ambient",
+      )}
     >
-      <div className="neon-grid absolute inset-0" />
+      <div className="plasma-blob plasma-pink" />
+      <div className="plasma-blob plasma-violet" />
+      <div className="plasma-blob plasma-cyan" />
+      <div className="plasma-blob plasma-magenta" />
 
-      <div className="orb orb-a orb-magenta -left-40 -top-52 absolute size-[42rem]" />
-      <div className="orb orb-b orb-violet -right-52 absolute top-[15%] size-[38rem]" />
-      <div className="orb orb-c orb-cyan -bottom-56 absolute left-[20%] size-[34rem]" />
-
-      <div className="neon-beam -inset-y-40 absolute left-1/3 w-48" />
-      <div className="neon-vignette absolute inset-0" />
+      {/*
+       * The door only. Behind a signed-in screen the shade would darken the
+       * very margins the ambient mask exists to light, and grain under a
+       * table of figures is one more texture to read past.
+       */}
+      {door ? (
+        <>
+          <div className="plasma-shade absolute inset-0" />
+          <div className="plasma-grain absolute inset-0" />
+        </>
+      ) : null}
     </div>
   );
 }

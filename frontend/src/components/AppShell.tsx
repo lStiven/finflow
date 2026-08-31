@@ -28,6 +28,7 @@ import type { ComponentType, ReactNode } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
 import { BetaMark } from "@/components/BetaMark";
+import { NeonBackdrop } from "@/components/NeonBackdrop";
 import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
 import { cn } from "@/lib/cn";
@@ -62,9 +63,10 @@ const BAR: Destination[] = [
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh lg:flex">
+      <NeonBackdrop variant="ambient" />
       <Rail />
       <div className="min-w-0 flex-1">
-        <main className="aurora rise mx-auto w-full max-w-6xl px-4 pt-6 pb-32 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
+        <main className="rise mx-auto w-full max-w-6xl px-4 pt-6 pb-32 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
           <OnboardingNudge />
           {children}
         </main>

@@ -58,11 +58,10 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — A payment to your own credit card is one email and two
-  movements. Ingestion publishes it as `TransferExtracted`, Financial writes
-  both sides with their own identities and routing, every total leaves them
-  out, and the screens read them as traslados. `just prepare` green (944
-  tests), `just web-check` green (115).
+- 2026-08-31 — The neon ground became one plasma serving both halves of the
+  app: four drifting pools at full strength on the door, at 10% and slower
+  behind the signed-in screens, masked out of the reading column. Background
+  only. `just web-check` green.
 
 ## Next steps
 
@@ -974,14 +973,30 @@ rest of the frontend — see **Next steps**.
   banner that outlives its onboarding is the thing people learn to stop
   reading.
 
-- **The door is the one screen that moves** (2026-08-30). Everything past
-  login follows the 80/20 rule and stays still; login and register get a
-  drifting neon ground, a panning grid and a beam, because that is the one
-  screen where somebody is waiting on a form rather than reading a figure.
-  Every layer animates on transform and opacity only and none carries a fill
-  mode, so `prefers-reduced-motion` — which the base layer already collapses
-  to 0.01ms — leaves each one resting at the state its own class describes: a
-  composed still, not a half-drawn frame.
+- **One plasma, two strengths** (2026-08-31). The door — login and register
+  — wears it at full strength: four wide pools of pink, violet, cyan and
+  magenta travelling and turning across each other on a ground of their own,
+  because that is the one screen where somebody is waiting on a form rather
+  than reading a figure. Every signed-in screen wears the same four pools at
+  10% opacity and a slower tempo, masked clear through the middle of the
+  viewport so they only light the empty margins and never sit under a table
+  or a balance. Two separate grounds would have made the app look like two
+  products, and the earlier fully-still app read as a different design
+  altogether; the door and the app now differ only in `--plasma-opacity` and
+  `--plasma-tempo`.
+
+  Rejected on the way: particles, the sweeping beam and any pulsing glow — an
+  intermittent flash pulls the eye on a schedule, which is the opposite of
+  ambient. The panning grid went too: behind a table it was one more set of
+  lines to read. What makes it read as plasma rather than as blurred discs is
+  a mismatched border-radius that turns as it travels, two colour stops per
+  pool instead of one, and `screen` blending inside an isolated container.
+  Each pool runs `alternate`, so it walks its path out and back rather than
+  snapping home, and the four periods are near-coprime. Every layer animates
+  on transform alone and none carries a fill mode, so `prefers-reduced-motion`
+  — which the base layer already collapses to 0.01ms — leaves each one resting
+  at the state its own class describes: a composed still, not a half-drawn
+  frame.
 
 - **Signing in and signing up are two places, not one form with two buttons**
   (2026-08-30). They share a card and a switch, but the copy, the hue (magenta
