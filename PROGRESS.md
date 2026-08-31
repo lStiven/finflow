@@ -43,18 +43,20 @@ borrows the host's Docker daemon and installs the SAM CLI (2026-08-28).
 The frontend has started. `frontend/` holds a Vite + React + TypeScript SPA
 whose types are generated from the API's own OpenAPI document, so a router
 change in Python fails the TypeScript build rather than a screen in a browser.
-Session, money and date handling, and the first two screens (login/register
-and the accounts dashboard) run against the local emulator.
+Session, money and date handling, the door (login/register, on a moving neon
+ground), the accounts dashboard, the Transacciones surface, `/perfil` and the
+`/conectar` onboarding guide all run against the local emulator.
 
 What is missing for production is observability, a cap on LLM spending and the
 rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-30 — An account can be named, and say who it belongs to. `name` is
-  optional on the user, the access token carries `email` and `name` beside
-  `sub`, and `GET`/`PATCH /identity/me` read and change it. `just prepare`
-  green (873 tests), `just verify` green (90 checks) against the emulator.
+- 2026-08-30 — `/conectar` walks somebody through forwarding their first
+  alert and, once expenses are arriving, becomes the guide they can come back
+  to. The shell carries the unfinished-setup mark and says which stage is
+  next; connecting is announced once, when it actually happens.
+  `just web-check` green (76 tests).
 
 ## Next steps
 
@@ -869,6 +871,63 @@ rest of the frontend — see **Next steps**.
   turns all of it off, and its `!important` is deliberate: the durations it
   has to beat are Tailwind utilities on the elements themselves, which a plain
   base-layer declaration loses to.
+
+- **Onboarding is derived on the server and acknowledged in the browser**
+  (2026-08-30). `GET /ingestion/setup` already answers the four checkable
+  facts and deliberately has no field a client writes, so the screen adds
+  nothing to it. What it keeps locally is only what nobody else can observe:
+  the explanation was read, the address was copied, the Gmail rule was
+  claimed, the "you are connected" message was shown once. Putting those in
+  the same record as verified facts would mix a claim with a proof, and each
+  stage says which of the two it is ("Verificado" against "Hecho"). Stated
+  cost: signing in on another browser replays the reading, never the work.
+
+- **`ready` closes the guide, not five green ticks** (2026-08-30). Somebody
+  forwarding each alert by hand never gets Google's confirmation, so the
+  forwarding stage also closes on a first alert having arrived, and arriving
+  expenses settle every stage behind them — including the reading nobody
+  acknowledged, because the recap reports on the setup rather than on which
+  paragraphs were opened. The reverse holds too: emptying the allow-list
+  makes `ready` false again and the guide comes back pointing at senders,
+  which is right, since the next alert would be dropped.
+
+- **The connect entry changes meaning instead of disappearing** (2026-08-30).
+  One route: while anything is open it is "Conectar", carries a dot and a
+  count, and resumes where the person left off; once expenses arrive it
+  becomes "Guía" — where the address is looked up and the explanation
+  re-read. Two routes would have been the same page twice, and a banner that
+  outlives its onboarding is the thing people learn to stop reading.
+
+- **The door is the one screen that moves** (2026-08-30). Everything past
+  login follows the 80/20 rule and stays still; login and register get a
+  drifting neon ground, a panning grid and a beam, because that is the one
+  screen where somebody is waiting on a form rather than reading a figure.
+  Every layer animates on transform and opacity only and none carries a fill
+  mode, so `prefers-reduced-motion` — which the base layer already collapses
+  to 0.01ms — leaves each one resting at the state its own class describes: a
+  composed still, not a half-drawn frame.
+
+- **Signing in and signing up are two places, not one form with two buttons**
+  (2026-08-30). They share a card and a switch, but the copy, the hue (magenta
+  for the return, cyan for the arrival), the panel beside them and the fields
+  differ — registering asks for a name and spends the panel explaining the
+  forwarding step, which is the part of Finflow nobody guesses. The mode is
+  keyed in React so switching replays the entrance instead of relabelling the
+  same screen in place.
+
+- **An expiry is announced on a timer, not discovered on the next request**
+  (2026-08-30). `expiresAt` is known the moment the token arrives, so the
+  moment it lapses is knowable too: a tab left open overnight says so at the
+  time rather than looking signed in until somebody clicks. `readStoredSession`
+  exists to tell "there was no session" from "the one you had ran out" — a
+  corrupt entry is deliberately *not* an expiry, since saying so would be a
+  lie — and the login screen turns the second into a notice above the form. A
+  deliberate sign-out reports nothing, because nothing happened to explain.
+
+- **The beta mark is handwriting, and the only webfont** (2026-08-30). One
+  small face (Caveat) loaded for one word, pencilled into a corner: it should
+  read as noted by hand rather than as a shipped label. `cursive` is the
+  fallback if the request never lands, and nothing else on screen wears it.
 
 - **The correction body is a pure function with its own tests**
   (`lib/correction.ts`). Three rules of `PATCH /financial/transactions/{id}`

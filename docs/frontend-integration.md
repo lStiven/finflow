@@ -136,6 +136,7 @@ POST /identity/register
 {
   "email": "yo@example.com",
   "password": "una frase larga de verdad",
+  "name": "Tu Nombre",
   "allowed_domains": ["an.notificacionesbancolombia.com"],
   "allowed_addresses": []
 }
@@ -150,6 +151,9 @@ Reglas:
   hacia patrones predecibles. Valida solo longitud, con el mismo mensaje que
   devuelve el backend.
 - **Email repetido → `409`.** Mensaje genérico a propósito.
+- **`name` es opcional.** La cuenta se identifica por el correo, así que se
+  puede registrar sin nombre y ponerlo después con `PATCH /identity/me`.
+  Máximo 80 caracteres; solo espacios se rechaza con `422`.
 - **El registro ya asigna la dirección de reenvío.** No hay un segundo paso
   para "crear la bandeja"; no la pidas, no la construyas, no la dejes elegir.
 - Los dos arrays de remitentes son **opcionales aquí**: se pueden mandar en el
@@ -159,8 +163,10 @@ Reglas:
 ### 2. Sesión
 
 ```http
-POST /identity/login    → 200 { user_id, access_token, expires_at }
-GET  /identity/me       → 200 { user_id }
+POST  /identity/login    → 200 { user_id, access_token, expires_at }
+GET   /identity/me       → 200 { user_id, email, name }
+PATCH /identity/me       → 200 { user_id, email, name }
+{ "name": "Tu Nombre" }
 ```
 
 - `POST /login` responde **`401` idéntico** para email desconocido, contraseña
@@ -171,6 +177,14 @@ GET  /identity/me       → 200 { user_id }
 - Un `401` en cualquier endpoint significa token ausente, inválido o vencido →
   volver al login. No hay refresh token ni endpoint de logout: cerrar sesión es
   borrar el token del cliente.
+- **El token lleva `sub`, `email` y `name`** (los nombres estándar: se leen con
+  cualquier decoder). Sirven para pintar al usuario apenas entra, sin una
+  llamada extra — pero son una foto del momento en que se emitió: después de un
+  `PATCH /identity/me` el `name` del token sigue siendo el viejo hasta el
+  siguiente login. Para mostrar el actual, `GET /identity/me`.
+- **`PATCH /identity/me` solo cambia el nombre.** El correo es la identidad de
+  la cuenta y no hay forma de moverlo. A quién se edita sale del token: no
+  recibe id, así que no hay manera de pedir la cuenta de otro.
 
 ### 3. Conectar el banco
 

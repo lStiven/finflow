@@ -20,6 +20,8 @@ export type NetWorth = components["schemas"]["NetWorthResponse"];
 export type Transaction = components["schemas"]["TransactionResponse"];
 export type Notification = components["schemas"]["NotificationResponse"];
 export type RegisteredInbox = components["schemas"]["RegisteredInboxResponse"];
+export type Profile = components["schemas"]["CurrentUserResponse"];
+export type InboxSetup = components["schemas"]["InboxSetupResponse"];
 export type Summary = components["schemas"]["SpendingSummaryResponse"];
 export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
 export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
@@ -34,6 +36,8 @@ export const queryKeys = {
   merchants: ["merchants"] as const,
   notifications: ["notifications"] as const,
   inbox: ["inbox"] as const,
+  profile: ["profile"] as const,
+  setup: ["setup"] as const,
   catalog: ["catalog"] as const,
 };
 
@@ -169,12 +173,63 @@ export const notificationsQuery = (status?: NotificationStatus) =>
     refetchInterval: 30_000,
   });
 
+/**
+ * How far this account got connecting their bank.
+ *
+ * Polled while anything is still open, and only then: two of the four steps
+ * close where the user cannot see — Google confirms by mailing a mailbox only
+ * this deployment reads, and the first alert lands in a worker — so the
+ * screen has to ask. Once expenses are arriving there is nothing left to
+ * watch, and `refetchInterval` returning false stops the timer rather than
+ * asking forever.
+ */
+export const setupQuery = queryOptions({
+  queryKey: queryKeys.setup,
+  queryFn: () => unwrap(api.GET("/ingestion/setup")),
+  staleTime: 10_000,
+  refetchInterval: (query) => (query.state.data?.ready ? false : 15_000),
+});
+
 export const inboxQuery = queryOptions({
   queryKey: queryKeys.inbox,
   queryFn: () => unwrap(api.GET("/identity/inbox")),
 });
 
+/**
+ * Who is signed in — id, email and name.
+ *
+ * Read from the API rather than decoded out of the access token: the token
+ * carries the same three claims, but as a snapshot of the moment it was
+ * issued, so a name changed since then would still show the old one until the
+ * next login. Cached long: it changes when this user changes it, and that
+ * path writes the answer straight back below.
+ */
+export const profileQuery = queryOptions({
+  queryKey: queryKeys.profile,
+  queryFn: () => unwrap(api.GET("/identity/me")),
+  staleTime: 10 * 60_000,
+});
+
 /* --------------------------------------------------------------- mutations */
+
+type ProfileBody = components["schemas"]["UpdateProfilePayload"];
+
+/**
+ * Changes the caller's name, the only editable field for now — the email is
+ * the account's identity, and the backend offers no way to move it.
+ *
+ * The response is the updated profile, so it replaces the cache outright
+ * instead of invalidating and asking again.
+ */
+export function useUpdateProfile(): UseMutationResult<Profile, Error, ProfileBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProfileBody) => unwrap(api.PATCH("/identity/me", { body })),
+    onSuccess: (data) => {
+      client.setQueryData(queryKeys.profile, data);
+    },
+  });
+}
 
 type InboxBody = components["schemas"]["InboxSendersPayload"];
 
@@ -189,6 +244,9 @@ export function useUpdateInbox(): UseMutationResult<RegisteredInbox, Error, Inbo
     mutationFn: (body: InboxBody) => unwrap(api.PATCH("/identity/inbox", { body })),
     onSuccess: (data) => {
       client.setQueryData(queryKeys.inbox, data);
+      // Approving a sender is exactly what closes the `senders_approved`
+      // step, so the onboarding answer is stale the moment this lands.
+      client.invalidateQueries({ queryKey: queryKeys.setup });
     },
   });
 }

@@ -20,6 +20,18 @@ export type Session = {
   expiresAt: number;
 };
 
+/**
+ * What was in storage, and whether it was thrown away for having expired.
+ *
+ * The distinction is the whole point: "no session" and "the session you had
+ * ran out" look identical once the token is gone, and only the second one is
+ * worth telling somebody about.
+ */
+export type StoredSession = {
+  session: Session | null;
+  expired: boolean;
+};
+
 function isSession(value: unknown): value is Session {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -34,29 +46,46 @@ export function isExpired(session: Session, now = Date.now() / 1000): boolean {
   return session.expiresAt - EXPIRY_MARGIN_SECONDS <= now;
 }
 
-export function loadSession(): Session | null {
+/** Milliseconds until `session` is due to be treated as spent. Never negative. */
+export function millisecondsUntilExpiry(
+  session: Session,
+  now = Date.now() / 1000,
+): number {
+  return Math.max(0, (session.expiresAt - EXPIRY_MARGIN_SECONDS - now) * 1000);
+}
+
+export function readStoredSession(): StoredSession {
   let raw: string | null;
   try {
     raw = window.localStorage.getItem(STORAGE_KEY);
   } catch {
     // Private windows and "block site data" both throw rather than return
     // null. No stored session is a valid state, so this is not an error.
-    return null;
+    return { session: null, expired: false };
   }
-  if (!raw) return null;
+  if (!raw) return { session: null, expired: false };
 
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isSession(parsed)) return null;
+    // Unreadable is not expired: a corrupt entry never was a usable session,
+    // and saying "tu sesión expiró" for one would be a lie.
+    if (!isSession(parsed)) {
+      clearSession();
+      return { session: null, expired: false };
+    }
     if (isExpired(parsed)) {
       clearSession();
-      return null;
+      return { session: null, expired: true };
     }
-    return parsed;
+    return { session: parsed, expired: false };
   } catch {
     clearSession();
-    return null;
+    return { session: null, expired: false };
   }
+}
+
+export function loadSession(): Session | null {
+  return readStoredSession().session;
 }
 
 export function saveSession(session: Session): void {

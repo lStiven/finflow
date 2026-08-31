@@ -44,6 +44,8 @@
   --radius-card: 1.15rem;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* One word wears this: the beta mark. See `.beta-mark` below. */
+  --font-script: "Caveat", "Segoe Script", "Bradley Hand", cursive;
 
   /* Balances get their own scale: they are the content, not a heading. */
   --text-numeral: 2.75rem;
@@ -117,6 +119,76 @@
     }
     to {
       stroke-dashoffset: 0;
+    }
+  }
+
+  /*
+   * The authenticated app is 80% calm. The door is the one room that may
+   * announce itself, so the login and register screens get a ground that
+   * moves: three very dilute pools drifting on their own cycles, a grid
+   * panning behind them, and one beam crossing every half minute.
+   *
+   * All of it is transform and opacity — no layout, no paint of anything a
+   * screen reader can reach — and none of it uses a fill mode, so under
+   * `prefers-reduced-motion` every element simply rests at the base state its
+   * own class already describes.
+   */
+  @keyframes drift-a {
+    50% {
+      transform: translate3d(8vw, 6vh, 0) scale(1.12);
+    }
+  }
+
+  @keyframes drift-b {
+    50% {
+      transform: translate3d(-7vw, 8vh, 0) scale(0.9);
+    }
+  }
+
+  @keyframes drift-c {
+    50% {
+      transform: translate3d(5vw, -7vh, 0) scale(1.08);
+    }
+  }
+
+  @keyframes grid-pan {
+    to {
+      background-position:
+        56px 56px,
+        56px 56px;
+    }
+  }
+
+  @keyframes beam {
+    /*
+     * Off-screen at both ends and invisible at both ends: the sweep should
+     * read as a passing reflection, not as a bar that parks at one edge.
+     */
+    0% {
+      transform: translate3d(-60vw, 0, 0) rotate(14deg);
+      opacity: 0;
+    }
+    12%,
+    45% {
+      opacity: 1;
+    }
+    100% {
+      transform: translate3d(60vw, 0, 0) rotate(14deg);
+      opacity: 0;
+    }
+  }
+
+  /* The wordmark's gradient travels rather than the wordmark itself. */
+  @keyframes hue-slide {
+    to {
+      background-position: 200% center;
+    }
+  }
+
+  @keyframes pulse-ring {
+    50% {
+      opacity: 0.85;
+      transform: scale(1.04);
     }
   }
 
@@ -217,5 +289,135 @@
 
   .rise {
     animation: rise 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+@layer components {
+  /*
+   * The animated ground behind the door screens. Each piece rests at the
+   * state its own declarations describe, and the animation only departs from
+   * it and comes back — which is what makes freezing them (reduced motion)
+   * leave a composed still rather than a half-drawn frame.
+   */
+  .orb {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(64px);
+    will-change: transform;
+  }
+
+  /*
+   * Hue lives on its own classes rather than in a utility: a gradient stop
+   * carries a slash for its alpha, and an arbitrary Tailwind value reads that
+   * slash as an opacity modifier.
+   */
+  .orb-magenta {
+    background-image: radial-gradient(
+      circle at 50% 50%,
+      oklch(0.64 0.24 349 / 0.32),
+      transparent 68%
+    );
+  }
+  .orb-violet {
+    background-image: radial-gradient(
+      circle at 50% 50%,
+      oklch(0.62 0.21 293 / 0.28),
+      transparent 68%
+    );
+  }
+  .orb-cyan {
+    background-image: radial-gradient(
+      circle at 50% 50%,
+      oklch(0.78 0.13 205 / 0.22),
+      transparent 68%
+    );
+  }
+
+  /* Darkens the edges so the pools never touch the viewport border. */
+  .neon-vignette {
+    background-image: radial-gradient(
+      75% 65% at 50% 45%,
+      transparent 40%,
+      var(--color-ink) 100%
+    );
+  }
+
+  .orb-a {
+    animation: drift-a 26s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+  .orb-b {
+    animation: drift-b 32s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+  .orb-c {
+    animation: drift-c 38s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  }
+
+  /*
+   * A grid, dilute enough to read as texture. Masked to fade out towards the
+   * edges so it never meets the viewport border as a hard line.
+   */
+  .neon-grid {
+    background-image:
+      repeating-linear-gradient(
+        to right,
+        oklch(0.78 0.13 205 / 0.07) 0 1px,
+        transparent 1px 56px
+      ),
+      repeating-linear-gradient(
+        to bottom,
+        oklch(0.64 0.24 349 / 0.06) 0 1px,
+        transparent 1px 56px
+      );
+    mask-image: radial-gradient(70% 60% at 50% 40%, #000 30%, transparent 100%);
+    animation: grid-pan 24s linear infinite;
+  }
+
+  .neon-beam {
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      oklch(0.78 0.13 205 / 0.14),
+      oklch(0.64 0.24 349 / 0.1),
+      transparent
+    );
+    transform: translate3d(-60vw, 0, 0) rotate(14deg);
+    opacity: 0;
+    animation: beam 19s ease-in-out infinite;
+  }
+
+  /* The wordmark on the door, lit from a gradient that keeps moving. */
+  .wordmark-lit {
+    background-image: linear-gradient(
+      100deg,
+      var(--color-text) 0%,
+      var(--color-accent) 25%,
+      var(--color-cyan) 50%,
+      var(--color-violet) 75%,
+      var(--color-text) 100%
+    );
+    background-size: 200% auto;
+    background-clip: text;
+    color: transparent;
+    animation: hue-slide 9s linear infinite;
+  }
+
+  .pulse-ring {
+    animation: pulse-ring 4.5s ease-in-out infinite;
+  }
+
+  /*
+   * The beta mark: handwriting, because the point is that it reads as
+   * something pencilled in the corner rather than a shipped label. Small,
+   * unclickable, and the one thing on screen wearing a script face.
+   */
+  .beta-mark {
+    font-family: var(--font-script);
+    font-size: 1.125rem;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: oklch(0.78 0.13 205 / 0.85);
+    text-shadow:
+      0 0 12px oklch(0.78 0.13 205 / 0.45),
+      0 0 30px oklch(0.64 0.24 349 / 0.25);
   }
 }
