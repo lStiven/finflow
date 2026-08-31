@@ -1,6 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
+  Archive,
   ArrowRight,
   BookOpen,
   Check,
@@ -8,14 +9,20 @@ import {
   CreditCard,
   Landmark,
   Loader2,
+  Lock,
+  Pencil,
   Plus,
   Radio,
+  Scale,
   ShieldCheck,
   Sparkles,
   TrendingDown,
+  TriangleAlert,
   Wallet,
 } from "lucide-react";
-import { type SubmitEvent, useState } from "react";
+import type { ComponentType, ReactNode } from "react";
+import { type SubmitEvent, useState, useTransition } from "react";
+import { balanceIssue, creditLimitIssue, nameIssue } from "@/accounts/edits";
 import { describeInstrument } from "@/accounts/instruments";
 import { instrumentLabel, kindCopy } from "@/accounts/kinds";
 import {
@@ -23,7 +30,11 @@ import {
   accountsQuery,
   financialCatalogQuery,
   type InstrumentKind,
+  useCloseAccount,
   useLinkInstrument,
+  useRenameAccount,
+  useRestateBalance,
+  useSetCreditLimit,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
@@ -33,7 +44,17 @@ import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
+import { formatDate } from "@/lib/dates";
 import { describeBalance, signOf, toChartValue } from "@/lib/money";
+
+/** Which accounts the list shows. The API's own vocabulary. */
+type Scope = "open" | "closed" | "all";
+
+const SCOPE_TABS: { value: Scope; label: string }[] = [
+  { value: "open", label: "Abiertas" },
+  { value: "closed", label: "Cerradas" },
+  { value: "all", label: "Todas" },
+];
 
 export const Route = createFileRoute("/cuentas/")({
   beforeLoad: ({ context }) => {
@@ -43,23 +64,46 @@ export const Route = createFileRoute("/cuentas/")({
     Promise.all([
       /*
        * `open`, the same scope the dashboard reports on. The net worth that
-       * travels with this list is computed over the scope asked for, so
-       * asking for `all` here would put a second, larger figure on a second
-       * screen — two numbers for one question, one of them apparently wrong.
+       * travels with this list is computed over the scope asked for, so the
+       * figures above the list stay on this one however the list is filtered
+       * — two numbers for one question, one of them apparently wrong, is
+       * exactly what the scope tabs must not introduce.
        */
       context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
+      /*
+       * And `all`, which answers a different question: has this person ever
+       * declared an account? Only that may decide between the first-run
+       * explanation and the list, because somebody who has closed every
+       * account they had is not a first-run — and showing them the pitch
+       * would hide the tabs that are the only way back to what they closed.
+       */
+      context.queryClient.query({ ...accountsQuery("all"), staleTime: "static" }),
       context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
     ]),
   component: AccountsScreen,
 });
 
 function AccountsScreen() {
-  const { data } = useSuspenseQuery(accountsQuery("open"));
+  const [scope, setScope] = useState<Scope>("open");
+  /*
+   * Switching scope changes a query key, so the screen would suspend and blank
+   * out on every tap. Inside a transition React keeps the current list on
+   * screen until the new one is ready, and `pending` is what says so.
+   */
+  const [pending, startScopeChange] = useTransition();
+
+  const { data: open } = useSuspenseQuery(accountsQuery("open"));
+  const { data: every } = useSuspenseQuery(accountsQuery("all"));
+  const { data } = useSuspenseQuery(accountsQuery(scope));
   const { data: catalog } = useSuspenseQuery(financialCatalogQuery);
 
   const accounts = data.accounts;
-  const primary = data.net_worth[0] ?? null;
-  const others = data.net_worth.slice(1);
+  const primary = open.net_worth[0] ?? null;
+  const others = open.net_worth.slice(1);
+  // Nothing at all, ever — the only case the first-run explanation is for. A
+  // brand-new account holder also has nothing to filter, so the tabs go with
+  // it rather than sitting above a paragraph about what an account is.
+  const declaredAny = every.accounts.length > 0;
 
   /** The catalogue's own label, for a kind this build has no Spanish copy for. */
   const labelOf = (kind: string) =>
@@ -71,13 +115,13 @@ function AccountsScreen() {
         <div>
           <h1 className="font-semibold text-2xl tracking-tight">Cuentas</h1>
           <p className="mt-1.5 max-w-xl text-muted text-sm">
-            {accounts.length === 0
-              ? "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."
-              : "Lo que tienes y lo que debes, con los movimientos que ya se les asignaron."}
+            {declaredAny
+              ? "Lo que tienes y lo que debes, con los movimientos que ya se les asignaron."
+              : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."}
           </p>
         </div>
 
-        {accounts.length > 0 ? (
+        {declaredAny ? (
           <Link
             to="/cuentas/nueva"
             className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
@@ -88,7 +132,7 @@ function AccountsScreen() {
         ) : null}
       </header>
 
-      {accounts.length === 0 ? (
+      {!declaredAny ? (
         <EmptyState />
       ) : (
         <div className="flex flex-col gap-8">
@@ -109,21 +153,78 @@ function AccountsScreen() {
             </p>
           ) : null}
 
-          <section className="grid gap-4 md:grid-cols-2">
-            {accounts.map((account, index) => (
-              <AccountCard
-                key={account.id}
-                account={account}
-                kindLabel={labelOf(account.kind)}
-                index={index}
-              />
-            ))}
-          </section>
+          <ScopeTabs
+            scope={scope}
+            pending={pending}
+            onChange={(next) => startScopeChange(() => setScope(next))}
+          />
+
+          {accounts.length === 0 ? (
+            <Card lift={false}>
+              <p className="py-8 text-center text-muted text-sm">
+                {scope === "closed"
+                  ? "No has cerrado ninguna cuenta."
+                  : "Cerraste todas tus cuentas. Míralas en «Cerradas», o declara una nueva."}
+              </p>
+            </Card>
+          ) : (
+            <section
+              className={cn("grid gap-4 md:grid-cols-2", pending && "opacity-60")}
+            >
+              {accounts.map((account, index) => (
+                <AccountCard
+                  key={account.id}
+                  account={account}
+                  kindLabel={labelOf(account.kind)}
+                  index={index}
+                  onClosed={() => startScopeChange(() => setScope("closed"))}
+                />
+              ))}
+            </section>
+          )}
 
           <GuideLink />
         </div>
       )}
     </AppShell>
+  );
+}
+
+function ScopeTabs({
+  scope,
+  pending,
+  onChange,
+}: {
+  scope: Scope;
+  pending: boolean;
+  onChange: (next: Scope) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        role="tablist"
+        aria-label="Qué cuentas ver"
+        className="flex flex-1 gap-1 rounded-xl border border-line bg-surface p-1 sm:max-w-sm"
+      >
+        {SCOPE_TABS.map((tab) => (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            aria-selected={scope === tab.value}
+            onClick={() => onChange(tab.value)}
+            className={
+              scope === tab.value
+                ? "flex-1 rounded-lg bg-accent-soft py-2 font-medium text-sm text-text transition-colors"
+                : "flex-1 rounded-lg py-2 text-muted text-sm transition-colors hover:text-text"
+            }
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {pending ? <Loader2 className="size-4 animate-spin text-faint" /> : null}
+    </div>
   );
 }
 
@@ -303,10 +404,12 @@ function AccountCard({
   account,
   kindLabel,
   index,
+  onClosed,
 }: {
   account: Account;
   kindLabel: string;
   index: number;
+  onClosed: () => void;
 }) {
   // Tone and caption both from the one place allowed to decide what a balance
   // means: a paid-off card must not read "Debes" beside a zero.
@@ -316,21 +419,25 @@ function AccountCard({
     account.category,
   );
   const owed = account.category === "liability";
+  const closed = account.closed_at !== null;
   const copy = kindCopy(account.kind, kindLabel);
   const Icon = copy.icon;
 
   return (
     <Card
-      glow={owed ? "accent" : "cyan"}
+      glow={closed ? "none" : owed ? "accent" : "cyan"}
       lift={false}
-      className="rise relative flex flex-col gap-5 overflow-hidden"
+      className={cn(
+        "rise relative flex flex-col gap-5 overflow-hidden",
+        closed && "border-dashed",
+      )}
       style={{ animationDelay: `${index * 60}ms` }}
     >
       <span
         aria-hidden
         className={cn(
           "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent to-transparent",
-          owed ? "via-accent/50" : "via-cyan/50",
+          closed ? "via-line" : owed ? "via-accent/50" : "via-cyan/50",
         )}
       />
 
@@ -339,16 +446,25 @@ function AccountCard({
           aria-hidden
           className={cn(
             "grid size-11 shrink-0 place-items-center rounded-xl ring-1",
-            owed
-              ? "bg-accent/12 text-accent ring-accent/25"
-              : "bg-cyan/12 text-cyan ring-cyan/25",
+            closed
+              ? "bg-surface-raised text-faint ring-line"
+              : owed
+                ? "bg-accent/12 text-accent ring-accent/25"
+                : "bg-cyan/12 text-cyan ring-cyan/25",
           )}
         >
           <Icon className="size-5" />
         </span>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium">{account.name}</p>
+          <p className="flex flex-wrap items-center gap-2 font-medium">
+            <span className="truncate">{account.name}</span>
+            {closed ? (
+              <span className="rounded-full border border-line px-2 py-0.5 text-[0.625rem] text-faint uppercase tracking-wider">
+                Cerrada
+              </span>
+            ) : null}
+          </p>
           <p className="mt-0.5 truncate text-faint text-xs">
             {copy.label}
             {account.bank ? ` · ${account.bank}` : ""}
@@ -376,9 +492,13 @@ function AccountCard({
                 ? "movimiento asignado"
                 : "movimientos asignados"
             }.`}
+        {closed && account.closed_at !== null
+          ? ` Cerrada el ${formatDate(account.closed_at)}.`
+          : ""}
       </p>
 
       <Instruments account={account} />
+      <Settings account={account} onClosed={onClosed} />
 
       <Link
         to="/transacciones"
@@ -442,17 +562,17 @@ function CreditBar({ account }: { account: Account }) {
   );
 }
 
-/**
- * The names this account's alerts arrive under, and the way to add another.
- *
- * The silent failure this exists for: one real account emails as a card for
- * purchases and as an account number for transfers, under different last four
- * digits. Link only one and half its movements wait forever, with nothing on
- * screen to say why.
- */
-function Instruments({ account }: { account: Account }) {
+/** One foldable section at the bottom of a card. */
+function Panel({
+  icon: Icon,
+  summary,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  summary: string;
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
-  const count = account.instruments.length;
 
   return (
     <div className="rounded-xl border border-line bg-ink/60">
@@ -462,12 +582,8 @@ function Instruments({ account }: { account: Account }) {
         aria-expanded={open}
         className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
       >
-        <Radio className="size-3.5 shrink-0 text-faint" />
-        <span className="min-w-0 flex-1 truncate text-muted text-xs">
-          {count === 0
-            ? "No está enlazada a ninguna alerta"
-            : `${count} ${count === 1 ? "forma de llegar" : "formas de llegar"}`}
-        </span>
+        <Icon className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 truncate text-muted text-xs">{summary}</span>
         <ChevronDown
           className={cn(
             "size-3.5 shrink-0 text-faint transition-transform duration-200",
@@ -478,28 +594,64 @@ function Instruments({ account }: { account: Account }) {
 
       {open ? (
         <div className="rise flex flex-col gap-4 border-line border-t p-3.5">
-          {count === 0 ? (
-            <p className="text-faint text-xs leading-relaxed">
-              Ninguna alerta se le asigna sola todavía. Enlaza la tarjeta o la cuenta
-              cuyos correos deben caer aquí y se adoptan también los que ya llegaron.
-            </p>
-          ) : (
-            <ul className="flex flex-wrap gap-2">
-              {account.instruments.map((instrument) => (
-                <li
-                  key={instrument}
-                  className="rounded-lg border border-line bg-surface px-2.5 py-1 text-xs"
-                >
-                  {describeInstrument(instrument)}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <LinkInstrumentForm account={account} />
+          {children}
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The names this account's alerts arrive under, and the way to add another.
+ *
+ * The silent failure this exists for: one real account emails as a card for
+ * purchases and as an account number for transfers, under different last four
+ * digits. Link only one and half its movements wait forever, with nothing on
+ * screen to say why. So the panel says what it is *for* rather than counting
+ * the keys — "3 formas de llegar" named the mechanism to somebody who has no
+ * reason to know there is one.
+ */
+function Instruments({ account }: { account: Account }) {
+  const count = account.instruments.length;
+
+  return (
+    <Panel
+      icon={Radio}
+      summary={
+        count === 0
+          ? "Ninguna alerta del banco cae en esta cuenta"
+          : `${count} ${count === 1 ? "tarjeta o cuenta enlazada" : "tarjetas o cuentas enlazadas"}`
+      }
+    >
+      <p className="text-faint text-xs leading-relaxed">
+        Las alertas de tu banco no dicen a cuál de tus cuentas pertenecen: solo traen el
+        banco, si fue tarjeta o cuenta, y los últimos cuatro dígitos. Enlazar esos datos
+        aquí es lo que hace que esos movimientos entren en{" "}
+        <strong className="text-muted">{account.name}</strong> y muevan su saldo.
+      </p>
+
+      {count > 0 ? (
+        <ul className="flex flex-wrap gap-2">
+          {account.instruments.map((instrument) => (
+            <li
+              key={instrument}
+              className="rounded-lg border border-line bg-surface px-2.5 py-1 text-xs"
+            >
+              {describeInstrument(instrument)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {account.closed_at === null ? (
+        <LinkInstrumentForm account={account} />
+      ) : (
+        <p className="text-faint text-xs">
+          Está cerrada, así que no adopta movimientos nuevos y no tiene sentido
+          enlazarle más alertas.
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -605,6 +757,356 @@ function LinkInstrumentForm({ account }: { account: Account }) {
   );
 }
 
+/* ------------------------------------------------------------------ ajustes */
+
+/** The three things about an account that are the owner's to change, and the end of it. */
+function Settings({ account, onClosed }: { account: Account; onClosed: () => void }) {
+  const owed = account.category === "liability";
+
+  return (
+    <Panel icon={Pencil} summary="Ajustes de la cuenta">
+      <RenameForm account={account} />
+      <BalanceForm account={account} />
+      {owed ? <CreditLimitForm account={account} /> : null}
+      {account.closed_at === null ? (
+        <CloseForm account={account} onClosed={onClosed} />
+      ) : (
+        <p className="flex items-start gap-2 border-line border-t pt-4 text-faint text-xs leading-relaxed">
+          <Lock className="mt-0.5 size-3.5 shrink-0" />
+          Esta cuenta está cerrada: no recibe movimientos nuevos, pero sigue explicando
+          los que ya tiene y su saldo sigue contando en tu patrimonio. Volver a abrirla
+          todavía no se puede desde la app.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+/** Shared shell for the little one-field forms below. */
+function EditRow({
+  icon: Icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2 border-line border-t pt-4 first:border-0 first:pt-0">
+      <p className="flex items-center gap-2 font-medium text-xs">
+        <Icon className="size-3.5 shrink-0 text-faint" />
+        {title}
+      </p>
+      <p className="text-faint text-xs leading-relaxed">{hint}</p>
+      {children}
+    </div>
+  );
+}
+
+function Saved({ children }: { children: ReactNode }) {
+  return (
+    <p role="status" className="rise flex items-center gap-1.5 text-incoming text-xs">
+      <Check className="size-3.5" />
+      {children}
+    </p>
+  );
+}
+
+function Failed({ error }: { error: Error | null }) {
+  if (error === null) return null;
+  return (
+    <p role="alert" className="text-outgoing text-xs">
+      {error.message}
+    </p>
+  );
+}
+
+function RenameForm({ account }: { account: Account }) {
+  const rename = useRenameAccount(account.id);
+  const [name, setName] = useState(account.name);
+  const [saved, setSaved] = useState(false);
+
+  const issue = nameIssue(name);
+  const changed = name.trim() !== account.name;
+  const canSave = issue === undefined && changed && !rename.isPending;
+
+  async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave) return;
+    setSaved(false);
+    try {
+      const next = await rename.mutateAsync({ name: name.trim() });
+      setName(next.name);
+      setSaved(true);
+    } catch {
+      // `rename.error` carries it and `Failed` reports it below.
+    }
+  }
+
+  return (
+    <EditRow
+      icon={Pencil}
+      title="Nombre"
+      hint="Solo cómo la llamas. No mueve saldos ni movimientos."
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-2">
+        <Field
+          label="Nombre de la cuenta"
+          value={name}
+          maxLength={120}
+          onChange={(event) => {
+            setName(event.target.value);
+            setSaved(false);
+          }}
+        />
+        {changed && issue ? <p className="text-outgoing text-xs">{issue}</p> : null}
+        <Failed error={rename.error} />
+        {saved && !changed ? <Saved>Nombre guardado.</Saved> : null}
+        <Button
+          type="submit"
+          variant="ghost"
+          className="self-start py-2 text-xs"
+          disabled={!canSave}
+        >
+          {rename.isPending ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              Guardando…
+            </>
+          ) : (
+            "Guardar nombre"
+          )}
+        </Button>
+      </form>
+    </EditRow>
+  );
+}
+
+/**
+ * Restating the balance: the figure the bank shows today, not a movement.
+ *
+ * The backend solves the opening balance backwards from the movements already
+ * on record, so nothing in the transaction list changes and every row still
+ * counts exactly once. That is the whole point, and it is also the thing that
+ * needs saying on screen — otherwise this reads like a way to invent money.
+ */
+function BalanceForm({ account }: { account: Account }) {
+  const restate = useRestateBalance(account.id);
+  const [balance, setBalance] = useState(account.balance);
+  const [saved, setSaved] = useState(false);
+
+  const issue = balanceIssue(balance);
+  const changed = balance.trim() !== account.balance;
+  const canSave = issue === undefined && changed && !restate.isPending;
+  const owed = account.category === "liability";
+
+  async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave) return;
+    setSaved(false);
+    try {
+      const next = await restate.mutateAsync({ balance: balance.trim() });
+      setBalance(next.balance);
+      setSaved(true);
+    } catch {
+      // `restate.error` carries it and `Failed` reports it below.
+    }
+  }
+
+  return (
+    <EditRow
+      icon={Scale}
+      title="Saldo"
+      hint={
+        owed
+          ? "Lo que la tarjeta debe hoy, según tu banco. No crea ningún movimiento: Finflow recalcula el saldo de partida para que las compras que ya tiene sigan cuadrando."
+          : "Lo que la cuenta tiene hoy, según tu banco. No crea ningún movimiento: Finflow recalcula el saldo de partida para que lo que ya tiene siga cuadrando."
+      }
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-2">
+        <Field
+          label={owed ? "¿Cuánto debe hoy?" : "¿Cuánto tiene hoy?"}
+          inputMode="decimal"
+          placeholder="0"
+          value={balance}
+          onChange={(event) => {
+            setBalance(event.target.value);
+            setSaved(false);
+          }}
+        />
+        {changed && issue ? <p className="text-outgoing text-xs">{issue}</p> : null}
+        <Failed error={restate.error} />
+        {saved && !changed ? (
+          <Saved>Saldo corregido. Ningún movimiento se tocó.</Saved>
+        ) : null}
+        <Button
+          type="submit"
+          variant="ghost"
+          className="self-start py-2 text-xs"
+          disabled={!canSave}
+        >
+          {restate.isPending ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              Guardando…
+            </>
+          ) : (
+            "Corregir saldo"
+          )}
+        </Button>
+      </form>
+    </EditRow>
+  );
+}
+
+/** Only a liability has one; sending a limit on an asset is a 422, not a no-op. */
+function CreditLimitForm({ account }: { account: Account }) {
+  const setLimit = useSetCreditLimit(account.id);
+  const [limit, setLimit_] = useState(account.credit_limit ?? "");
+  const [saved, setSaved] = useState(false);
+
+  const issue = creditLimitIssue(limit);
+  const changed = limit.trim() !== (account.credit_limit ?? "");
+  const canSave = issue === undefined && changed && !setLimit.isPending;
+
+  async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSave) return;
+    setSaved(false);
+    try {
+      // Empty clears it: the endpoint takes the whole fact, so "no limit" is
+      // a value that has to be sent rather than a field left out.
+      const next = await setLimit.mutateAsync({
+        credit_limit: limit.trim() === "" ? null : limit.trim(),
+      });
+      setLimit_(next.credit_limit ?? "");
+      setSaved(true);
+    } catch {
+      // `setLimit.error` carries it and `Failed` reports it below.
+    }
+  }
+
+  return (
+    <EditRow
+      icon={CreditCard}
+      title="Cupo"
+      hint="El máximo que el banco te deja deber. Es lo que permite mostrar cuánto te queda disponible. Déjalo vacío para quitarlo."
+    >
+      <form onSubmit={onSubmit} className="flex flex-col gap-2">
+        <Field
+          label="Cupo total"
+          inputMode="decimal"
+          placeholder="Sin cupo declarado"
+          value={limit}
+          onChange={(event) => {
+            setLimit_(event.target.value);
+            setSaved(false);
+          }}
+        />
+        {changed && issue ? <p className="text-outgoing text-xs">{issue}</p> : null}
+        <Failed error={setLimit.error} />
+        {saved && !changed ? <Saved>Cupo guardado.</Saved> : null}
+        <Button
+          type="submit"
+          variant="ghost"
+          className="self-start py-2 text-xs"
+          disabled={!canSave}
+        >
+          {setLimit.isPending ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              Guardando…
+            </>
+          ) : (
+            "Guardar cupo"
+          )}
+        </Button>
+      </form>
+    </EditRow>
+  );
+}
+
+/**
+ * Closing, behind a confirmation, because there is no way back.
+ *
+ * The API has no reopen and no delete, deliberately: a closed account still
+ * explains the movements it already holds. What the confirmation has to say is
+ * the consequence somebody would not guess — alerts from its card keep
+ * arriving and land unassigned, because a closed account takes no movements.
+ */
+function CloseForm({ account, onClosed }: { account: Account; onClosed: () => void }) {
+  const close = useCloseAccount(account.id);
+  const [confirming, setConfirming] = useState(false);
+
+  async function onConfirm() {
+    try {
+      await close.mutateAsync();
+      onClosed();
+    } catch {
+      // `close.error` carries it and `Failed` reports it below.
+    }
+  }
+
+  return (
+    <EditRow
+      icon={Archive}
+      title="Cerrar la cuenta"
+      hint="Deja de recibir movimientos nuevos. No se borra: sus movimientos y su saldo siguen ahí, explicando lo que ya pasó."
+    >
+      {confirming ? (
+        <div className="flex flex-col gap-3 rounded-xl border border-warn/30 bg-warn/10 p-3">
+          <p className="flex items-start gap-2 text-xs leading-relaxed">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warn" />
+            <span>
+              Vas a cerrar <strong>{account.name}</strong>. Si su tarjeta sigue enviando
+              alertas, esos movimientos quedarán sin asignar.{" "}
+              <strong>Volver a abrirla no se puede desde la app.</strong>
+            </span>
+          </p>
+          <Failed error={close.error} />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              className="py-2 text-xs"
+              disabled={close.isPending}
+              onClick={onConfirm}
+            >
+              {close.isPending ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Cerrando…
+                </>
+              ) : (
+                "Sí, cerrarla"
+              )}
+            </Button>
+            <Button
+              variant="quiet"
+              className="py-2 text-xs"
+              disabled={close.isPending}
+              onClick={() => setConfirming(false)}
+            >
+              Mejor no
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <Button
+          variant="ghost"
+          className="self-start py-2 text-xs"
+          onClick={() => setConfirming(true)}
+        >
+          <Archive className="size-3.5" />
+          Cerrar cuenta
+        </Button>
+      )}
+    </EditRow>
+  );
+}
+
 function GuideLink() {
   return (
     <Link
@@ -620,7 +1122,7 @@ function GuideLink() {
       <span className="min-w-0 flex-1">
         <span className="block font-medium text-sm">Cuentas y movimientos</span>
         <span className="mt-0.5 block text-muted text-sm">
-          Qué es cada cosa, cómo se juntan y qué hacer cuando algo no cuadra.
+          Qué es cada cosa, cómo se juntan y qué hacer cuando algo no cuadre.
         </span>
       </span>
       <ArrowRight className="size-4 shrink-0 text-faint" />

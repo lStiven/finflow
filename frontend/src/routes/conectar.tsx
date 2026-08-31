@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
   Wallet,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { type SubmitEvent, useState } from "react";
@@ -372,7 +373,7 @@ function StageBody({
         />
       );
     case "senders":
-      return <SendersBody complete={complete} />;
+      return <SendersBody />;
     case "forwarding":
       return (
         <ForwardingBody
@@ -496,7 +497,17 @@ const KNOWN_BANK = {
   domains: ["an.notificacionesbancolombia.com", "notificacionesbancolombia.com"],
 };
 
-function SendersBody({ complete }: { complete: boolean }) {
+/**
+ * The approved-sender list, and the only screen that edits it.
+ *
+ * Available whether or not the setup is finished: banks change the domain
+ * they send from, somebody approves the wrong one by pasting it, and a list
+ * that could only ever grow would leave the wrong entry accepted forever.
+ * Removing is not destructive — it is re-approved by typing it again — so it
+ * costs one click, with the consequence spelled out where it matters: taking
+ * the last one out means the address accepts nothing at all.
+ */
+function SendersBody() {
   const { data: inbox } = useSuspenseQuery(inboxQuery);
   const update = useUpdateInbox();
   const [custom, setCustom] = useState("");
@@ -528,6 +539,20 @@ function SendersBody({ complete }: { complete: boolean }) {
     setCustom("");
   }
 
+  function remove(sender: string, kind: "domain" | "address") {
+    if (kind === "domain") {
+      save({ domains: domains.filter((value) => value !== sender) });
+    } else {
+      save({ addresses: addresses.filter((value) => value !== sender) });
+    }
+  }
+
+  const approved: { value: string; kind: "domain" | "address" }[] = [
+    ...domains.map((value) => ({ value, kind: "domain" as const })),
+    ...addresses.map((value) => ({ value, kind: "address" as const })),
+  ];
+  const last = approved.length === 1;
+
   return (
     <div className="flex flex-col gap-5">
       <p className="text-sm leading-relaxed">
@@ -536,45 +561,51 @@ function SendersBody({ complete }: { complete: boolean }) {
         que es el valor seguro por defecto.
       </p>
 
-      {!complete ? (
-        <>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant={hasKnownBank ? "ghost" : "primary"}
-              disabled={hasKnownBank || update.isPending}
-              onClick={() =>
-                save({
-                  domains: [...new Set([...domains, ...KNOWN_BANK.domains])],
-                })
-              }
-            >
-              {hasKnownBank ? <Check className="size-4 text-incoming" /> : null}
-              {hasKnownBank
-                ? `${KNOWN_BANK.label} aprobado`
-                : `Aprobar ${KNOWN_BANK.label}`}
-            </Button>
-            {update.isPending ? (
-              <Loader2 className="size-4 animate-spin text-faint" />
-            ) : null}
-          </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant={hasKnownBank ? "ghost" : "primary"}
+          disabled={hasKnownBank || update.isPending}
+          onClick={() =>
+            save({
+              domains: [...new Set([...domains, ...KNOWN_BANK.domains])],
+            })
+          }
+        >
+          {hasKnownBank ? <Check className="size-4 text-incoming" /> : null}
+          {hasKnownBank
+            ? `${KNOWN_BANK.label} aprobado`
+            : `Aprobar ${KNOWN_BANK.label}`}
+        </Button>
+        {update.isPending ? (
+          <Loader2 className="size-4 animate-spin text-faint" />
+        ) : null}
+      </div>
 
-          <form
-            onSubmit={addCustom}
-            className="flex flex-col gap-3 sm:flex-row sm:items-end"
-          >
-            <Field
-              label="Otro banco"
-              className="w-full"
-              placeholder="dominio.com o alertas@banco.com"
-              value={custom}
-              onChange={(e) => setCustom(e.target.value)}
-            />
-            <Button type="submit" variant="ghost" disabled={!custom.trim()}>
-              Aprobar
-            </Button>
-          </form>
-        </>
-      ) : null}
+      <form
+        onSubmit={addCustom}
+        className="flex flex-col gap-3 sm:flex-row sm:items-end"
+      >
+        <Field
+          label="Otro banco"
+          className="w-full"
+          placeholder="dominio.com o alertas@banco.com"
+          value={custom}
+          onChange={(e) => setCustom(e.target.value)}
+        />
+        {/*
+          Disabled while a write is in flight like every other control here:
+          `save` rebuilds the whole list from the cached one, and the endpoint
+          replaces rather than merges — a second submit before the first
+          response lands would drop the sender the first one added.
+        */}
+        <Button
+          type="submit"
+          variant="ghost"
+          disabled={!custom.trim() || update.isPending}
+        >
+          Aprobar
+        </Button>
+      </form>
 
       {update.error ? (
         <p role="alert" className="text-outgoing text-sm">
@@ -584,22 +615,39 @@ function SendersBody({ complete }: { complete: boolean }) {
 
       <div>
         <p className="mb-2 text-muted text-xs uppercase tracking-wider">Aprobados</p>
-        {domains.length === 0 && addresses.length === 0 ? (
+        {approved.length === 0 ? (
           <p className="text-faint text-sm">
             Nadie todavía. Tu dirección no acepta nada.
           </p>
         ) : (
-          <ul className="flex flex-wrap gap-2">
-            {[...domains, ...addresses].map((sender) => (
-              <li
-                key={sender}
-                className="flex items-center gap-1.5 rounded-lg border border-incoming/25 bg-incoming/10 px-2.5 py-1 text-incoming text-xs"
-              >
-                <Check className="size-3" />
-                {sender}
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="flex flex-wrap gap-2">
+              {approved.map(({ value, kind }) => (
+                <li
+                  key={value}
+                  className="flex items-center gap-1.5 rounded-lg border border-incoming/25 bg-incoming/10 py-1 pr-1 pl-2.5 text-incoming text-xs"
+                >
+                  <Check className="size-3 shrink-0" />
+                  <span className="min-w-0 break-all">{value}</span>
+                  <button
+                    type="button"
+                    onClick={() => remove(value, kind)}
+                    disabled={update.isPending}
+                    aria-label={`Quitar ${value} de los remitentes aprobados`}
+                    title={`Quitar ${value}`}
+                    className="-my-1 grid size-6 shrink-0 place-items-center rounded-md text-incoming/70 transition-colors hover:bg-outgoing/15 hover:text-outgoing disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-faint text-xs leading-relaxed">
+              {last
+                ? "Si quitas el último, tu dirección deja de aceptar correo y no se registrará ningún movimiento nuevo."
+                : "Quitar uno deja de aceptar sus correos de aquí en adelante; los movimientos que ya se registraron se quedan."}
+            </p>
+          </>
         )}
       </div>
     </div>

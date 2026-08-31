@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
+import { originLabel } from "@/accounts/kinds";
 import {
   accountsQuery,
   financialCatalogQuery,
@@ -28,6 +29,7 @@ import { Card } from "@/components/ui/Card";
 import { type Option, Select } from "@/components/ui/Select";
 import { formatDate, formatMonthKey, fromLocalInput, monthKeyOf } from "@/lib/dates";
 import { transferTitle } from "@/lib/transfers";
+import { categoryLabel } from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -290,7 +292,10 @@ function TransactionsScreen() {
               placeholder="Todas"
               value={search.category ?? ""}
               onChange={(event) => apply({ category: event.target.value || undefined })}
-              options={merchantCatalog.categories.map(asOption)}
+              options={merchantCatalog.categories.map((option) => ({
+                value: option.value,
+                label: categoryLabel(option.value, option.label),
+              }))}
             />
             <Select
               label="Comercio"
@@ -312,7 +317,10 @@ function TransactionsScreen() {
                       : undefined,
                 })
               }
-              options={catalog.transaction_origins.map(asOption)}
+              options={catalog.transaction_origins.map((option) => ({
+                value: option.value,
+                label: originLabel(option.value, option.label),
+              }))}
             />
             <DateFilter
               label="Desde"
@@ -372,10 +380,6 @@ function TransactionsScreen() {
       </div>
     </AppShell>
   );
-}
-
-function asOption(option: { value: string; label: string }): Option {
-  return { value: option.value, label: option.label };
 }
 
 /**
@@ -574,7 +578,7 @@ function MovementRow({ movement }: { movement: Transaction }) {
           <span>{formatDate(movement.occurred_at)}</span>
           {transfer ? <span className="text-violet">· traslado</span> : null}
           {movement.merchant?.category ? (
-            <span>· {movement.merchant.category}</span>
+            <span>· {categoryLabel(movement.merchant.category)}</span>
           ) : null}
           {movement.origin === "manual" ? <span>· a mano</span> : null}
           {movement.account_id ? null : (

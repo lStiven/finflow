@@ -177,3 +177,18 @@ export function canLinkAlerts(kind: string): boolean {
   const copy = KIND_COPY[kind];
   return copy === undefined || copy.instrument !== null;
 }
+
+/**
+ * Where a movement came from, said in Spanish.
+ *
+ * The catalogue's own labels are English (`Bank alert`, `Manual`), and this is
+ * the filter somebody reads before choosing one.
+ */
+const ORIGIN_COPY: Record<string, string> = {
+  bank_alert: "Alerta del banco",
+  manual: "Registrado a mano",
+};
+
+export function originLabel(value: string, catalogLabel = value): string {
+  return ORIGIN_COPY[value] ?? catalogLabel;
+}

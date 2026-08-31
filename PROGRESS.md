@@ -58,10 +58,11 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — The neon ground became one plasma serving both halves of the
-  app: four drifting pools at full strength on the door, at 10% and slower
-  behind the signed-in screens, masked out of the reading column. Background
-  only. `just web-check` green.
+- 2026-08-31 — `/cuentas` closed its two gaps: an account's balance can be
+  restated and an account can be closed, alongside renaming and the credit
+  limit, behind scope tabs so a closed one stays reachable. Approved senders
+  can now be removed, not only added. Every category and origin the user
+  reads is Spanish. `just web-check` green (135).
 
 ## Next steps
 
@@ -90,12 +91,23 @@ rest of the frontend — see **Next steps**.
          Done: the dashboard, the whole Transacciones surface, the
          connect-your-bank guide, `/cuentas` and the `/guias` section. What is
          left is screens, not plumbing: merchant review, the spending summary
-         and reports, and configuration. Two things the accounts screen does
-         not cover and nothing else does either — restating a balance, and
-         closing an account — have endpoints already and no way in from the
-         app. `docs/frontend-integration.md` is still the contract each of
-         them has to honour. Nothing is deployed: no hosting is provisioned
-         and `API_CORS_ORIGINS` names only localhost.
+         and reports, and configuration. `docs/frontend-integration.md` is
+         still the contract each of them has to honour. Nothing is deployed:
+         no hosting is provisioned and `API_CORS_ORIGINS` names only
+         localhost.
+- [ ] **Three account edits the API cannot do, so the app cannot offer
+      them.** Reopening a closed account (`close` is one-way and there is no
+      inverse); deleting one outright (deliberate — a closed account still
+      explains its past movements, so this may stay refused rather than be
+      built); and unlinking an instrument from an account, which is the one
+      that hurts: `POST .../instruments` only adds, so a card linked to the
+      wrong account cannot be moved off it from anywhere. Each needs an
+      endpoint before a screen.
+- [ ] **`access_token_ttl_minutes` defaults to 1, not 1440.** Every `.env*`
+      sets 1440 and `docs/frontend-integration.md` documents it, so this only
+      bites a deployment where the variable is missing — where it logs people
+      out about thirty seconds after login, since the client keeps a 30 s
+      expiry margin. Reads like a debugging leftover.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.

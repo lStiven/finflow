@@ -223,10 +223,11 @@ function AccountsGuide() {
             .
           </Case>
           <Case title="Llega, pero queda sin asignar">
-            La alerta no coincide con ninguna llave. Declara la cuenta con el banco y
-            los cuatro dígitos que ves en el correo, o enlaza esa forma de llegar a una
-            cuenta que ya tengas: los movimientos que estaban esperando se acomodan
-            solos.
+            La alerta no coincide con ninguna tarjeta ni cuenta enlazada. Declara la
+            cuenta con el banco y los cuatro dígitos que ves en el correo, o enlaza esa
+            tarjeta a una cuenta que ya tengas desde{" "}
+            <strong className="text-text">Ajustes de la cuenta</strong>: los movimientos
+            que estaban esperando se acomodan solos.
           </Case>
           <Case title="Un movimiento tiene algo mal">
             Ábrelo y corrígelo: el monto, la fecha, el comercio o a qué cuenta
@@ -241,8 +242,13 @@ function AccountsGuide() {
           </Case>
           <Case title="El saldo no coincide con el del banco">
             Casi siempre falta el punto de partida: la cuenta arrancó en cero y solo
-            cuenta lo que ha pasado desde entonces. También puede faltar una forma de
-            llegar por enlazar, si la mitad de sus compras no aparece.
+            cuenta lo que ha pasado desde entonces. Corrígelo en{" "}
+            <Link to="/cuentas" className="text-cyan underline underline-offset-4">
+              Cuentas
+            </Link>{" "}
+            escribiendo el saldo que muestra hoy tu banco; no crea ningún movimiento.
+            También puede faltar una tarjeta por enlazar, si la mitad de sus compras no
+            aparece.
           </Case>
         </Section>
 

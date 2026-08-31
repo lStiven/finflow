@@ -35,6 +35,7 @@ import {
 } from "@/lib/dates";
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
+import { categoryGroupLabel } from "@/merchants/categories";
 
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
@@ -422,9 +423,14 @@ function toSlices(groups: SummaryGroup[], currency: string): Slices {
     .map((group) => {
       const totals = group.totals.find((total) => total.currency === currency);
       // `key` is nullable in the contract — the bucket for movements with no
-      // category at all. The label is what the reader sees either way.
+      // merchant behind them, and the one whose label the API sends in
+      // English. `categoryGroupLabel` is what answers both.
       return totals
-        ? { key: group.key ?? group.label, label: group.label, amount: totals.outgoing }
+        ? {
+            key: group.key ?? "__none__",
+            label: categoryGroupLabel(group),
+            amount: totals.outgoing,
+          }
         : null;
     })
     .filter((row): row is NonNullable<typeof row> => row !== null)

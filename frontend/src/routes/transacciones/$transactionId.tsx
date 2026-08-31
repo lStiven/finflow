@@ -19,6 +19,7 @@ import { TextArea } from "@/components/ui/TextArea";
 import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
 import { transferBlurb, transferTitle } from "@/lib/transfers";
+import { categoryLabel } from "@/merchants/categories";
 
 export const Route = createFileRoute("/transacciones/$transactionId")({
   beforeLoad: ({ context }) => {
@@ -91,7 +92,7 @@ function TransactionScreen() {
             </Row>
           ) : null}
           {movement.merchant?.category ? (
-            <Row label="Categoría">{movement.merchant.category}</Row>
+            <Row label="Categoría">{categoryLabel(movement.merchant.category)}</Row>
           ) : null}
           <Row label="Cuenta">
             {movement.account_id ? (

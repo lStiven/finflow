@@ -373,3 +373,105 @@ export function useEditTransaction(
     },
   });
 }
+
+type RenameAccountBody = components["schemas"]["RenameAccountPayload"];
+
+/**
+ * A new name for an account. Nothing else about it moves.
+ *
+ * The summary is invalidated too: grouped by account, its bucket labels are
+ * these names, so a rename that only refreshed the accounts list would leave
+ * the old one sitting on a chart.
+ */
+export function useRenameAccount(
+  accountId: string,
+): UseMutationResult<Account, Error, RenameAccountBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RenameAccountBody) =>
+      unwrap(
+        api.PATCH("/financial/accounts/{account_id}", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+type RestateBalanceBody = components["schemas"]["RestateBalancePayload"];
+
+/**
+ * What the account holds *today*, as the bank shows it.
+ *
+ * Not a movement and never recorded as one: the backend solves the opening
+ * balance backwards so the same movements still add up to the figure sent, so
+ * the transaction list is untouched and only balances and net worth move.
+ */
+export function useRestateBalance(
+  accountId: string,
+): UseMutationResult<Account, Error, RestateBalanceBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RestateBalanceBody) =>
+      unwrap(
+        api.PUT("/financial/accounts/{account_id}/balance", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+type CreditLimitBody = components["schemas"]["SetCreditLimitPayload"];
+
+/** The card's ceiling. `null` clears it — the endpoint takes the whole fact. */
+export function useSetCreditLimit(
+  accountId: string,
+): UseMutationResult<Account, Error, CreditLimitBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreditLimitBody) =>
+      unwrap(
+        api.PUT("/financial/accounts/{account_id}/credit-limit", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+/**
+ * Stop taking movements on an account, keeping everything it already explains.
+ *
+ * Not a delete — there is no endpoint that deletes one, deliberately: a closed
+ * account still accounts for past spending, and its balance still counts in
+ * net worth. It leaves the `open` list, which is the list every screen asks
+ * for, so the accounts screen has to offer a way back to it.
+ */
+export function useCloseAccount(
+  accountId: string,
+): UseMutationResult<Account, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/close", {
+          params: { path: { account_id: accountId } },
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
