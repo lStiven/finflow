@@ -940,6 +940,7 @@ tocar el backend.
 | **Refresh token / logout** | Sesión = token guardado en el cliente; al vencer, login otra vez. |
 | **Borrado** | No hay `DELETE` de cuentas ni de movimientos. Cerrar y corregir es lo que hay. |
 | **Paginación por cursor** | `limit`/`offset` solamente; `total` es el filtrado. |
+| **Instrumentos legibles** | `AccountResponse.instruments` viene como la clave que se guarda —`11:bancolombia\|10:debit_card\|4:0530\|`, con la longitud delante de cada parte—, no como campos. Para enseñarla hay que decodificarla en el cliente (`frontend/src/accounts/instruments.ts`); si algún día publica `bank`/`instrument_kind`/`last_four`, ese módulo sobra. |
 
 ---
 

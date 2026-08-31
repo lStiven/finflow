@@ -37,13 +37,13 @@ type Destination = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   /** Absent until the screen exists — rendered as pending, never as a dead link. */
-  to?: "/" | "/transacciones" | "/perfil" | "/conectar";
+  to?: "/" | "/transacciones" | "/cuentas" | "/perfil" | "/conectar" | "/guias";
 };
 
 const DESTINATIONS: Destination[] = [
   { label: "Resumen", icon: LayoutGrid, to: "/" },
   { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
-  { label: "Cuentas", icon: Wallet },
+  { label: "Cuentas", icon: Wallet, to: "/cuentas" },
   { label: "Reportes", icon: BarChart3 },
   { label: "Comercios", icon: Store },
   { label: "Configuración", icon: Settings },
@@ -78,21 +78,23 @@ export function AppShell({ children }: { children: ReactNode }) {
 /**
  * The guide's own entry, which changes meaning rather than disappearing.
  *
- * While the setup is open it is the thing to finish, with a dot on it. Once
- * expenses are arriving there is nothing left to do, so it stops asking and
- * becomes what somebody looks for afterwards: where the address is and how
- * this works. One destination either way — two would be the same page twice.
+ * While the setup is open it is the one thing to finish, so it points
+ * straight at it and carries a dot. Once expenses are arriving there is
+ * nothing left to do, and it becomes the way into every explanation — the
+ * connection walkthrough among them, one click further in. Two entries would
+ * be one asking for something nobody has left to do.
  */
 function ConnectLink({ compact = false }: { compact?: boolean }) {
   const { state } = useOnboarding();
   const pending = state !== null && !state.complete;
-  const label = pending ? "Conectar" : "Guía";
+  const label = pending ? "Conectar" : "Guías";
   const Icon = pending ? Plug : BookOpen;
+  const to = pending ? "/conectar" : "/guias";
 
   if (compact) {
     return (
       <Link
-        to="/conectar"
+        to={to}
         className="relative flex flex-1 flex-col items-center gap-1 py-2 text-[0.6875rem] text-muted transition-colors"
         activeProps={{ className: "text-accent", "aria-current": "page" }}
       >
@@ -105,7 +107,7 @@ function ConnectLink({ compact = false }: { compact?: boolean }) {
 
   return (
     <Link
-      to="/conectar"
+      to={to}
       className="relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-muted text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
       activeProps={{
         className:

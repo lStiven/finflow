@@ -44,19 +44,21 @@ The frontend has started. `frontend/` holds a Vite + React + TypeScript SPA
 whose types are generated from the API's own OpenAPI document, so a router
 change in Python fails the TypeScript build rather than a screen in a browser.
 Session, money and date handling, the door (login/register, on a moving neon
-ground), the accounts dashboard, the Transacciones surface, `/perfil` and the
-`/conectar` onboarding guide all run against the local emulator.
+ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
+account and linking its alerts), `/perfil`, the `/conectar` onboarding guide
+and the `/guias` section all run against the local emulator.
 
 What is missing for production is observability, a cap on LLM spending and the
 rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-30 — `/conectar` walks somebody through forwarding their first
-  alert and, once expenses are arriving, becomes the guide they can come back
-  to. The shell carries the unfinished-setup mark and says which stage is
-  next; connecting is announced once, when it actually happens.
-  `just web-check` green (76 tests).
+- 2026-08-31 — `/cuentas` declares accounts: an empty screen that explains
+  what an account is and disappears once there is one, a three-step wizard
+  whose last step says what declaring one actually does, and the linking of a
+  second card to an account that already exists. `/guias` collects the
+  explanations, with the connection walkthrough and a written guide to
+  accounts and movements. `just web-check` green (110 tests).
 
 ## Next steps
 
@@ -81,15 +83,16 @@ rest of the frontend — see **Next steps**.
       3. **A spending cap on the LLM** (see the standalone item below). The
          cheapest of the three and the only one that costs money while it is
          missing.
-      4. **The rest of the frontend.** The foundation is in (`just web`), and
-         the dashboard and the whole Transacciones surface are done. What is
-         left is screens, not plumbing: accounts, the connect-your-bank wizard
-         (four steps against `GET /ingestion/setup`, polled while it is open,
-         not blocking the rest of the app — a persistent bar in the shell
-         until `ready`), merchant review, and the spending summary.
-         `docs/frontend-integration.md` is still the contract each of them has
-         to honour. Nothing is deployed: no hosting is provisioned and
-         `API_CORS_ORIGINS` names only localhost.
+      4. **The rest of the frontend.** The foundation is in (`just web`).
+         Done: the dashboard, the whole Transacciones surface, the
+         connect-your-bank guide, `/cuentas` and the `/guias` section. What is
+         left is screens, not plumbing: merchant review, the spending summary
+         and reports, and configuration. Two things the accounts screen does
+         not cover and nothing else does either — restating a balance, and
+         closing an account — have endpoints already and no way in from the
+         app. `docs/frontend-integration.md` is still the contract each of
+         them has to honour. Nothing is deployed: no hosting is provisioned
+         and `API_CORS_ORIGINS` names only localhost.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -891,12 +894,15 @@ rest of the frontend — see **Next steps**.
   makes `ready` false again and the guide comes back pointing at senders,
   which is right, since the next alert would be dropped.
 
-- **The connect entry changes meaning instead of disappearing** (2026-08-30).
-  One route: while anything is open it is "Conectar", carries a dot and a
-  count, and resumes where the person left off; once expenses arrive it
-  becomes "Guía" — where the address is looked up and the explanation
-  re-read. Two routes would have been the same page twice, and a banner that
-  outlives its onboarding is the thing people learn to stop reading.
+- **The connect entry changes meaning instead of disappearing** (2026-08-30,
+  retargeted 2026-08-31). While anything is open it is "Conectar", carries a
+  dot and a count, and resumes where the person left off; once expenses
+  arrive it becomes "Guías" and points at the index rather than at the
+  walkthrough, which is one click further in and now sits beside the written
+  guide to accounts and movements. A second permanent entry for the
+  walkthrough would be one asking for something nobody has left to do, and a
+  banner that outlives its onboarding is the thing people learn to stop
+  reading.
 
 - **The door is the one screen that moves** (2026-08-30). Everything past
   login follows the 80/20 rule and stays still; login and register get a
@@ -1143,6 +1149,45 @@ rest of the frontend — see **Next steps**.
   `twMerge`. Both would be false positives under file-level matching, which
   is why the agent is told to read the declaration the tag sits on before
   reporting anything.
+
+- **The empty accounts screen is the explanation, and it is spent once**
+  (2026-08-31). Finflow asks for something no other finance app does —
+  declare a label yourself, for an app that is not connected to your bank —
+  so with no accounts the screen is that argument: what a cuenta is, that
+  everything already works without one, and that declaring one is
+  retroactive. It disappears for good at the first account, because after
+  that the balances say it better than any paragraph, and the same material
+  stays reachable in `/guias` for whoever wants it later.
+
+- **Declaring an account is three clicks, and the third one is a paragraph**
+  (2026-08-31). Pick a kind (which advances on the click), keep the name it
+  suggests, confirm. Everything else is optional and says so. The confirm
+  step is kept anyway, against the "fewer clicks" rule, because it is the
+  only moment somebody can be told what an account *does* here — it adopts
+  what already arrived, it is not a connection to a bank, and all of it can
+  be corrected — and a wizard that ends on a fourth "next" would waste it.
+  The instrument fields are deliberately not prefilled: the suggested option
+  is marked in the list instead, so choosing one is what makes its digits
+  required rather than a hidden default trapping somebody who has no card to
+  hand.
+
+- **The accounts screen reports on the same scope as the dashboard**
+  (2026-08-31). `GET /financial/accounts` computes `net_worth` over the scope
+  asked for, so a screen that listed `all` would put a second, larger
+  patrimonio next to the dashboard's — two answers to one question, one of
+  them apparently wrong. Both ask for `open`. Nothing in the app can close an
+  account yet, so nothing is hidden by it today.
+
+- **The instrument key is decoded in the client, knowingly** (2026-08-31).
+  `AccountResponse.instruments` publishes the account's stored matching keys,
+  length-prefixed (`11:bancolombia|10:debit_card|4:0530|`), and showing "2
+  formas de llegar" without saying which two is useless on the one screen
+  where a missing link is the silent failure. `src/accounts/instruments.ts`
+  parses it, decides nothing from the result, and shows anything it cannot
+  read whole rather than mangled. The real fix is on the other side —
+  publishing bank, kind and last four as fields — and until then this is the
+  only place that knows the shape; it is recorded in
+  `docs/frontend-integration.md` under what the backend does not expose.
 
 - **No component library yet.** The primitives in `src/components/ui/` are a
   handful of hand-written files. shadcn/ui is the intended destination — it

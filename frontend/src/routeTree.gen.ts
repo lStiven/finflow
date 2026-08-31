@@ -13,6 +13,10 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConectarRouteImport } from './routes/conectar'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PerfilRouteImport } from './routes/perfil'
+import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
+import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
+import { Route as GuiasIndexRouteImport } from './routes/guias/index'
+import { Route as GuiasCuentasYMovimientosRouteImport } from './routes/guias/cuentas-y-movimientos'
 import { Route as TransaccionesIndexRouteImport } from './routes/transacciones/index'
 import { Route as TransaccionesTransactionIdRouteImport } from './routes/transacciones/$transactionId'
 import { Route as TransaccionesNuevaRouteImport } from './routes/transacciones/nueva'
@@ -37,6 +41,27 @@ const PerfilRoute = PerfilRouteImport.update({
   path: '/perfil',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CuentasIndexRoute = CuentasIndexRouteImport.update({
+  id: '/cuentas/',
+  path: '/cuentas/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CuentasNuevaRoute = CuentasNuevaRouteImport.update({
+  id: '/cuentas/nueva',
+  path: '/cuentas/nueva',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuiasIndexRoute = GuiasIndexRouteImport.update({
+  id: '/guias/',
+  path: '/guias/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuiasCuentasYMovimientosRoute =
+  GuiasCuentasYMovimientosRouteImport.update({
+    id: '/guias/cuentas-y-movimientos',
+    path: '/guias/cuentas-y-movimientos',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const TransaccionesIndexRoute = TransaccionesIndexRouteImport.update({
   id: '/transacciones/',
   path: '/transacciones/',
@@ -59,8 +84,12 @@ export interface FileRoutesByFullPath {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/cuentas/': typeof CuentasIndexRoute
+  '/guias/': typeof GuiasIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -68,8 +97,12 @@ export interface FileRoutesByTo {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/cuentas': typeof CuentasIndexRoute
+  '/guias': typeof GuiasIndexRoute
   '/transacciones': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesById {
@@ -78,8 +111,12 @@ export interface FileRoutesById {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/cuentas/': typeof CuentasIndexRoute
+  '/guias/': typeof GuiasIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRouteTypes {
@@ -89,8 +126,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/cuentas/nueva'
+    | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/cuentas/'
+    | '/guias/'
     | '/transacciones/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -98,8 +139,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/cuentas/nueva'
+    | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/cuentas'
+    | '/guias'
     | '/transacciones'
   id:
     | '__root__'
@@ -107,8 +152,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/cuentas/nueva'
+    | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/cuentas/'
+    | '/guias/'
     | '/transacciones/'
   fileRoutesById: FileRoutesById
 }
@@ -117,8 +166,12 @@ export interface RootRouteChildren {
   ConectarRoute: typeof ConectarRoute
   LoginRoute: typeof LoginRoute
   PerfilRoute: typeof PerfilRoute
+  CuentasNuevaRoute: typeof CuentasNuevaRoute
+  GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
   TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
   TransaccionesNuevaRoute: typeof TransaccionesNuevaRoute
+  CuentasIndexRoute: typeof CuentasIndexRoute
+  GuiasIndexRoute: typeof GuiasIndexRoute
   TransaccionesIndexRoute: typeof TransaccionesIndexRoute
 }
 
@@ -152,6 +205,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PerfilRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cuentas/': {
+      id: '/cuentas/'
+      path: '/cuentas'
+      fullPath: '/cuentas/'
+      preLoaderRoute: typeof CuentasIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cuentas/nueva': {
+      id: '/cuentas/nueva'
+      path: '/cuentas/nueva'
+      fullPath: '/cuentas/nueva'
+      preLoaderRoute: typeof CuentasNuevaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guias/': {
+      id: '/guias/'
+      path: '/guias'
+      fullPath: '/guias/'
+      preLoaderRoute: typeof GuiasIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guias/cuentas-y-movimientos': {
+      id: '/guias/cuentas-y-movimientos'
+      path: '/guias/cuentas-y-movimientos'
+      fullPath: '/guias/cuentas-y-movimientos'
+      preLoaderRoute: typeof GuiasCuentasYMovimientosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/transacciones/': {
       id: '/transacciones/'
       path: '/transacciones'
@@ -181,8 +262,12 @@ const rootRouteChildren: RootRouteChildren = {
   ConectarRoute: ConectarRoute,
   LoginRoute: LoginRoute,
   PerfilRoute: PerfilRoute,
+  CuentasNuevaRoute: CuentasNuevaRoute,
+  GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,
   TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
   TransaccionesNuevaRoute: TransaccionesNuevaRoute,
+  CuentasIndexRoute: CuentasIndexRoute,
+  GuiasIndexRoute: GuiasIndexRoute,
   TransaccionesIndexRoute: TransaccionesIndexRoute,
 }
 export const routeTree = rootRouteImport

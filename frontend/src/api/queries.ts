@@ -28,6 +28,7 @@ export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
 export type Merchant =
   components["schemas"]["personal_finance__contexts__merchant__presentation__http__router__MerchantResponse"];
 export type CategoryOption = components["schemas"]["CategoryResponse"];
+export type InstrumentKind = components["schemas"]["InstrumentKind"];
 
 export const queryKeys = {
   accounts: ["accounts"] as const,
@@ -267,6 +268,36 @@ export function useCreateAccount(): UseMutationResult<
   return useMutation({
     mutationFn: (body: CreateAccountBody) =>
       unwrap(api.POST("/financial/accounts", { body })),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+type LinkInstrumentBody = components["schemas"]["LinkInstrumentPayload"];
+
+/**
+ * Teaches an account another of the names its alerts arrive under.
+ *
+ * One real account emails as a card for purchases and as an account number
+ * for transfers, under different last four digits — link only one and half
+ * its movements wait forever. Retroactive like declaring the account itself,
+ * so the same three families are stale afterwards.
+ */
+export function useLinkInstrument(
+  accountId: string,
+): UseMutationResult<Account, Error, LinkInstrumentBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LinkInstrumentBody) =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/instruments", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: queryKeys.accounts });
       client.invalidateQueries({ queryKey: queryKeys.transactions });
