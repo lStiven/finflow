@@ -13,6 +13,9 @@ import json
 import time
 from typing import TYPE_CHECKING
 
+from personal_finance.contexts.financial.infrastructure.messaging.inbound import (
+    TRANSFER_EXTRACTED,
+)
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as FINANCIAL_PARTITION_KEY,
     SORT_KEY as FINANCIAL_SORT_KEY,
@@ -890,8 +893,13 @@ def provision() -> ProvisionedResources:
         rule_name=FINANCIAL_EVENTS_RULE,
         target_id=FINANCIAL_EVENTS_TARGET_ID,
         event_pattern={
+            # Both, on one rule: a transfer between the owner's own accounts
+            # ends as two rows on the same balances this context already
+            # keeps. Merchant's rule above deliberately does *not* list it —
+            # there is no shop in a card payment, and letting one be created
+            # would put somebody's own card in their list of merchants.
+            "detail-type": [TRANSACTION_EXTRACTED, TRANSFER_EXTRACTED],
             "source": [INGESTION_SOURCE],
-            "detail-type": [TRANSACTION_EXTRACTED],
         },
     )
     _done(started)
@@ -963,7 +971,8 @@ def main() -> None:
     print(
         f"  Financial queue: {resources.financial_events_queue_url}\n"
         f"                   (rule {FINANCIAL_EVENTS_RULE}, "
-        f"{INGESTION_SOURCE} {TRANSACTION_EXTRACTED} -> balances)",
+        f"{INGESTION_SOURCE} {TRANSACTION_EXTRACTED}/{TRANSFER_EXTRACTED} "
+        f"-> balances)",
     )
     print(f"  Event bus      : {resources.event_bus_name}")
     print(

@@ -2,6 +2,9 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BancolombiaParser,
 )
 from personal_finance.contexts.ingestion.domain.parsing.text import extract_text
+from personal_finance.contexts.ingestion.domain.transactions import (
+    ExtractedTransaction,
+)
 
 
 # Verbatim from a delivered Bancolombia alert: quoted-printable, with `=3D`
@@ -37,7 +40,7 @@ def test_markup_and_entities_are_gone() -> None:
 def test_the_parser_reads_the_real_html_alert() -> None:
     transaction = BancolombiaParser().parse(extract_text(RAW_HTML))
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert str(transaction.amount.amount) == "19850806.00"
     assert transaction.counterparty == "BOLD.CO SAS"
 

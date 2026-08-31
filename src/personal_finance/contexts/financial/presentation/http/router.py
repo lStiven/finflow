@@ -69,12 +69,14 @@ from personal_finance.contexts.financial.application.queries import (
     SummaryGrouping,
     SummaryQuery,
     TransactionQuery,
+    TransferView,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
     TransactionAlreadyAssignedError,
+    TransferLegError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -203,6 +205,25 @@ class MerchantResponse(BaseModel):
     needs_review: bool
 
 
+class TransferResponse(BaseModel):
+    """The half of a movement that says it was not spending.
+
+    Present on both sides of a transfer between two of the owner's own
+    accounts, and null on everything else. A client shows it instead of the
+    counterparty text — `role` says which way the money went and
+    `counterpart_*` names the other side — and, more importantly, knows not to
+    read the amount as an expense.
+    """
+
+    id: str
+    # `source` (money left this account) | `destination` (it arrived here; on
+    # a credit card that is its debt going down).
+    role: str
+    counterpart_movement_id: str
+    counterpart_instrument_kind: str
+    counterpart_last_four: str
+
+
 class TransactionResponse(BaseModel):
     id: str
     # `outgoing` | `incoming`.
@@ -224,6 +245,9 @@ class TransactionResponse(BaseModel):
     # merchant's queue, and a movement entered by hand under a name nothing
     # else has seen never gets one. Not an error either way.
     merchant: MerchantResponse | None
+    # Set on both rows of a transfer between the owner's own accounts. Null
+    # on ordinary spending, which is nearly everything.
+    transfer: TransferResponse | None = None
 
 
 class TransactionListResponse(BaseModel):
@@ -343,6 +367,10 @@ class FinancialCatalogResponse(BaseModel):
     transaction_statuses: list[CatalogOption]
     account_scopes: list[CatalogOption]
     summary_groupings: list[CatalogOption]
+    # Whether an answer counts the two sides of a transfer between the owner's
+    # own accounts. `/transactions` defaults to `include`, every total to
+    # `exclude`.
+    transfer_views: list[CatalogOption]
 
 
 class OpenAccountPayload(BaseModel):
@@ -628,6 +656,7 @@ def get_catalog() -> FinancialCatalogResponse:
         transaction_statuses=options(TransactionStatus),
         account_scopes=options(AccountScope),
         summary_groupings=options(SummaryGrouping),
+        transfer_views=options(TransferView),
     )
 
 
@@ -902,6 +931,7 @@ def list_transactions(
         int | None,
         Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
     ] = None,
+    transfers: Annotated[TransferView, Query()] = TransferView.INCLUDE,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> TransactionListResponse:
@@ -911,6 +941,13 @@ def list_transactions(
     counterparty nobody has resolved yet matches neither — it is unknown, not
     uncategorized. `from` is included and `to` is not, so two consecutive
     months can be asked for without one movement landing in both.
+
+    `transfers` defaults to `include` here and to `exclude` on `/summary`,
+    which is the one place these two surfaces deliberately disagree: both
+    sides of a card payment belong in the list, because they explain why an
+    account fell, and in no total, because nothing was spent. A screen showing
+    a figure from `/summary` beside the list behind it should ask for
+    `transfers=exclude` on both.
     """
     page = use_case.execute(
         TransactionQuery(
@@ -925,6 +962,7 @@ def list_transactions(
                 category=_known_category(category, merchants),
                 since=since,
                 until=until,
+                transfers=transfers,
             ),
             limit=limit,
             offset=offset,
@@ -963,6 +1001,7 @@ def summarize_spending(
     search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
     merchant_id: Annotated[str | None, Query(max_length=64)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
+    transfers: Annotated[TransferView, Query()] = TransferView.EXCLUDE,
     timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
 ) -> SpendingSummaryResponse:
     """What a period adds up to, broken down by month, category, merchant or
@@ -972,6 +1011,12 @@ def summarize_spending(
     opened as a list by repeating the query with the bucket's key. `timezone`
     only affects `month`, and it matters: a purchase at 8pm on the 31st falls
     in the next month once it is read in UTC.
+
+    `transfers` defaults to `exclude` here, unlike on `/transactions`: money
+    moved between two of the owner's own accounts is neither spending nor
+    income, and counting it would report a card payment as the month's largest
+    expense and again as income on the card. `only` answers the opposite
+    question — what did I move between my own accounts.
     """
     summary = use_case.execute(
         SummaryQuery(
@@ -986,6 +1031,7 @@ def summarize_spending(
                 category=_known_category(category, merchants),
                 since=since,
                 until=until,
+                transfers=transfers,
             ),
             group_by=group_by,
             timezone=_known_timezone(timezone),
@@ -1156,6 +1202,7 @@ def _movement_filter(
     category: str | None,
     since: int | None,
     until: int | None,
+    transfers: TransferView,
 ) -> MovementFilter:
     """The filters `/transactions` and `/summary` share, read once.
 
@@ -1174,6 +1221,7 @@ def _movement_filter(
         category=category,
         since=None if since is None else PosixTime.from_epoch_seconds(since),
         until=None if until is None else PosixTime.from_epoch_seconds(until),
+        transfers=transfers,
     )
 
 
@@ -1273,6 +1321,17 @@ def _transaction_response(entry: AttributedTransaction) -> TransactionResponse:
                 display_name=merchant.display_name,
                 category=merchant.category,
                 needs_review=merchant.needs_review,
+            )
+        ),
+        transfer=(
+            None
+            if (leg := transaction.transfer) is None
+            else TransferResponse(
+                id=leg.transfer_id.value,
+                role=leg.role.value,
+                counterpart_movement_id=leg.counterpart_id.value,
+                counterpart_instrument_kind=leg.counterpart_instrument_kind,
+                counterpart_last_four=leg.counterpart_last_four,
             )
         ),
     )
@@ -1381,6 +1440,14 @@ def _domain_errors() -> Generator[None]:
         # recorded here.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except TransferLegError as error:
+        # The request is well formed and the movement exists; what refuses it
+        # is that this row is half of one fact. 409 rather than 400: nothing
+        # about the body could be rewritten to make it work.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(error),
         ) from error
     except ValueError as error:

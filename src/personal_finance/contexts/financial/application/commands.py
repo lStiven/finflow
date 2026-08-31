@@ -42,6 +42,31 @@ class RecordMovementCommand:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RecordTransferCommand:
+    """One alert that moved money between two instruments of the same owner.
+
+    Two movements, one command: the sides have to be built together or they
+    stop being a pair. Both instruments are required in full — a side without
+    last four digits can never find its account, and a transfer with one
+    routable side is exactly the half-recorded state this whole path exists to
+    prevent.
+
+    `source` is where the money left and `destination` where it arrived. On a
+    card payment that is the account and the card, in that order; swapping
+    them moves both balances the wrong way.
+    """
+
+    user_id: UserId
+    bank: str
+    amount: Money
+    occurred_at: PosixTime
+    source_instrument_kind: str
+    source_last_four: str
+    destination_instrument_kind: str
+    destination_last_four: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class OpenAccountCommand:
     """An account its owner declared.
 

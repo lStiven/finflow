@@ -7,7 +7,7 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BANK_NAME as BANCOLOMBIA,
     BancolombiaParser,
 )
-from personal_finance.contexts.ingestion.domain.transactions import ExtractedTransaction
+from personal_finance.contexts.ingestion.domain.transactions import ExtractedMovement
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 
 
@@ -16,9 +16,13 @@ class DeterministicParser(Protocol):
 
     bank: str
 
-    def parse(self, text: str) -> ExtractedTransaction | None:
-        """Return the transaction the text describes, or None when no template
-        matches — which is the caller's signal to fall back to the LLM.
+    def parse(self, text: str) -> ExtractedMovement | None:
+        """Return what the text describes, or None when no template matches —
+        which is the caller's signal to fall back to the LLM.
+
+        A template may answer with an `ExtractedTransfer` instead of a
+        transaction: some alerts state money moving between two of the
+        owner's own instruments, and that is two movements rather than one.
         """
         ...
 

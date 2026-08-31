@@ -8,9 +8,16 @@ from personal_finance.contexts.ingestion.application.parsing_handlers import (
     ParseOutcome,
 )
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
-from personal_finance.contexts.ingestion.domain.events import TransactionExtracted
+from personal_finance.contexts.ingestion.domain.events import (
+    TransactionExtracted,
+    TransferExtracted,
+)
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
-from personal_finance.contexts.ingestion.domain.transactions import TransactionKind
+from personal_finance.contexts.ingestion.domain.transactions import (
+    InstrumentKind,
+    TransactionKind,
+    TransferKind,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
@@ -28,6 +35,10 @@ BANK_SENDER = "alertasynotificaciones@an.notificacionesbancolombia.com"
 PURCHASE = (
     "Bancolombia: Compraste COP29.259,00 en TIENDAS ARA con tu T.Cred *7653, "
     "el 20/08/2026 a las 12:00. Estamos cerca."
+)
+CARD_PAYMENT = (
+    "Bancolombia: Pagaste $3,540,258 en la tarjeta de credito *7653 desde la "
+    "cuenta *5261, el 21/05/2026 16:30. Estamos cerca."
 )
 
 
@@ -233,3 +244,49 @@ def test_a_message_for_a_vanished_notification_is_skipped() -> None:
     assert result.outcome is ParseOutcome.SKIPPED
     assert result.status is None
     assert publisher.published == []
+
+
+# --------------------------------------------------------------- traslados
+
+
+def test_a_card_payment_is_published_as_a_transfer_not_as_a_transaction() -> None:
+    """The event decides who acts on it: Financial writes both sides, and
+    Merchant — which subscribes to `TransactionExtracted` — never sees a card
+    payment at all."""
+    notification = _notification(raw_content=CARD_PAYMENT)
+    use_case, repository, publisher = _make(notification)
+
+    result = use_case.execute(_message(notification))
+
+    assert result.outcome is ParseOutcome.EXTRACTED
+    assert _published_types(publisher) == ["TransferExtracted"]
+
+    stored = repository.get(notification.idempotency_key)
+    assert stored is not None
+    assert stored.status is ProcessingStatus.PROCESSED
+
+
+def test_the_published_transfer_carries_both_sides() -> None:
+    notification = _notification(raw_content=CARD_PAYMENT)
+    use_case, _, publisher = _make(notification)
+
+    use_case.execute(_message(notification))
+
+    event = publisher.published[0]
+    assert isinstance(event, TransferExtracted)
+    assert event.transfer.kind is TransferKind.CARD_PAYMENT
+    assert event.transfer.source.kind is InstrumentKind.ACCOUNT
+    assert event.transfer.source.last_four == "5261"
+    assert event.transfer.destination.kind is InstrumentKind.CREDIT_CARD
+    assert event.transfer.destination.last_four == "7653"
+
+
+def test_a_card_payment_drops_the_email_body_like_any_other_alert() -> None:
+    notification = _notification(raw_content=CARD_PAYMENT)
+    use_case, repository, _ = _make(notification)
+
+    use_case.execute(_message(notification))
+
+    stored = repository.get(notification.idempotency_key)
+    assert stored is not None
+    assert stored.raw_content == ""

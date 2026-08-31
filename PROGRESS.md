@@ -23,6 +23,11 @@ watching only what comes in and goes out. Declaring an account starts the
 association and is retroactive. Money that never emails can be entered by
 hand, and anything recorded can be corrected.
 
+One email is not always one movement: paying a credit card from an account at
+the same bank moves two balances and is neither spending nor income. That path
+is closed end to end — a deterministic template, its own integration event,
+two linked ledger rows, and totals that leave both of them out.
+
 Twenty-nine endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
@@ -53,12 +58,11 @@ rest of the frontend — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — `/cuentas` declares accounts: an empty screen that explains
-  what an account is and disappears once there is one, a three-step wizard
-  whose last step says what declaring one actually does, and the linking of a
-  second card to an account that already exists. `/guias` collects the
-  explanations, with the connection walkthrough and a written guide to
-  accounts and movements. `just web-check` green (110 tests).
+- 2026-08-31 — A payment to your own credit card is one email and two
+  movements. Ingestion publishes it as `TransferExtracted`, Financial writes
+  both sides with their own identities and routing, every total leaves them
+  out, and the screens read them as traslados. `just prepare` green (944
+  tests), `just web-check` green (115).
 
 ## Next steps
 
@@ -443,6 +447,59 @@ rest of the frontend — see **Next steps**.
   pulled — `event_id` is fresh on every attempt, so republishing them reads as
   new work to any subscriber deduping on it.
 
+### Transfers between the owner's own accounts (2026-08-31)
+
+- **A card payment is two movements, and the type system says so.** The alert
+  names two of the holder's own instruments, so `ExtractedTransaction` — one
+  direction, one instrument — cannot describe it. Read as a single movement it
+  is wrong either way round: booked on the account the card keeps showing a
+  debt that was paid; booked on the card, an outgoing movement *raises* what
+  is owed, adding the payment to the balance it just cleared. Ingestion grew
+  `ExtractedTransfer` (source and destination, both with digits, both
+  required) and the parser's return type widened to a union, which is what
+  makes every caller handle it instead of quietly reading `.counterparty`.
+
+- **Its own detail type, not a version bump** (`TransferExtracted` v1).
+  Version is for a payload whose shape changed; this is a different fact with
+  different subscribers — Financial writes both sides, Merchant must never see
+  it, because there is no shop in a card payment and creating one would put
+  somebody's own card in their merchant list. It also deploys in either order:
+  a consumer that does not know the type never matches it, where an unknown
+  *version* of a subscribed type sits on the queue until the dead-letter takes
+  it. Financial's EventBridge rule now lists both; Merchant's still lists one.
+
+- **Each side is placed independently, and that is the design.** Only one of
+  the two accounts may be declared, so the other side is recorded unassigned
+  and adopted later through the same retroactive path as any alert — nothing
+  in `ManageAccounts` had to learn about transfers. Each side's identity comes
+  from its own content, so a redelivery after a partial failure completes the
+  pair instead of doubling the half that succeeded. The counterparty of a side
+  is the *other* instrument, spelled canonically (`credit_card *1234`): it
+  feeds the fingerprint, so it can never be reworded, and clients render the
+  structured `transfer` block instead.
+
+- **A transfer is not spending, and the defaults say which surface believes
+  that.** `/transactions` includes both sides (they explain why an account
+  fell); `/summary` and `/history` exclude them (counting them would report a
+  card payment as the month's largest expense and again as income on the
+  card). The `transfers` parameter — `include` / `exclude` / `only` — is what
+  lets a screen make a figure and the list behind it agree, and the
+  dashboard's tiles pass `exclude` for exactly that reason.
+
+- **One side cannot be corrected alone** (`TransferLegError` → 422). The two
+  rows state one movement; editing one amount would leave two balances that no
+  longer reconcile, and the aggregate holding one side cannot move the other's
+  balance inside its own write. Routing and notes stay editable, which is what
+  a misrouted side actually needs.
+
+- **The model is told to refuse these.** The LLM fallback is asked for one
+  movement and cannot be asked which of two instruments is the source without
+  guessing — and the wrong guess moves a real balance the wrong way. So the
+  prompt sets `understood=false` for money between two of the holder's own
+  instruments, and only deterministic templates produce transfers. The cost is
+  stated: a card payment from a bank with no template is deferred, visible,
+  and not recorded — which is the safe half of the trade.
+
 ### Reading Financial and Merchant together (2026-08-25)
 
 - **The movement↔merchant join is made on read, never stored.**
@@ -537,6 +594,19 @@ rest of the frontend — see **Next steps**.
   alerts in, queues drained, accounts declared *after* they arrive so
   retroactive adoption is covered. Idempotent, and the model stays unwired
   unless `--with-llm` so it neither bills nor needs the network.
+
+- **The seed writes the one fact nothing local can produce** (2026-08-31).
+  `forwarding_confirmed` is normally marked by the ingest worker after it
+  follows Google's confirmation email, and no Gmail account forwards to the
+  emulator — so the demo user sat permanently one step short, and the guide
+  could never be seen in the state it spends most of its life in.
+  `seed_local.py` now writes that mark through the inbox repository directly,
+  at a fixed instant the day before the first alert. Deliberately not an
+  endpoint: it is a verified fact, and a client able to claim it would turn a
+  proof into an assertion. What keeps that safe is the seed refusing to run
+  outside `ENVIRONMENT=local`, which it already did. `ready` never depended on
+  this step — it is first alert plus an approved sender — so nothing about
+  what the app considers connected changed.
 
 - **Point-in-time recovery is on for every table** (2026-08-24), applied on
   each provisioning run rather than only at creation, so an environment that

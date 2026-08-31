@@ -24,6 +24,7 @@ from personal_finance.contexts.financial.domain.entities import Account, Transac
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
+    InstrumentKind,
 )
 from personal_finance.contexts.financial.presentation.http.router import (
     get_account_use_case,
@@ -41,7 +42,12 @@ from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
 )
 from personal_finance.shared.domain.events import Event
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
 
 
 USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
@@ -195,6 +201,23 @@ class FakeDirectory:
 
 @pytest.fixture
 def client() -> TestClient:
+    app, _ = _build()
+
+    return app
+
+
+@pytest.fixture
+def wired() -> tuple[TestClient, InMemoryLedger]:
+    """The same app, plus the ledger behind it.
+
+    Transfers reach the ledger from the bus and there is no endpoint that
+    writes one, so a test about how the API *reads* them has to put the pair
+    in place itself.
+    """
+    return _build()
+
+
+def _build() -> tuple[TestClient, InMemoryLedger]:
     accounts = InMemoryAccounts()
     ledger = InMemoryLedger()
     publisher = NullPublisher()
@@ -241,7 +264,7 @@ def client() -> TestClient:
         ReadFinancialHistoryUseCase(ledger=ledger, accounts=accounts)
     )
 
-    return TestClient(app)
+    return TestClient(app), ledger
 
 
 def _declare(client: TestClient, **overrides: object) -> dict[str, object]:
@@ -1250,3 +1273,221 @@ def test_a_balance_beyond_what_the_table_can_hold_is_refused(
     )
 
     assert response.status_code == 422
+
+
+# --------------------------------------------------------------- traslados
+
+
+def _pay_a_card(ledger: InMemoryLedger, *, amount: str = "3540258") -> None:
+    """Both sides of a card payment, put in the ledger the way the worker
+    leaves them."""
+    source, destination = Transaction.as_transfer(
+        user_id=USER_ID,
+        bank="bancolombia",
+        amount=Money(amount=Decimal(amount), currency=Currency.COP),
+        occurred_at=PosixTime.from_epoch_seconds(WHEN),
+        source_instrument_kind=InstrumentKind.ACCOUNT.value,
+        source_last_four="5261",
+        destination_instrument_kind=InstrumentKind.CREDIT_CARD.value,
+        destination_last_four="7653",
+    )
+    ledger.save(source)
+    ledger.save(destination)
+
+
+def test_a_transfer_leg_reports_the_other_side_instead_of_a_merchant(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """Structured, so a client says «pago a tu tarjeta ···· 7653» without
+    parsing the counterparty text."""
+    client, ledger = wired
+    _pay_a_card(ledger)
+
+    body = client.get("/financial/transactions").json()
+    legs = [row for row in body["transactions"] if row["transfer"] is not None]
+
+    assert len(legs) == 2
+    roles = {leg["transfer"]["role"] for leg in legs}
+    assert roles == {"source", "destination"}
+    assert {leg["transfer"]["id"] for leg in legs} == {legs[0]["transfer"]["id"]}
+
+
+def test_each_side_points_at_the_other_row(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    client, ledger = wired
+    _pay_a_card(ledger)
+
+    rows = client.get("/financial/transactions").json()["transactions"]
+    by_id = {row["id"]: row for row in rows}
+
+    for row in rows:
+        counterpart = by_id[row["transfer"]["counterpart_movement_id"]]
+        assert counterpart["id"] != row["id"]
+        assert counterpart["transfer"]["counterpart_movement_id"] == row["id"]
+
+
+def test_an_ordinary_movement_reports_no_transfer(client: TestClient) -> None:
+    _enter(client)
+
+    body = client.get("/financial/transactions").json()
+
+    assert body["transactions"][0]["transfer"] is None
+
+
+def test_the_list_shows_both_sides_by_default(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    client, ledger = wired
+    _pay_a_card(ledger)
+    _enter(client)
+
+    body = client.get("/financial/transactions").json()
+
+    assert body["total"] == 3
+
+
+def test_the_list_can_be_asked_to_hide_them(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    client, ledger = wired
+    _pay_a_card(ledger)
+    _enter(client)
+
+    body = client.get("/financial/transactions", params={"transfers": "exclude"}).json()
+
+    assert body["total"] == 1
+    assert body["transactions"][0]["transfer"] is None
+
+
+def test_the_summary_leaves_transfers_out_without_being_asked(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """The default that keeps a card payment from reading as the month's
+    largest expense."""
+    client, ledger = wired
+    _pay_a_card(ledger)
+    _enter(client)
+
+    body = client.get("/financial/summary", params={"group_by": "month"}).json()
+
+    assert body["totals"][0]["outgoing"] == "50000"
+    assert body["totals"][0]["incoming"] == "0"
+
+
+def test_the_summary_can_be_asked_for_the_transfers_alone(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    client, ledger = wired
+    _pay_a_card(ledger)
+    _enter(client)
+
+    body = client.get(
+        "/financial/summary",
+        params={"group_by": "month", "transfers": "only"},
+    ).json()
+
+    assert body["totals"][0]["outgoing"] == "3540258"
+    assert body["totals"][0]["incoming"] == "3540258"
+
+
+def test_a_transfers_value_the_api_does_not_know_is_refused(
+    client: TestClient,
+) -> None:
+    """An enum, not free text: a typo must not silently mean «include»."""
+    response = client.get("/financial/transactions", params={"transfers": "maybe"})
+
+    assert response.status_code == 422
+
+
+def test_the_catalog_publishes_the_transfer_views(client: TestClient) -> None:
+    body = client.get("/financial/catalog").json()
+
+    assert [option["value"] for option in body["transfer_views"]] == [
+        "include",
+        "exclude",
+        "only",
+    ]
+
+
+def test_one_side_of_a_transfer_cannot_be_corrected_on_its_own(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """A refusal rather than a half-applied correction: the two sides state one
+    movement, and the other side lives on another balance.
+
+    409 rather than 400 or 422, the same way a duplicate account answers: the
+    body is well formed and the movement exists — what refuses it is that this
+    row is half of one fact, and no rewording of the request would help.
+
+    The amount travels with its currency on purpose: without it the payload
+    validator rejects the request first, and this test would pass while the
+    domain rule went unexercised.
+    """
+    client, ledger = wired
+    _pay_a_card(ledger)
+    leg = client.get("/financial/transactions").json()["transactions"][0]
+
+    response = client.patch(
+        f"/financial/transactions/{leg['id']}",
+        json={"amount": "100", "currency": "COP"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "transfer" in response.json()["detail"]
+
+
+def test_moving_one_side_of_a_transfer_in_time_is_refused_too(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    client, ledger = wired
+    _pay_a_card(ledger)
+    leg = client.get("/financial/transactions").json()["transactions"][0]
+
+    response = client.patch(
+        f"/financial/transactions/{leg['id']}",
+        json={"occurred_at": WHEN + 3600},
+    )
+
+    assert response.status_code == 409, response.text
+
+
+def test_a_note_can_still_be_written_on_a_transfer_leg(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """An annotation is not a claim about the movement — it is how somebody
+    records why they paid the card early."""
+    client, ledger = wired
+    _pay_a_card(ledger)
+    leg = client.get("/financial/transactions").json()["transactions"][0]
+
+    response = client.patch(
+        f"/financial/transactions/{leg['id']}",
+        json={"note": "pago anticipado"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["note"] == "pago anticipado"
+
+
+def test_a_transfer_leg_can_still_be_moved_to_the_right_account(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """Routing is not the money: putting a side on the account that actually
+    holds it has to stay possible."""
+    client, ledger = wired
+    _pay_a_card(ledger)
+    account = _declare(client, name="Ahorros", kind="savings")
+    leg = next(
+        row
+        for row in client.get("/financial/transactions").json()["transactions"]
+        if row["transfer"]["role"] == "source"
+    )
+
+    response = client.patch(
+        f"/financial/transactions/{leg['id']}",
+        json={"account_id": account["id"]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["account_id"] == account["id"]

@@ -23,10 +23,12 @@ import pytest
 
 from personal_finance.contexts.financial.application.commands import (
     OpenAccountCommand,
+    RestateBalanceCommand,
 )
 from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     RecordMovementUseCase,
+    RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Account
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -50,13 +52,18 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
 from personal_finance.contexts.ingestion.application.integration_events import (
     IngestionIntegrationEventTranslator,
 )
-from personal_finance.contexts.ingestion.domain.events import TransactionExtracted
+from personal_finance.contexts.ingestion.domain.events import (
+    TransactionExtracted,
+    TransferExtracted,
+)
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
+    ExtractedTransfer,
     Instrument,
     InstrumentKind,
     TransactionDirection,
     TransactionKind,
+    TransferKind,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailMessageId,
@@ -113,8 +120,12 @@ def queue_url(
         rule_name=FINANCIAL_EVENTS_RULE,
         target_id=FINANCIAL_EVENTS_TARGET_ID,
         event_pattern={
+            # Both, exactly as `provisioning.py` writes it: the rule is what
+            # decides whether a card payment ever reaches this context, and a
+            # test that subscribed to less would pass against a rule that
+            # loses transfers in production.
             "source": ["finflow.ingestion"],
-            "detail-type": ["TransactionExtracted"],
+            "detail-type": ["TransactionExtracted", "TransferExtracted"],
         },
     )
 
@@ -162,6 +173,11 @@ def worker(
         client=sqs_client,
         queue_url=queue_url,
         use_case=RecordMovementUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=NullEventPublisher(),
+        ),
+        transfer_use_case=RecordTransferUseCase(
             accounts=accounts,
             ledger=ledger,
             event_publisher=NullEventPublisher(),
@@ -242,7 +258,7 @@ def _alert(
 
 def _publish(
     publisher: EventBridgeEventPublisher,
-    events: Sequence[TransactionExtracted],
+    events: Sequence[TransactionExtracted | TransferExtracted],
 ) -> None:
     publisher.publish(list(events))
 
@@ -628,3 +644,148 @@ def test_a_payload_that_will_never_parse_is_dropped_rather_than_retried(
         ).get("Messages", [])
         == []
     )
+
+
+# ------------------------------------------------------------- traslados
+
+SAVINGS_ACCOUNT = Instrument(kind=InstrumentKind.ACCOUNT, last_four="5261")
+
+
+def _card_payment(
+    *,
+    amount: str = "3540258",
+    user_id: UserId = USER_ID,
+) -> TransferExtracted:
+    """The alert Bancolombia sends when a card is paid from an account."""
+    return TransferExtracted(
+        notification_id=NotificationId.for_message(
+            user_id=user_id,
+            message_id=MESSAGE_ID,
+        ),
+        user_id=user_id,
+        message_id=MESSAGE_ID,
+        transfer=ExtractedTransfer(
+            kind=TransferKind.CARD_PAYMENT,
+            amount=Money(amount=Decimal(amount), currency=Currency.COP),
+            occurred_at=PURCHASE_TIME,
+            bank="Bancolombia",
+            source=SAVINGS_ACCOUNT,
+            destination=CREDIT_CARD,
+        ),
+    )
+
+
+def _declare_savings(manage_accounts: ManageAccountsUseCase) -> Account:
+    return manage_accounts.open(
+        OpenAccountCommand(
+            user_id=USER_ID,
+            name="Ahorros",
+            kind=AccountKind.SAVINGS,
+            currency=Currency.COP,
+            opening_balance=Money(
+                amount=Decimal("5000000"),
+                currency=Currency.COP,
+            ),
+            bank="Bancolombia",
+            instrument_kind=FinancialInstrumentKind.ACCOUNT,
+            last_four="5261",
+        ),
+    )
+
+
+def test_a_card_payment_lowers_the_account_and_the_debt_in_one_pass(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    manage_accounts: ManageAccountsUseCase,
+) -> None:
+    """The whole path, over a real bus and a real table: one email, two rows,
+    two balances, and a net worth that did not move."""
+    savings = _declare_savings(manage_accounts)
+    card = _declare_card(manage_accounts)
+    manage_accounts.restate_balance(
+        RestateBalanceCommand(
+            user_id=USER_ID,
+            account_id=card.id,
+            balance=Decimal("3540258"),
+        ),
+    )
+    _publish(publisher, [_card_payment()])
+
+    assert worker.poll_once(wait_seconds=0).handled == 1
+
+    stored_savings = accounts.find(user_id=USER_ID, account_id=savings.id)
+    stored_card = accounts.find(user_id=USER_ID, account_id=card.id)
+
+    assert stored_savings is not None
+    assert stored_card is not None
+    assert stored_savings.balance.signed_amount == Decimal("1459742")
+    assert stored_card.balance.signed_amount == Decimal("0")
+
+
+def test_a_card_payment_writes_two_linked_rows(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    ledger: DynamoDBTransactionLedger,
+    manage_accounts: ManageAccountsUseCase,
+) -> None:
+    _declare_savings(manage_accounts)
+    _declare_card(manage_accounts)
+    _publish(publisher, [_card_payment()])
+    worker.poll_once(wait_seconds=0)
+
+    rows = list(ledger.list_all(USER_ID))
+
+    assert len(rows) == 2
+    legs = [row.transfer for row in rows]
+    assert all(leg is not None for leg in legs)
+    assert legs[0] is not None
+    assert legs[1] is not None
+    # Read back out of DynamoDB: the pairing has to survive storage, or a
+    # total would count one of the sides as spending after a restart.
+    assert legs[0].transfer_id == legs[1].transfer_id
+    assert {legs[0].counterpart_id, legs[1].counterpart_id} == {row.id for row in rows}
+
+
+def test_the_same_card_payment_delivered_twice_moves_the_balances_once(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+    manage_accounts: ManageAccountsUseCase,
+) -> None:
+    """At-least-once delivery, against the conditional write that answers it."""
+    savings = _declare_savings(manage_accounts)
+    _declare_card(manage_accounts)
+    _publish(publisher, [_card_payment(), _card_payment()])
+
+    worker.poll_once(wait_seconds=0)
+    worker.poll_once(wait_seconds=0)
+
+    stored = accounts.find(user_id=USER_ID, account_id=savings.id)
+
+    assert stored is not None
+    assert stored.balance.signed_amount == Decimal("1459742")
+    assert len(ledger.list_all(USER_ID)) == 2
+
+
+def test_a_card_payment_waits_for_the_account_that_is_not_declared_yet(
+    publisher: EventBridgeEventPublisher,
+    worker: SQSFinancialWorker,
+    ledger: DynamoDBTransactionLedger,
+    manage_accounts: ManageAccountsUseCase,
+) -> None:
+    """Half a transfer is the state that would corrupt a balance, so the
+    missing half is recorded unassigned and adopted when its account arrives —
+    through the same retroactive path every other alert uses."""
+    _declare_card(manage_accounts)
+    _publish(publisher, [_card_payment()])
+    worker.poll_once(wait_seconds=0)
+
+    assert len(ledger.list_unassigned(USER_ID)) == 1
+
+    savings = _declare_savings(manage_accounts)
+
+    assert savings.movements_applied == 1
+    assert savings.balance.signed_amount == Decimal("1459742")
+    assert not ledger.list_unassigned(USER_ID)

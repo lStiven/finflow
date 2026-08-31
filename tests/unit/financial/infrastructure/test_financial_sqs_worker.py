@@ -20,11 +20,14 @@ import pytest
 
 from personal_finance.contexts.financial.application.commands import (
     RecordMovementCommand,
+    RecordTransferCommand,
 )
 from personal_finance.contexts.financial.application.handlers import (
     Outcome,
     RecordMovementResult,
     RecordMovementUseCase,
+    RecordTransferResult,
+    RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -33,6 +36,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
 from personal_finance.contexts.financial.infrastructure.messaging.inbound import (
     INGESTION_SOURCE,
     TRANSACTION_EXTRACTED,
+    TRANSFER_EXTRACTED,
 )
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
     SQSFinancialWorker,
@@ -95,6 +99,23 @@ class RecordingUseCase:
         return _result(self._outcome)
 
 
+class RecordingTransferUseCase:
+    """Stands in for the pair-writing use case, and remembers what it was
+    asked to write."""
+
+    def __init__(self, outcome: Outcome = Outcome.UNASSIGNED) -> None:
+        self.commands: list[RecordTransferCommand] = []
+        self._outcome = outcome
+
+    def execute(self, command: RecordTransferCommand) -> RecordTransferResult:
+        self.commands.append(command)
+
+        return RecordTransferResult(
+            source=_result(self._outcome),
+            destination=_result(self._outcome),
+        )
+
+
 class FailingUseCase:
     """Whatever a repository does on a bad day: a throttle, an unreadable row."""
 
@@ -143,13 +164,18 @@ def _envelope(
 def _worker(
     *bodies: str,
     use_case: object | None = None,
+    transfer_use_case: object | None = None,
 ) -> tuple[SQSFinancialWorker, FakeSQSClient, Any]:
     client = FakeSQSClient(*bodies)
     resolved = RecordingUseCase() if use_case is None else use_case
+    transfers = (
+        RecordingTransferUseCase() if transfer_use_case is None else transfer_use_case
+    )
     worker = SQSFinancialWorker(
         client=cast(SQSClient, client),
         queue_url=QUEUE_URL,
         use_case=cast(RecordMovementUseCase, resolved),
+        transfer_use_case=cast(RecordTransferUseCase, transfers),
     )
 
     return worker, client, resolved
@@ -267,4 +293,133 @@ def test_a_redelivered_movement_is_deleted_rather_than_retried() -> None:
     result = worker.poll_once(wait_seconds=0)
 
     assert result.handled == 1
+    assert client.deleted == ["receipt-0"]
+
+
+# --------------------------------------------------------------- transfers
+
+
+def _transfer_envelope(
+    *,
+    detail_type: str = TRANSFER_EXTRACTED,
+    version: int = 1,
+    source_last_four: str | None = "5261",
+    currency: str = "COP",
+) -> str:
+    source: dict[str, Any] = {"kind": "account"}
+
+    if source_last_four is not None:
+        source["last_four"] = source_last_four
+
+    return json.dumps(
+        {
+            "source": INGESTION_SOURCE,
+            "detail-type": detail_type,
+            "detail": {
+                "version": version,
+                "event_id": str(uuid.uuid4()),
+                "user_id": USER_ID,
+                "transfer": {
+                    "kind": "card_payment",
+                    "amount": "3540258",
+                    "currency": currency,
+                    "occurred_at": 1_779_399_000,
+                    "bank": "Bancolombia",
+                    "source": source,
+                    "destination": {"kind": "credit_card", "last_four": "7653"},
+                },
+            },
+        },
+    )
+
+
+def test_a_transfer_goes_to_the_use_case_that_writes_both_sides() -> None:
+    client = FakeSQSClient(_transfer_envelope())
+    movements = RecordingUseCase()
+    transfers = RecordingTransferUseCase()
+    worker = SQSFinancialWorker(
+        client=cast(SQSClient, client),
+        queue_url=QUEUE_URL,
+        use_case=cast(RecordMovementUseCase, movements),
+        transfer_use_case=cast(RecordTransferUseCase, transfers),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.handled == 1
+    assert len(transfers.commands) == 1
+    # Never through the single-movement path: that is the bug, not a fallback.
+    assert not movements.commands
+    assert client.deleted == ["receipt-0"]
+
+
+def test_a_transfer_keeps_the_account_as_source_and_the_card_as_destination() -> None:
+    """The one field pair that decides which balance falls."""
+    transfers = RecordingTransferUseCase()
+    worker = SQSFinancialWorker(
+        client=cast(SQSClient, FakeSQSClient(_transfer_envelope())),
+        queue_url=QUEUE_URL,
+        use_case=cast(RecordMovementUseCase, RecordingUseCase()),
+        transfer_use_case=cast(RecordTransferUseCase, transfers),
+    )
+
+    worker.poll_once(wait_seconds=0)
+
+    command = transfers.commands[0]
+    assert command.source_instrument_kind == "account"
+    assert command.source_last_four == "5261"
+    assert command.destination_instrument_kind == "credit_card"
+    assert command.destination_last_four == "7653"
+    assert command.amount.amount == Decimal("3540258")
+
+
+def test_a_transfer_side_with_no_digits_is_dropped_rather_than_half_recorded() -> None:
+    """A side that cannot be routed can never find an account, and half a
+    transfer on a balance is worse than none of it."""
+    worker, client, _ = _worker(_transfer_envelope(source_last_four=None))
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
+    assert client.deleted == ["receipt-0"]
+
+
+def test_a_transfer_version_this_worker_cannot_read_stays_on_the_queue() -> None:
+    worker, client, _ = _worker(_transfer_envelope(version=99))
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
+    assert client.deleted == []
+
+
+def test_a_transfer_currency_this_worker_cannot_read_stays_on_the_queue() -> None:
+    worker, client, _ = _worker(_transfer_envelope(currency="XYZ"))
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
+    assert client.deleted == []
+
+
+def test_a_transfer_the_domain_refuses_is_dropped_rather_than_redelivered() -> None:
+    """One instrument paying itself. No retry can change a payload, and only
+    one side of it could ever be written."""
+
+    class RefusingTransfers:
+        def execute(self, command: RecordTransferCommand) -> RecordTransferResult:
+            del command
+
+            raise ValueError("A transfer moves money between two instruments")
+
+    worker = SQSFinancialWorker(
+        client=cast(SQSClient, client := FakeSQSClient(_transfer_envelope())),
+        queue_url=QUEUE_URL,
+        use_case=cast(RecordMovementUseCase, RecordingUseCase()),
+        transfer_use_case=cast(RecordTransferUseCase, RefusingTransfers()),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.rejected == 1
     assert client.deleted == ["receipt-0"]

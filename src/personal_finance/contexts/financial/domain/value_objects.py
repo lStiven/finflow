@@ -579,6 +579,114 @@ class MovementFingerprint(ValueObject):
         return self.value
 
 
+class TransferRole(enum.Enum):
+    """Which side of a transfer one movement is.
+
+    `SOURCE` is where the money left, `DESTINATION` where it arrived. On a
+    card payment the destination is the card, and money "arriving" on a
+    liability is its debt falling — the same rule `Account.apply` already
+    uses, unchanged.
+    """
+
+    SOURCE = "source"
+    DESTINATION = "destination"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TransferId(ValueObject):
+    """What ties the two sides of one transfer together.
+
+    Derived from the transfer itself rather than generated, for the same
+    reason `MovementId` is: the same alert read twice has to produce the same
+    pair, or a redelivery would write a second transfer whose sides duplicate
+    the first one's. Every part that identifies the movement goes in — who,
+    which bank, how much, when, and both instruments — so two card payments
+    of the same amount on the same day from different accounts stay distinct.
+
+    Hashed like the movement fingerprint, and for the same reason: this value
+    is stored on both rows and reaches logs, and card digits should not sit
+    there in plaintext.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        value = self.value.strip()
+
+        if not value:
+            raise ValueError("Transfer id cannot be empty")
+
+        object.__setattr__(self, "value", value)
+
+    @classmethod
+    def from_parts(
+        cls,
+        *,
+        user_id: UserId,
+        bank: str,
+        amount: Money,
+        occurred_at: PosixTime,
+        source_instrument_kind: str,
+        source_last_four: str,
+        destination_instrument_kind: str,
+        destination_last_four: str,
+    ) -> Self:
+        canonical = _canonical(
+            (
+                str(user_id.value),
+                bank.strip().lower(),
+                _canonical_amount(amount),
+                amount.currency.value,
+                str(occurred_at.as_epoch_seconds()),
+                source_instrument_kind.strip().lower(),
+                _instrument_last_four(source_last_four),
+                destination_instrument_kind.strip().lower(),
+                _instrument_last_four(destination_last_four),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    def to_dict(self) -> JsonValue:
+        return self.value
+
+
+def transfer_counterparty(*, instrument_kind: str, last_four: str) -> str:
+    """How one side of a transfer names the other.
+
+    A transfer has no counterparty in the ordinary sense — the other side is
+    another of the owner's own accounts — but every movement needs one, and
+    this text is part of the movement fingerprint. So it is built from the
+    instrument rather than from anything a bank wrote: **changing this format
+    changes the identity of every transfer leg recorded after it**, and the
+    same email would then be written a second time. Clients render the
+    structured `TransferLeg` instead of parsing this.
+    """
+    return f"{instrument_kind.strip().lower()} *{last_four.strip()}"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TransferLeg(ValueObject):
+    """What one movement knows about being half of a transfer.
+
+    Carried on the row rather than looked up, so reading a movement never
+    needs a second query to find out that it is not spending — which is the
+    one thing a summary must know about it.
+    """
+
+    transfer_id: TransferId
+    role: TransferRole
+    # The other side's movement id. Both sides are built together and both
+    # ids come from content, so this is known without asking storage.
+    counterpart_id: MovementId
+    counterpart_instrument_kind: str
+    counterpart_last_four: str
+
+    def __post_init__(self) -> None:
+        if not self.counterpart_instrument_kind.strip():
+            raise ValueError("A transfer leg names the other side's instrument")
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class StatedMovement(ValueObject):
     """What the bank said, before anybody corrected it.

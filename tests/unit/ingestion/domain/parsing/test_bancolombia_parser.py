@@ -13,9 +13,12 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BancolombiaParser,
 )
 from personal_finance.contexts.ingestion.domain.transactions import (
+    ExtractedTransaction,
+    ExtractedTransfer,
     InstrumentKind,
     TransactionDirection,
     TransactionKind,
+    TransferKind,
 )
 from personal_finance.shared.domain.value_objects import Currency
 
@@ -40,6 +43,15 @@ TRANSFER = (
     "*3017402695 el 11/08/2026 a las 10:16. ¿Dudas? Llamanos al 018000931987. "
     "Estamos cerca."
 )
+CARD_PAYMENT = (
+    "Bancolombia: Pagaste $3,540,258 en la tarjeta de credito *7653 desde la "
+    "cuenta *5261, el 21/05/2026 16:30. ¿Dudas? Llamanos al 018000912345. "
+    "Estamos cerca."
+)
+CARD_PAYMENT_ACCENTED = (
+    "Bancolombia: Pagaste $1.200.000,50 en la tarjeta de crédito 7653 desde "
+    "la cuenta 5261 el 21/05/2026 a las 16:30. Estamos cerca."
+)
 INCOMING_PAYROLL = (
     "Bancolombia: Recibiste un pago de Nomina de BOLD.CO SAS por $19,850,806.00 "
     "en tu cuenta de Ahorros el 10/08/2026 a las 17:30. Si tienes dudas, "
@@ -55,7 +67,7 @@ def parser() -> BancolombiaParser:
 def test_card_purchase(parser: BancolombiaParser) -> None:
     transaction = parser.parse(CARD_PURCHASE)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert transaction.kind is TransactionKind.CARD_PURCHASE
     assert transaction.direction is TransactionDirection.OUTGOING
     assert transaction.amount.amount == Decimal("29259.00")
@@ -72,7 +84,7 @@ def test_card_purchase_keeps_a_multi_word_merchant_intact(
 ) -> None:
     transaction = parser.parse(CARD_PURCHASE_MULTIWORD_MERCHANT)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert transaction.counterparty == "TIENDA D1 VAL TULUA"
     assert transaction.amount.amount == Decimal("37680.00")
 
@@ -80,7 +92,7 @@ def test_card_purchase_keeps_a_multi_word_merchant_intact(
 def test_card_purchase_time_is_bogota_local(parser: BancolombiaParser) -> None:
     transaction = parser.parse(CARD_PURCHASE)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     # 12:00 in Bogotá is 17:00 UTC. Reading the alert as UTC would move every
     # evening purchase into the next day.
     assert transaction.occurred_at.to_datetime().isoformat() == (
@@ -91,7 +103,7 @@ def test_card_purchase_time_is_bogota_local(parser: BancolombiaParser) -> None:
 def test_qr_payment(parser: BancolombiaParser) -> None:
     transaction = parser.parse(QR_PAYMENT)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert transaction.kind is TransactionKind.QR_PAYMENT
     assert transaction.direction is TransactionDirection.OUTGOING
     assert transaction.amount.amount == Decimal("13600.00")
@@ -105,7 +117,7 @@ def test_transfer_accepts_an_unmasked_source_account(
 ) -> None:
     transaction = parser.parse(TRANSFER)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert transaction.kind is TransactionKind.TRANSFER
     assert transaction.amount.amount == Decimal("112700.00")
     assert transaction.counterparty == "3017402695"
@@ -117,7 +129,7 @@ def test_transfer_accepts_an_unmasked_source_account(
 def test_incoming_payroll(parser: BancolombiaParser) -> None:
     transaction = parser.parse(INCOMING_PAYROLL)
 
-    assert transaction is not None
+    assert isinstance(transaction, ExtractedTransaction)
     assert transaction.kind is TransactionKind.INCOMING_PAYMENT
     assert transaction.direction is TransactionDirection.INCOMING
     assert transaction.amount.amount == Decimal("19850806.00")
@@ -166,3 +178,75 @@ def test_unknown_template_returns_none(parser: BancolombiaParser) -> None:
 
 def test_unrelated_text_returns_none(parser: BancolombiaParser) -> None:
     assert parser.parse("Compraste algo en alguna parte") is None
+
+
+# --------------------------------------------------------- pago de tarjeta
+
+
+def test_a_card_payment_is_a_transfer_not_a_movement(
+    parser: BancolombiaParser,
+) -> None:
+    """The alert that names two of the holder's own instruments.
+
+    Read as one movement it is wrong whichever side it lands on, so the parser
+    answers with a different type entirely and the caller cannot accidentally
+    treat it as spending.
+    """
+    transfer = parser.parse(CARD_PAYMENT)
+
+    assert isinstance(transfer, ExtractedTransfer)
+    assert transfer.kind is TransferKind.CARD_PAYMENT
+    assert transfer.amount.amount == Decimal("3540258")
+    assert transfer.amount.currency is Currency.COP
+    assert transfer.bank == "bancolombia"
+
+
+def test_a_card_payment_reads_the_account_as_source_and_the_card_as_destination(
+    parser: BancolombiaParser,
+) -> None:
+    """The direction of the whole thing. Swapped, a payment would empty the
+    account *and* raise the card's debt."""
+    transfer = parser.parse(CARD_PAYMENT)
+
+    assert isinstance(transfer, ExtractedTransfer)
+    assert transfer.source.kind is InstrumentKind.ACCOUNT
+    assert transfer.source.last_four == "5261"
+    assert transfer.destination.kind is InstrumentKind.CREDIT_CARD
+    assert transfer.destination.last_four == "7653"
+
+
+def test_a_card_payment_time_is_bogota_local(parser: BancolombiaParser) -> None:
+    transfer = parser.parse(CARD_PAYMENT)
+
+    assert isinstance(transfer, ExtractedTransfer)
+    # 16:30 in Bogotá is 21:30 UTC.
+    assert transfer.occurred_at.as_epoch_seconds() == 1_779_399_000
+
+
+def test_a_card_payment_survives_the_accent_and_the_missing_asterisks(
+    parser: BancolombiaParser,
+) -> None:
+    """Same template, the way the bank writes it on another day: `crédito`
+    with its accent, no masking marker, `a las` back in the date, and cents."""
+    transfer = parser.parse(CARD_PAYMENT_ACCENTED)
+
+    assert isinstance(transfer, ExtractedTransfer)
+    assert transfer.amount.amount == Decimal("1200000.50")
+    assert transfer.source.last_four == "5261"
+    assert transfer.destination.last_four == "7653"
+
+
+def test_a_card_payment_is_never_read_as_one_of_the_single_sided_templates(
+    parser: BancolombiaParser,
+) -> None:
+    """The regression this whole path exists for: before the template, this
+    alert fell through to the fallback, which reports one movement."""
+    assert not isinstance(parser.parse(CARD_PAYMENT), ExtractedTransaction)
+
+
+def test_a_transfer_to_somebody_else_stays_a_single_movement(
+    parser: BancolombiaParser,
+) -> None:
+    """Money leaving for an account the bank does not say is yours is one
+    expense, and must not be turned into a pair."""
+    assert isinstance(parser.parse(TRANSFER), ExtractedTransaction)

@@ -22,6 +22,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
     TransactionAlreadyAssignedError,
+    TransferLegError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -37,6 +38,10 @@ from personal_finance.contexts.financial.domain.value_objects import (
     StatedMovement,
     TransactionOrigin,
     TransactionStatus,
+    TransferId,
+    TransferLeg,
+    TransferRole,
+    transfer_counterparty,
 )
 from personal_finance.shared.domain.entities import AggregateRoot
 from personal_finance.shared.domain.value_objects import (
@@ -456,6 +461,10 @@ class Transaction(AggregateRoot[MovementId]):
     # no earlier version of a claim its author just made.
     stated: StatedMovement | None = None
     note: str | None = None
+    # Set on both rows of a transfer between two of the owner's own accounts,
+    # and on nothing else. Present means this movement is not spending and not
+    # income: it is one half of money that never left.
+    transfer: TransferLeg | None = None
 
     @classmethod
     def from_alert(
@@ -513,6 +522,148 @@ class Transaction(AggregateRoot[MovementId]):
         return transaction
 
     @classmethod
+    def as_transfer(
+        cls,
+        *,
+        user_id: UserId,
+        bank: str,
+        amount: Money,
+        occurred_at: PosixTime,
+        source_instrument_kind: str,
+        source_last_four: str,
+        destination_instrument_kind: str,
+        destination_last_four: str,
+        origin: TransactionOrigin = TransactionOrigin.BANK_ALERT,
+    ) -> tuple[Self, Self]:
+        """Both sides of money that moved inside one person's own finances.
+
+        Returned as a pair, and built here rather than by a caller assembling
+        two movements, because the pairing is the rule: each side has to know
+        the other's identity, both have to carry the same transfer id, and the
+        directions have to be opposites. A caller free to build them
+        separately is a caller free to build two outgoing sides, which is a
+        card payment that empties an account and never pays the card.
+
+        Each side keeps its own identity, derived from its own content exactly
+        like any alert, so a redelivery rewrites the same two rows instead of
+        adding a second pair — and so a side whose account is not declared yet
+        can be adopted on its own, later, by the account that claims it.
+
+        Nothing here decides what a balance does with a side. `Account.apply`
+        already knows: money arriving on a liability is debt going down.
+        """
+        institution = bank.strip().lower()
+
+        if not institution:
+            raise ValueError("A transfer requires a bank")
+
+        if (
+            source_instrument_kind.strip().lower(),
+            source_last_four.strip(),
+        ) == (
+            destination_instrument_kind.strip().lower(),
+            destination_last_four.strip(),
+        ):
+            raise ValueError(
+                "A transfer moves money between two different instruments",
+            )
+
+        transfer_id = TransferId.from_parts(
+            user_id=user_id,
+            bank=institution,
+            amount=amount,
+            occurred_at=occurred_at,
+            source_instrument_kind=source_instrument_kind,
+            source_last_four=source_last_four,
+            destination_instrument_kind=destination_instrument_kind,
+            destination_last_four=destination_last_four,
+        )
+        # Each side's counterparty is the other side's instrument, which is
+        # what makes the two fingerprints differ even for a transfer between
+        # two instruments of the same kind.
+        out_counterparty = transfer_counterparty(
+            instrument_kind=destination_instrument_kind,
+            last_four=destination_last_four,
+        )
+        in_counterparty = transfer_counterparty(
+            instrument_kind=source_instrument_kind,
+            last_four=source_last_four,
+        )
+        out_id = MovementId.from_fingerprint(
+            MovementFingerprint.from_movement(
+                user_id=user_id,
+                bank=institution,
+                direction=MovementDirection.OUTGOING,
+                amount=amount,
+                occurred_at=occurred_at,
+                counterparty=out_counterparty,
+                instrument_kind=source_instrument_kind,
+                last_four=source_last_four,
+            ),
+        )
+        in_id = MovementId.from_fingerprint(
+            MovementFingerprint.from_movement(
+                user_id=user_id,
+                bank=institution,
+                direction=MovementDirection.INCOMING,
+                amount=amount,
+                occurred_at=occurred_at,
+                counterparty=in_counterparty,
+                instrument_kind=destination_instrument_kind,
+                last_four=destination_last_four,
+            ),
+        )
+
+        source = cls(
+            id=out_id,
+            user_id=user_id,
+            direction=MovementDirection.OUTGOING,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=out_counterparty,
+            bank=institution,
+            origin=origin,
+            account_fingerprint=_account_fingerprint(
+                bank=institution,
+                instrument_kind=source_instrument_kind,
+                last_four=source_last_four,
+            ),
+            transfer=TransferLeg(
+                transfer_id=transfer_id,
+                role=TransferRole.SOURCE,
+                counterpart_id=in_id,
+                counterpart_instrument_kind=destination_instrument_kind,
+                counterpart_last_four=destination_last_four,
+            ),
+        )
+        destination = cls(
+            id=in_id,
+            user_id=user_id,
+            direction=MovementDirection.INCOMING,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=in_counterparty,
+            bank=institution,
+            origin=origin,
+            account_fingerprint=_account_fingerprint(
+                bank=institution,
+                instrument_kind=destination_instrument_kind,
+                last_four=destination_last_four,
+            ),
+            transfer=TransferLeg(
+                transfer_id=transfer_id,
+                role=TransferRole.DESTINATION,
+                counterpart_id=out_id,
+                counterpart_instrument_kind=source_instrument_kind,
+                counterpart_last_four=source_last_four,
+            ),
+        )
+        source._announce()
+        destination._announce()
+
+        return source, destination
+
+    @classmethod
     def enter_manually(
         cls,
         *,
@@ -558,6 +709,16 @@ class Transaction(AggregateRoot[MovementId]):
         )
 
     @property
+    def is_transfer(self) -> bool:
+        """One half of money that moved between the owner's own accounts.
+
+        The one question a spending total has to ask: a transfer is neither an
+        expense nor income, and counting either side would report money
+        somebody never spent and never earned.
+        """
+        return self.transfer is not None
+
+    @property
     def is_routable(self) -> bool:
         """Whether an account could ever claim this movement by matching.
 
@@ -598,6 +759,20 @@ class Transaction(AggregateRoot[MovementId]):
             if counterparty is None
             else _valid_counterparty(counterparty)
         )
+
+        if self.is_transfer and (
+            replacement_amount != self.amount
+            or replacement_time != self.occurred_at
+            or replacement_party != self.counterparty
+        ):
+            # Refused rather than applied to both sides: this aggregate holds
+            # one of them, and moving the other's balance from here would be a
+            # write nothing in this transaction boundary can guarantee. What a
+            # wrong transfer needs is to be re-read, not half-corrected.
+            raise TransferLegError(
+                "One side of a transfer cannot be corrected on its own: the "
+                "two sides state one movement of money",
+            )
         # A note is an annotation, not a claim about the movement, so it is
         # tracked apart: writing one must not fabricate a "the bank said
         # something different" record whose values match the live ones.

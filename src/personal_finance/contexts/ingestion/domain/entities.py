@@ -10,6 +10,7 @@ from personal_finance.contexts.ingestion.domain.events import (
     BankNotificationReceived,
     TransactionExtracted,
     TransactionExtractionDeferred,
+    TransferExtracted,
 )
 from personal_finance.contexts.ingestion.domain.exceptions import (
     InvalidNotificationStateError,
@@ -17,6 +18,7 @@ from personal_finance.contexts.ingestion.domain.exceptions import (
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
+    ExtractedTransfer,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -152,6 +154,30 @@ class BankNotification(AggregateRoot[NotificationId]):
                 user_id=self.user_id,
                 message_id=self.message_id,
                 transaction=transaction,
+            ),
+        )
+
+    def complete_as_transfer(self, transfer: ExtractedTransfer) -> None:
+        """Same ending as `complete`, for the alert that moved money between
+        two of the owner's own instruments.
+
+        Its own method rather than a branch inside `complete`: the event it
+        records has different subscribers, and a caller that had to remember
+        which one to publish would eventually publish the wrong one.
+        """
+        if self.status is not ProcessingStatus.PROCESSING:
+            raise InvalidNotificationStateError(
+                f"Cannot complete a notification with status {self.status}",
+            )
+
+        self.status = ProcessingStatus.PROCESSED
+        self.raw_content = ""
+        self.record_event(
+            TransferExtracted(
+                notification_id=self.id,
+                user_id=self.user_id,
+                message_id=self.message_id,
+                transfer=transfer,
             ),
         )
 

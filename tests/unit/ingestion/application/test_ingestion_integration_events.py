@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from personal_finance.contexts.ingestion.application.integration_events import (
     SOURCE,
+    TRANSFER_EXTRACTED,
     IngestionIntegrationEventTranslator,
 )
 from personal_finance.contexts.ingestion.domain.events import (
@@ -11,13 +12,16 @@ from personal_finance.contexts.ingestion.domain.events import (
     BankNotificationReceived,
     TransactionExtracted,
     TransactionExtractionDeferred,
+    TransferExtracted,
 )
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
+    ExtractedTransfer,
     Instrument,
     InstrumentKind,
     TransactionDirection,
     TransactionKind,
+    TransferKind,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -186,3 +190,73 @@ def test_ingestions_internal_lifecycle_events_are_not_published() -> None:
     # These describe how ingestion happens to work; publishing them would let
     # another context couple itself to that.
     assert [translator.translate(event) for event in internal] == [None] * len(internal)
+
+
+# --------------------------------------------------------------- traslados
+
+
+def _transfer() -> ExtractedTransfer:
+    return ExtractedTransfer(
+        kind=TransferKind.CARD_PAYMENT,
+        amount=Money(amount=Decimal("3540258"), currency=Currency.COP),
+        occurred_at=OCCURRED_AT,
+        bank="bancolombia",
+        source=Instrument(kind=InstrumentKind.ACCOUNT, last_four="5261"),
+        destination=Instrument(kind=InstrumentKind.CREDIT_CARD, last_four="7653"),
+    )
+
+
+def _transfer_event() -> TransferExtracted:
+    return TransferExtracted(
+        notification_id=NOTIFICATION_ID,
+        user_id=USER_ID,
+        message_id=MESSAGE_ID,
+        transfer=_transfer(),
+    )
+
+
+def test_a_transfer_is_published_under_its_own_detail_type() -> None:
+    """Not a version of `TransactionExtracted`: Merchant subscribes to that
+    one and must never see a card payment, and a rule can select on a detail
+    type where it cannot select on a version."""
+    event = IngestionIntegrationEventTranslator().translate(_transfer_event())
+
+    assert event is not None
+    assert event.source == SOURCE
+    assert event.detail_type == TRANSFER_EXTRACTED
+    assert event.version == 1
+
+
+def test_a_transfer_payload_carries_both_instruments() -> None:
+    event = IngestionIntegrationEventTranslator().translate(_transfer_event())
+
+    assert event is not None
+    transfer = event.payload["transfer"]
+    assert transfer == {
+        "kind": "card_payment",
+        "amount": "3540258",
+        "currency": "COP",
+        "occurred_at": OCCURRED_AT.as_epoch_seconds(),
+        "bank": "bancolombia",
+        "source": {"kind": "account", "last_four": "5261"},
+        "destination": {"kind": "credit_card", "last_four": "7653"},
+    }
+
+
+def test_a_transfer_amount_stays_a_string() -> None:
+    """One amount, two balances: a float that rounds a cent away here would
+    round it away twice."""
+    event = IngestionIntegrationEventTranslator().translate(_transfer_event())
+
+    assert event is not None
+    transfer = event.payload["transfer"]
+    assert isinstance(transfer, dict)
+    assert isinstance(transfer["amount"], str)
+
+
+def test_a_transfer_keeps_the_email_out_of_the_payload() -> None:
+    event = IngestionIntegrationEventTranslator().translate(_transfer_event())
+
+    assert event is not None
+    assert "message_id" not in event.payload
+    assert "sender" not in event.payload

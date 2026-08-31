@@ -12,6 +12,7 @@ from personal_finance.contexts.financial.application.commands import (
     LinkInstrumentCommand,
     OpenAccountCommand,
     RecordMovementCommand,
+    RecordTransferCommand,
     RenameAccountCommand,
     RestateBalanceCommand,
     SetCreditLimitCommand,
@@ -126,21 +127,135 @@ class RecordMovementUseCase:
         ledger: TransactionLedger,
         event_publisher: EventPublisher,
     ) -> None:
+        self._placer = MovementPlacer(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=event_publisher,
+        )
+
+    def execute(self, command: RecordMovementCommand) -> RecordMovementResult:
+        return self._placer.place(
+            Transaction.from_alert(
+                user_id=command.user_id,
+                bank=command.bank,
+                direction=command.direction,
+                amount=command.amount,
+                occurred_at=command.occurred_at,
+                counterparty=command.counterparty,
+                instrument_kind=command.instrument_kind,
+                last_four=command.last_four,
+            ),
+        )
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RecordTransferResult:
+    """What happened to each side of one transfer.
+
+    Both are reported because they are genuinely independent outcomes: the
+    account may be declared and the card not, and a redelivery can find one
+    side already written and the other missing — which is exactly the state a
+    partial failure leaves behind, and exactly what a retry has to repair.
+    """
+
+    source: RecordMovementResult
+    destination: RecordMovementResult
+
+    @property
+    def outcome(self) -> Outcome:
+        """One answer for a log line, taking the weaker of the two sides.
+
+        `DUPLICATE` only when *both* sides were already there: a pair with one
+        side still missing is work the retry did, not a no-op.
+        """
+        outcomes = {self.source.outcome, self.destination.outcome}
+
+        if outcomes == {Outcome.DUPLICATE}:
+            return Outcome.DUPLICATE
+
+        if Outcome.APPLIED in outcomes:
+            return Outcome.APPLIED
+
+        return Outcome.UNASSIGNED
+
+
+class RecordTransferUseCase:
+    """Turns one alert about money moving inside somebody's own finances into
+    the two ledger rows it actually is.
+
+    A payment to your own credit card is not an expense: an account falls and
+    a card's debt falls with it, and net worth does not move. Recorded as a
+    single movement it is wrong whichever side it lands on — on the account
+    the debt never clears, on the card an outgoing movement *raises* what is
+    owed. So both sides are written, each with its own identity derived from
+    its own content.
+
+    **Each side is placed independently, and that is deliberate.** Only one of
+    the two accounts may be declared; the other side is then recorded
+    unassigned and adopted later, by the account that claims it, through the
+    same retroactive path everything else uses. A side already in the ledger
+    is refused by its own conditional write, so a redelivery after a partial
+    failure completes the pair instead of doubling the half that succeeded.
+
+    What it never does is invent the missing half. If a side cannot be
+    recorded at all, the exception leaves the message on the queue: a transfer
+    with one side booked is the one state that would quietly corrupt a
+    balance, and a retry is what repairs it.
+    """
+
+    def __init__(
+        self,
+        *,
+        accounts: AccountRepository,
+        ledger: TransactionLedger,
+        event_publisher: EventPublisher,
+    ) -> None:
+        self._placer = MovementPlacer(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=event_publisher,
+        )
+
+    def execute(self, command: RecordTransferCommand) -> RecordTransferResult:
+        source, destination = Transaction.as_transfer(
+            user_id=command.user_id,
+            bank=command.bank,
+            amount=command.amount,
+            occurred_at=command.occurred_at,
+            source_instrument_kind=command.source_instrument_kind,
+            source_last_four=command.source_last_four,
+            destination_instrument_kind=command.destination_instrument_kind,
+            destination_last_four=command.destination_last_four,
+        )
+
+        return RecordTransferResult(
+            source=self._placer.place(source),
+            destination=self._placer.place(destination),
+        )
+
+
+class MovementPlacer:
+    """Puts one already-built movement where it belongs, and writes it.
+
+    Extracted from `RecordMovementUseCase` so a transfer's two sides go
+    through the identical path: find the account by fingerprint, apply it in
+    memory to learn how far the balance moves, then write the row and the
+    balance change together, conditionally. Two copies of this would be two
+    places for the rule about what a redelivery may do to a balance.
+    """
+
+    def __init__(
+        self,
+        *,
+        accounts: AccountRepository,
+        ledger: TransactionLedger,
+        event_publisher: EventPublisher,
+    ) -> None:
         self._accounts = accounts
         self._ledger = ledger
         self._events = event_publisher
 
-    def execute(self, command: RecordMovementCommand) -> RecordMovementResult:
-        transaction = Transaction.from_alert(
-            user_id=command.user_id,
-            bank=command.bank,
-            direction=command.direction,
-            amount=command.amount,
-            occurred_at=command.occurred_at,
-            counterparty=command.counterparty,
-            instrument_kind=command.instrument_kind,
-            last_four=command.last_four,
-        )
+    def place(self, transaction: Transaction) -> RecordMovementResult:
         fingerprint = transaction.account_fingerprint
 
         if fingerprint is None:
@@ -150,7 +265,7 @@ class RecordMovementUseCase:
             )
 
         account = self._accounts.find_by_fingerprint(
-            user_id=command.user_id,
+            user_id=transaction.user_id,
             fingerprint=fingerprint,
         )
 

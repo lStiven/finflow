@@ -11,6 +11,7 @@ from types import FrameType
 
 from personal_finance.contexts.financial.application.handlers import (
     RecordMovementUseCase,
+    RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
     SQSFinancialWorker,
@@ -63,20 +64,24 @@ def build_worker() -> SQSFinancialWorker:
 
     dynamodb = get_dynamodb_client()
     table_name = settings.accounts_table
+    accounts = DynamoDBAccountRepository(client=dynamodb, table_name=table_name)
+    ledger = DynamoDBTransactionLedger(client=dynamodb, table_name=table_name)
+    events = LoggingEventPublisher()
 
     return SQSFinancialWorker(
         client=get_sqs_client(),
         queue_url=settings.events_queue_url,
         use_case=RecordMovementUseCase(
-            accounts=DynamoDBAccountRepository(
-                client=dynamodb,
-                table_name=table_name,
-            ),
-            ledger=DynamoDBTransactionLedger(
-                client=dynamodb,
-                table_name=table_name,
-            ),
-            event_publisher=LoggingEventPublisher(),
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=events,
+        ),
+        # The same queue carries both: one rule, two detail types, because a
+        # transfer and a purchase both end as rows on the same balances.
+        transfer_use_case=RecordTransferUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=events,
         ),
     )
 

@@ -28,6 +28,7 @@ from personal_finance.contexts.financial.application.commands import OpenAccount
 from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     RecordMovementUseCase,
+    RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
@@ -161,6 +162,11 @@ def lambda_worker(
         client=sqs_client,
         queue_url=queue_url,
         use_case=RecordMovementUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=NullEventPublisher(),
+        ),
+        transfer_use_case=RecordTransferUseCase(
             accounts=accounts,
             ledger=ledger,
             event_publisher=NullEventPublisher(),

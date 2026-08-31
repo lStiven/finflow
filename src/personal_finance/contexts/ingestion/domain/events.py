@@ -4,6 +4,7 @@ import dataclasses
 
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
+    ExtractedTransfer,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -49,6 +50,23 @@ class TransactionExtracted(Event):
     user_id: UserId
     message_id: EmailMessageId
     transaction: ExtractedTransaction
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TransferExtracted(Event):
+    """A bank alert described money moving between the owner's own accounts.
+
+    A separate event rather than a variant of `TransactionExtracted`, because
+    the two mean different things to different subscribers: Financial has to
+    write both sides of this, and Merchant must never see it at all — there is
+    no merchant in a card payment, and letting one be created would put the
+    owner's own card in their list of shops.
+    """
+
+    notification_id: NotificationId
+    user_id: UserId
+    message_id: EmailMessageId
+    transfer: ExtractedTransfer
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

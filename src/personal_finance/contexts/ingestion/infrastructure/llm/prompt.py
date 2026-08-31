@@ -46,6 +46,26 @@ When you cannot tell which of the two an email is, set understood=false. The \
 email is kept either way, and a missing expense is visible where a doubled \
 one is not.
 
+MONEY BETWEEN TWO OF THE HOLDER'S OWN INSTRUMENTS IS NOT ONE MOVEMENT
+
+Some alerts name two instruments that both belong to the person reading them: \
+paying a credit card from their own account ("Pagaste $X en la tarjeta de \
+credito *7653 desde la cuenta *5261"), moving money between their own \
+accounts. Nothing left their finances — an account fell and a card's debt \
+fell with it — so this is two movements, and the fields below can only \
+describe one.
+
+Set understood=false for those. Reporting one side is not a smaller version \
+of the truth: booked on the account, the card keeps showing a debt that was \
+paid; booked on the card, an outgoing movement *raises* what is owed, adding \
+the payment to the balance it just cleared. A deterministic template reads \
+these, because it can tell which instrument is which without guessing; you \
+cannot, and a guess here moves somebody's real balance the wrong way.
+
+An alert naming one instrument and an external destination — a transfer to \
+somebody else's account, a purchase, a QR payment — is one movement and is \
+yours to report as usual.
+
 FIELDS
 
 kind:

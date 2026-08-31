@@ -19,12 +19,15 @@ from pydantic import ValidationError
 from personal_finance.contexts.financial.application.handlers import (
     Outcome,
     RecordMovementUseCase,
+    RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.infrastructure.messaging.inbound import (
     INGESTION_SOURCE,
     TRANSACTION_EXTRACTED,
+    TRANSFER_EXTRACTED,
     IntegrationEventEnvelope,
     TransactionExtractedDetail,
+    TransferExtractedDetail,
     UnsupportedPayloadVersionError,
 )
 
@@ -68,10 +71,12 @@ class SQSFinancialWorker:
         client: SQSClient,
         queue_url: str,
         use_case: RecordMovementUseCase,
+        transfer_use_case: RecordTransferUseCase,
     ) -> None:
         self._client = client
         self._queue_url = queue_url
         self._use_case = use_case
+        self._transfer_use_case = transfer_use_case
 
     def poll_once(self, *, wait_seconds: int = WAIT_TIME_SECONDS) -> PollResult:
         response = self._client.receive_message(
@@ -118,10 +123,10 @@ class SQSFinancialWorker:
 
             return MessageOutcome.DISCARDED
 
-        if (
-            envelope.source != INGESTION_SOURCE
-            or envelope.detail_type != TRANSACTION_EXTRACTED
-        ):
+        if envelope.source != INGESTION_SOURCE or envelope.detail_type not in {
+            TRANSACTION_EXTRACTED,
+            TRANSFER_EXTRACTED,
+        }:
             # This queue belongs to Financial alone, so an event addressed to
             # somebody else is a misrouted rule, not a message another
             # subscriber is still waiting for.
@@ -131,6 +136,9 @@ class SQSFinancialWorker:
             )
 
             return MessageOutcome.DISCARDED
+
+        if envelope.detail_type == TRANSFER_EXTRACTED:
+            return self._handle_transfer(envelope)
 
         try:
             detail = TransactionExtractedDetail.model_validate(envelope.detail)
@@ -193,6 +201,70 @@ class SQSFinancialWorker:
                 "movement already in the ledger",
                 extra={"movement_id": result.transaction.id.value},
             )
+
+        return MessageOutcome.HANDLED
+
+    def _handle_transfer(self, envelope: IntegrationEventEnvelope) -> MessageOutcome:
+        """Both sides of one email, written together.
+
+        Every failure mode is answered the same way the single-movement path
+        answers it, and for the same reasons: a shape this cannot read is
+        discarded because it will never become readable, while a version or a
+        currency it does not know yet is left on the queue for a newer deploy.
+
+        A transfer that raises mid-way has written at most one of its two
+        sides. Retrying is what completes it: each side's identity comes from
+        its own content, so the side already stored is refused by its own
+        conditional write instead of being applied twice.
+        """
+        try:
+            detail = TransferExtractedDetail.model_validate(envelope.detail)
+        except ValidationError:
+            _logger.exception("discarding malformed TransferExtracted payload")
+
+            return MessageOutcome.DISCARDED
+
+        try:
+            command = detail.to_command()
+        except UnsupportedPayloadVersionError:
+            _logger.warning(
+                "unsupported TransferExtracted version",
+                extra={"version": detail.version},
+            )
+
+            return MessageOutcome.RETRY
+        except ValueError:
+            _logger.exception("leaving an unreadable transfer on the queue")
+
+            return MessageOutcome.RETRY
+
+        try:
+            result = self._transfer_use_case.execute(command)
+        except ValueError:
+            # The domain refused the pair itself — one instrument paying
+            # itself, an empty bank. Retrying cannot change a payload, and
+            # only one side of it could ever be recorded, so it is discarded
+            # rather than left to redeliver forever.
+            _logger.exception("discarding a transfer the domain refused")
+
+            return MessageOutcome.DISCARDED
+        except Exception:
+            _logger.exception(
+                "leaving a transfer that could not be recorded on the queue",
+            )
+
+            return MessageOutcome.RETRY
+
+        _logger.info(
+            "transfer recorded",
+            extra={
+                "movement_id": result.source.transaction.id.value,
+                "counterpart_movement_id": result.destination.transaction.id.value,
+                "outcome": result.outcome.value,
+                "source_outcome": result.source.outcome.value,
+                "destination_outcome": result.destination.outcome.value,
+            },
+        )
 
         return MessageOutcome.HANDLED
 

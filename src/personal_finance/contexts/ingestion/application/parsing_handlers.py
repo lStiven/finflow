@@ -13,6 +13,7 @@ from personal_finance.contexts.ingestion.application.ports import (
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.parsing.text import extract_text
+from personal_finance.contexts.ingestion.domain.transactions import ExtractedTransfer
 from personal_finance.contexts.ingestion.domain.value_objects import (
     NotificationDeferredReason,
     ProcessingStatus,
@@ -47,6 +48,13 @@ class ParseNotificationUseCase:
     Tries the bank's own templates first and only defers to the LLM fallback
     when none of them matches, which is the order the whole pipeline depends
     on: a deterministic read is cheap, repeatable and auditable.
+
+    A template may answer with a *transfer* rather than a transaction — money
+    moving between two instruments of the same owner, which is two movements
+    with one email behind them. The fallback never does: a model asked to
+    choose which of two instruments an amount belongs to would be guessing at
+    which balance moves, and on a credit card the wrong guess adds the payment
+    to the debt it just cleared.
 
     The fallback is optional. Without one — no API key, or a deployment that
     wants none — an unrecognised alert is kept as `PENDING_FALLBACK` exactly
@@ -101,6 +109,15 @@ class ParseNotificationUseCase:
             # templates — a new wording, or a kind of movement nobody has
             # written a pattern for.
             return self._fall_back(notification)
+
+        if isinstance(transaction, ExtractedTransfer):
+            # Two movements out of one email: money left an account and the
+            # debt on a card of the same owner fell by the same amount. Only
+            # a template ever produces one — the fallback below is asked for a
+            # single movement and refuses these on purpose.
+            notification.complete_as_transfer(transaction)
+
+            return self._finish(notification, ParseOutcome.EXTRACTED)
 
         notification.complete(transaction)
 

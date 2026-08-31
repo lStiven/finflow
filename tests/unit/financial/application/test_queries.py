@@ -18,12 +18,14 @@ from personal_finance.contexts.financial.application.queries import (
     SummaryGrouping,
     SummaryQuery,
     TransactionQuery,
+    TransferView,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
     AccountKind,
+    InstrumentKind,
     MovementDirection,
 )
 from personal_finance.shared.domain.value_objects import (
@@ -844,3 +846,145 @@ def test_the_lived_month_stops_at_now_like_the_comparison_does(
     assert lived.totals[0].outgoing == Decimal("10000")
     assert lived.totals == list(history.comparison.totals)
     assert lived.net_worth == list(history.comparison.net_worth)
+
+
+# ------------------------------------------------------------- traslados
+
+
+def _pay_a_card(
+    ledger: InMemoryLedger,
+    *,
+    amount: str = "3540258",
+    when: int = AUGUST_MIDDAY,
+) -> tuple[Transaction, Transaction]:
+    """Both sides of a card payment, in the ledger the way the worker leaves
+    them."""
+    source, destination = Transaction.as_transfer(
+        user_id=USER_ID,
+        bank="bancolombia",
+        amount=Money(amount=Decimal(amount), currency=Currency.COP),
+        occurred_at=PosixTime.from_epoch_seconds(when),
+        source_instrument_kind=InstrumentKind.ACCOUNT.value,
+        source_last_four="5261",
+        destination_instrument_kind=InstrumentKind.CREDIT_CARD.value,
+        destination_last_four="7653",
+    )
+    ledger.save(source)
+    ledger.save(destination)
+
+    return source, destination
+
+
+def test_a_summary_leaves_transfers_out_of_what_was_spent(
+    ledger: InMemoryLedger,
+) -> None:
+    """The bug this whole path exists to prevent: a card payment reporting as
+    the month's largest expense, and again as income on the card."""
+    _spend(ledger, counterparty="TIENDAS ARA", amount="50000")
+    _pay_a_card(ledger)
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=InMemoryAccounts(),
+    ).execute(
+        SummaryQuery(
+            filter=_filter(transfers=TransferView.EXCLUDE),
+            group_by=SummaryGrouping.MONTH,
+        ),
+    )
+
+    assert summary.totals[0].outgoing == Decimal("50000")
+    assert summary.totals[0].incoming == Decimal("0")
+    assert summary.totals[0].movements == 1
+
+
+def test_a_summary_can_be_asked_for_the_transfers_alone(
+    ledger: InMemoryLedger,
+) -> None:
+    """The opposite question: what did I move between my own accounts."""
+    _spend(ledger, counterparty="TIENDAS ARA", amount="50000")
+    _pay_a_card(ledger)
+
+    summary = SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=InMemoryAccounts(),
+    ).execute(
+        SummaryQuery(
+            filter=_filter(transfers=TransferView.ONLY),
+            group_by=SummaryGrouping.MONTH,
+        ),
+    )
+
+    assert summary.totals[0].outgoing == Decimal("3540258")
+    assert summary.totals[0].incoming == Decimal("3540258")
+    assert summary.totals[0].movements == 2
+
+
+def test_the_list_shows_both_sides_of_a_transfer_by_default(
+    ledger: InMemoryLedger,
+) -> None:
+    """They explain why an account fell, so hiding them would leave somebody
+    looking for money that plainly left."""
+    _spend(ledger, counterparty="TIENDAS ARA", amount="50000")
+    _pay_a_card(ledger)
+
+    page = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(filter=_filter()),
+    )
+
+    assert page.total == 3
+    assert sum(1 for entry in page.transactions if entry.transaction.is_transfer) == 2
+
+
+def test_the_list_can_hide_transfers_so_it_matches_a_total_beside_it(
+    ledger: InMemoryLedger,
+) -> None:
+    _pay_a_card(ledger)
+    _spend(ledger, counterparty="TIENDAS ARA", amount="50000")
+
+    page = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(filter=_filter(transfers=TransferView.EXCLUDE)),
+    )
+
+    assert page.total == 1
+    assert page.transactions[0].transaction.counterparty == "TIENDAS ARA"
+
+
+def test_history_keeps_transfers_out_of_the_monthly_totals(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="AGOSTO", amount="50000", when=AUGUST_FIFTH)
+    _pay_a_card(ledger, when=AUGUST_FIFTH)
+
+    history = _history(ledger, accounts, months=1)
+
+    assert history.months[-1].totals[0].outgoing == Decimal("50000")
+    assert history.months[-1].totals[0].incoming == Decimal("0")
+
+
+def test_history_still_replays_transfers_into_the_balances(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Totals and balances read the same ledger for different questions: a
+    card payment is not spending, and it really did move both balances."""
+    account = Account.open(
+        user_id=USER_ID,
+        name="Ahorros",
+        kind=AccountKind.SAVINGS,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(JULY_FIFTH),
+        bank="bancolombia",
+        instrument_kind=InstrumentKind.ACCOUNT,
+        last_four="5261",
+        opening_balance=Money(amount=Decimal("5000000"), currency=Currency.COP),
+    )
+    accounts.save(account)
+    source, _ = _pay_a_card(ledger, when=AUGUST_FIFTH)
+    source.assign_to(account.id)
+    ledger.save(source)
+
+    history = _history(ledger, accounts, months=1)
+
+    assert history.months[-1].net_worth[0].total == Decimal("1459742")

@@ -6,8 +6,9 @@
 moto keeps everything in memory, so every restart begins from an empty
 environment. Rather than making that data durable, this makes it cheap to
 recreate: one command walks the whole chain — register, approve the bank's
-domain, forward six alerts, drain the three workers, declare the accounts
-that adopt them — and leaves an account somebody can log into and browse.
+domain, mark the forwarding Google would have confirmed, forward six alerts,
+drain the three workers, declare the accounts that adopt them — and leaves an
+account somebody can log into and browse, with its setup already finished.
 
 The application is driven in process, so nothing needs to be running except
 the emulator (`just aws-init`), and the workers built here are the ones
@@ -42,13 +43,22 @@ from personal_finance.api.main import create_app
 from personal_finance.contexts.financial.presentation.cli.run_financial_worker import (
     build_worker as build_financial_worker,
 )
+from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
+from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
+    DynamoDBUserInboxRepository,
+)
 from personal_finance.contexts.ingestion.presentation.cli.run_parse_worker import (
     build_worker as build_parse_worker,
 )
 from personal_finance.contexts.merchant.presentation.cli.run_merchant_worker import (
     build_worker as build_merchant_worker,
 )
-from personal_finance.shared.infrastructure.config.settings import get_aws_settings
+from personal_finance.shared.domain.value_objects import PosixTime
+from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
+from personal_finance.shared.infrastructure.config.settings import (
+    get_aws_settings,
+    get_ingestion_settings,
+)
 
 
 DEFAULT_EMAIL = "demo@finflow.local"
@@ -67,6 +77,11 @@ BOGOTA = ZoneInfo("America/Bogota")
 # A drained queue answers an empty receive; the cap is only there so a message
 # nothing can handle cannot spin this forever.
 MAX_POLLS = 20
+
+# When Google would have confirmed the forwarding rule: the day before the
+# first alert below, so the guide reads in a coherent order. Fixed like every
+# other instant here, for the same reason.
+FORWARDING_CONFIRMED_AT = datetime(2026, 8, 14, 9, 0, tzinfo=BOGOTA)
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -157,6 +172,15 @@ ALERTS: tuple[Alert, ...] = (
             "*5261 a la llave 3001234567 el 21/08/2026 a las 13:20"
         ),
         received_at=_local(2026, 8, 21, 13, 21),
+    ),
+    Alert(
+        message_id="<seed-card-payment@finflow.local>",
+        subject="Pago a tarjeta de credito",
+        body=(
+            "Bancolombia: Pagaste $100.000 en la tarjeta de credito *1234 "
+            "desde la cuenta *5261, el 24/08/2026 16:30"
+        ),
+        received_at=_local(2026, 8, 24, 16, 31),
     ),
     Alert(
         message_id="<seed-transfer@finflow.local>",
@@ -308,6 +332,37 @@ def _approve_sender(client: TestClient, *, token: str) -> str:
     print(f"  inbox     {address} (approved: {BANK_DOMAIN})")
 
     return address
+
+
+def _confirm_forwarding(address: str) -> None:
+    """Record the one step nothing local can produce.
+
+    In a real setup this mark is written by the ingest worker when Google's
+    confirmation email lands in the shared mailbox and is followed. There is
+    no such email here — no Gmail account forwards to the emulator — so the
+    demo account would sit forever with one step open and its guide unable to
+    show what a finished connection looks like, which is the whole point of
+    seeding one.
+
+    Written through the repository rather than an endpoint on purpose: there
+    is no endpoint, and there must not be one. This is a verified fact, and a
+    client that could claim it would turn a proof into an assertion. `main`
+    refuses to run outside local, which is what keeps that true.
+
+    First write wins, so a second run is a no-op rather than a new date.
+    """
+    settings = get_ingestion_settings()
+    repository = DynamoDBUserInboxRepository(
+        client=get_dynamodb_client(),
+        table_name=settings.user_inboxes_table,
+    )
+    marked = repository.mark_forwarding_confirmed(
+        address=EmailAddress(address),
+        confirmed_at=PosixTime.from_datetime(FORWARDING_CONFIRMED_AT),
+    )
+    when = FORWARDING_CONFIRMED_AT.date().isoformat()
+    state = f"confirmed {when}" if marked else "already confirmed"
+    print(f"  forwarding {state}")
 
 
 def _forward_alerts(client: TestClient, *, address: str) -> Counter[str]:
@@ -597,6 +652,7 @@ def main() -> None:
     client = _build_client()
     token = _authenticate(client, email=args.email, password=args.password)
     address = _approve_sender(client, token=token)
+    _confirm_forwarding(address)
     _forward_alerts(client, address=address)
     _drain_workers()
     accounts = _declare_accounts(client, token=token)

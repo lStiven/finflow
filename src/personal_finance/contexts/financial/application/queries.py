@@ -115,6 +115,24 @@ class GetAccountUseCase:
         return self._accounts.find(user_id=user_id, account_id=account_id)
 
 
+class TransferView(enum.Enum):
+    """Whether a set of movements includes the two sides of a transfer.
+
+    A transfer between the owner's own accounts is not spending and not
+    income: money moved from one of their balances to another and net worth
+    did not change. So the *list* shows both sides by default — they explain
+    why an account fell — while every **total** leaves them out, or a card
+    payment would report as an expense the size of the card's whole balance.
+
+    `ONLY` exists for the screen that asks the opposite question: what did I
+    move between my own accounts this month.
+    """
+
+    INCLUDE = "include"
+    EXCLUDE = "exclude"
+    ONLY = "only"
+
+
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class MovementFilter:
     """What narrows a set of movements. Shared by the list and the summary,
@@ -144,6 +162,9 @@ class MovementFilter:
     # both of them.
     since: PosixTime | None = None
     until: PosixTime | None = None
+    # Both sides of a transfer, neither, or only those. The default suits a
+    # list; a total asks for `EXCLUDE`.
+    transfers: TransferView = TransferView.INCLUDE
 
     @property
     def needs_attribution(self) -> bool:
@@ -473,6 +494,11 @@ def _narrow(
     if criteria.origin is not None:
         found = [movement for movement in found if movement.origin is criteria.origin]
 
+    if criteria.transfers is TransferView.EXCLUDE:
+        found = [movement for movement in found if not movement.is_transfer]
+    elif criteria.transfers is TransferView.ONLY:
+        found = [movement for movement in found if movement.is_transfer]
+
     if criteria.direction is not None:
         found = [
             movement for movement in found if movement.direction is criteria.direction
@@ -753,6 +779,11 @@ class ReadFinancialHistoryUseCase:
             self._ledger.list_all(query.user_id),
             key=lambda movement: movement.occurred_at.as_epoch_seconds(),
         )
+        # Two lists on purpose. Balances replay *every* movement, transfers
+        # included: paying a card really does move both balances. Totals
+        # replay only what was spent or earned, or a card payment would report
+        # as a month's largest expense and again as income on the card.
+        spending = [movement for movement in movements if not movement.is_transfer]
 
         keys = _month_keys(instant, span)
         bounds = {key: _month_bounds(zone, key) for key in keys}
@@ -794,7 +825,7 @@ class ReadFinancialHistoryUseCase:
                     ends_at=PosixTime.from_epoch_seconds(closes),
                     partial=partial,
                     totals=_totals(
-                        _between(movements, int(starts.timestamp()), closes),
+                        _between(spending, int(starts.timestamp()), closes),
                     ),
                     net_worth=worth[closes],
                 ),
@@ -819,11 +850,11 @@ class ReadFinancialHistoryUseCase:
                 ),
                 clamped=clamped,
                 totals=_totals(
-                    _between(movements, int(current_starts.timestamp()), here),
+                    _between(spending, int(current_starts.timestamp()), here),
                 ),
                 previous_totals=_totals(
                     _between(
-                        movements,
+                        spending,
                         int(previous_starts.timestamp()),
                         int(previous_through.timestamp()),
                     ),

@@ -11,11 +11,14 @@ from personal_finance.contexts.ingestion.domain.parsing.dates import (
     parse_date_time,
 )
 from personal_finance.contexts.ingestion.domain.transactions import (
+    ExtractedMovement,
     ExtractedTransaction,
+    ExtractedTransfer,
     Instrument,
     InstrumentKind,
     TransactionDirection,
     TransactionKind,
+    TransferKind,
 )
 
 
@@ -49,6 +52,23 @@ _TRANSFER = re.compile(
     re.IGNORECASE,
 )
 
+# Paying a credit card from an account at the same bank. The one alert that
+# names *two* of the holder's own instruments, and the reason `ExtractedTransfer`
+# exists: money leaves the account and the card's debt falls by the same
+# amount. Read as a single movement it is wrong either way round — booked on
+# the account the debt never drops, booked on the card an outgoing movement
+# *raises* what is owed.
+#
+# The accent is optional because the text arrives as the bank wrote it, and
+# these alerts are not consistent about it.
+_CARD_PAYMENT = re.compile(
+    _PREFIX + rf"Pagaste\s+{_AMOUNT}"
+    r"\s+en\s+la\s+tarjeta\s+de\s+cr[eé]dito\s*\*?(?P<card>\d+)"
+    r"\s+desde\s+la\s+cuenta\s*\*?(?P<account>\d+)"
+    rf"\s*,?\s+{_WHEN}",
+    re.IGNORECASE,
+)
+
 _INCOMING_PAYMENT = re.compile(
     _PREFIX + r"Recibiste\s+un\s+pago\s+de\s+(?P<concept>.+?)"
     rf"\s+de\s+(?P<payer>.+?)\s+por\s+{_AMOUNT}"
@@ -73,15 +93,23 @@ class BancolombiaParser:
     Returns None when no template matches, which is the signal for the caller
     to fall back to the LLM. It never guesses: a partially matched alert is a
     miss, not a half-filled transaction.
+
+    Most templates describe one movement. `_card_payment` describes two — an
+    account paying a card at this same bank — and answers with an
+    `ExtractedTransfer` instead.
     """
 
     bank = BANK_NAME
 
-    def parse(self, text: str) -> ExtractedTransaction | None:
+    def parse(self, text: str) -> ExtractedMovement | None:
         normalized = " ".join(text.split())
 
         for handler in (
             self._card_purchase,
+            # Before `_qr_payment` and `_transfer`, both of which also begin
+            # with a verb in the second person: the most specific template
+            # wins, and this one names two instruments where they name one.
+            self._card_payment,
             self._qr_payment,
             self._transfer,
             self._incoming_payment,
@@ -109,6 +137,29 @@ class BancolombiaParser:
             instrument=Instrument(
                 kind=_CARD_KINDS[match.group("instrument").lower()],
                 last_four=match.group("last_four"),
+            ),
+        )
+
+    def _card_payment(self, text: str) -> ExtractedTransfer | None:
+        match = _CARD_PAYMENT.search(text)
+
+        if match is None:
+            return None
+
+        return ExtractedTransfer(
+            kind=TransferKind.CARD_PAYMENT,
+            amount=parse_amount(match.group("amount")),
+            occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
+            # The account pays; the card is paid. Swapping these swaps which
+            # balance goes up and which goes down.
+            source=Instrument(
+                kind=InstrumentKind.ACCOUNT,
+                last_four=_last_four(match.group("account")),
+            ),
+            destination=Instrument(
+                kind=InstrumentKind.CREDIT_CARD,
+                last_four=_last_four(match.group("card")),
             ),
         )
 

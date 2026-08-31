@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from personal_finance.contexts.financial.application.commands import (
     RecordMovementCommand,
+    RecordTransferCommand,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     MovementDirection,
@@ -33,6 +34,12 @@ from personal_finance.shared.domain.value_objects import (
 
 INGESTION_SOURCE = "finflow.ingestion"
 TRANSACTION_EXTRACTED = "TransactionExtracted"
+# Money that moved between two instruments of the same owner: two movements
+# with one email behind them. Its own detail type rather than a version of the
+# one above, so a deploy in either order is safe — a worker that does not know
+# it never matches it, where an unknown *version* of a subscribed type sits on
+# the queue until the dead-letter takes it.
+TRANSFER_EXTRACTED = "TransferExtracted"
 SUPPORTED_VERSION = 1
 
 # Plain decimal notation only. Rejects a sign, `NaN`, `Infinity` and — the one
@@ -152,6 +159,76 @@ class TransactionExtractedDetail(BaseModel):
             counterparty=movement.counterparty,
             instrument_kind=None if instrument is None else instrument.named_kind,
             last_four=None if instrument is None else instrument.last_four,
+        )
+
+
+class TransferInstrumentBody(BaseModel):
+    """One side's instrument. Both parts are required, unlike a movement's.
+
+    A transfer exists to be routed to two accounts; a side with no digits
+    could never find one, and half a transfer on a balance is worse than none
+    of it. Refused at the boundary rather than deep in the domain, so the
+    worker can leave an unreadable payload where a person will see it.
+    """
+
+    kind: str = Field(min_length=1, max_length=64)
+    last_four: str = Field(pattern=r"^\d+$", max_length=32)
+
+
+class ExtractedTransferBody(BaseModel):
+    """Both sides of one movement inside the owner's own finances."""
+
+    kind: str = Field(default="", max_length=64)
+    amount: str = Field(pattern=AMOUNT_PATTERN, max_length=64)
+    currency: str = Field(min_length=1, max_length=8)
+    occurred_at: int = Field(ge=MIN_OCCURRED_AT, le=MAX_OCCURRED_AT)
+    bank: str = Field(min_length=1, max_length=256)
+    source: TransferInstrumentBody
+    destination: TransferInstrumentBody
+
+    @field_validator("bank")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        return _required_text(value)
+
+
+class TransferExtractedDetail(BaseModel):
+    version: int = Field(ge=1)
+    event_id: uuid.UUID
+    user_id: uuid.UUID
+    transfer: ExtractedTransferBody
+
+    def to_command(self) -> RecordTransferCommand:
+        """Read the payload into Financial's vocabulary.
+
+        Refuses a version it cannot read for the same reason the movement
+        payload does — reading v2 fields as v1 would book whatever v2 changed
+        onto two real balances — and refuses a currency it does not know
+        rather than guessing one.
+
+        The two sides are *not* checked for being different here: that is the
+        domain's rule, and `Transaction.as_transfer` raises on it. The
+        boundary decides shape; the domain decides meaning.
+        """
+        if self.version != SUPPORTED_VERSION:
+            raise UnsupportedPayloadVersionError(
+                f"Cannot read TransferExtracted version {self.version}",
+            )
+
+        transfer = self.transfer
+
+        return RecordTransferCommand(
+            user_id=UserId(value=self.user_id),
+            bank=transfer.bank,
+            amount=Money(
+                amount=Decimal(transfer.amount),
+                currency=_currency(transfer.currency),
+            ),
+            occurred_at=PosixTime.from_epoch_seconds(transfer.occurred_at),
+            source_instrument_kind=transfer.source.kind,
+            source_last_four=transfer.source.last_four,
+            destination_instrument_kind=transfer.destination.kind,
+            destination_last_four=transfer.destination.last_four,
         )
 
 

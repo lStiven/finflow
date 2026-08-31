@@ -14,16 +14,20 @@ class DateParseError(ValueError):
 # Colombian banks write local time with no zone marker anywhere in the body.
 BOGOTA = ZoneInfo("America/Bogota")
 
-DATE_TIME_PATTERN = r"\d{2}/\d{2}/\d{4}\s+a\s+las\s+\d{1,2}:\d{2}"
+# `a las` is optional because the same bank writes both: "el 20/08/2026 a las
+# 12:00" on a purchase and "el 21/05/2026 16:30" on a card payment. Requiring
+# it made the second one unreadable — which is a deferred alert, not a wrong
+# one, but it is still a movement nobody sees.
+DATE_TIME_PATTERN = r"\d{2}/\d{2}/\d{4}(?:\s+a\s+las)?\s+\d{1,2}:\d{2}"
 
 _DATE_TIME = re.compile(
     r"^(?P<day>\d{2})/(?P<month>\d{2})/(?P<year>\d{4})"
-    r"\s+a\s+las\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})$",
+    r"(?:\s+a\s+las)?\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})$",
 )
 
 
 def parse_date_time(raw: str) -> PosixTime:
-    """Read `20/08/2026 a las 12:00` as an instant.
+    """Read `20/08/2026 a las 12:00` — or `21/05/2026 16:30` — as an instant.
 
     The alert carries no timezone, so the wall clock is interpreted in Bogotá
     and converted to UTC. Reading it as UTC would shift every transaction five

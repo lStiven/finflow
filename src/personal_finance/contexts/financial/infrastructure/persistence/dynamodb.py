@@ -40,6 +40,9 @@ from personal_finance.contexts.financial.domain.value_objects import (
     MovementId,
     StatedMovement,
     TransactionOrigin,
+    TransferId,
+    TransferLeg,
+    TransferRole,
 )
 from personal_finance.shared.domain.value_objects import (
     Currency,
@@ -254,6 +257,27 @@ def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDe
             else {}
         ),
         **({"note": {"S": transaction.note}} if transaction.note else {}),
+        # Both sides of a transfer carry the same `transfer_id`; each carries
+        # the other's movement id. Absent on everything else, which is what an
+        # older row read back as: no attribute, no transfer, ordinary
+        # spending.
+        **(
+            {
+                "transfer": {
+                    "M": {
+                        "transfer_id": {"S": leg.transfer_id.value},
+                        "role": {"S": leg.role.value},
+                        "counterpart_id": {"S": leg.counterpart_id.value},
+                        "counterpart_instrument_kind": {
+                            "S": leg.counterpart_instrument_kind,
+                        },
+                        "counterpart_last_four": {"S": leg.counterpart_last_four},
+                    },
+                },
+            }
+            if (leg := transaction.transfer) is not None
+            else {}
+        ),
         **(
             {
                 "stated": {
@@ -326,6 +350,43 @@ def movement_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Transaction
         ),
         stated=_stated_to_entity(item.get("stated", {}).get("M")),
         note=_string(item, "note"),
+        transfer=_transfer_to_entity(item.get("transfer", {}).get("M")),
+    )
+
+
+def _transfer_to_entity(
+    item: Mapping[str, AttributeValueTypeDef] | None,
+) -> TransferLeg | None:
+    """Read the transfer half of a movement, or None for an ordinary one.
+
+    Refuses a half-written one rather than dropping it: a leg that read back
+    without its transfer marker would be counted as spending, and a balance
+    would still be right while every total around it was wrong.
+    """
+    if item is None:
+        return None
+
+    transfer_id = _string(item, "transfer_id")
+    role = _string(item, "role")
+    counterpart_id = _string(item, "counterpart_id")
+    instrument_kind = _string(item, "counterpart_instrument_kind")
+    last_four = _string(item, "counterpart_last_four")
+
+    if (
+        transfer_id is None
+        or role is None
+        or counterpart_id is None
+        or instrument_kind is None
+        or last_four is None
+    ):
+        raise CorruptFinancialItemError("Stored transfer leg is missing fields")
+
+    return TransferLeg(
+        transfer_id=TransferId(value=transfer_id),
+        role=_enum(TransferRole, role, "transfer role"),
+        counterpart_id=MovementId(value=counterpart_id),
+        counterpart_instrument_kind=instrument_kind,
+        counterpart_last_four=last_four,
     )
 
 
