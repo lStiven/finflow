@@ -52,9 +52,10 @@ Parameters:
     Type: String
     Default: ""
     Description: >
-      Comma-separated origins allowed to call the API from a browser. Empty
-      means none, which is correct when the frontend is served from this same
-      origin.
+      Extra comma-separated origins allowed to call the API from a browser.
+      The deployed frontend's own CloudFront origin is always allowed and is
+      not listed here — this is only for the additions, such as a developer's
+      http://localhost:5173 pointed at a deployed API.
 
   LogRetentionDays:
     Type: Number
@@ -70,6 +71,19 @@ Parameters:
       How often the mailbox is polled. This is the single largest consumer of
       the Lambda free tier — almost entirely invocations that find an empty
       mailbox — so it is the first dial to turn if that ever matters.
+
+  IngestScheduleState:
+    Type: String
+    Default: ENABLED
+    AllowedValues: [ENABLED, DISABLED]
+    Description: >
+      Whether this stack polls the shared ingest mailbox. Exactly one stack
+      may: the reader searches UNSEEN and marks what it takes \Seen, so two
+      pollers do not duplicate a message, they race for it — each email lands
+      in whichever stack asked first, and is invisible to the other. With one
+      Gmail account behind both environments, production is the one that polls
+      and development is DISABLED. Everything else in a disabled stack still
+      works; only the automatic intake stops.
 
   AlertEmail:
     Type: String
@@ -164,7 +178,14 @@ Resources:
         Command: []
       Environment:
         Variables:
-          API_CORS_ORIGINS: !Ref CorsOrigins
+          # The distribution's own origin is appended here rather than
+          # configured: it is created by this same stack, and a frontend
+          # origin copied by hand into samconfig is a value that silently
+          # goes stale — as a CORS failure in a browser, which reads as a
+          # broken app and never as a wrong deploy parameter. The leading
+          # comma when CorsOrigins is empty is harmless: the settings
+          # splitter drops empty entries.
+          API_CORS_ORIGINS: !Sub "${CorsOrigins},https://${WebDistribution.DomainName}"
           # Only the API signs and verifies tokens.
           IDENTITY_JWT_SECRET: !Sub "ssm:${JwtSecretParameter}"
       FunctionUrlConfig:
@@ -240,6 +261,7 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: !Ref IngestScheduleExpression
+            State: !Ref IngestScheduleState
             Description: Poll the shared ingest mailbox.
       Policies:
         - DynamoDBCrudPolicy:
@@ -576,6 +598,159 @@ Resources:
       AlarmActions:
         - !Ref AlertTopic
 
+  # ------------------------------------------------------------------
+  # The frontend — a static bundle on S3, served by CloudFront
+  # ------------------------------------------------------------------
+  #
+  # The SPA is built by `vite build` and is nothing but files, so there is no
+  # server here to run or patch. CloudFront supplies the one thing a phone's
+  # browser requires and S3 alone cannot: HTTPS on a name nobody has to buy.
+  #
+  # The bucket stays private. Its only reader is the distribution, proven by
+  # the Origin Access Control signature and the bucket policy's SourceArn
+  # below, so the objects have no public URL of their own to leak or index.
+
+  WebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-web-${AWS::AccountId}"
+      # Bucket names are global. The account id is what keeps a redeploy in a
+      # second account from colliding with a name someone else already holds.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        # A bad bundle is then one `aws s3api` call from being undone, without
+        # a rebuild from whatever the working tree happens to hold. The rule
+        # below is what stops the old versions from being billed forever.
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-superseded-bundles
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  WebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-web-oac"
+        Description: Lets only this distribution read the bundle bucket.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} frontend"
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        # The audience is in South America, which only PriceClass_All serves
+        # from a nearby edge. The cheaper classes still answer those requests
+        # — from another continent, which is the entire point of paying for a
+        # CDN. At this volume both sit inside the permanent 1 TB free tier.
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: web-bucket
+            # The *regional* domain name, not the bare one: the legacy global
+            # endpoint answers with a redirect that OAC's signature does not
+            # survive, which reads as a 307 loop rather than as a wrong name.
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOriginAccessControl.Id
+            S3OriginConfig:
+              # Required and must be empty: a non-empty value here means the
+              # legacy Origin Access Identity, which conflicts with OAC.
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: web-bucket
+          ViewerProtocolPolicy: redirect-to-https
+          # A static bundle answers nothing else, and the API lives on its own
+          # origin. OPTIONS is absent on purpose: no preflight is ever sent
+          # here, and allowing it would only widen what this can serve.
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Managed CachingOptimized. It forwards no cookie, header or query
+          # string, so every viewer shares one cached object — correct for a
+          # bundle whose per-user state lives entirely in the browser.
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref WebSecurityHeadersPolicy
+        CustomErrorResponses:
+          # Client-side routing: the browser asks for /cuentas, which is a
+          # route in the bundle and not a key in the bucket. Without this it
+          # is a 403 from S3 — every deep link and every refresh away from `/`
+          # breaks, and only in the deployed app, never in `vite dev`.
+          #
+          # 200, not the original status: a 404 here would make the browser
+          # treat a perfectly good screen as an error page.
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  WebSecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${AWS::StackName}-web-security-headers"
+        Comment: Sent with every file of the bundle.
+        SecurityHeadersConfig:
+          # The app is HTTPS-only from here on, and a bearer token in
+          # localStorage is worth saying so about.
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                # Scoped to this distribution, not to CloudFront at large:
+                # without it, any distribution in any account could name this
+                # bucket as its origin and republish the app.
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}"
+
 Outputs:
   ApiUrl:
     Description: >
@@ -592,3 +767,17 @@ Outputs:
       Where the dead-letter alarms publish. Subscribe a second endpoint here
       rather than editing the alarms.
     Value: !Ref AlertTopic
+
+  WebUrl:
+    Description: >
+      The address the app is opened at. This is what goes to whoever is
+      going to use it.
+    Value: !Sub "https://${WebDistribution.DomainName}"
+
+  WebBucketName:
+    Description: Where `just web-deploy-*` uploads the built bundle.
+    Value: !Ref WebBucket
+
+  WebDistributionId:
+    Description: For the cache invalidation that follows every upload.
+    Value: !Ref WebDistribution

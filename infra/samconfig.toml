@@ -49,9 +49,15 @@ parameter_overrides = [
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
+    # The deployed frontend's own origin is added by the template. This is
+    # the addition: a dev server on the laptop, pointed at this API.
     "CorsOrigins=http://localhost:5173",
     # Cheaper on the free tier and plenty for a rehearsal environment.
     'IngestScheduleExpression="rate(5 minutes)"',
+    # One Gmail account behind both stacks, and the reader consumes what it
+    # reads. Production polls it; this one would steal the messages. Flip the
+    # two if the rehearsal environment ever needs the intake back.
+    "IngestScheduleState=DISABLED",
     "LogRetentionDays=7",
 ]
 
@@ -82,9 +88,12 @@ parameter_overrides = [
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
-    # Empty until there is a frontend on its own origin. See
-    # docs/frontend-integration.md.
+    # Empty on purpose. The only browser origin production answers is the
+    # CloudFront distribution this same stack creates, and the template adds
+    # that itself — nothing to copy here, nothing to go stale.
     "CorsOrigins=",
     'IngestScheduleExpression="rate(1 minute)"',
+    # The one stack that reads the mailbox. See IngestScheduleState.
+    "IngestScheduleState=ENABLED",
     "LogRetentionDays=30",
 ]

@@ -53,17 +53,41 @@ ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
 account and linking its alerts), `/perfil`, the `/conectar` onboarding guide
 and the `/guias` section all run against the local emulator.
 
-What is missing for production is observability, a cap on LLM spending and the
-rest of the frontend — see **Next steps**.
+The frontend now has somewhere to live: a private S3 bucket behind CloudFront,
+declared in the same SAM template as the API, and `just web-deploy-prod` /
+`-dev` builds and publishes it in one command. Declared but not yet run — the
+production stack does not exist, so this is where the first `just deploy-prod`
+is.
+
+What is missing for production is the production stack itself (its AWS
+profile, its three SSM secrets, its data plane), observability's one manual
+step, and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — A new account is met by something instead of an empty
-  dashboard: `WelcomeDialog` says what Finflow needs before it can do
-  anything and opens the guide, or is closed and never returns. The banner
-  keeps the step from there on. `just web-check` green (139).
+- 2026-08-31 — Hosting for the frontend, declared: private bucket, Origin
+  Access Control, CloudFront with the SPA fallback that deep links need, and
+  `just web-deploy-*`. The API is told its own frontend's origin by the
+  template rather than by a copied parameter. `just infra-check` and `just
+  web-check` green (139); nothing deployed yet.
 
 ## Next steps
+
+- [ ] **Next: the production stack does not exist yet, and everything below
+      waits on it.** The frontend is what friends will open, and it can only
+      be published against a stack. In order:
+      1. An AWS profile named `finflow-production`. It does not exist on this
+         machine — see **Open questions**, where the two environments still
+         resolve to one account and one IAM user.
+      2. The three secrets under `/finflow/production/*`, none of which exist
+         (`just secret-put`, once each). The development three do.
+      3. `just provision-prod` — the data plane, unprefixed.
+      4. `just deploy-prod`, then `just web-deploy-prod`, then `just smoke`.
+         The first one is slow: creating the CloudFront distribution is ten
+         to fifteen minutes and CloudFormation waits for it.
+      Deploying `finflow-dev` again is part of this, not optional: it is what
+      turns that stack's mailbox polling off, and until it runs both stacks
+      race for every forwarded email.
 
 - [ ] **Next: what production actually needs.** In order of what hurts
       soonest:
@@ -91,9 +115,9 @@ rest of the frontend — see **Next steps**.
          connect-your-bank guide, `/cuentas` and the `/guias` section. What is
          left is screens, not plumbing: merchant review, the spending summary
          and reports, and configuration. `docs/frontend-integration.md` is
-         still the contract each of them has to honour. Nothing is deployed:
-         no hosting is provisioned and `API_CORS_ORIGINS` names only
-         localhost.
+         still the contract each of them has to honour. Hosting is no longer
+         the blocker: it is declared and one command away (`just
+         web-deploy-prod`).
 - [ ] **Three account edits the API cannot do, so the app cannot offer
       them.** Reopening a closed account (`close` is one-way and there is no
       inverse); deleting one outright (deliberate — a closed account still
@@ -174,6 +198,11 @@ rest of the frontend — see **Next steps**.
   the `dev-` prefix is again the only thing keeping the two apart, and the
   comments claiming otherwise in `.env.development.example`,
   `infra/samconfig.toml` and `docs/running.md` overstate the isolation.
+  It stops being a note the moment production holds other people's finances,
+  which is the next thing that happens: a mistyped profile then points a
+  rehearsal command at real money. Worse, `finflow-production` is not
+  configured on this machine at all, so every `*-prod` recipe fails outright —
+  which is at least the safe direction to fail in.
 
 ## Decisions
 
@@ -748,6 +777,49 @@ rest of the frontend — see **Next steps**.
   Both Dockerfile stages sit on Lambda's own base image because `bcrypt` is a
   compiled extension: wheels built against another distribution's glibc import
   fine and fail at runtime.
+- **The frontend is hosted by the same stack that serves it data**
+  (2026-08-31). A private S3 bucket, Origin Access Control, and a CloudFront
+  distribution, in `infra/template.yaml` beside the five functions. The
+  alternative considered was Cloudflare Pages, which is genuinely less work —
+  one command, SPA fallback and HTTPS included, free. It was rejected for one
+  reason that outweighs the convenience: the frontend's origin and the API's
+  `API_CORS_ORIGINS` have to agree, and on a second provider they agree only
+  because somebody copied a domain into `samconfig.toml`. In one stack the
+  template passes `!GetAtt WebDistribution.DomainName` to the API directly, so
+  the value cannot go stale — and a stale one fails as a CORS error in a
+  browser, which reads as a broken app and never as a wrong deploy parameter.
+  What it costs is a cache invalidation per release and a distribution that
+  takes ten minutes to create the first time. `CorsOrigins` survives as the
+  parameter for *additional* origins only.
+- **`PriceClass_All`, deliberately, against the cheaper default.** The
+  audience is in South America, which the cheaper classes serve from another
+  continent — the one thing a CDN is for. Free either way inside CloudFront's
+  permanent 1 TB tier.
+- **403 and 404 are answered with `/index.html` and a 200.** Client-side
+  routing means `/cuentas` is a route in the bundle and not a key in the
+  bucket. Without the rewrite every deep link and every refresh away from `/`
+  breaks — and only in the deployed app, never under `vite dev`, which is the
+  expensive kind of bug. The 200 matters as much as the rewrite: a 404 would
+  make the browser treat a working screen as an error page.
+- **The bundle is uploaded in two passes with opposite caching.** `assets/`
+  carries content hashes, so it is immutable for a year; `index.html` is the
+  one fixed name that points at those hashes and goes up `no-cache`.
+  Cached, it serves the previous bundle from the browser long after the
+  invalidation cleared the edge — the failure looks like a deploy that did
+  nothing.
+- **`frontend/.env.production` is generated by the deploy, not maintained.**
+  It holds exactly one value, the stack's own `ApiUrl`. Maintained by hand it
+  is the second place the two halves have to agree, and the one that goes
+  stale silently: the app loads, looks right, and fails every call against
+  yesterday's URL.
+- **One stack polls the mailbox, and it is production** (`IngestScheduleState`,
+  2026-08-31). The `dev-` prefix separates tables, queues and the bus; it
+  cannot separate a Gmail account. The reader searches `UNSEEN` and marks what
+  it takes `\Seen`, so two deployed pollers do not duplicate an email — they
+  race for it, and each message becomes invisible to whichever asked second.
+  Development is `DISABLED`; a disabled stack still works in full, only its
+  automatic intake stops. A second Gmail account would remove the constraint
+  and was not worth standing up for a rehearsal environment.
 - **The API needed no code.** The Lambda Web Adapter runs the same uvicorn
   command as `just run-prod`, so `create_app`, the `lifespan` eager build and
   `/docs` all survive untouched. Mangum was rejected for re-implementing the
