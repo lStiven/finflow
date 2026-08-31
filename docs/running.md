@@ -150,20 +150,31 @@ just seed
 ```
 
 Recorre la cadena entera —registra al usuario demo, aprueba el dominio del
-banco, reenvía seis alertas de Bancolombia, drena los tres workers y declara
-las cuentas que las adoptan— y deja algo que mirar. No necesita `just dev` ni
-los workers levantados: monta la aplicación en su propio proceso. Repetirlo es
+banco, marca el reenvío que Google habría confirmado, reenvía siete alertas de
+Bancolombia (una de ellas el pago de una tarjeta, que son dos movimientos),
+drena los tres workers y declara las cuentas que las adoptan— y deja algo que
+mirar. No necesita `just dev` ni los workers levantados: monta la aplicación en su propio proceso. Repetirlo es
 seguro: dos ejecuciones seguidas dejan los mismos saldos. Lo que deja:
 
 | | |
 |---|---|
 | `demo@finflow.local` / `una frase larga de verdad` | La cuenta. El token sale impreso al final, listo para pegar en Postman. |
+| Correo ya conectado | Los cuatro pasos de `GET /ingestion/setup` en verde, `ready: true`. La interfaz se ve como la de alguien que ya terminó de configurar su correo: sin el aviso de conexión pendiente, con `/conectar` en pasado y la dirección marcada como «recibiendo». |
 | 3 cuentas declaradas | Tarjeta de crédito, ahorros —con la débito enlazada como segundo instrumento— y efectivo. |
-| 8 movimientos | Seis de alertas y dos a mano. Uno queda **sin asignar**: la nómina, porque esa alerta no nombra los últimos cuatro dígitos de ninguna cuenta. |
+| 10 movimientos | Ocho de alertas y dos a mano. Uno queda **sin asignar**: la nómina, porque esa alerta no nombra los últimos cuatro dígitos de ninguna cuenta. |
+| 1 traslado | El pago de la tarjeta desde la cuenta de ahorros llega como **un solo correo** y se guarda como dos mitades: baja el saldo de ahorros y baja la deuda de la tarjeta por el mismo monto. El patrimonio no cambia y ninguna de las dos mitades cuenta como gasto. |
 | 6 comercios | Todos en revisión, agrupados solo con reglas deterministas. |
 
 Las cuentas se declaran **después** de que llegan las alertas, a propósito: la
 adopción es retroactiva y así queda ejercitada.
+
+El paso `forwarding_confirmed` es el único que en local **no puede ocurrir
+solo**: lo marca el `ingest worker` cuando sigue el correo de confirmación de
+Google, y aquí ninguna cuenta de Gmail reenvía al emulador. El seed lo escribe
+directamente en el repositorio de bandejas —no hay endpoint para eso, ni debe
+haberlo: es un hecho verificado, no algo que un cliente pueda afirmar—, y
+`seed_local.py` se niega a correr fuera de `ENVIRONMENT=local`. `ready` nunca
+dependió de ese paso: son la primera alerta y un remitente aprobado.
 
 El modelo queda **sin conectar** a propósito: las seis alertas son de las que
 el parser determinista lee, así que sembrar no cuesta nada ni necesita red.

@@ -19,6 +19,9 @@ export type Account = components["schemas"]["AccountResponse"];
 export type NetWorth = components["schemas"]["NetWorthResponse"];
 export type Transaction = components["schemas"]["TransactionResponse"];
 export type Notification = components["schemas"]["NotificationResponse"];
+export type TransferLeg = components["schemas"]["TransferResponse"];
+/** `include` (the list's default) | `exclude` (every total) | `only`. */
+export type TransferView = components["schemas"]["TransferView"];
 export type RegisteredInbox = components["schemas"]["RegisteredInboxResponse"];
 export type Profile = components["schemas"]["CurrentUserResponse"];
 export type InboxSetup = components["schemas"]["InboxSetupResponse"];
@@ -102,6 +105,13 @@ export type TransactionFilters = {
   search?: string;
   from?: number;
   to?: number;
+  /**
+   * Both sides of a transfer between the owner's own accounts, neither, or
+   * only those. Omitted, the API includes them in a list and leaves them out
+   * of a summary — so a figure and the list behind it have to agree by asking
+   * for the same thing, which is why the dashboard's tiles pass `exclude`.
+   */
+  transfers?: TransferView;
 };
 
 export const transactionsQuery = (filters: TransactionFilters = {}) =>

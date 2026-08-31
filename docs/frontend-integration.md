@@ -385,6 +385,7 @@ GET /financial/transactions?search=EXITO
 GET /financial/transactions?merchant_id=<id>
 GET /financial/transactions?category=groceries
 GET /financial/transactions?from=<epoch>&to=<epoch>
+GET /financial/transactions?transfers=include|exclude|only
 GET /financial/transactions/{transaction_id}
 ```
 
@@ -409,7 +410,8 @@ GET /financial/transactions/{transaction_id}
         "display_name": "Netflix",
         "category": "subscriptions",
         "needs_review": false
-      }
+      },
+      "transfer": null
     }
   ],
   "total": 8,
@@ -457,6 +459,58 @@ Reglas:
   devuelve una lista vacía — decir que no existe filtraría si es de otro.
 - `from` **incluye** y `to` **excluye** (epoch en segundos), para que dos
   meses consecutivos nunca compartan un movimiento.
+
+#### Traslados: un correo, dos movimientos
+
+Pagar la tarjeta de crédito desde la cuenta del mismo banco llega en **un solo
+correo** y son **dos movimientos**: sale plata de la cuenta y baja la deuda de
+la tarjeta, por el mismo monto. Leerlo como uno solo está mal en las dos
+direcciones —cargado a la cuenta, la deuda nunca baja; cargado a la tarjeta, un
+movimiento saliente **sube** lo que se debe—, así que el backend escribe las dos
+mitades y las marca.
+
+```jsonc
+// una de las dos filas
+{
+  "direction": "outgoing",
+  "amount": "100000",
+  "counterparty": "credit_card *1234",   // texto de máquina: no lo muestres
+  "transfer": {
+    "id": "c0f6ef69…",                   // el mismo en las dos mitades
+    "role": "source",                    // source | destination
+    "counterpart_movement_id": "21e907…",
+    "counterpart_instrument_kind": "credit_card",
+    "counterpart_last_four": "1234"
+  }
+}
+```
+
+Reglas:
+
+1. **`transfer` no nulo significa que este movimiento no es gasto ni ingreso.**
+   Nunca lo sumes a un total tuyo. Los totales del backend ya lo excluyen.
+2. **`counterparty` es texto de máquina** (`credit_card *1234`) porque forma
+   parte de la identidad del movimiento y no puede reescribirse nunca. Para la
+   pantalla, arma la frase con `role` + `counterpart_instrument_kind` +
+   `counterpart_last_four` ("Pago a tu tarjeta ···· 1234").
+3. **`role: "source"`** es la mitad de donde salió la plata; **`destination`**
+   donde llegó — en una tarjeta, su deuda bajando.
+4. **Las dos mitades se enrutan por separado.** Si solo declaraste una de las
+   dos cuentas, la otra mitad queda `unassigned` y se adopta cuando declares la
+   que falta. Es el mismo camino retroactivo de siempre.
+5. **`PATCH` del monto, la fecha o la contraparte de una mitad responde `409`**:
+   las dos dicen un mismo movimiento y corregir una sola dejaría dos saldos que
+   no cuadran. Es un conflicto con el estado, no con la forma del cuerpo —por
+   eso 409 y no 400—, y ninguna reescritura de la petición lo arregla. Sí se
+   puede cambiar `account_id`, `detach` y la nota.
+6. **`transfers`** controla qué se ve: `include` (por defecto en
+   `/transactions`), `exclude` (por defecto en `/summary`) y `only`. Si una
+   pantalla enseña una cifra del resumen y la lista detrás, pide `exclude` en
+   las dos o los números no cuadrarán.
+7. El único que hoy los produce es el **parser determinista de Bancolombia**.
+   El LLM tiene instrucción explícita de responder `understood=false` ante un
+   correo así: elegir a ojo cuál de los dos instrumentos es el origen es
+   exactamente cómo un saldo se mueve al revés.
 
 ### 6. Cuentas
 
@@ -628,9 +682,20 @@ GET /financial/summary?timezone=America/Bogota
 ```
 
 Acepta **los mismos filtros que `/financial/transactions`** (`account_id`,
-`unassigned`, `origin`, `search`, `merchant_id`, `category`, `from`, `to`), y
-eso es a propósito: cualquier bucket del resumen se abre repitiendo la misma
-consulta contra `/transactions` con la `key` del bucket.
+`unassigned`, `origin`, `search`, `merchant_id`, `category`, `from`, `to`,
+`transfers`), y eso es a propósito: cualquier bucket del resumen se abre
+repitiendo la misma consulta contra `/transactions` con la `key` del bucket.
+
+Con **una diferencia deliberada en el valor por defecto**: `transfers` es
+`exclude` aquí y `include` en la lista. Un traslado entre cuentas propias no es
+gasto ni ingreso, y contarlo reportaría el pago de una tarjeta como el mayor
+gasto del mes y otra vez como ingreso en la tarjeta. Si una pantalla enseña una
+cifra de aquí y la lista detrás, pide `transfers=exclude` en las dos. `only`
+responde la pregunta contraria: cuánto moví entre mis propias cuentas.
+
+`GET /financial/history` hace lo mismo sin preguntarlo: sus totales por mes
+excluyen los traslados, pero el patrimonio de cada mes **sí** los replica —
+porque el pago de la tarjeta movió los dos saldos de verdad.
 
 ```json
 {
@@ -728,6 +793,11 @@ Resumen para revisar contra la interfaz cuando esté hecha:
 10. Nunca llamar al webhook de ingesta desde la app.
 11. Nunca hardcodear el vocabulario de categorías.
 12. Nunca esperar consistencia inmediata después de un correo.
+13. Nunca contar un traslado (`transfer` no nulo) como gasto ni como ingreso:
+    la plata cambió de lado dentro de las cuentas del usuario y el patrimonio
+    no se movió.
+14. Nunca mostrar la mitad de un traslado como si fuera un movimiento suelto:
+    lleva `counterpart_movement_id` justo para poder llegar a la otra.
 
 ---
 
@@ -738,7 +808,7 @@ el mismo enum contra el que el endpoint valida, así que no pueden desfasarse:
 
 | Método | Ruta | Auth | Qué trae |
 |---|---|---|---|
-| GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), **`instrument_kinds`**, `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings` |
+| GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), **`instrument_kinds`**, `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings`, `transfer_views` |
 | GET | `/ingestion/catalog` | — | `processing_statuses`, `ignored_reasons`, `deferred_reasons`, `instrument_kinds` (el mismo vocabulario, visto desde quien lo recibe) |
 | GET | `/merchants/catalog` | — | `categories`, `sorts`, `statuses`, `alias_origins`, `counterparty_kinds` |
 
@@ -891,11 +961,11 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento (retroactivo). |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
-| GET | `/financial/summary` | ✔ | Totales del periodo y desglose por mes, categoría, comercio o cuenta. |
-| GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. |
+| GET | `/financial/summary` | ✔ | Totales del periodo y desglose por mes, categoría, comercio o cuenta. Excluye traslados salvo que pidas otra cosa. |
+| GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. Incluye las dos mitades de un traslado. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |
-| PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. |
+| PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. En una mitad de traslado, solo cuenta y nota. |
 | GET | `/ingestion/setup` | ✔ | En qué paso va conectando su banco, y si ya recibe gastos solo. |
 | GET | `/ingestion/notifications` | ✔ | Qué llegó al alias del usuario y en qué estado quedó. |
 | POST | `/ingestion/bank-notifications` | — | **Solo local.** Simular un correo. No es una ruta del producto. |
@@ -919,7 +989,7 @@ Hay **dos formas** de cuerpo de error, y el frontend tiene que manejar las dos:
 | `400` | Moneda que la cuenta no tiene, valor imposible. | Mensaje del `detail`; es accionable. |
 | `401` | Sin token, token inválido o vencido. Trae `WWW-Authenticate: Bearer`. | Ir al login. |
 | `404` | No existe **o es de otro usuario**. | "No encontrado". Nunca "no tienes permiso". |
-| `409` | El estado lo impide: cuenta duplicada, cuenta cerrada, movimiento ya asignado, último alias. | Ofrecer la salida (abrir la existente, fusionar…). |
+| `409` | El estado lo impide: cuenta duplicada, cuenta cerrada, movimiento ya asignado, último alias, mitad de un traslado que se intenta corregir sola. | Ofrecer la salida (abrir la existente, fusionar…). |
 | `422` | Esquema o regla del payload. `detail` es lista. | Marcar el campo; `loc` dice cuál. |
 
 Un `202` del webhook local **no** significa que se aceptó el correo: siempre

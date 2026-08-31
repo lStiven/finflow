@@ -1174,6 +1174,12 @@
                   "key": "timezone",
                   "value": "America/Bogota",
                   "description": "IANA name. Only affects group_by=month, and it matters: 8pm on the 31st in Bogotá is already the next month in UTC"
+                },
+                {
+                  "key": "transfers",
+                  "value": "",
+                  "description": "exclude (default here) | include | only. A card payment is not spending: counting it would report it as an expense and again as income on the card.",
+                  "disabled": true
                 }
               ]
             },
@@ -1296,6 +1302,12 @@
                 {
                   "key": "offset",
                   "value": "0"
+                },
+                {
+                  "key": "transfers",
+                  "value": "",
+                  "description": "include (default) | exclude | only. Both sides of a transfer between the owner's own accounts. A list shows them; a total never counts them.",
+                  "disabled": true
                 }
               ]
             },

@@ -237,6 +237,12 @@ export interface paths {
          *     opened as a list by repeating the query with the bucket's key. `timezone`
          *     only affects `month`, and it matters: a purchase at 8pm on the 31st falls
          *     in the next month once it is read in UTC.
+         *
+         *     `transfers` defaults to `exclude` here, unlike on `/transactions`: money
+         *     moved between two of the owner's own accounts is neither spending nor
+         *     income, and counting it would report a card payment as the month's largest
+         *     expense and again as income on the card. `only` answers the opposite
+         *     question — what did I move between my own accounts.
          */
         get: operations["summarize_spending_financial_summary_get"];
         put?: never;
@@ -262,6 +268,13 @@ export interface paths {
          *     counterparty nobody has resolved yet matches neither — it is unknown, not
          *     uncategorized. `from` is included and `to` is not, so two consecutive
          *     months can be asked for without one movement landing in both.
+         *
+         *     `transfers` defaults to `include` here and to `exclude` on `/summary`,
+         *     which is the one place these two surfaces deliberately disagree: both
+         *     sides of a card payment belong in the list, because they explain why an
+         *     account fell, and in no total, because nothing was spent. A screen showing
+         *     a figure from `/summary` beside the list behind it should ask for
+         *     `transfers=exclude` on both.
          */
         get: operations["list_transactions_financial_transactions_get"];
         put?: never;
@@ -877,6 +890,8 @@ export interface components {
             transaction_origins: components["schemas"]["CatalogOption"][];
             /** Transaction Statuses */
             transaction_statuses: components["schemas"]["CatalogOption"][];
+            /** Transfer Views */
+            transfer_views: components["schemas"]["CatalogOption"][];
         };
         /** FinancialHistoryResponse */
         FinancialHistoryResponse: {
@@ -1386,7 +1401,45 @@ export interface components {
             stated: components["schemas"]["StatedResponse"] | null;
             /** Status */
             status: string;
+            transfer?: components["schemas"]["TransferResponse"] | null;
         };
+        /**
+         * TransferResponse
+         * @description The half of a movement that says it was not spending.
+         *
+         *     Present on both sides of a transfer between two of the owner's own
+         *     accounts, and null on everything else. A client shows it instead of the
+         *     counterparty text — `role` says which way the money went and
+         *     `counterpart_*` names the other side — and, more importantly, knows not to
+         *     read the amount as an expense.
+         */
+        TransferResponse: {
+            /** Counterpart Instrument Kind */
+            counterpart_instrument_kind: string;
+            /** Counterpart Last Four */
+            counterpart_last_four: string;
+            /** Counterpart Movement Id */
+            counterpart_movement_id: string;
+            /** Id */
+            id: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * TransferView
+         * @description Whether a set of movements includes the two sides of a transfer.
+         *
+         *     A transfer between the owner's own accounts is not spending and not
+         *     income: money moved from one of their balances to another and net worth
+         *     did not change. So the *list* shows both sides by default — they explain
+         *     why an account fell — while every **total** leaves them out, or a card
+         *     payment would report as an expense the size of the card's whole balance.
+         *
+         *     `ONLY` exists for the screen that asks the opposite question: what did I
+         *     move between my own accounts this month.
+         * @enum {string}
+         */
+        TransferView: "include" | "exclude" | "only";
         /**
          * UpdateProfilePayload
          * @description Only the name: the email is the account's identity, not a field.
@@ -1807,6 +1860,7 @@ export interface operations {
                 search?: string | null;
                 merchant_id?: string | null;
                 category?: string | null;
+                transfers?: components["schemas"]["TransferView"];
                 timezone?: string;
             };
             header?: never;
@@ -1847,6 +1901,7 @@ export interface operations {
                 category?: string | null;
                 from?: number | null;
                 to?: number | null;
+                transfers?: components["schemas"]["TransferView"];
                 limit?: number;
                 offset?: number;
             };

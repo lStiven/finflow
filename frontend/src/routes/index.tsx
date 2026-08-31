@@ -2,6 +2,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   Landmark,
   TrendingDown,
@@ -33,6 +34,7 @@ import {
   previousMonthKey,
 } from "@/lib/dates";
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
+import { transferTitle } from "@/lib/transfers";
 
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
@@ -179,7 +181,14 @@ function Dashboard() {
             hue="green"
             to={{
               to: "/transacciones",
-              search: { ...monthSearch, direction: "incoming" },
+              search: {
+                ...monthSearch,
+                direction: "incoming",
+                // The tile reports income, and `/summary` leaves transfers
+                // out of that. The list has to be asked for the same thing or
+                // the rows behind the figure would not add up to it.
+                transfers: "exclude",
+              },
             }}
             caption={
               <Delta
@@ -210,7 +219,11 @@ function Dashboard() {
             hue="accent"
             to={{
               to: "/transacciones",
-              search: { ...monthSearch, direction: "outgoing" },
+              search: {
+                ...monthSearch,
+                direction: "outgoing",
+                transfers: "exclude",
+              },
             }}
             caption={
               <Delta
@@ -476,12 +489,16 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
                 <span
                   aria-hidden
                   className={
-                    movement.direction === "incoming"
-                      ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
-                      : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
+                    movement.transfer
+                      ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-violet/25 to-cyan/5 text-violet transition-transform duration-200 group-hover:scale-110"
+                      : movement.direction === "incoming"
+                        ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
+                        : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
                   }
                 >
-                  {movement.direction === "incoming" ? (
+                  {movement.transfer ? (
+                    <ArrowLeftRight className="size-3.5" />
+                  ) : movement.direction === "incoming" ? (
                     <ArrowDownLeft className="size-3.5" />
                   ) : (
                     <ArrowUpRight className="size-3.5" />
@@ -490,10 +507,13 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
 
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">
-                    {movement.merchant?.display_name ?? movement.counterparty}
+                    {movement.transfer
+                      ? transferTitle(movement.transfer)
+                      : (movement.merchant?.display_name ?? movement.counterparty)}
                   </p>
                   <p className="truncate text-faint text-xs">
                     {formatDate(movement.occurred_at)}
+                    {movement.transfer ? " · traslado" : null}
                     {movement.account_id ? null : " · sin asignar"}
                   </p>
                 </div>
@@ -507,7 +527,13 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
                   currency={movement.currency}
                   signed
                   size="sm"
-                  tone={movement.direction === "incoming" ? "positive" : "plain"}
+                  tone={
+                    movement.transfer
+                      ? "neutral"
+                      : movement.direction === "incoming"
+                        ? "positive"
+                        : "plain"
+                  }
                 />
               </Link>
             </li>

@@ -594,6 +594,13 @@
             },
             "title": "Transaction Statuses",
             "type": "array"
+          },
+          "transfer_views": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Transfer Views",
+            "type": "array"
           }
         },
         "required": [
@@ -605,7 +612,8 @@
           "transaction_origins",
           "transaction_statuses",
           "account_scopes",
-          "summary_groupings"
+          "summary_groupings",
+          "transfer_views"
         ],
         "title": "FinancialCatalogResponse",
         "type": "object"
@@ -1867,6 +1875,16 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "transfer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransferResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -1886,6 +1904,50 @@
         ],
         "title": "TransactionResponse",
         "type": "object"
+      },
+      "TransferResponse": {
+        "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.",
+        "properties": {
+          "counterpart_instrument_kind": {
+            "title": "Counterpart Instrument Kind",
+            "type": "string"
+          },
+          "counterpart_last_four": {
+            "title": "Counterpart Last Four",
+            "type": "string"
+          },
+          "counterpart_movement_id": {
+            "title": "Counterpart Movement Id",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "counterpart_movement_id",
+          "counterpart_instrument_kind",
+          "counterpart_last_four"
+        ],
+        "title": "TransferResponse",
+        "type": "object"
+      },
+      "TransferView": {
+        "description": "Whether a set of movements includes the two sides of a transfer.\n\nA transfer between the owner's own accounts is not spending and not\nincome: money moved from one of their balances to another and net worth\ndid not change. So the *list* shows both sides by default — they explain\nwhy an account fell — while every **total** leaves them out, or a card\npayment would report as an expense the size of the card's whole balance.\n\n`ONLY` exists for the screen that asks the opposite question: what did I\nmove between my own accounts this month.",
+        "enum": [
+          "include",
+          "exclude",
+          "only"
+        ],
+        "title": "TransferView",
+        "type": "string"
       },
       "UpdateProfilePayload": {
         "description": "Only the name: the email is the account's identity, not a field.",
@@ -2571,7 +2633,7 @@
     },
     "/financial/summary": {
       "get": {
-        "description": "What a period adds up to, broken down by month, category, merchant or\naccount — and totalled per currency, never across them.\n\nIt takes the same filters as `/transactions`, so any bucket here can be\nopened as a list by repeating the query with the bucket's key. `timezone`\nonly affects `month`, and it matters: a purchase at 8pm on the 31st falls\nin the next month once it is read in UTC.",
+        "description": "What a period adds up to, broken down by month, category, merchant or\naccount — and totalled per currency, never across them.\n\nIt takes the same filters as `/transactions`, so any bucket here can be\nopened as a list by repeating the query with the bucket's key. `timezone`\nonly affects `month`, and it matters: a purchase at 8pm on the 31st falls\nin the next month once it is read in UTC.\n\n`transfers` defaults to `exclude` here, unlike on `/transactions`: money\nmoved between two of the owner's own accounts is neither spending nor\nincome, and counting it would report a card payment as the month's largest\nexpense and again as income on the card. `only` answers the opposite\nquestion — what did I move between my own accounts.",
         "operationId": "summarize_spending_financial_summary_get",
         "parameters": [
           {
@@ -2736,6 +2798,15 @@
           },
           {
             "in": "query",
+            "name": "transfers",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransferView",
+              "default": "exclude"
+            }
+          },
+          {
+            "in": "query",
             "name": "timezone",
             "required": false,
             "schema": {
@@ -2781,7 +2852,7 @@
     },
     "/financial/transactions": {
       "get": {
-        "description": "Movements, newest first, each with the merchant behind its text.\n\n`merchant_id` and `category` are Merchant's answer, so a movement whose\ncounterparty nobody has resolved yet matches neither — it is unknown, not\nuncategorized. `from` is included and `to` is not, so two consecutive\nmonths can be asked for without one movement landing in both.",
+        "description": "Movements, newest first, each with the merchant behind its text.\n\n`merchant_id` and `category` are Merchant's answer, so a movement whose\ncounterparty nobody has resolved yet matches neither — it is unknown, not\nuncategorized. `from` is included and `to` is not, so two consecutive\nmonths can be asked for without one movement landing in both.\n\n`transfers` defaults to `include` here and to `exclude` on `/summary`,\nwhich is the one place these two surfaces deliberately disagree: both\nsides of a card payment belong in the list, because they explain why an\naccount fell, and in no total, because nothing was spent. A screen showing\na figure from `/summary` beside the list behind it should ask for\n`transfers=exclude` on both.",
         "operationId": "list_transactions_financial_transactions_get",
         "parameters": [
           {
@@ -2933,6 +3004,15 @@
                 }
               ],
               "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transfers",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransferView",
+              "default": "include"
             }
           },
           {

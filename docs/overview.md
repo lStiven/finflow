@@ -46,12 +46,15 @@ flowchart TD
     E --> F["Cola SQS"]
     F --> G["Parse worker"]
     G -->|"plantilla determinista"| H["Transacción extraída"]
+    G -->|"plantilla determinista:<br/>pago de tarjeta propia"| T["Traslado extraído<br/>(dos movimientos)"]
     G -->|"ninguna plantilla<br/>coincidió"| I["Gemini (plan B)"]
     I --> H
     I -.->|"no pudo leerlo"| J["Se conserva<br/>pending_fallback"]
     H --> K["EventBridge<br/>TransactionExtracted"]
+    T --> U["EventBridge<br/>TransferExtracted"]
     K --> L["Merchant worker"]
     L --> M["Comercio canónico<br/>+ categoría"]
+    U --> N
     K --> N["Financial worker"]
     N --> O["¿Hay una cuenta declarada<br/>para esa tarjeta?"]
     O -->|"sí"| P["Fila del ledger + saldo<br/>en una sola escritura atómica"]
@@ -63,6 +66,9 @@ flowchart TD
 
 Merchant y Financial escuchan el **mismo** evento y no se conocen entre sí:
 uno decide quién es el comercio, el otro cuánto dinero se movió y de dónde.
+`TransferExtracted` es la excepción y va solo a Financial: un pago a tu propia
+tarjeta no tiene comercio detrás, y crear uno pondría tu tarjeta en tu lista
+de tiendas.
 
 Dos propiedades gobiernan toda la cadena:
 
@@ -189,6 +195,19 @@ mismo banco en un saldo equivocado. Una misma cuenta real puede responder a
 varias huellas —una cuenta corriente llega como tarjeta débito en las compras
 y como número de cuenta en las transferencias—, pero enlazarlas es siempre
 decisión del dueño: deducirlo sería adivinar sobre el dinero de alguien.
+
+**Un correo puede ser dos movimientos.** Pagar la tarjeta desde una cuenta del
+mismo banco llega en un solo aviso y mueve dos saldos: sale plata de la cuenta
+y baja la deuda de la tarjeta, por el mismo monto. Registrarlo como un
+movimiento está mal en las dos direcciones —cargado a la cuenta, la deuda
+nunca baja; cargado a la tarjeta, un movimiento saliente *sube* lo que se
+debe—, así que Ingestion lo publica como `TransferExtracted` y Financial
+escribe las dos mitades, cada una con su propia identidad y su propio
+enrutamiento. Ninguna cuenta como gasto ni como ingreso: el patrimonio no se
+movió. Solo lo produce una plantilla determinista, que puede distinguir los
+dos instrumentos sin adivinar; al modelo se le dice que rechace esos correos,
+porque elegir a ojo cuál es el origen es exactamente cómo un saldo se mueve al
+revés.
 
 **Una autorización no es un movimiento, y se descarta antes de llegar aquí.**
 Una retención de hotel y su cobro real son dos correos distintos con cuerpos

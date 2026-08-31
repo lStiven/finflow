@@ -1,6 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   Ban,
   CreditCard,
@@ -174,11 +175,43 @@ function AccountsGuide() {
         </Section>
 
         <Section
+          icon={ArrowLeftRight}
+          glow="violet"
+          title="Traslados entre tus cuentas"
+          lead="Pagar tu tarjeta no es un gasto: la plata sigue siendo tuya."
+          delay={245}
+        >
+          <p>
+            Cuando pagas tu tarjeta de crédito desde tu cuenta, el banco manda un solo
+            correo y pasan <strong className="text-text">dos cosas</strong>: sale plata
+            de la cuenta y baja la deuda de la tarjeta, por el mismo monto. Finflow lo
+            registra así, como dos mitades de un mismo movimiento.
+          </p>
+          <p>
+            Por eso{" "}
+            <strong className="text-text">un traslado no suma a tus gastos</strong> ni a
+            tus ingresos, y tu patrimonio no se mueve: lo que tienes bajó justo lo que
+            bajó lo que debes. Los verás en la lista marcados como “traslado”, con un
+            enlace de una mitad a la otra.
+          </p>
+          <Note>
+            Si solo declaraste una de las dos cuentas, esa mitad se registra y la otra
+            queda esperando. En cuanto declares la que falta, se acomoda sola — igual
+            que cualquier otro movimiento.
+          </Note>
+          <p>
+            El monto y la fecha de un traslado no se corrigen por separado: las dos
+            mitades dicen lo mismo, y cambiar una sola dejaría dos saldos que no
+            cuadran. Lo que sí puedes mover es en qué cuenta queda cada mitad.
+          </p>
+        </Section>
+
+        <Section
           icon={Search}
           glow="cyan"
           title="Cuando algo no cuadra"
           lead="Los cuatro casos que se ven de verdad, y qué hacer en cada uno."
-          delay={280}
+          delay={315}
         >
           <Case title="No llega nada">
             El problema está antes de las cuentas: o el reenvío no está activo, o el
@@ -201,6 +234,11 @@ function AccountsGuide() {
             <strong className="text-text">lo que dijo el banco</strong>, para que
             siempre se pueda comparar tu corrección con el original.
           </Case>
+          <Case title="Pagué la tarjeta y el gasto se duplicó">
+            No debería: un pago de tarjeta se registra como traslado y no cuenta como
+            gasto. Si lo ves contado, mira si lo registraste a mano además del correo
+            del banco — un movimiento manual sí suma.
+          </Case>
           <Case title="El saldo no coincide con el del banco">
             Casi siempre falta el punto de partida: la cuenta arrancó en cero y solo
             cuenta lo que ha pasado desde entonces. También puede faltar una forma de
@@ -213,7 +251,7 @@ function AccountsGuide() {
           glow="none"
           title="Lo que Finflow no hace"
           lead="Igual de importante, y más corto."
-          delay={350}
+          delay={385}
         >
           <ul className="flex flex-col gap-2.5">
             <Never>

@@ -2,6 +2,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
@@ -26,6 +27,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { type Option, Select } from "@/components/ui/Select";
 import { formatDate, formatMonthKey, fromLocalInput, monthKeyOf } from "@/lib/dates";
+import { transferTitle } from "@/lib/transfers";
 
 const PAGE_SIZE = 25;
 
@@ -55,6 +57,12 @@ export type TransactionSearch = {
   origin?: "bank_alert" | "manual";
   direction?: "incoming" | "outgoing";
   unassigned?: boolean;
+  /**
+   * Carried in the URL so a figure and the list behind it can agree: the
+   * dashboard's tiles report spending, which leaves transfers out, and they
+   * link here asking for the same thing.
+   */
+  transfers?: "exclude" | "only";
   from?: string;
   to?: string;
   /**
@@ -84,6 +92,10 @@ export const Route = createFileRoute("/transacciones/")({
         ? raw.direction
         : undefined,
     unassigned: raw.unassigned === true || raw.unassigned === "true" ? true : undefined,
+    transfers:
+      raw.transfers === "exclude" || raw.transfers === "only"
+        ? raw.transfers
+        : undefined,
     from: text(raw.from),
     to: text(raw.to),
     page: raw.page === undefined ? undefined : Math.max(1, Number(raw.page) || 1),
@@ -136,6 +148,7 @@ function toFilters(search: TransactionSearch): TransactionFilters {
     origin: search.origin,
     direction: search.direction,
     unassigned: search.unassigned,
+    transfers: search.transfers,
     from: search.from
       ? (fromLocalInput(`${search.from}T00:00`) ?? undefined)
       : undefined,
@@ -395,6 +408,7 @@ function countActive(search: TransactionSearch): number {
     search.origin,
     search.direction,
     search.unassigned,
+    search.transfers,
     search.from,
     search.to,
   ].filter((value) => value !== undefined).length;
@@ -518,6 +532,7 @@ function MovementList({ transactions }: { transactions: Transaction[] }) {
 
 function MovementRow({ movement }: { movement: Transaction }) {
   const incoming = movement.direction === "incoming";
+  const transfer = movement.transfer;
 
   return (
     <Link
@@ -526,15 +541,23 @@ function MovementRow({ movement }: { movement: Transaction }) {
       className="group flex items-center gap-3 border-line/40 border-b px-4 py-2.5 transition-colors duration-150 hover:bg-surface-raised/70"
       activeProps={{ className: "bg-surface-raised/70" }}
     >
+      {/*
+       * A transfer wears neither hue: green means money arriving and magenta
+       * means money leaving, and this is the one movement that is neither.
+       */}
       <span
         aria-hidden
         className={
-          incoming
-            ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
-            : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
+          transfer
+            ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-violet/25 to-cyan/5 text-violet transition-transform duration-200 group-hover:scale-110"
+            : incoming
+              ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
+              : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
         }
       >
-        {incoming ? (
+        {transfer ? (
+          <ArrowLeftRight className="size-3.5" />
+        ) : incoming ? (
           <ArrowDownLeft className="size-3.5" />
         ) : (
           <ArrowUpRight className="size-3.5" />
@@ -543,10 +566,13 @@ function MovementRow({ movement }: { movement: Transaction }) {
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm">
-          {movement.merchant?.display_name ?? movement.counterparty}
+          {transfer
+            ? transferTitle(transfer)
+            : (movement.merchant?.display_name ?? movement.counterparty)}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 truncate text-faint text-xs">
           <span>{formatDate(movement.occurred_at)}</span>
+          {transfer ? <span className="text-violet">· traslado</span> : null}
           {movement.merchant?.category ? (
             <span>· {movement.merchant.category}</span>
           ) : null}
@@ -562,7 +588,7 @@ function MovementRow({ movement }: { movement: Transaction }) {
         currency={movement.currency}
         signed
         size="sm"
-        tone={incoming ? "positive" : "plain"}
+        tone={transfer ? "neutral" : incoming ? "positive" : "plain"}
       />
     </Link>
   );

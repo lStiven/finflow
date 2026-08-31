@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Landmark, Pencil, Unlink } from "lucide-react";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft, ArrowLeftRight, Landmark, Pencil, Unlink } from "lucide-react";
 import { type SubmitEvent, useState } from "react";
 import {
   accountsQuery,
@@ -18,6 +18,7 @@ import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
+import { transferBlurb, transferTitle } from "@/lib/transfers";
 
 export const Route = createFileRoute("/transacciones/$transactionId")({
   beforeLoad: ({ context }) => {
@@ -42,6 +43,7 @@ function TransactionScreen() {
   const [editing, setEditing] = useState(false);
 
   const incoming = movement.direction === "incoming";
+  const transfer = movement.transfer;
 
   return (
     <AppShell>
@@ -57,21 +59,27 @@ function TransactionScreen() {
 
         <header className="flex flex-col items-start gap-2">
           <p className="text-muted text-sm">
-            {movement.merchant?.display_name ?? movement.counterparty}
+            {transfer
+              ? transferTitle(transfer)
+              : (movement.merchant?.display_name ?? movement.counterparty)}
           </p>
           <Money
             amount={incoming ? movement.amount : `-${movement.amount}`}
             currency={movement.currency}
             signed
             size="lg"
-            tone={incoming ? "positive" : "plain"}
+            tone={transfer ? "neutral" : incoming ? "positive" : "plain"}
           />
           <p className="text-faint text-xs">{formatDateTime(movement.occurred_at)}</p>
         </header>
 
+        {transfer ? <TransferPanel movement={movement} /> : null}
+
         <Card lift={false} className="flex flex-col gap-0 p-0">
-          <Row label="Tipo">{incoming ? "Ingreso" : "Gasto"}</Row>
-          <Row label="Contraparte">{movement.counterparty}</Row>
+          <Row label="Tipo">
+            {transfer ? "Traslado entre tus cuentas" : incoming ? "Ingreso" : "Gasto"}
+          </Row>
+          {transfer ? null : <Row label="Contraparte">{movement.counterparty}</Row>}
           {movement.merchant ? (
             <Row label="Comercio">
               {movement.merchant.display_name}
@@ -229,43 +237,64 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
     }
   }
 
+  /*
+   * A transfer states one movement across two rows, and this screen holds one
+   * of them: correcting the amount or the date here would leave the pair
+   * describing two different movements on two balances. The API refuses it
+   * with a 409, so the fields are not offered rather than offered and
+   * rejected.
+   */
+  const isTransfer = movement.transfer !== null && movement.transfer !== undefined;
+
   return (
     <Card lift={false}>
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <h2 className="font-medium">Corregir</h2>
 
-        <Field
-          label="Contraparte"
-          required
-          // The endpoint refuses an empty one, and would reject the whole
-          // correction with it.
-          minLength={1}
-          maxLength={512}
-          value={counterparty}
-          onChange={(event) => setCounterparty(event.target.value)}
-        />
+        {isTransfer ? (
+          <p className="rounded-xl border border-line bg-ink p-3.5 text-faint text-xs leading-relaxed">
+            Este movimiento es una mitad de un traslado entre tus cuentas, así que el
+            monto y la fecha no se corrigen por separado: las dos mitades dicen lo
+            mismo. Lo que sí puedes cambiar es en qué cuenta queda y la nota.
+          </p>
+        ) : null}
 
-        <div className="grid gap-5 sm:grid-cols-2">
-          <Field
-            label="Monto"
-            inputMode="decimal"
-            value={amount}
-            onChange={(event) => setAmount(event.target.value)}
-          />
-          <Select
-            label="Moneda"
-            value={currency}
-            onChange={(event) => setCurrency(event.target.value)}
-            options={catalog.currencies}
-          />
-        </div>
+        {isTransfer ? null : (
+          <>
+            <Field
+              label="Contraparte"
+              required
+              // The endpoint refuses an empty one, and would reject the whole
+              // correction with it.
+              minLength={1}
+              maxLength={512}
+              value={counterparty}
+              onChange={(event) => setCounterparty(event.target.value)}
+            />
 
-        <Field
-          label="Fecha y hora"
-          type="datetime-local"
-          value={occurredAt}
-          onChange={(event) => setOccurredAt(event.target.value)}
-        />
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field
+                label="Monto"
+                inputMode="decimal"
+                value={amount}
+                onChange={(event) => setAmount(event.target.value)}
+              />
+              <Select
+                label="Moneda"
+                value={currency}
+                onChange={(event) => setCurrency(event.target.value)}
+                options={catalog.currencies}
+              />
+            </div>
+
+            <Field
+              label="Fecha y hora"
+              type="datetime-local"
+              value={occurredAt}
+              onChange={(event) => setOccurredAt(event.target.value)}
+            />
+          </>
+        )}
 
         <Select
           label="Cuenta"
@@ -318,6 +347,46 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
           </Button>
         </div>
       </form>
+    </Card>
+  );
+}
+
+/**
+ * The half of the screen that only a transfer has.
+ *
+ * It answers the two questions this movement raises and nothing else does:
+ * why the amount is not spending, and where its other half is. The link is
+ * the point — a balance that fell and a debt that fell are one event, and
+ * being able to step between them is what makes that legible.
+ */
+function TransferPanel({ movement }: { movement: Transaction }) {
+  const transfer = movement.transfer;
+  if (!transfer) return null;
+
+  return (
+    <Card glow="violet" lift={false} className="flex items-start gap-3.5">
+      <span
+        aria-hidden
+        className="grid size-10 shrink-0 place-items-center rounded-xl bg-violet/12 text-violet ring-1 ring-violet/25"
+      >
+        <ArrowLeftRight className="size-4" />
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-sm">Traslado entre tus cuentas</p>
+        <p className="mt-1 text-muted text-sm leading-relaxed">
+          {transferBlurb(transfer)} Tu patrimonio no cambió: la plata sigue siendo tuya,
+          solo cambió de lado.
+        </p>
+        <Link
+          to="/transacciones/$transactionId"
+          params={{ transactionId: transfer.counterpart_movement_id }}
+          className="mt-2 inline-flex items-center gap-1.5 text-sm text-violet transition-colors hover:text-text"
+        >
+          Ver la otra mitad
+          <ArrowLeftRight className="size-3.5" />
+        </Link>
+      </div>
     </Card>
   );
 }
