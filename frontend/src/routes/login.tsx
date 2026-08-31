@@ -62,7 +62,7 @@ const COPY: Record<
     submit: "Entrar",
     busy: "Entrando…",
     glow: "accent",
-    panelTitle: "Tus movimientos, sin escribir ninguno.",
+    panelTitle: "Tu dinero fluye. Finflow lo entiende.",
     points: [
       {
         icon: Mail,
