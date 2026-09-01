@@ -107,12 +107,21 @@ Bounded Contexts:
   where things stand. After finishing a task or a meaningful chunk of work,
   update `PROGRESS.md` before ending the turn — this replaces relying on
   `/compact` or long-lived conversation history to track state. Keep
-  `Last completed` to the single most recent item only, short. Do not narrate
-  diffs there or anywhere else in the file: git already records what changed.
-  Record in `Decisions` only what a fresh session could not recover by
-  reading the code — why something is the way it is, what was rejected, what
-  risk was knowingly accepted — and edit an existing entry in place rather
-  than appending a new one about the same thing.
+  `Last completed` to the five most recent items at most, newest first, one
+  short line each — drop the oldest rather than letting the list grow. Do not
+  narrate diffs there or anywhere else in the file: git already records what
+  changed. `PROGRESS.md` holds only where the work stands — done, next,
+  blocked — and stays short enough to read at a glance, because every session
+  pays for it.
+* Durable rationale goes in `docs/decisions.md`, not in `PROGRESS.md`: record
+  there only what a fresh session could not recover by reading the code — why
+  something is the way it is, what was rejected, what risk was knowingly
+  accepted — and edit an existing entry in place rather than appending a new
+  one about the same thing. **Do not read that file at the start of a
+  session**, and do not read it whole: it is an archive of about twenty
+  thousand tokens, consulted by searching it when a specific "why" is in
+  question. Keeping it out of the startup path is the entire reason it is a
+  separate file.
 * Whenever an endpoint is added, changed, or removed, update
   `docs/postman/finflow_v2.postman_collection.json` (Postman Collection
   v2.1 format — importable by both Postman and Bruno) in the same change.

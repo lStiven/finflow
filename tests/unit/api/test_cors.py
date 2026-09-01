@@ -162,3 +162,35 @@ def test_nothing_configured_is_an_empty_list_not_a_blank_origin() -> None:
         ApiSettings(environment=Environment.LOCAL, cors_origins="").allowed_origins
         == ()
     )
+
+
+def test_every_method_the_api_exposes_survives_a_preflight() -> None:
+    """The allow-list is a second copy of what the routers declare, and a
+    browser cannot reach a method missing from it — the preflight fails and
+    the real request is never sent. `PUT` was absent while two endpoints used
+    it, which is what this pins.
+    """
+    app = create_app(expose_local_only_routes=False, cors_origins=(ALLOWED,))
+    client = TestClient(app)
+    # From the schema, not `app.routes`: included routers stay nested there,
+    # so walking it collects the docs endpoints and nothing else.
+    declared = {
+        method.upper()
+        for operations in app.openapi()["paths"].values()
+        for method in operations
+        if method.upper() not in {"HEAD", "OPTIONS"}
+    }
+
+    assert {"GET", "POST", "PATCH", "PUT"} <= declared
+
+    for method in sorted(declared):
+        response = client.options(
+            "/financial/accounts",
+            headers={
+                "Origin": ALLOWED,
+                "Access-Control-Request-Method": method,
+            },
+        )
+
+        assert response.status_code == 200, f"{method} fails the preflight"
+        assert method in response.headers["access-control-allow-methods"]

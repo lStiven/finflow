@@ -1,22 +1,37 @@
-"""Following a Gmail confirmation link, and refusing to follow anything else.
+"""Submitting Gmail's confirmation form, and refusing to submit anything else.
 
 The one place this context makes an outbound request to something that is not
 AWS, aimed at a URL that arrived inside untrusted mail. Everything here exists
-to keep that from becoming a way to make the worker fetch arbitrary addresses:
+to keep that from becoming a way to make the worker call arbitrary addresses:
 
 * the URL was already pinned to scheme, host and `vf-` path prefix by
   `ForwardingConfirmation`, which refuses to exist otherwise;
 * it is checked again here, against the parsed host rather than the string,
   because this is the call site and a value object can be constructed anywhere;
-* redirects are not followed, so a 302 cannot walk the request somewhere the
-  checks above already rejected.
+* the one redirect this follows is checked the same way before it is followed,
+  so a `Location` out of untrusted mail cannot walk the request off Google.
 
-Google answers the confirm link with a **redirect**, not with a page. There is
-no API and no machine-readable result, so the signal is the status plus where
-the redirect points — read out of the `Location` header and never requested.
-Requiring a 2xx here, as this once did, recorded every real confirmation as
-refused: the fetch did confirm the forwarding, and the worker then dropped the
-mail as spent without marking anything.
+**Confirming is a POST, not a GET.** The link in the mail answers a `GET` with
+a redirect to `mail.google.com`, which serves an ordinary page holding one
+button — `<form action="" method="post">`, no fields, no token beyond the one
+already in the URL. Fetching the link therefore confirms nothing: it renders
+the page a person would have clicked. This read a `GET` as the whole exchange
+for a while, first demanding a 2xx (so every attempt was recorded as refused)
+and then accepting the redirect (so every attempt was recorded as confirmed
+while the forwarding stayed pending). Both were wrong about the same thing.
+
+The exchange, observed against the real Google on 2026-09-01:
+
+    GET  mail-settings.google.com/mail/vf-…  -> 302 to mail.google.com/mail/vf-…
+    GET  mail.google.com/mail/vf-…           -> 200, "Confirmación" + the form
+    POST mail.google.com/mail/vf-…           -> 200, "¡Confirmación exitosa!"
+
+There is still no API and no machine-readable result — every answer is a page
+for a person, in the mailbox account's own language — so success is the POST's
+status, and an error page served with 200 remains indistinguishable from an
+accepted one. Deliberately: reading a real confirmation as refused breaks the
+feature for everybody, while reading a refusal as confirmed only sets a
+checkmark early, and `InboxSetup.ready` does not depend on that checkmark.
 """
 
 from __future__ import annotations
@@ -36,16 +51,11 @@ _logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
-# Where a redirect may land and still mean "confirmed". Google does not
-# document which of its hosts answers, and naming the two obvious ones would
-# be a guess that breaks this again the day it answers from a third.
-#
-# Wide on purpose, because the two mistakes do not cost the same. Reading a
-# real confirmation as refused breaks the feature outright — it already did,
-# for every user. Reading a refusal as confirmed sets a checkmark early, and
-# `InboxSetup.ready` does not depend on that checkmark: what says a setup
-# works is an alert that actually arrived.
-ACCEPTED_REDIRECT_DOMAIN = "google.com"
+# Where the form may live. The redirect observed goes to `mail.google.com`,
+# but which host answers is not documented and naming that one alone would
+# break this again the day it answers from another. Scheme and domain are
+# pinned; the host inside the domain is not.
+CONFIRMATION_DOMAIN = "google.com"
 
 
 class UnexpectedConfirmationHostError(Exception):
@@ -58,7 +68,7 @@ class UnexpectedConfirmationHostError(Exception):
 
 
 class HttpForwardingConfirmer:
-    """Confirms a forwarding request by fetching its link once."""
+    """Confirms a forwarding request by submitting the form behind its link."""
 
     def __init__(
         self,
@@ -73,16 +83,31 @@ class HttpForwardingConfirmer:
         _assert_expected_host(confirmation.url)
 
         if self._client is not None:
-            return _accepted(self._get(self._client, confirmation.url))
+            return self._submit(self._client, confirmation.url)
 
         with httpx.Client(
             timeout=self._timeout_seconds,
             follow_redirects=False,
         ) as client:
-            return _accepted(self._get(client, confirmation.url))
+            return self._submit(client, confirmation.url)
 
-    def _get(self, client: httpx.Client, url: str) -> httpx.Response:
-        return client.get(url, follow_redirects=False)
+    def _submit(self, client: httpx.Client, url: str) -> bool:
+        """Find the form and post it: two requests, both pinned to Google.
+
+        Redirects are never followed by the client itself. A 302 is resolved
+        here instead, so the host it names is checked before anything is sent
+        to it — and so the POST stays a POST, which an automatic redirect
+        would silently turn back into a GET.
+        """
+        page = client.get(url, follow_redirects=False)
+        target = _form_target(page, url)
+
+        if target is None:
+            return False
+
+        # No fields: the page's own form carries none, and the token that
+        # authorises this is the one already in the URL.
+        return _accepted(client.post(target, follow_redirects=False))
 
 
 def _assert_expected_host(url: str) -> None:
@@ -97,22 +122,44 @@ def _assert_expected_host(url: str) -> None:
         )
 
 
-def _accepted(response: httpx.Response) -> bool:
-    if response.is_success:
-        return True
+def _form_target(page: httpx.Response, url: str) -> str | None:
+    """Where to post the confirmation, or `None` if there is nowhere safe.
+
+    The form's `action` is empty, which means the page's own address — so the
+    target is the URL that served the page, either the one fetched or the one
+    a redirect named.
+    """
+    if page.is_success:
+        return url
 
     # `has_redirect_location`, not `is_redirect`: the latter is only the
-    # status class, and a 3xx with no `Location` says nothing about where this
-    # went. It falls through to the refusal below, where it belongs.
-    if response.has_redirect_location:
-        return _redirect_means_confirmed(response)
+    # status class, and a 3xx with no `Location` names no target at all.
+    if not page.has_redirect_location:
+        _logger.warning(
+            "confirmation link did not lead to a form",
+            extra={"status_code": page.status_code},
+        )
+
+        return None
+
+    # Relative targets are ordinary and resolve against the URL already pinned
+    # to the confirmation host, so they are checked rather than assumed.
+    target = urljoin(url, page.headers["location"])
+    parsed = urlparse(target)
+
+    if parsed.scheme == "https" and _is_google(parsed.hostname):
+        return target
 
     _logger.warning(
-        "confirmation link was not accepted",
-        extra={"status_code": response.status_code},
+        "confirmation link redirected off Google and was not followed",
+        extra={
+            "status_code": page.status_code,
+            # The host only: the rest of a confirmation URL is a credential.
+            "location_host": parsed.hostname,
+        },
     )
 
-    return False
+    return None
 
 
 def _is_google(hostname: str | None) -> bool:
@@ -123,34 +170,23 @@ def _is_google(hostname: str | None) -> bool:
     if hostname is None:
         return False
 
-    return hostname == ACCEPTED_REDIRECT_DOMAIN or hostname.endswith(
-        f".{ACCEPTED_REDIRECT_DOMAIN}",
+    return hostname == CONFIRMATION_DOMAIN or hostname.endswith(
+        f".{CONFIRMATION_DOMAIN}",
     )
 
 
-def _redirect_means_confirmed(response: httpx.Response) -> bool:
-    """Whether a redirect is Google acknowledging the confirmation.
+def _accepted(response: httpx.Response) -> bool:
+    """Whether the submitted form was taken.
 
-    The target is read, never fetched. That keeps the guarantee the module
-    docstring makes — a `Location` out of untrusted mail cannot become a
-    request — while still telling an acknowledgement apart from a bounce to
-    somewhere else.
+    A redirect counts: a form that succeeds commonly answers with one, and
+    where it points is not what decides — the POST already happened.
     """
-    # Relative targets are ordinary and resolve against the URL already pinned
-    # to the confirmation host, so they are checked rather than assumed.
-    target = urljoin(str(response.request.url), response.headers["location"])
-    parsed = urlparse(target)
-
-    if parsed.scheme == "https" and _is_google(parsed.hostname):
+    if response.is_success or response.has_redirect_location:
         return True
 
     _logger.warning(
-        "confirmation link redirected somewhere that does not mean confirmed",
-        extra={
-            "status_code": response.status_code,
-            # The host only: the rest of a confirmation URL is a credential.
-            "location_host": parsed.hostname,
-        },
+        "confirmation form was not accepted",
+        extra={"status_code": response.status_code},
     )
 
     return False

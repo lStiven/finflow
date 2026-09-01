@@ -1,4 +1,9 @@
-"""What the confirmer will and will not send a request to."""
+"""What the confirmer will and will not send a request to.
+
+Confirming is two requests: a `GET` that lands on the page holding Google's
+one-button form, then the `POST` that submits it. A `GET` alone renders the
+page and confirms nothing, which is what this used to do.
+"""
 
 import httpx
 import pytest
@@ -13,6 +18,11 @@ from personal_finance.contexts.ingestion.infrastructure.ingest.forwarding_confir
 
 
 URL = "https://mail-settings.google.com/mail/vf-%5BANGjdJ-abc%5D-def"
+REDIRECTED = "https://mail.google.com/mail/vf-%5BANGjdJ-abc%5D-def"
+
+# What Google actually serves, trimmed to the part that matters.
+FORM_PAGE = '<html><body><form action="" method="post">'
+DONE_PAGE = "<html><head><title>¡Confirmación exitosa!</title>"
 
 
 def _confirmer(handler: object) -> HttpForwardingConfirmer:
@@ -23,91 +33,78 @@ def _confirmer(handler: object) -> HttpForwardingConfirmer:
     )
 
 
-def test_a_confirmed_request_reports_success() -> None:
-    seen: list[str] = []
+def _seen(calls: list[tuple[str, str]]) -> object:
+    """A handler recording every request, answering the way Google does."""
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(str(request.url))
+        calls.append((request.method, str(request.url)))
 
-        return httpx.Response(200, text="ok")
+        if request.method == "GET" and str(request.url) == URL:
+            return httpx.Response(302, headers={"Location": REDIRECTED})
+
+        if request.method == "GET":
+            return httpx.Response(200, text=FORM_PAGE)
+
+        return httpx.Response(200, text=DONE_PAGE)
+
+    return handler
+
+
+def test_the_form_behind_the_link_is_posted() -> None:
+    """The whole point: a `GET` renders the button, a `POST` presses it."""
+    calls: list[tuple[str, str]] = []
+
+    assert _confirmer(_seen(calls)).confirm(ForwardingConfirmation(url=URL)) is True
+    assert calls == [("GET", URL), ("POST", REDIRECTED)]
+
+
+def test_a_page_served_without_a_redirect_is_posted_where_it_was_found() -> None:
+    """The form's `action` is empty, which means the page's own address."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
+
+        return httpx.Response(200, text=FORM_PAGE if request.method == "GET" else "")
 
     assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
-    assert seen == [URL]
+    assert calls == [("GET", URL), ("POST", URL)]
 
 
-def test_a_link_google_refuses_is_reported_not_raised() -> None:
-    """An expired or already-used link is a normal outcome, not a failure."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        del request
-
-        return httpx.Response(400)
-
-    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
-
-
-def test_a_redirect_is_not_followed() -> None:
-    """A 302 must not walk the request past the host checks above it."""
-    requested: list[str] = []
+def test_a_relative_redirect_stays_on_the_confirmation_host() -> None:
+    calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requested.append(str(request.url))
+        calls.append((request.method, str(request.url)))
+
+        if request.method == "GET":
+            return httpx.Response(302, headers={"Location": "/mail/vf-next"})
+
+        return httpx.Response(200)
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
+    assert calls[-1] == ("POST", "https://mail-settings.google.com/mail/vf-next")
+
+
+def test_a_redirect_off_google_is_never_followed() -> None:
+    """The `Location` came out of untrusted mail. Nothing is sent to it."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
 
         return httpx.Response(302, headers={"Location": "http://169.254.169.254/"})
 
     assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
-    assert requested == [URL]
+    assert calls == [("GET", URL)]
 
 
-def test_a_redirect_back_into_gmail_reports_success() -> None:
-    """How Google actually answers a link it accepted. Read, never followed:
-    requiring a 2xx here recorded every real confirmation as refused.
-    """
-    requested: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested.append(str(request.url))
-
-        return httpx.Response(
-            302,
-            headers={"Location": "https://mail.google.com/mail/u/0/#settings"},
-        )
-
-    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
-    assert requested == [URL]
-
-
-def test_a_relative_redirect_stays_on_the_confirmation_host() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        del request
-
-        return httpx.Response(302, headers={"Location": "/mail/vf-done"})
-
-    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
-
-
-def test_any_google_subdomain_counts_as_confirmed() -> None:
-    """Which host answers is not documented, and guessing narrowly is what
-    broke this before. A checkmark set early costs less than a feature that
-    reports every real confirmation as refused.
-    """
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        del request
-
-        return httpx.Response(
-            302,
-            headers={"Location": "https://accounts.google.com/ServiceLogin"},
-        )
-
-    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
-
-
-def test_a_redirect_to_a_lookalike_host_is_not_a_confirmation() -> None:
+def test_a_redirect_to_a_lookalike_host_is_never_followed() -> None:
     """The same trap the request-side host check exists for, on the way back."""
+    calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        del request
+        calls.append((request.method, str(request.url)))
 
         return httpx.Response(
             302,
@@ -115,31 +112,61 @@ def test_a_redirect_to_a_lookalike_host_is_not_a_confirmation() -> None:
         )
 
     assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+    assert calls == [("GET", URL)]
 
 
-def test_a_host_merely_ending_in_the_domain_is_not_a_confirmation() -> None:
+def test_a_host_merely_ending_in_the_domain_is_never_followed() -> None:
     """`notgoogle.com` ends in `google.com` and is somebody else."""
+    calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        del request
+        calls.append((request.method, str(request.url)))
 
         return httpx.Response(302, headers={"Location": "https://notgoogle.com/ok"})
 
     assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+    assert calls == [("GET", URL)]
 
 
-def test_a_plain_http_redirect_is_not_a_confirmation() -> None:
+def test_a_plain_http_redirect_is_never_followed() -> None:
     """Downgrading the scheme is not something Google's own flow does."""
+    calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        del request
+        calls.append((request.method, str(request.url)))
 
         return httpx.Response(302, headers={"Location": "http://mail.google.com/ok"})
 
     assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+    assert calls == [("GET", URL)]
 
 
-def test_a_redirect_status_without_a_location_is_refused() -> None:
+def test_a_link_google_refuses_is_reported_not_raised() -> None:
+    """An expired or already-used link is a normal outcome, not a failure."""
+    calls: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
+
+        return httpx.Response(400)
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+    assert calls == [("GET", URL)]
+
+
+def test_a_form_that_is_refused_when_submitted_is_not_a_confirmation() -> None:
+    """The page was found and the button pressed, and Google said no."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=FORM_PAGE)
+
+        return httpx.Response(403)
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+
+
+def test_a_redirect_status_without_a_location_leads_nowhere() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         del request
 
@@ -165,35 +192,3 @@ def test_a_url_on_another_host_is_refused_before_any_request() -> None:
 
     with pytest.raises(UnexpectedConfirmationHostError):
         _confirmer(handler).confirm(confirmation)
-
-
-def test_redirects_stay_unfollowed_even_behind_a_client_that_would_follow_them() -> (
-    None
-):
-    """The refusal is per request, not a property of the client handed in.
-
-    An injected client is a test seam and a caller could configure it either
-    way; the one place that must not be overridable is this.
-    """
-    requested: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested.append(str(request.url))
-
-        if "vf-" in str(request.url):
-            return httpx.Response(
-                302,
-                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
-            )
-
-        return httpx.Response(200)
-
-    confirmer = HttpForwardingConfirmer(
-        client=httpx.Client(
-            transport=httpx.MockTransport(handler),
-            follow_redirects=True,
-        ),
-    )
-
-    assert confirmer.confirm(ForwardingConfirmation(url=URL)) is False
-    assert requested == [URL]

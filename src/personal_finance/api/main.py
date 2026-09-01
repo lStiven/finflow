@@ -92,7 +92,13 @@ def create_app(
             allow_credentials=False,
             # Only what the surface actually uses. OPTIONS is handled by the
             # middleware itself for the preflight.
-            allow_methods=["GET", "POST", "PATCH"],
+            #
+            # This list is a second copy of a fact the routers already state,
+            # and it drifted once: `PUT` was missing while two endpoints used
+            # it, so restating a balance and setting a credit limit failed the
+            # preflight and never reached the API at all. `test_cors` compares
+            # it against the routes to keep the copy honest.
+            allow_methods=["GET", "POST", "PATCH", "PUT"],
             allow_headers=["Authorization", "Content-Type"],
         )
 
