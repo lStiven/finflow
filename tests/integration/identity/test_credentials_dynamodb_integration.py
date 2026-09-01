@@ -287,3 +287,29 @@ def test_a_verification_and_a_reset_for_one_address_do_not_collide(
     assert verifications.find(EMAIL) is not None
     assert resets.find_window(EMAIL) is not None
     assert resets.consume_ticket(token_hash=TOKEN_HASH, now=NOW) is not None
+
+
+def test_a_challenge_outlives_the_ticket_it_is_holding(
+    verifications: DynamoDBEmailVerificationRepository,
+) -> None:
+    """A code accepted late in the window buys a ticket that outlives it.
+
+    The record's time-to-live has to cover the ticket, not just the window, or
+    the sweep deletes a live ticket out from under somebody who is still
+    filling in the registration form.
+    """
+    verification = _verification()
+    # 59 minutes into a 60-minute window, then a 30-minute ticket.
+    late = _later(59 * 60)
+    verification.accept(ticket_hash=TICKET_HASH, now=late, ticket_ttl_minutes=30)
+    verifications.save(verification, expected=None)
+
+    stored = verifications.find(EMAIL)
+    assert stored is not None
+    # The window itself is unchanged — it is what caps the mail.
+    assert stored.window.expires_at == _later(60 * 60)
+    assert verifications.consume_ticket(
+        email=EMAIL,
+        ticket_hash=TICKET_HASH,
+        now=_later(80 * 60),
+    )

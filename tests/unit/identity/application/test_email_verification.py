@@ -47,6 +47,18 @@ class FakeSecretHasher:
         return hashed.value == f"hashed:{secret}"
 
 
+class CountingSecretHasher(FakeSecretHasher):
+    """Counts comparisons, so a test can assert that a branch paid for one."""
+
+    def __init__(self) -> None:
+        self.verifications = 0
+
+    def verify(self, secret: str, hashed: SecretHash) -> bool:
+        self.verifications += 1
+
+        return super().verify(secret, hashed)
+
+
 class FixedSecretGenerator:
     def __init__(self) -> None:
         self.tokens: list[str] = []
@@ -368,6 +380,30 @@ def test_an_address_with_no_challenge_gets_the_same_answer_as_a_wrong_code() -> 
         _confirm_use_case(InMemoryVerificationRepository()).execute(
             ConfirmEmailVerificationCommand(email=EMAIL, code=CODE),
         )
+
+
+def test_an_address_with_no_challenge_still_costs_a_hash_comparison() -> None:
+    """The two answers are identical; the time they take has to be too.
+
+    Without the decoy, "no challenge for this address" would return before the
+    hash comparison the other branch pays for — and the difference is exactly
+    "is somebody part-way through registering this address".
+    """
+    hasher = CountingSecretHasher()
+    use_case = ConfirmEmailVerificationUseCase(
+        verifications=InMemoryVerificationRepository(),
+        generator=FixedSecretGenerator(),
+        code_hasher=hasher,
+        ticket_hasher=FakeSecretHasher(),
+        ticket_ttl_minutes=30,
+    )
+    # Building the use case draws the decoy; only comparisons are counted.
+    before = hasher.verifications
+
+    with pytest.raises(InvalidVerificationCodeError):
+        use_case.execute(ConfirmEmailVerificationCommand(email=EMAIL, code=CODE))
+
+    assert hasher.verifications == before + 1
 
 
 def test_guessing_runs_out() -> None:

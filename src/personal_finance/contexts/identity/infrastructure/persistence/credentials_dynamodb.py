@@ -43,7 +43,15 @@ if TYPE_CHECKING:
 PARTITION_KEY = "challenge_id"
 # The attribute DynamoDB's own time-to-live sweep watches. Named to match what
 # `provisioning.TTL_ATTRIBUTE` enables on every other table here.
+#
+# It is always the *last* moment anything in the record still matters, which
+# is not always the same as the thing the record is about: a challenge holds a
+# send window and, once the code is accepted, a ticket that can outlive it.
+# Sweeping on the window alone would delete a live ticket out from under
+# somebody who took their time filling in the form.
 TTL_ATTRIBUTE = "expires_at"
+# The window's own end, stored separately for exactly that reason.
+WINDOW_EXPIRES_AT_ATTRIBUTE = "window_expires_at"
 
 VERIFICATION_PREFIX = "verify#"
 RESET_WINDOW_PREFIX = "reset-window#"
@@ -105,10 +113,11 @@ def verification_to_item(
         "attempts": {"N": str(verification.attempts)},
         "sends": {"N": str(verification.window.sends)},
         "last_sent_at": {"N": str(verification.window.last_sent_at.as_epoch_seconds())},
-        # The window's end is also the record's: once no more mail may be sent
-        # and the code inside it has expired, there is nothing left to keep.
-        TTL_ATTRIBUTE: {"N": str(verification.window.expires_at.as_epoch_seconds())},
+        WINDOW_EXPIRES_AT_ATTRIBUTE: {
+            "N": str(verification.window.expires_at.as_epoch_seconds()),
+        },
     }
+    keep_until = verification.window.expires_at.as_epoch_seconds()
 
     if (
         verification.ticket_hash is not None
@@ -118,6 +127,12 @@ def verification_to_item(
         item["ticket_expires_at"] = {
             "N": str(verification.ticket_expires_at.as_epoch_seconds()),
         }
+        # A code accepted near the end of the window buys a ticket that
+        # outlives it. The record has to last as long as the ticket does, or
+        # registration fails for somebody who did everything right.
+        keep_until = max(keep_until, verification.ticket_expires_at.as_epoch_seconds())
+
+    item[TTL_ATTRIBUTE] = {"N": str(keep_until)}
 
     return item
 
@@ -135,7 +150,9 @@ def verification_to_entity(
         window=SendWindow(
             sends=_number(item, "sends"),
             last_sent_at=PosixTime.from_epoch_seconds(_number(item, "last_sent_at")),
-            expires_at=PosixTime.from_epoch_seconds(_number(item, TTL_ATTRIBUTE)),
+            expires_at=PosixTime.from_epoch_seconds(
+                _number(item, WINDOW_EXPIRES_AT_ATTRIBUTE),
+            ),
         ),
         attempts=_number(item, "attempts"),
         ticket_hash=SecretHash(ticket_hash) if ticket_hash else None,

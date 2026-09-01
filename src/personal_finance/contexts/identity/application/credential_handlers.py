@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 from urllib.parse import quote, urlsplit
+import uuid
 
 from personal_finance.contexts.identity.application.commands import (
     ChangePasswordCommand,
@@ -177,6 +178,12 @@ class ConfirmEmailVerificationUseCase:
     One write per attempt, conditional on the counters the record was read
     with: that is what makes the attempt cap real rather than advisory, since
     two requests racing the same code cannot both be counted as one.
+
+    An address with no challenge still runs a full hash comparison against a
+    decoy, the same way `LoginUseCase` does for an unknown email. The two
+    answers are already identical; without the decoy they would take
+    measurably different times, and the difference is exactly "is somebody
+    part-way through registering this address".
     """
 
     def __init__(
@@ -193,6 +200,7 @@ class ConfirmEmailVerificationUseCase:
         self._code_hasher = code_hasher
         self._ticket_hasher = ticket_hasher
         self._ticket_ttl_minutes = ticket_ttl_minutes
+        self._decoy_hash = code_hasher.hash(uuid.uuid4().hex)
 
     def execute(self, command: ConfirmEmailVerificationCommand) -> RegistrationTicket:
         email = Email(command.email)
@@ -200,8 +208,12 @@ class ConfirmEmailVerificationUseCase:
         verification = self._verifications.find(email)
 
         if verification is None:
-            # Same answer as a wrong code: "no challenge for this address"
-            # would otherwise say which addresses are mid-registration.
+            # Same answer as a wrong code, and the same cost: "no challenge for
+            # this address" would otherwise be readable off the clock, since
+            # the branch below spends a bcrypt comparison and this one would
+            # not.
+            self._code_hasher.verify(_normalized(command.code), self._decoy_hash)
+
             raise InvalidVerificationCodeError("That code is not valid")
 
         expected = verification.state
