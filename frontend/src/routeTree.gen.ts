@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConectarRouteImport } from './routes/conectar'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PerfilRouteImport } from './routes/perfil'
+import { Route as RecuperarRouteImport } from './routes/recuperar'
+import { Route as RestablecerRouteImport } from './routes/restablecer'
 import { Route as ComerciosIndexRouteImport } from './routes/comercios/index'
 import { Route as ComerciosMerchantIdRouteImport } from './routes/comercios/$merchantId'
 import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
@@ -41,6 +43,16 @@ const LoginRoute = LoginRouteImport.update({
 const PerfilRoute = PerfilRouteImport.update({
   id: '/perfil',
   path: '/perfil',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RecuperarRoute = RecuperarRouteImport.update({
+  id: '/recuperar',
+  path: '/recuperar',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RestablecerRoute = RestablecerRouteImport.update({
+  id: '/restablecer',
+  path: '/restablecer',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ComerciosIndexRoute = ComerciosIndexRouteImport.update({
@@ -96,6 +108,8 @@ export interface FileRoutesByFullPath {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/recuperar': typeof RecuperarRoute
+  '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
@@ -111,6 +125,8 @@ export interface FileRoutesByTo {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/recuperar': typeof RecuperarRoute
+  '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
@@ -127,6 +143,8 @@ export interface FileRoutesById {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/recuperar': typeof RecuperarRoute
+  '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
@@ -144,6 +162,8 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/recuperar'
+    | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
@@ -159,6 +179,8 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/recuperar'
+    | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
@@ -174,6 +196,8 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/recuperar'
+    | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
@@ -190,6 +214,8 @@ export interface RootRouteChildren {
   ConectarRoute: typeof ConectarRoute
   LoginRoute: typeof LoginRoute
   PerfilRoute: typeof PerfilRoute
+  RecuperarRoute: typeof RecuperarRoute
+  RestablecerRoute: typeof RestablecerRoute
   ComerciosMerchantIdRoute: typeof ComerciosMerchantIdRoute
   CuentasNuevaRoute: typeof CuentasNuevaRoute
   GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
@@ -229,6 +255,20 @@ declare module '@tanstack/react-router' {
       path: '/perfil'
       fullPath: '/perfil'
       preLoaderRoute: typeof PerfilRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/recuperar': {
+      id: '/recuperar'
+      path: '/recuperar'
+      fullPath: '/recuperar'
+      preLoaderRoute: typeof RecuperarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/restablecer': {
+      id: '/restablecer'
+      path: '/restablecer'
+      fullPath: '/restablecer'
+      preLoaderRoute: typeof RestablecerRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/comercios/': {
@@ -302,6 +342,8 @@ const rootRouteChildren: RootRouteChildren = {
   ConectarRoute: ConectarRoute,
   LoginRoute: LoginRoute,
   PerfilRoute: PerfilRoute,
+  RecuperarRoute: RecuperarRoute,
+  RestablecerRoute: RestablecerRoute,
   ComerciosMerchantIdRoute: ComerciosMerchantIdRoute,
   CuentasNuevaRoute: CuentasNuevaRoute,
   GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,

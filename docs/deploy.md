@@ -78,7 +78,7 @@ Dos sitios quedan en `*` y no por pereza: los repositorios de ECR los nombra
 el *companion stack* de SAM con un hash impredecible, y los *event source
 mappings* de SQS se identifican por UUID. No hay prefijo al que agarrarse.
 
-### 4. Los tres secretos, en Parameter Store
+### 4. Los secretos, en Parameter Store
 
 Uno por entorno. El valor se pide por prompt, nunca como argumento: una línea
 de comandos es visible en `ps` y queda en el historial del shell.
@@ -88,8 +88,16 @@ uv run python -c "import secrets; print(secrets.token_hex(32))"   # para el JWT
 
 just secret-put /finflow/production/jwt-secret
 just secret-put /finflow/production/mailbox-app-password
+just secret-put /finflow/production/mail-app-password
 just secret-put /finflow/production/llm-api-key
 ```
+
+`mail-app-password` es de dónde **salen** los correos que manda Identity —
+códigos de verificación y enlaces para restablecer la contraseña. Puede ser
+exactamente la misma App Password que `mailbox-app-password`: es la misma
+casilla, leída por IMAP y escrita por SMTP. Están separadas porque son dos
+permisos distintos (solo la función de la API resuelve esta) y porque nada
+obliga a que la cuenta que envía sea la que recibe.
 
 Para development, la misma orden con `/finflow/development/...`: **el fichero
 de entorno se deduce de la ruta**, así que no hay un segundo argumento que
@@ -109,12 +117,36 @@ el valor se lee una vez por proceso, así que hay que volver a desplegar el
 stack o reiniciar el proceso local.
 
 Qué ruta lee cada stack está en `infra/samconfig.toml`
-(`JwtSecretParameter`, `MailboxPasswordParameter`, `LlmApiKeyParameter`).
+(`JwtSecretParameter`, `MailboxPasswordParameter`, `MailAppPasswordParameter`,
+`LlmApiKeyParameter`).
+
+Además de la ruta del secreto, Identity necesita dos valores que **no** son
+secretos y viven en `parameter_overrides` del mismo fichero:
+
+| Parámetro | Qué es |
+|---|---|
+| `MailFromAddress` | La cuenta desde la que sale el correo. Tiene que coincidir con la App Password de `MailAppPasswordParameter`. |
+| `PasswordResetUrl` | La página del frontend que recibe el enlace; la API le añade `?token=…`. Tiene que ser `https`: el token viaja en la query. |
+
+**Los tres son obligatorios**: sin ellos la API no arranca. Es deliberado — un
+despliegue que no puede mandar un código es uno donde nadie puede registrarse
+ni recuperar su cuenta, y eso tiene que fallar al desplegar y no en la cara del
+primer usuario que lo intente.
 
 > Hoy `finflow-dev` y `finflow-production` resuelven a la **misma cuenta de
 > AWS**, con usuarios IAM distintos. Compruébalo antes de fiarte de la
 > separación:
 > `aws sts get-caller-identity --profile finflow-production --query '[Account,Arn]' --output text`
+
+Comprueba la pareja antes de desplegar, que es cuando sale barato:
+
+```bash
+just mail-check "" .env.production
+```
+
+Un `535` ahí significa que la App Password y `MailFromAddress` son de cuentas
+distintas — el único error que la plantilla no puede detectar y que solo
+aparece cuando alguien intenta registrarse.
 
 ### 5. La cuenta de correo de ingesta
 
@@ -146,7 +178,11 @@ just deploy-outputs-dev     # imprime la ApiUrl y lo demás que publica el stack
 just smoke <ApiUrl>         # comprueba que responde de verdad
 ```
 
-`provision-dev` solo hay que repetirlo cuando cambie una tabla o una cola.
+`provision-dev` solo hay que repetirlo cuando cambie una tabla o una cola. Lo
+hizo la última vez: la tabla `credential_challenges` (códigos de verificación,
+tickets de registro y enlaces de restablecimiento) es nueva, así que **hay que
+volver a aprovisionar los dos entornos antes de desplegar** — la API la escribe
+en la primera llamada a `/identity/verification/request`.
 `deploy-dev`, cada vez que cambie el código.
 
 Las cuatro URLs de cola no se pueden escribir por adelantado: incluyen el id

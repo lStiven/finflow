@@ -132,26 +132,64 @@ frontend puede ignorarlo, o usarlo para pintar un aviso cuando no es
 
 ### 1. Registro
 
+Son **tres llamadas, no una**: la dirección tiene que demostrar que se lee
+antes de que exista una cuenta detrás. Sin eso, cualquiera que pueda hacer un
+`POST` llena el despliegue de cuentas que nadie puede recuperar.
+
 ```http
-POST /identity/register
+POST /identity/verification/request     → 202 { expires_in_minutes, code }
+{ "email": "yo@example.com" }
+
+POST /identity/verification/confirm     → 200 { verification_token, expires_at }
+{ "email": "yo@example.com", "code": "123456" }
+
+POST /identity/register                 → 201 { user_id, access_token, ... }
 {
   "email": "yo@example.com",
   "password": "una frase larga de verdad",
+  "verification_token": "<el de arriba>",
   "name": "Tu Nombre",
   "allowed_domains": ["an.notificacionesbancolombia.com"],
   "allowed_addresses": []
 }
 ```
 
-→ `201` con `{ user_id, access_token, token_type, expires_at }`.
+Reglas del paso del código:
 
-Reglas:
+- **`request` responde `202` siempre**, exista o no una cuenta con ese correo,
+  y manda correo en los dos casos (uno con el código, otro diciendo "ya tienes
+  cuenta"). No intentes deducir de la respuesta si el correo está registrado:
+  el backend no lo dice a propósito, y la UI no debe inventarlo.
+- **`code` en la respuesta solo viene en local.** Es `null` en cualquier
+  despliegue real; ahí el código está únicamente en el buzón. Sirve para que
+  un script termine el flujo sin correo, no para la pantalla.
+- **El código son 6 dígitos y vive 15 minutos.** Cinco intentos: el sexto
+  responde `429` y hay que pedir otro. Espacios y guiones se limpian solos, así
+  que un pegado desde el correo funciona.
+- **`confirm` responde igual (`400`, "That code is not valid") para código
+  equivocado, correo sin desafío y correo mal formado.** Un código vencido es
+  `410` y quiere decir "pide otro"; agotar los intentos es `429`.
+- **`verification_token` vive 30 minutos y se gasta una sola vez.** Es lo que
+  reserva la dirección: verificar no es registrar, y sin el token alguien que
+  supiera que un correo acaba de verificarse podría ganarle la carrera a su
+  dueño.
+- **Límite por dirección: un mensaje por minuto, cinco por hora.** Pasado eso,
+  `429` con cabecera `Retry-After` en segundos — muéstrala, es el único dato
+  que da.
+
+Reglas del registro:
 
 - **La contraseña necesita 8 caracteres como mínimo.** No hay reglas de
   composición (mayúsculas, símbolos): son conocidas por empujar a la gente
   hacia patrones predecibles. Valida solo longitud, con el mismo mensaje que
   devuelve el backend.
-- **Email repetido → `409`.** Mensaje genérico a propósito.
+- **Sin `verification_token` válido → `403`.** También si venció, si ya se
+  gastó, o si es de otra dirección.
+- **La contraseña se valida antes que el token**, así que un `422` por
+  contraseña corta no quema el token: se puede reintentar con el mismo.
+- **Email repetido → `409`.** Mensaje genérico a propósito — y para llegar
+  hasta ahí hay que haber leído el código enviado a esa dirección, que es lo
+  que evita que el `409` sirva para averiguar quién está registrado.
 - **`name` es opcional.** La cuenta se identifica por el correo, así que se
   puede registrar sin nombre y ponerlo después con `PATCH /identity/me`.
   Máximo 80 caracteres; solo espacios se rechaza con `422`.
@@ -186,6 +224,56 @@ PATCH /identity/me       → 200 { user_id, email, name }
 - **`PATCH /identity/me` solo cambia el nombre.** El correo es la identidad de
   la cuenta y no hay forma de moverlo. A quién se edita sale del token: no
   recibe id, así que no hay manera de pedir la cuenta de otro.
+- **Cambiar la contraseña invalida todos los tokens vigentes**, incluido el que
+  hizo la llamada. Cada request autenticado compara la generación de
+  credenciales que lleva el token contra la de la cuenta, así que una sesión
+  abierta en otro dispositivo deja de servir en el acto. Ver el paso 2.b.
+
+### 2.b Contraseña olvidada, restablecida y cambiada
+
+```http
+POST /identity/password/forgot   → 202, cuerpo vacío
+{ "email": "yo@example.com" }
+
+POST /identity/password/reset    → 204
+{ "token": "<el del enlace del correo>", "new_password": "otra frase larga" }
+
+POST /identity/password/change   → 200 { user_id, access_token, expires_at }   (auth)
+{ "current_password": "...", "new_password": "..." }
+```
+
+- **`forgot` responde `202` exista o no la cuenta**, y manda correo en los dos
+  casos. La pantalla tiene que decir lo mismo siempre ("si hay una cuenta con
+  ese correo, te llegó un enlace"): decir "ese correo no existe" es exactamente
+  lo que el backend se niega a decir. Mismo límite que el código: uno por
+  minuto, cinco por hora, `429` con `Retry-After`.
+- **El enlace apunta al frontend, no a la API.** Su forma es
+  `IDENTITY_PASSWORD_RESET_URL` + `?token=…`; en producción,
+  `https://finflow-apk.pages.dev/restablecer?token=…`. Esa página lee el token
+  de la query y lo manda en el cuerpo de `POST /identity/password/reset`.
+- **Vive 30 minutos y sirve una sola vez.** Pedir otro retira el anterior.
+- **`reset` responde `204` sin token.** No inicia sesión: después hay que
+  entrar con la contraseña nueva, que es también la prueba de que funcionó.
+  Desconocido, vencido y ya usado son un solo `400` — nunca confirma que un
+  token haya sido real. Contraseña corta es `422`, y **no** gasta el enlace.
+- **`change` pide la contraseña actual** aunque la llamada ya venga
+  autenticada: una sesión abierta en una máquina prestada no puede alcanzar
+  para quedarse con la cuenta. Repetir la misma contraseña → `422`.
+- **Contraseña actual equivocada → `403`, no `401`.** Deliberado, y el
+  frontend depende de ello: el token está bien y la sesión no terminó, así que
+  un cliente que trate el `401` como "te desconectaron" no debe ver uno aquí.
+  Un `401` en esta ruta sigue significando lo de siempre: no hay token.
+- **`change` devuelve un token nuevo, y hay que guardarlo.** El cambio invalida
+  el que hizo la llamada; si el cliente no lo reemplaza, el siguiente request
+  da `401` y parece un cierre de sesión.
+
+#### Lo que el cliente HTTP tiene que hacer con estos códigos
+
+Un detalle que muerde: el `401` es el código con el que casi todo cliente
+cierra la sesión solo. Por eso ninguna de estas rutas lo devuelve por otra
+razón que "no hay token": una contraseña actual equivocada es `403`, y un
+`verification_token` gastado también. Si tu capa de red convierte cualquier
+`401` en "volver al login", este contrato ya está pensado para eso.
 
 ### 3. Conectar el banco
 
@@ -949,8 +1037,13 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | Método | Ruta | Auth | Para qué |
 |---|---|---|---|
 | GET | `/health` | — | Vivo o no. |
-| POST | `/identity/register` | — | Crear cuenta; devuelve token y asigna la dirección de reenvío. |
+| POST | `/identity/verification/request` | — | Mandar un código de 6 dígitos al correo. `202` siempre. |
+| POST | `/identity/verification/confirm` | — | Canjear el código por el token que gasta el registro. |
+| POST | `/identity/register` | — | Crear cuenta (necesita `verification_token`); devuelve token y asigna la dirección de reenvío. |
 | POST | `/identity/login` | — | Token. |
+| POST | `/identity/password/forgot` | — | Mandar un enlace para elegir contraseña nueva. `202` siempre. |
+| POST | `/identity/password/reset` | — | Gastar ese enlace. `204`, y corta todas las sesiones. |
+| POST | `/identity/password/change` | ✔ | Cambiar la contraseña sabiendo la actual. Devuelve el token que reemplaza al vigente. |
 | GET | `/identity/me` | ✔ | El id del usuario del token. |
 | GET | `/identity/inbox` | ✔ | Dirección de reenvío + remitentes aprobados. |
 | PATCH | `/identity/inbox` | ✔ | Reemplazar los remitentes aprobados. |
@@ -998,11 +1091,15 @@ Hay **dos formas** de cuerpo de error, y el frontend tiene que manejar las dos:
 
 | Código | Cuándo | Qué hacer en pantalla |
 |---|---|---|
-| `400` | Moneda que la cuenta no tiene, valor imposible. | Mensaje del `detail`; es accionable. |
-| `401` | Sin token, token inválido o vencido. Trae `WWW-Authenticate: Bearer`. | Ir al login. |
+| `400` | Moneda que la cuenta no tiene, valor imposible. Código de verificación inválido, enlace de restablecimiento inválido. | Mensaje del `detail`; es accionable. |
+| `401` | Sin token, token inválido, vencido, **o emitido antes de un cambio de contraseña**. Trae `WWW-Authenticate: Bearer`. | Ir al login. |
+| `403` | Registro sin `verification_token` usable (falta, venció, ya se gastó, o es de otra dirección), o la contraseña actual equivocada en `password/change`. | Volver al paso del código, o marcar el campo. **Nunca** cerrar la sesión: el token está bien. |
 | `404` | No existe **o es de otro usuario**. | "No encontrado". Nunca "no tienes permiso". |
 | `409` | El estado lo impide: cuenta duplicada, cuenta cerrada, movimiento ya asignado, último alias, mitad de un traslado que se intenta corregir sola. | Ofrecer la salida (abrir la existente, fusionar…). |
+| `410` | El código de verificación venció. | "Pide uno nuevo", y volver a `verification/request`. |
 | `422` | Esquema o regla del payload. `detail` es lista. | Marcar el campo; `loc` dice cuál. |
+| `429` | Demasiado correo a esa dirección, o demasiados intentos con un código. Trae `Retry-After` en segundos, expuesto por CORS a propósito — es el único dato que da. | Mostrar la espera. No reintentar solo. |
+| `502` | No se pudo entregar el correo al servidor de correo. | "Inténtalo en un momento". No es culpa del usuario. |
 
 Un `202` del webhook local **no** significa que se aceptó el correo: siempre
 responde 202, incluso para una dirección desconocida, para que nadie pueda

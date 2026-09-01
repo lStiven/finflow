@@ -31,7 +31,31 @@ type AuthValue = {
   sessionEnd: SessionEnd;
   dismissSessionEnd: () => void;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, name?: string) => Promise<void>;
+  /**
+   * Mail a one-time code to `email`. Answers the same way whether or not the
+   * address already has an account — the API deliberately does not say, and
+   * neither does this.
+   */
+  requestVerification: (email: string) => Promise<void>;
+  /** Trade the code for the ticket `register` spends. */
+  confirmVerification: (email: string, code: string) => Promise<string>;
+  register: (
+    email: string,
+    password: string,
+    verificationToken: string,
+    name?: string,
+  ) => Promise<void>;
+  /**
+   * Change the password of the signed-in user.
+   *
+   * Lives here rather than in `@/api/queries` because it replaces the
+   * session: the change invalidates every token issued before it, the one
+   * that made this very request included, and the API hands back the
+   * replacement precisely so the client can adopt it. A caller that dropped
+   * the response would see the next request 401 and look like a spontaneous
+   * sign-out.
+   */
+  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => void;
 };
 
@@ -110,7 +134,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login: async (email, password) => {
         adopt(await unwrap(api.POST("/identity/login", { body: { email, password } })));
       },
-      register: async (email, password, name) => {
+      requestVerification: async (email) => {
+        await unwrap(api.POST("/identity/verification/request", { body: { email } }));
+      },
+      confirmVerification: async (email, code) => {
+        const confirmed = await unwrap(
+          api.POST("/identity/verification/confirm", { body: { email, code } }),
+        );
+        return confirmed.verification_token;
+      },
+      register: async (email, password, verificationToken, name) => {
         // The senders stay empty here on purpose: approving them is its own
         // screen, and an empty allow-list means "accept nothing" — which is
         // the right state for an account that has not connected a bank yet.
@@ -124,9 +157,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               body: {
                 email,
                 password,
+                // Proof that this address answered, from
+                // `confirmVerification`. Spent here, once.
+                verification_token: verificationToken,
                 name: name?.trim() ? name.trim() : null,
                 allowed_domains: [],
                 allowed_addresses: [],
+              },
+            }),
+          ),
+        );
+      },
+      changePassword: async (currentPassword, newPassword) => {
+        adopt(
+          await unwrap(
+            api.POST("/identity/password/change", {
+              body: {
+                current_password: currentPassword,
+                new_password: newPassword,
               },
             }),
           ),

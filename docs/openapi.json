@@ -306,6 +306,28 @@
         "title": "CategoryResponse",
         "type": "object"
       },
+      "ChangePasswordPayload": {
+        "properties": {
+          "current_password": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Current Password",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordPayload",
+        "type": "object"
+      },
       "Currency": {
         "enum": [
           "COP",
@@ -455,6 +477,22 @@
           }
         },
         "title": "EditTransactionPayload",
+        "type": "object"
+      },
+      "EmailPayload": {
+        "description": "An address, and nothing else. Used by both unauthenticated flows.",
+        "properties": {
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "EmailPayload",
         "type": "object"
       },
       "EnterTransactionPayload": {
@@ -1441,11 +1479,18 @@
             "minLength": 8,
             "title": "Password",
             "type": "string"
+          },
+          "verification_token": {
+            "maxLength": 256,
+            "minLength": 16,
+            "title": "Verification Token",
+            "type": "string"
           }
         },
         "required": [
           "email",
-          "password"
+          "password",
+          "verification_token"
         ],
         "title": "RegisterPayload",
         "type": "object"
@@ -1492,6 +1537,28 @@
           "name"
         ],
         "title": "RenameAccountPayload",
+        "type": "object"
+      },
+      "ResetPasswordPayload": {
+        "properties": {
+          "new_password": {
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "New Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 256,
+            "minLength": 16,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "title": "ResetPasswordPayload",
         "type": "object"
       },
       "RestateBalancePayload": {
@@ -2003,6 +2070,71 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerificationCodePayload": {
+        "properties": {
+          "code": {
+            "maxLength": 16,
+            "minLength": 6,
+            "title": "Code",
+            "type": "string"
+          },
+          "email": {
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ],
+        "title": "VerificationCodePayload",
+        "type": "object"
+      },
+      "VerificationConfirmedResponse": {
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "verification_token": {
+            "title": "Verification Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verification_token",
+          "expires_at"
+        ],
+        "title": "VerificationConfirmedResponse",
+        "type": "object"
+      },
+      "VerificationRequestedResponse": {
+        "description": "Deliberately says nothing about the address it was given.\n\nSame body whether the address is new, already registered, or a typo, so\nthe endpoint cannot be used to ask which. `code` is filled in only on a\ndeveloper's own machine, where no mail is sent at all.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "expires_in_minutes": {
+            "title": "Expires In Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expires_in_minutes"
+        ],
+        "title": "VerificationRequestedResponse",
         "type": "object"
       },
       "personal_finance__contexts__financial__presentation__http__router__MerchantResponse": {
@@ -3430,9 +3562,131 @@
         ]
       }
     },
+    "/identity/password/change": {
+      "post": {
+        "description": "Change the password of somebody who can still log in.\n\nThe current password is required even though the caller already holds a\ntoken: a session left open on a shared machine must not be enough to take\nan account over.\n\nA token comes back because the change invalidates the one that made this\nrequest, along with every other session. The client is expected to replace\nwhat it holds with this.",
+        "operationId": "change_password_identity_password_change_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Change Password",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/password/forgot": {
+      "post": {
+        "description": "Mail a link that lets somebody who cannot log in set a new password.\n\nAnswers 202 whether or not the address has an account, and sends mail\neither way, so this is not a way to find out who is registered here.",
+        "operationId": "request_password_reset_identity_password_forgot_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Password Reset",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/password/reset": {
+      "post": {
+        "description": "Spend an emailed link and set the password behind it.\n\nNo token comes back: the account this just handed over is reached by\nlogging in with the new password, which is also the proof that it worked.\nEvery session opened with the old password stops working here.",
+        "operationId": "reset_password_identity_password_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Password",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/identity/register": {
       "post": {
-        "description": "Create an account and assign it a forwarding address.\n\nThe address itself never appears in this response — it depends only on\nthe new account's id, so `GET /identity/inbox` right after this call\nalready has it.",
+        "description": "Create an account and assign it a forwarding address.\n\nThe last step of three: `POST /identity/verification/request` mails a\ncode, `POST /identity/verification/confirm` trades it for the token this\nendpoint spends. Without that token there is no account, which is what\nkeeps this from being a way to fill the deployment with addresses nobody\ncan reach.\n\nThe forwarding address never appears in this response — it depends only\non the new account's id, so `GET /identity/inbox` right after this call\nalready has it.",
         "operationId": "register_identity_register_post",
         "requestBody": {
           "content": {
@@ -3467,6 +3721,90 @@
           }
         },
         "summary": "Register",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/verification/confirm": {
+      "post": {
+        "description": "Trade a code for the token `POST /identity/register` spends.\n\nThe token is what reserves the address: verifying is not registering, and\nsomebody who merely knows that an address was just verified must not be\nable to race its owner to the account.",
+        "operationId": "confirm_email_verification_identity_verification_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationCodePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationConfirmedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Email Verification",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
+    "/identity/verification/request": {
+      "post": {
+        "description": "Mail a one-time code to an address that wants an account.\n\n202 rather than 200: what this promises is that a message was handed to\nthe mail server, not that anybody read it.",
+        "operationId": "request_email_verification_identity_verification_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationRequestedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Email Verification",
         "tags": [
           "identity"
         ]

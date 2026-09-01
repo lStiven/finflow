@@ -465,7 +465,7 @@
                     "change"
                   ]
                 },
-                "description": "For somebody who can still log in. The current password is required even though the request is authenticated: a session left open on a shared machine must not be enough to take the account over.\n\nReturns a fresh access token because the change invalidates the one that made this request, along with every other session. The test script replaces `fetch_token`/`token` with it.",
+                "description": "For somebody who can still log in. The current password is required even though the request is authenticated: a session left open on a shared machine must not be enough to take the account over. Getting it wrong answers 403, not 401: the token is fine and the session is not over, so a client that reads 401 as \"you have been signed out\" never sees one here.\n\nReturns a fresh access token because the change invalidates the one that made this request, along with every other session. The test script replaces `fetch_token`/`token` with it.",
                 "body": {
                   "mode": "raw",
                   "raw": "{\n  \"current_password\": \"a-long-real-passphrase\",\n  \"new_password\": \"a-different-long-passphrase\"\n}",

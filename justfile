@@ -103,6 +103,14 @@ register-inbox-prod *args: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
 
+# Does this deployment's mailbox actually send? Walks the same four steps the
+# API does — configuration, connect, log in, send — and says which one failed.
+# Without an address it stops after the login, which proves the credential
+# without putting anything in anybody's inbox.
+mail-check recipient="" env_file=".env": (_require-env env_file)
+    @ENV_FILE={{env_file}} PYTHONPATH=src uv run python -m \
+        personal_finance.contexts.identity.presentation.cli.check_mail {{recipient}}
+
 # --------------------------------------------------
 # Running the API
 # --------------------------------------------------

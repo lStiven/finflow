@@ -115,6 +115,14 @@ App Password, cuando quieras correr `just ingest-worker` de verdad.
 > API arranca igual y el worker se niega a arrancar, que es justo lo que
 > quieres.
 
+**El correo de Identity no hace falta en local.** Con
+`IDENTITY_MAIL_FROM_ADDRESS` vacío y `ENVIRONMENT=local`, el código de
+verificación y el enlace de restablecimiento se escriben en el log en vez de
+enviarse, y `POST /identity/verification/request` además devuelve el código en
+su propia respuesta para que un script pueda terminar el flujo sin buzón. Esa
+salida existe **solo** para local: en cualquier otro entorno un buzón sin
+configurar impide arrancar, en lugar de publicar códigos vivos en CloudWatch.
+
 Opcionales:
 
 - **`LLM_API_KEY`** ([aistudio.google.com/apikey](https://aistudio.google.com/apikey))
@@ -137,6 +145,62 @@ Arranca moto y crea todo: cinco tablas de DynamoDB, las colas con sus DLQ, el
 bus de eventos y las reglas que lo conectan. Es idempotente, se puede repetir.
 
 `just aws-down` lo para. `just aws-status` muestra qué existe ahora mismo.
+
+### 2.b Registrarse en local, con el código
+
+Registrarse son tres llamadas: pedir el código, canjearlo y crear la cuenta.
+En local no se manda correo, así que el código vuelve en la respuesta:
+
+```bash
+curl -s localhost:8000/identity/verification/request \
+  -H 'content-type: application/json' -d '{"email":"yo@finflow.local"}'
+# → {"expires_in_minutes":15,"code":"053471"}
+
+curl -s localhost:8000/identity/verification/confirm \
+  -H 'content-type: application/json' \
+  -d '{"email":"yo@finflow.local","code":"053471"}'
+# → {"verification_token":"…","expires_at":…}
+
+curl -s localhost:8000/identity/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"yo@finflow.local","password":"una frase larga de verdad",
+       "verification_token":"…"}'
+```
+
+`just seed` y `just verify` no pasan por ahí: escriben el ticket directamente
+en la tabla y lo gastan en el endpoint real
+(`identity/presentation/cli/verification_tickets.py`). Es el camino del
+operador, no una puerta trasera — necesita permisos de escritura en DynamoDB y
+no está expuesto por HTTP.
+
+### 2.c ¿El correo sale de verdad?
+
+Es lo único del flujo de credenciales que ninguna prueba puede responder: los
+códigos, los tickets y las escrituras condicionales se prueban solos, pero
+"el mensaje salió y llegó" no. Y un despliegue que no puede enviar es uno
+donde nadie puede registrarse ni recuperar su cuenta.
+
+```bash
+just mail-check                          # configuración y login, sin enviar nada
+just mail-check tu@correo.com            # …y un mensaje real
+just mail-check tu@correo.com .env.production
+```
+
+Recorre los mismos cuatro pasos que hace la API —configuración, conectar,
+autenticar, enviar— y dice cuál falló, porque fallan por razones distintas.
+Sin dirección se detiene después del login: comprueba la credencial sin dejar
+nada en el buzón de nadie.
+
+El error más común es un `535`, y casi siempre significa lo mismo: la App
+Password es de una cuenta de Gmail y `IDENTITY_MAIL_FROM_ADDRESS` es otra. Son
+una sola credencial partida en dos sitios, y solo SMTP se entera de que no
+coinciden. La casilla de ingesta ya tiene una App Password que funciona: usar
+esa misma pareja (dirección **y** contraseña) es lo más simple.
+
+Que llegue no es lo mismo que que funcione. Cuando envíes uno de verdad, mira
+también si cayó en spam —una cuenta de Gmail personal escribiendo a
+desconocidos suele hacerlo al principio— y abre el enlace de
+`IDENTITY_PASSWORD_RESET_URL` para comprobar que esa página existe.
 
 ### 3. Datos de prueba
 
@@ -632,6 +696,8 @@ degradarse en silencio:
 | Mensaje | Qué hacer |
 |---|---|
 | `IDENTITY_JWT_SECRET is not set` | Genera y pega el secreto. Todo token sería falsificable. |
+| `IDENTITY_MAIL_FROM_ADDRESS and IDENTITY_MAIL_APP_PASSWORD are not set` | Fuera de local, sin buzón nadie puede registrarse ni recuperar su cuenta. En local, déjalos vacíos: el código va al log. |
+| `IDENTITY_PASSWORD_RESET_URL must be an absolute https:// URL` | Es la página del frontend a la que apunta el enlace del correo, no una ruta de la API. Sin `https` el token viajaría a la vista. |
 | `INGESTION_INGEST_MAILBOX_ADDRESS is not set` | Sin ella nadie puede registrarse: cada cuenta nueva deriva de ahí su dirección de reenvío. |
 | `INGESTION_INGEST_MAILBOX_ADDRESS / ..._APP_PASSWORD are not set` (solo el `ingest worker`) | El worker no tiene qué buzón revisar. Configura la cuenta dedicada. |
 | `INGESTION_PARSE_QUEUE_URL is not set` | Aprovisiona y pega la URL. Si no, se aceptarían notificaciones que nunca se parsearían. |

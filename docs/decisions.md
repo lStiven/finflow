@@ -409,6 +409,131 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   so every token issued before this change is refused — one forced login for
   everybody, chosen over accepting a token that cannot reach its own account.
 
+### Identity — proving an address, and getting back in (2026-09-01)
+
+- **An address has to answer before an account exists behind it.**
+  Registration is three calls: `verification/request` mails a six-digit code,
+  `verification/confirm` trades it for a one-time ticket, `register` spends
+  the ticket. Without it, anything that can POST fills the deployment with
+  accounts nobody can reach — and, worse for a finance app, an account can be
+  created on somebody else's address and then quietly hold their forwarded
+  bank mail. Rejected: a link-based confirmation *after* the account exists,
+  which is friendlier but leaves the unverified account real in the meantime.
+
+- **Verifying is not reserving, so `confirm` hands out a ticket.** The
+  alternative — marking the challenge "verified" and letting `register` look
+  it up by address — would let anybody who guessed that an address had just
+  been verified race its owner to the account. The ticket is 256 random bits,
+  stored only as a SHA-256, spent by a conditional `DeleteItem` that checks
+  the hash and the expiry in the same write.
+
+- **The ticket is spent before the duplicate-email check.** That ordering is
+  what stops `register`'s 409 from being an oracle: learning that an address
+  is registered here now costs reading the code mailed to it. `POST /login`
+  was already uninformative; this closes the other half.
+
+- **Both unauthenticated endpoints mail something in every branch.** An
+  address that already has an account gets "you already have one" instead of
+  a code; an address with no account asking for a reset gets "there is nothing
+  here". Silence in one branch would itself be the answer. It also equalises
+  the timing, since an SMTP round trip dominates everything else in the
+  request.
+
+- **A one-time secret is never a low-entropy value guarding itself.** The
+  six-digit code is bcrypt-hashed (salted, slow) because a million
+  possibilities is seconds of work against a fast hash if the table leaks; its
+  real defence is the five-attempt cap and fifteen-minute life. The reset and
+  registration tokens are SHA-256 because the hash *is* the lookup key and has
+  to be deterministic — safe only because what goes in is
+  `secrets.token_urlsafe(32)`. Two hashers, and picking the wrong one is a
+  real mistake in both directions.
+
+- **Time-to-live is housekeeping, never a check.** DynamoDB's sweep is
+  eventual and routinely hours late, so every expiry that decides anything is
+  also compared in the condition expression. The record's own TTL is the
+  *last* moment anything in it matters: a code accepted at minute 59 of a
+  60-minute window buys a 30-minute ticket, and sweeping on the window alone
+  would delete a live ticket out from under somebody still filling in the
+  form.
+
+- **Changing a password ends every session, and that costs one read per
+  request.** `User.credential_version` is a counter carried in the token as
+  `cv` and compared against storage by `AuthenticateUseCase`, which
+  `get_current_user` now goes through. A JWT is otherwise valid until it
+  expires no matter what happens to the account behind it, so a token stolen
+  before a reset would keep working through the reset meant to stop it — for a
+  day, at this deployment's TTL. That made the reset a formality. The price is
+  a strongly-consistent `GetItem` on every authenticated request, which at a
+  handful of users is far below the cost of the endpoints behind it, and it
+  also stops a token for a deleted account.
+  A **counter, not the moment of the change**: the comparison has to be exact,
+  and a timestamp in seconds cannot tell a password set one millisecond after
+  registration from the registration itself — which is precisely the case
+  where the token must stop working. Accepted cost: every token issued before
+  this change lacks the claim and is refused, so everybody logs in once more.
+
+- **Password change asks for the current password even though it is
+  authenticated, and a wrong one is 403.** A session left open on a shared
+  machine must not be enough to take an account over. The status is the
+  interesting part: 401 is the code every HTTP client turns into "you have
+  been signed out", and answering it here would log somebody out for a typo.
+  The caller *is* authenticated — their token is fine — so a failed
+  re-challenge for one action is 403, and 401 on this route keeps meaning only
+  "no token". Same reasoning covers the spent registration ticket.
+  It returns a fresh token because the change invalidates the one that asked,
+  and a client that did not replace it would see what looks like a
+  spontaneous logout.
+
+- **`Retry-After` is exposed through CORS.** Only a handful of response
+  headers are readable across origins by default and this is not one of them,
+  so the frontend on Cloudflare Pages would have seen the 429 and not the
+  wait — which is the *only* thing that answer carries, since how much mail an
+  address has caused and whether it has an account are exactly what these
+  endpoints refuse to say.
+
+- **SMTP over the deployment's own Gmail, not SES.** SES will not mail a
+  stranger until a domain is verified and the sandbox is lifted, and this
+  deployment owns no domain — the same reason the intake side is IMAP with an
+  App Password rather than OAuth. It is the same casilla: read over IMAP,
+  written over SMTP, one credential. Configured separately
+  (`IDENTITY_MAIL_*`) all the same, so identity does not read ingestion's
+  settings and so the sending account can move without the receiving one.
+
+- **An unconfigured mailbox stops the API from starting, everywhere but
+  local.** The two degraded alternatives were both worse: accepting
+  registrations that can never be completed, or falling back to the logging
+  notifier and writing live codes and reset links into CloudWatch. On
+  `ENVIRONMENT=local` that fallback is exactly what runs, and
+  `verification/request` also returns the code in its own response so a script
+  can finish the flow without a mailbox. That echo is derived from nothing but
+  `is_local` — a separate switch would be a switch somebody could set in
+  production.
+
+- **Scripts create accounts through an operator path, not a back door.**
+  `seed_local.py` invents addresses and `smoke.py`'s canary lives at
+  `@finflow.local`, which no mail server will deliver to, so neither can go
+  through the code exchange. They write a ready ticket straight into the
+  challenges table
+  (`identity/presentation/cli/verification_tickets.py`) and then spend it
+  through the real endpoint. It needs DynamoDB write access — the privilege
+  whoever runs them already holds — and is reachable over no HTTP surface.
+  Rejected: an environment flag that disables verification, which is a switch
+  that can be set in production. Accepted cost: `just smoke`'s default depth
+  now needs AWS credentials, which its docstring used to promise it did not.
+
+- **An address with no pending challenge still costs a hash comparison.**
+  `confirm` answers identically for a wrong code and for an address nothing is
+  registering, but without a decoy the second branch would return before the
+  bcrypt comparison the first pays for — and the difference is readable off
+  the clock. It is the same guard `LoginUseCase` already runs for an unknown
+  email, for the same reason.
+
+- **Both unauthenticated endpoints are rate limited per address**, one message
+  a minute and five an hour, answered with 429 and `Retry-After`. Not
+  politeness: without it they are a way to aim this deployment's mailbox at
+  somebody else's inbox and to burn its Gmail sending quota, which would take
+  registration down for everybody.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

@@ -28,13 +28,22 @@ the same bank moves two balances and is neither spending nor income. That path
 is closed end to end — a deterministic template, its own integration event,
 two linked ledger rows, and totals that leave both of them out.
 
-Twenty-nine endpoints across the four contexts, the three SQS workers, the
+Identity now proves an address before it will build an account on it, and
+knows how to let somebody back in. Registering is three calls — a six-digit
+code by mail, traded for a one-time ticket that `POST /identity/register`
+spends — and a forgotten password is recovered through a 30-minute link.
+Changing a password ends every session opened with the old one, which is the
+one thing that makes the reset worth anything: every authenticated request now
+compares the token's credential generation against the account's.
+
+Thirty-four endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
 canonical merchant behind the bank's text, and `GET /financial/summary`
-answers what a period adds up to. `uv run pytest` green (954). `just prepare`
-does **not** pass end to end: a pre-existing pyright error in
-`shared/infrastructure/llm/gemini.py:120` stops it before the tests run.
+answers what a period adds up to. `just prepare` passes end to end again —
+format, lint, types and 1070 tests. The pyright error in
+`shared/infrastructure/llm/gemini.py:120` that had been stopping it is gone
+without the file changing, so it was the installed stubs, not the code.
 
 DynamoDB runs on-demand: at this deployment's volume the bill is on the order
 of a cent a month, and the free tier's 25 provisioned units were shaping the
@@ -78,6 +87,13 @@ and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
+- 2026-09-01 — Email verification at registration and password recovery, in
+  both halves: five endpoints, a `credential_challenges` table whose every
+  record expires, SMTP over the deployment's own Gmail, and the screens that
+  use them — the door's code step, `/recuperar`, `/restablecer` and a password
+  card on `/perfil`. A password change now invalidates every token issued
+  before it. **Neither stack has the new table or the new configuration yet**
+  — see Next steps.
 - 2026-09-01 — `/comercios` is built: the review queue with one-tap confirm,
   search and filters, and a detail screen for renaming, recategorizing,
   moving or splitting a spelling and merging two merchants. Found and
@@ -96,13 +112,23 @@ and a cap on LLM spending — see **Next steps**.
   972), integrating (`frontend-integration.md`) and where to start
   (`docs/README.md`). Every relative link and anchor checked; every `just`
   command named in them exists.
-- 2026-09-01 — Forwarding confirmation actually confirms: it is a `POST` to
-  the form behind the link, not a `GET` of the link, which only rendered the
-  page a person would have clicked.
-
 ## Next steps
 
-- [ ] **Next: two fixes and a mailbox split are written but not deployed.**
+- [ ] **Next: registration is now impossible on both deployed stacks until
+      they are provisioned and redeployed.** In this order, per environment:
+      1. `just secret-put /finflow/<env>/mail-app-password` — the same Gmail
+         App Password the ingest worker already uses; the API sends from that
+         casilla over SMTP.
+      2. `just provision-dev` / `provision-prod` — creates
+         `credential_challenges`. Without it every `/identity/verification/*`
+         call fails.
+      3. `just deploy-dev` / `deploy-prod` — carries `MailFromAddress`,
+         `MailAppPasswordParameter` and `PasswordResetUrl`, which are
+         **required**: the API refuses to start without them.
+      Note the deploy also rotates every session, twice over: tokens now carry
+      a `cv` claim and are refused without it. Everybody logs in again.
+
+- [ ] **Two fixes and a mailbox split are written but not deployed.**
       Both stacks are running older code than this working tree:
       1. `just deploy-dev` — carries development's own ingest mailbox
          (`IngestMailboxAddress` in `infra/samconfig.toml`). Until it runs,
@@ -147,11 +173,13 @@ and a cap on LLM spending — see **Next steps**.
          missing.
       4. **The rest of the frontend.** The foundation is in (`just web`).
          Done: the dashboard, the whole Transacciones surface, the
-         connect-your-bank guide, `/cuentas`, `/comercios` and the `/guias`
-         section. What is left is two screens, not plumbing: the spending
-         summary and reports, and configuration — both still disabled in the
-         shell's nav. `docs/frontend-integration.md` is the contract each of
-         them has to honour.
+         connect-your-bank guide, `/cuentas`, `/comercios`, the `/guias`
+         section, the door's code step, `/recuperar`, `/restablecer` and the
+         password card on `/perfil`. What is left is two screens, not
+         plumbing: the spending summary and reports, and configuration — both
+         still disabled in the shell's nav.
+         `docs/frontend-integration.md` is the contract each of them has to
+         honour.
 - [ ] **Three account edits the API cannot do, so the app cannot offer
       them.** Reopening a closed account (`close` is one-way and there is no
       inverse); deleting one outright (deliberate — a closed account still

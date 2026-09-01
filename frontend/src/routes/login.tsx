@@ -1,7 +1,8 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   AtSign,
   Clock3,
+  KeyRound,
   Loader2,
   Lock,
   Mail,
@@ -13,6 +14,8 @@ import {
 import type { ComponentType, ReactNode } from "react";
 import { type SubmitEvent, useState } from "react";
 import { useAuth } from "@/auth/AuthContext";
+import { identityErrorMessage } from "@/auth/errors";
+import { codeLooksComplete, normalizeCode } from "@/auth/password";
 import { BetaMark } from "@/components/BetaMark";
 import { Logo } from "@/components/Logo";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
@@ -109,12 +112,24 @@ const COPY: Record<
 };
 
 function LoginScreen() {
-  const { login, register, sessionEnd, dismissSessionEnd } = useAuth();
+  const {
+    login,
+    register,
+    requestVerification,
+    confirmVerification,
+    sessionEnd,
+    dismissSessionEnd,
+  } = useAuth();
 
   const [mode, setMode] = useState<Mode>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  // Registering is two submits, not one: the first asks for a code and the
+  // second sends it back. `awaitingCode` is which of the two this form is on.
+  const [awaitingCode, setAwaitingCode] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -125,20 +140,61 @@ function LoginScreen() {
     if (next === mode) return;
     setMode(next);
     setError(null);
+    setNotice(null);
+    setAwaitingCode(false);
+    setCode("");
+  }
+
+  /** Back to the first step, with the address still editable. */
+  function editEmail() {
+    setAwaitingCode(false);
+    setCode("");
+    setError(null);
+    setNotice(null);
+  }
+
+  async function sendCode() {
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      // Nothing is created yet — this only sends mail. The account is made by
+      // the second submit, with the ticket that code buys.
+      await requestVerification(email);
+      setAwaitingCode(true);
+      setCode("");
+      setNotice(`Te enviamos un código a ${email}.`);
+    } catch (cause) {
+      setError(identityErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (isRegister && !awaitingCode) {
+      await sendCode();
+      return;
+    }
+
     setError(null);
+    setNotice(null);
     setBusy(true);
     try {
-      await (isRegister ? register(email, password, name) : login(email, password));
+      if (isRegister) {
+        const ticket = await confirmVerification(email, normalizeCode(code));
+        await register(email, password, ticket, name);
+      } else {
+        await login(email, password);
+      }
       // No navigation here on purpose. The new session invalidates the router
       // (see `RoutedApp`), this route's own `beforeLoad` then re-runs and
       // redirects to `/`. Navigating as well would race that redirect.
       // `busy` deliberately stays true: the form is on its way out.
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Algo salió mal");
+      setError(identityErrorMessage(cause));
       setBusy(false);
     }
   }
@@ -226,17 +282,70 @@ function LoginScreen() {
                   />
                 </Stagger>
 
+                {awaitingCode ? (
+                  <Stagger step={3}>
+                    <div className="flex flex-col gap-3">
+                      <Field
+                        label="Código"
+                        icon={KeyRound}
+                        // `inputMode` and `one-time-code` together are what
+                        // make a phone offer the code straight from the
+                        // notification instead of a keyboard.
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        // Room for the spacing a mail client adds; the value
+                        // is normalized before it is sent.
+                        maxLength={12}
+                        placeholder="000000"
+                        required
+                        className="text-center font-mono text-xl tracking-[0.4em]"
+                        hint={`Seis dígitos, enviados a ${email}. Vencen en 15 minutos.`}
+                        value={code}
+                        onChange={(e) => setCode(e.target.value)}
+                      />
+
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                        <button
+                          type="button"
+                          onClick={sendCode}
+                          disabled={busy}
+                          className="text-muted transition-colors hover:text-text disabled:opacity-50"
+                        >
+                          Reenviar código
+                        </button>
+                        <button
+                          type="button"
+                          onClick={editEmail}
+                          disabled={busy}
+                          className="text-muted transition-colors hover:text-text disabled:opacity-50"
+                        >
+                          Usar otro correo
+                        </button>
+                      </div>
+                    </div>
+                  </Stagger>
+                ) : null}
+
+                {notice && !error ? (
+                  <p role="status" className="rise text-cyan text-sm">
+                    {notice}
+                  </p>
+                ) : null}
+
                 {error ? (
                   <p role="alert" className="rise text-outgoing text-sm">
                     {error}
                   </p>
                 ) : null}
 
-                <Stagger step={isRegister ? 3 : 2}>
+                <Stagger step={isRegister ? 4 : 2}>
                   <Button
                     type="submit"
+                    // A guess of the wrong length would still spend one of the
+                    // five attempts the challenge allows, so the form does not
+                    // let one through.
                     full
-                    disabled={busy}
+                    disabled={busy || (awaitingCode && !codeLooksComplete(code))}
                     className={cn(
                       "py-3.5",
                       copy.glow === "cyan" && "bg-cyan text-ink hover:brightness-110",
@@ -245,8 +354,10 @@ function LoginScreen() {
                     {busy ? (
                       <>
                         <Loader2 className="size-4 animate-spin" />
-                        {copy.busy}
+                        {isRegister && !awaitingCode ? "Enviando código…" : copy.busy}
                       </>
+                    ) : isRegister && !awaitingCode ? (
+                      "Enviar código"
                     ) : (
                       copy.submit
                     )}
@@ -255,6 +366,14 @@ function LoginScreen() {
               </form>
             </div>
           </div>
+
+          {isRegister ? null : (
+            <p className="mt-5 text-center text-xs">
+              <Link to="/recuperar" className="text-muted hover:text-text">
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </p>
+          )}
 
           <p className="mt-5 text-center text-faint text-xs">
             Al continuar aceptas que Finflow lea los correos que le reenvíes, y solo

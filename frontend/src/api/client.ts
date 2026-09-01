@@ -57,60 +57,6 @@ const authMiddleware: Middleware = {
 export const api = createClient<paths>({ baseUrl });
 api.use(authMiddleware);
 
-/**
- * Unwrap an `openapi-fetch` result into the value TanStack Query expects.
- *
- * `openapi-fetch` never throws on a non-2xx: it returns `{ data, error }`.
- * Query needs a rejected promise to mark something as failed, so every call
- * goes through here.
- */
-export async function unwrap<T>(
-  result: Promise<{ data?: T; error?: unknown; response: Response }>,
-): Promise<T> {
-  const { data, error, response } = await result;
-  if (error !== undefined || !response.ok) {
-    throw new ApiError(response.status, error);
-  }
-  return data as T;
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly detail: unknown;
-
-  constructor(status: number, detail: unknown) {
-    super(messageFor(status, detail));
-    this.name = "ApiError";
-    this.status = status;
-    this.detail = detail;
-  }
-}
-
-/**
- * A message worth showing. FastAPI puts a string in `detail` for the errors
- * this API raises deliberately, and a list of field errors for a 422 — the
- * two need different handling, and neither should reach a user as `[object
- * Object]`.
- */
-function messageFor(status: number, detail: unknown): string {
-  // 401 is answered before the body is read, and deliberately so. The API
-  // returns an identical 401 for an unknown email, a wrong password and a
-  // malformed one — the guide requires the interface not to tell them apart,
-  // so there is nothing in that body worth showing, and this is the one
-  // message a user actually reads (a 401 anywhere else redirects to login
-  // rather than rendering).
-  if (status === 401) return "Correo o contraseña incorrectos";
-
-  if (typeof detail === "object" && detail !== null && "detail" in detail) {
-    const inner = (detail as { detail: unknown }).detail;
-    if (typeof inner === "string") return inner;
-    if (Array.isArray(inner)) {
-      const first = inner[0] as { msg?: unknown } | undefined;
-      if (first && typeof first.msg === "string") return first.msg;
-    }
-  }
-  if (status === 409) return "Ya existe algo igual";
-  if (status === 404) return "No encontrado";
-  if (status >= 500) return "El servidor falló. Intenta de nuevo.";
-  return `Error ${status}`;
-}
+// Re-exported so callers have one import for "talking to the API", while the
+// error type itself stays loadable without a base URL. See `@/api/errors`.
+export { ApiError, unwrap } from "@/api/errors";

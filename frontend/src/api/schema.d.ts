@@ -413,6 +413,81 @@ export interface paths {
         patch: operations["update_profile_identity_me_patch"];
         trace?: never;
     };
+    "/identity/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change the password of somebody who can still log in.
+         *
+         *     The current password is required even though the caller already holds a
+         *     token: a session left open on a shared machine must not be enough to take
+         *     an account over.
+         *
+         *     A token comes back because the change invalidates the one that made this
+         *     request, along with every other session. The client is expected to replace
+         *     what it holds with this.
+         */
+        post: operations["change_password_identity_password_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identity/password/forgot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Password Reset
+         * @description Mail a link that lets somebody who cannot log in set a new password.
+         *
+         *     Answers 202 whether or not the address has an account, and sends mail
+         *     either way, so this is not a way to find out who is registered here.
+         */
+        post: operations["request_password_reset_identity_password_forgot_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identity/password/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Password
+         * @description Spend an emailed link and set the password behind it.
+         *
+         *     No token comes back: the account this just handed over is reached by
+         *     logging in with the new password, which is also the proof that it worked.
+         *     Every session opened with the old password stops working here.
+         */
+        post: operations["reset_password_identity_password_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/identity/register": {
         parameters: {
             query?: never;
@@ -426,11 +501,64 @@ export interface paths {
          * Register
          * @description Create an account and assign it a forwarding address.
          *
-         *     The address itself never appears in this response — it depends only on
-         *     the new account's id, so `GET /identity/inbox` right after this call
+         *     The last step of three: `POST /identity/verification/request` mails a
+         *     code, `POST /identity/verification/confirm` trades it for the token this
+         *     endpoint spends. Without that token there is no account, which is what
+         *     keeps this from being a way to fill the deployment with addresses nobody
+         *     can reach.
+         *
+         *     The forwarding address never appears in this response — it depends only
+         *     on the new account's id, so `GET /identity/inbox` right after this call
          *     already has it.
          */
         post: operations["register_identity_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identity/verification/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Email Verification
+         * @description Trade a code for the token `POST /identity/register` spends.
+         *
+         *     The token is what reserves the address: verifying is not registering, and
+         *     somebody who merely knows that an address was just verified must not be
+         *     able to race its owner to the account.
+         */
+        post: operations["confirm_email_verification_identity_verification_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/identity/verification/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Email Verification
+         * @description Mail a one-time code to an address that wants an account.
+         *
+         *     202 rather than 200: what this promises is that a message was handed to
+         *     the mail server, not that anybody read it.
+         */
+        post: operations["request_email_verification_identity_verification_request_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -792,6 +920,13 @@ export interface components {
             /** Value */
             value: string;
         };
+        /** ChangePasswordPayload */
+        ChangePasswordPayload: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
         /**
          * Currency
          * @enum {string}
@@ -837,6 +972,14 @@ export interface components {
             note?: string | null;
             /** Occurred At */
             occurred_at?: number | null;
+        };
+        /**
+         * EmailPayload
+         * @description An address, and nothing else. Used by both unauthenticated flows.
+         */
+        EmailPayload: {
+            /** Email */
+            email: string;
         };
         /**
          * EnterTransactionPayload
@@ -1238,6 +1381,8 @@ export interface components {
             name?: string | null;
             /** Password */
             password: string;
+            /** Verification Token */
+            verification_token: string;
         };
         /** RegisteredInboxResponse */
         RegisteredInboxResponse: {
@@ -1252,6 +1397,13 @@ export interface components {
         RenameAccountPayload: {
             /** Name */
             name: string;
+        };
+        /** ResetPasswordPayload */
+        ResetPasswordPayload: {
+            /** New Password */
+            new_password: string;
+            /** Token */
+            token: string;
         };
         /**
          * RestateBalancePayload
@@ -1460,6 +1612,34 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /** VerificationCodePayload */
+        VerificationCodePayload: {
+            /** Code */
+            code: string;
+            /** Email */
+            email: string;
+        };
+        /** VerificationConfirmedResponse */
+        VerificationConfirmedResponse: {
+            /** Expires At */
+            expires_at: number;
+            /** Verification Token */
+            verification_token: string;
+        };
+        /**
+         * VerificationRequestedResponse
+         * @description Deliberately says nothing about the address it was given.
+         *
+         *     Same body whether the address is new, already registered, or a typo, so
+         *     the endpoint cannot be used to ask which. `code` is filled in only on a
+         *     developer's own machine, where no mail is sent at all.
+         */
+        VerificationRequestedResponse: {
+            /** Code */
+            code?: string | null;
+            /** Expires In Minutes */
+            expires_in_minutes: number;
         };
         /**
          * MerchantResponse
@@ -2191,6 +2371,103 @@ export interface operations {
             };
         };
     };
+    change_password_identity_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_password_reset_identity_password_forgot_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_password_identity_password_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResetPasswordPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     register_identity_register_post: {
         parameters: {
             query?: never;
@@ -2211,6 +2488,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_email_verification_identity_verification_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationCodePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationConfirmedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_email_verification_identity_verification_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationRequestedResponse"];
                 };
             };
             /** @description Validation Error */
