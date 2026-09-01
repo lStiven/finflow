@@ -993,8 +993,13 @@ def change_password(
             ),
         )
     except InvalidCredentialsError as error:
+        # 403, not 401. The caller *is* authenticated — their token is fine and
+        # their session is not over; they failed a second challenge for this
+        # one action. Answering 401 would overload the code the client uses to
+        # mean "your session died", and a wrong password typed here would log
+        # the person out instead of telling them what happened.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Current password is not correct",
         ) from error
     except (WeakPasswordError, PasswordUnchangedError) as error:

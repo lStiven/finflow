@@ -117,7 +117,7 @@ class StructuredModel:
             # optional dependency with no stubs installed, so the whole
             # signature reads as partially unknown. Only the `str` branch is
             # used here.
-            return self._client.models.generate_content(  # pyright: ignore[reportUnknownMemberType]
+            return self._client.models.generate_content(
                 model=self._settings.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(

@@ -100,6 +100,13 @@ def create_app(
             # it against the routes to keep the copy honest.
             allow_methods=["GET", "POST", "PATCH", "PUT"],
             allow_headers=["Authorization", "Content-Type"],
+            # Without this the browser hides it. Only a handful of response
+            # headers are readable across origins by default, and
+            # `Retry-After` is not one of them — so the 429 from the
+            # credential endpoints would reach the frontend served from
+            # Cloudflare Pages with no way to say how long to wait, and it is
+            # the only detail those endpoints give.
+            expose_headers=["Retry-After"],
         )
 
     app.include_router(health_router)

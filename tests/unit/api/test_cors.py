@@ -194,3 +194,20 @@ def test_every_method_the_api_exposes_survives_a_preflight() -> None:
 
         assert response.status_code == 200, f"{method} fails the preflight"
         assert method in response.headers["access-control-allow-methods"]
+
+
+def test_the_wait_after_a_429_is_readable_across_origins() -> None:
+    """`Retry-After` is not a header a browser exposes by default.
+
+    The credential endpoints answer a throttled request with it and with
+    nothing else — how much mail an address has already caused, and whether it
+    has an account at all, is exactly what they refuse to say. Unexposed, the
+    frontend on its own origin would see the 429 and not the wait.
+    """
+    app = create_app(expose_local_only_routes=False, cors_origins=(ALLOWED,))
+    client = TestClient(app)
+
+    response = client.get("/health", headers={"Origin": ALLOWED})
+
+    exposed = response.headers["access-control-expose-headers"]
+    assert "Retry-After" in exposed

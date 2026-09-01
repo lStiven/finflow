@@ -1199,7 +1199,9 @@ def test_changing_a_password_without_the_current_one_is_refused(
         headers=headers,
     )
 
-    assert response.status_code == 401
+    # 403 rather than 401: the token is fine and the session is not over, so a
+    # client that reads 401 as "you have been signed out" must not see one.
+    assert response.status_code == 403
     assert (
         authenticated_client.post(
             "/identity/login",
@@ -1212,6 +1214,8 @@ def test_changing_a_password_without_the_current_one_is_refused(
 def test_changing_a_password_without_a_token_is_unauthorized(
     authenticated_client: TestClient,
 ) -> None:
+    # And *this* is the 401: no token at all. The pair is what lets a client
+    # tell "sign in again" from "you mistyped your current password".
     response = authenticated_client.post(
         "/identity/password/change",
         json={
