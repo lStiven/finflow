@@ -59,8 +59,9 @@ whose types are generated from the API's own OpenAPI document, so a router
 change in Python fails the TypeScript build rather than a screen in a browser.
 Session, money and date handling, the door (login/register, on a moving neon
 ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
-account and linking its alerts), `/perfil`, the `/conectar` onboarding guide
-and the `/guias` section all run against the local emulator.
+account and linking its alerts), `/comercios` (the review queue and the
+corrections behind it), `/perfil`, the `/conectar` onboarding guide and the
+`/guias` section all run against the local emulator.
 
 The frontend lives on **Cloudflare Pages**, not on this AWS account: S3 plus
 CloudFront was built, deployed and reverted on 2026-09-01 because the account
@@ -77,6 +78,15 @@ and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
+- 2026-09-01 — `/comercios` is built: the review queue with one-tap confirm,
+  search and filters, and a detail screen for renaming, recategorizing,
+  moving or splitting a spelling and merging two merchants. Found and
+  documented on the way: `move` refuses the last alias exactly as `split`
+  does, and neither `move` nor `split` returns the merchant in the path.
+- 2026-09-01 — Production has a frontend: https://finflow-apk.pages.dev,
+  built against the production API and verified over HTTPS (headers, SPA
+  fallback, the bundle's own API address). Its origin is in `CorsOrigins` but
+  not yet deployed — `just deploy-prod` is what lets the API answer it.
 - 2026-09-01 — The frontend is live against development at
   https://finflow-dev-2tc.pages.dev — headers, SPA fallback and the bundle
   verified over HTTPS. Its calls fail the preflight until `just deploy-dev`
@@ -89,10 +99,6 @@ and a cap on LLM spending — see **Next steps**.
 - 2026-09-01 — Forwarding confirmation actually confirms: it is a `POST` to
   the form behind the link, not a `GET` of the link, which only rendered the
   page a person would have clicked.
-- 2026-09-01 — The two `PUT` endpoints are reachable from a browser again:
-  the CORS allow-list never listed `PUT`, so restating a balance and setting a
-  credit limit failed the preflight in every deployed environment.
-  `uv run pytest` green (953).
 
 ## Next steps
 
@@ -141,12 +147,11 @@ and a cap on LLM spending — see **Next steps**.
          missing.
       4. **The rest of the frontend.** The foundation is in (`just web`).
          Done: the dashboard, the whole Transacciones surface, the
-         connect-your-bank guide, `/cuentas` and the `/guias` section. What is
-         left is screens, not plumbing: merchant review, the spending summary
-         and reports, and configuration. `docs/frontend-integration.md` is
-         still the contract each of them has to honour. Nothing is deployed,
-         and hosting is a live question again — see **Deployment** in
-         [docs/decisions.md](docs/decisions.md).
+         connect-your-bank guide, `/cuentas`, `/comercios` and the `/guias`
+         section. What is left is two screens, not plumbing: the spending
+         summary and reports, and configuration — both still disabled in the
+         shell's nav. `docs/frontend-integration.md` is the contract each of
+         them has to honour.
 - [ ] **Three account edits the API cannot do, so the app cannot offer
       them.** Reopening a closed account (`close` is one-way and there is no
       inverse); deleting one outright (deliberate — a closed account still

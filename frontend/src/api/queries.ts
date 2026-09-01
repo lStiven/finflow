@@ -30,6 +30,11 @@ export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
 export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
 export type Merchant =
   components["schemas"]["personal_finance__contexts__merchant__presentation__http__router__MerchantResponse"];
+export type MerchantDetail = components["schemas"]["MerchantDetailResponse"];
+/** One spelling a merchant's name arrives under. */
+export type MerchantAlias = components["schemas"]["AliasResponse"];
+export type MerchantCategory = components["schemas"]["MerchantCategory"];
+export type MerchantSort = components["schemas"]["MerchantSort"];
 export type CategoryOption = components["schemas"]["CategoryResponse"];
 export type InstrumentKind = components["schemas"]["InstrumentKind"];
 
@@ -154,12 +159,58 @@ export const summaryQuery = (
       ),
   });
 
+/* --------------------------------------------------------------- merchants */
+
 /** Enough merchants to populate a filter, newest activity first. */
 export const merchantsForFilterQuery = queryOptions({
   queryKey: [...queryKeys.merchants, "filter"],
   queryFn: () => unwrap(api.GET("/merchants", { params: { query: { limit: 100 } } })),
   staleTime: 5 * 60_000,
 });
+
+export type MerchantFilters = {
+  search?: string;
+  /**
+   * A `MerchantCategory`, but typed as a string: it reaches this screen from
+   * the URL, where anything can be written, and the vocabulary itself is read
+   * from the catalogue rather than hardcoded here. The server is what
+   * validates it — an unknown value is a 422, which is the right answer to a
+   * hand-edited address.
+   */
+  category?: string;
+  /** `true` is the review queue. Omitted means every merchant. */
+  needs_review?: boolean;
+  sort?: MerchantSort;
+  limit?: number;
+  offset?: number;
+};
+
+export const merchantsQuery = (filters: MerchantFilters = {}) =>
+  queryOptions({
+    queryKey: [...queryKeys.merchants, "list", filters],
+    queryFn: () =>
+      unwrap(
+        api.GET("/merchants", {
+          // Undefined entries are dropped by the serializer, which is what
+          // keeps `category` and `sort` from ever being sent empty — an enum
+          // parameter sent empty is a 422, never "no filter".
+          params: {
+            query: { ...filters, category: filters.category as MerchantCategory },
+          },
+        }),
+      ),
+  });
+
+export const merchantQuery = (merchantId: string) =>
+  queryOptions({
+    queryKey: [...queryKeys.merchants, "detail", merchantId],
+    queryFn: () =>
+      unwrap(
+        api.GET("/merchants/{merchant_id}", {
+          params: { path: { merchant_id: merchantId } },
+        }),
+      ),
+  });
 
 /* --------------------------------------------------------------- ingestion */
 
@@ -474,4 +525,131 @@ export function useCloseAccount(
       client.invalidateQueries({ queryKey: queryKeys.summary });
     },
   });
+}
+
+/* --------------------------------------------------- mutations: comercios */
+
+/**
+ * Every merchant write ripples further than the merchant list.
+ *
+ * The canonical merchant travels on each movement (`transaction.merchant`)
+ * and it is what labels the buckets of `/financial/summary?group_by=merchant`
+ * — so renaming one, moving a spelling or merging two leaves the old name
+ * sitting on a list and on a chart unless those go too. Invalidating the
+ * whole `merchants` family rather than one key is deliberate: `move` returns
+ * the *target* merchant, not the one in the path, and both of them changed.
+ */
+function useMerchantMutation<TBody>(
+  mutationFn: (body: TBody) => Promise<MerchantDetail>,
+): UseMutationResult<MerchantDetail, Error, TBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.merchants });
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+type EditMerchantBody = components["schemas"]["EditMerchantPayload"];
+
+/**
+ * A new name, a new category, or both — and either one counts as reviewing
+ * it, so the merchant leaves the queue as a side effect of being edited.
+ *
+ * The payload refuses to be empty (422): a caller must send something to
+ * change, which is why the form only submits fields that actually differ.
+ */
+export function useEditMerchant(
+  merchantId: string,
+): UseMutationResult<MerchantDetail, Error, EditMerchantBody> {
+  return useMerchantMutation((body) =>
+    unwrap(
+      api.PATCH("/merchants/{merchant_id}", {
+        params: { path: { merchant_id: merchantId } },
+        body,
+      }),
+    ),
+  );
+}
+
+/** "It is fine as it is", guessed spellings included. Clears the review flag. */
+export function useConfirmMerchant(
+  merchantId: string,
+): UseMutationResult<MerchantDetail, Error, void> {
+  return useMerchantMutation(() =>
+    unwrap(
+      api.POST("/merchants/{merchant_id}/confirm", {
+        params: { path: { merchant_id: merchantId } },
+      }),
+    ),
+  );
+}
+
+type MoveAliasBody = components["schemas"]["MoveAliasPayload"];
+
+/**
+ * This spelling belongs to a different merchant.
+ *
+ * Returns the merchant it moved *to*, not the one it came from. Permanent in
+ * the sense that matters: from here on that spelling resolves by exact match
+ * and no rule re-derives where it belongs — undoing it means moving it back,
+ * not waiting for the system to change its mind.
+ */
+export function useMoveAlias(
+  merchantId: string,
+): UseMutationResult<MerchantDetail, Error, MoveAliasBody> {
+  return useMerchantMutation((body) =>
+    unwrap(
+      api.POST("/merchants/{merchant_id}/aliases/move", {
+        params: { path: { merchant_id: merchantId } },
+        body,
+      }),
+    ),
+  );
+}
+
+type SplitAliasBody = components["schemas"]["SplitAliasPayload"];
+
+/**
+ * This spelling is its own business. Returns the merchant just created.
+ *
+ * Taking the last spelling out is a 409 — a merchant with none does not
+ * exist — so the screen refuses it before the call (`lastAliasBlocker`),
+ * which guards the move above for exactly the same reason.
+ */
+export function useSplitAlias(
+  merchantId: string,
+): UseMutationResult<MerchantDetail, Error, SplitAliasBody> {
+  return useMerchantMutation((body) =>
+    unwrap(
+      api.POST("/merchants/{merchant_id}/aliases/split", {
+        params: { path: { merchant_id: merchantId } },
+        body,
+      }),
+    ),
+  );
+}
+
+type MergeMerchantsBody = components["schemas"]["MergeMerchantsPayload"];
+
+/**
+ * Two records, one business. The merchant in the path survives and takes
+ * everything the other had; the absorbed one stops existing.
+ *
+ * There is no unmerge, which is the whole reason this one asks first.
+ */
+export function useMergeMerchants(
+  merchantId: string,
+): UseMutationResult<MerchantDetail, Error, MergeMerchantsBody> {
+  return useMerchantMutation((body) =>
+    unwrap(
+      api.POST("/merchants/{merchant_id}/merge", {
+        params: { path: { merchant_id: merchantId } },
+        body,
+      }),
+    ),
+  );
 }

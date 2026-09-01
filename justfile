@@ -499,6 +499,18 @@ _web-publish stack profile project:
 
     (cd {{frontend_dir}} && npm run build)
 
+    # The project is created here rather than by `pages deploy`, which asks two
+    # questions when it does not find one — and cannot ask them at all, because
+    # the deploy's output is piped below and a pipe has no terminal. Creating it
+    # explicitly also pins the production branch, which is the difference
+    # between publishing and filing a preview nobody can reach.
+    if ! (cd {{frontend_dir}} && npx wrangler pages project list 2>/dev/null) \
+        | grep -qE '(^|[^-[:alnum:]]){{project}}([^-[:alnum:]]|$)'; then
+        echo "creating Pages project {{project}} (production branch {{pages_branch}})"
+        (cd {{frontend_dir}} && npx wrangler pages project create '{{project}}' \
+            --production-branch '{{pages_branch}}')
+    fi
+
     # The output is captured as well as shown, because the address the app
     # ends up on is in it and nowhere else — see below.
     log=$(mktemp)

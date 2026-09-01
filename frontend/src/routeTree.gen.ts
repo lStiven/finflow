@@ -13,6 +13,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConectarRouteImport } from './routes/conectar'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PerfilRouteImport } from './routes/perfil'
+import { Route as ComerciosIndexRouteImport } from './routes/comercios/index'
+import { Route as ComerciosMerchantIdRouteImport } from './routes/comercios/$merchantId'
 import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
 import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
 import { Route as GuiasIndexRouteImport } from './routes/guias/index'
@@ -39,6 +41,16 @@ const LoginRoute = LoginRouteImport.update({
 const PerfilRoute = PerfilRouteImport.update({
   id: '/perfil',
   path: '/perfil',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ComerciosIndexRoute = ComerciosIndexRouteImport.update({
+  id: '/comercios/',
+  path: '/comercios/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ComerciosMerchantIdRoute = ComerciosMerchantIdRouteImport.update({
+  id: '/comercios/$merchantId',
+  path: '/comercios/$merchantId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CuentasIndexRoute = CuentasIndexRouteImport.update({
@@ -84,10 +96,12 @@ export interface FileRoutesByFullPath {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/comercios/': typeof ComerciosIndexRoute
   '/cuentas/': typeof CuentasIndexRoute
   '/guias/': typeof GuiasIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
@@ -97,10 +111,12 @@ export interface FileRoutesByTo {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/comercios': typeof ComerciosIndexRoute
   '/cuentas': typeof CuentasIndexRoute
   '/guias': typeof GuiasIndexRoute
   '/transacciones': typeof TransaccionesIndexRoute
@@ -111,10 +127,12 @@ export interface FileRoutesById {
   '/conectar': typeof ConectarRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
+  '/comercios/': typeof ComerciosIndexRoute
   '/cuentas/': typeof CuentasIndexRoute
   '/guias/': typeof GuiasIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
@@ -126,10 +144,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/comercios/'
     | '/cuentas/'
     | '/guias/'
     | '/transacciones/'
@@ -139,10 +159,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/comercios'
     | '/cuentas'
     | '/guias'
     | '/transacciones'
@@ -152,10 +174,12 @@ export interface FileRouteTypes {
     | '/conectar'
     | '/login'
     | '/perfil'
+    | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
+    | '/comercios/'
     | '/cuentas/'
     | '/guias/'
     | '/transacciones/'
@@ -166,10 +190,12 @@ export interface RootRouteChildren {
   ConectarRoute: typeof ConectarRoute
   LoginRoute: typeof LoginRoute
   PerfilRoute: typeof PerfilRoute
+  ComerciosMerchantIdRoute: typeof ComerciosMerchantIdRoute
   CuentasNuevaRoute: typeof CuentasNuevaRoute
   GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
   TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
   TransaccionesNuevaRoute: typeof TransaccionesNuevaRoute
+  ComerciosIndexRoute: typeof ComerciosIndexRoute
   CuentasIndexRoute: typeof CuentasIndexRoute
   GuiasIndexRoute: typeof GuiasIndexRoute
   TransaccionesIndexRoute: typeof TransaccionesIndexRoute
@@ -203,6 +229,20 @@ declare module '@tanstack/react-router' {
       path: '/perfil'
       fullPath: '/perfil'
       preLoaderRoute: typeof PerfilRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/comercios/': {
+      id: '/comercios/'
+      path: '/comercios'
+      fullPath: '/comercios/'
+      preLoaderRoute: typeof ComerciosIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/comercios/$merchantId': {
+      id: '/comercios/$merchantId'
+      path: '/comercios/$merchantId'
+      fullPath: '/comercios/$merchantId'
+      preLoaderRoute: typeof ComerciosMerchantIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cuentas/': {
@@ -262,10 +302,12 @@ const rootRouteChildren: RootRouteChildren = {
   ConectarRoute: ConectarRoute,
   LoginRoute: LoginRoute,
   PerfilRoute: PerfilRoute,
+  ComerciosMerchantIdRoute: ComerciosMerchantIdRoute,
   CuentasNuevaRoute: CuentasNuevaRoute,
   GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,
   TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
   TransaccionesNuevaRoute: TransaccionesNuevaRoute,
+  ComerciosIndexRoute: ComerciosIndexRoute,
   CuentasIndexRoute: CuentasIndexRoute,
   GuiasIndexRoute: GuiasIndexRoute,
   TransaccionesIndexRoute: TransaccionesIndexRoute,

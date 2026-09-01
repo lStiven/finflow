@@ -40,7 +40,14 @@ type Destination = {
   label: string;
   icon: ComponentType<{ className?: string }>;
   /** Absent until the screen exists — rendered as pending, never as a dead link. */
-  to?: "/" | "/transacciones" | "/cuentas" | "/perfil" | "/conectar" | "/guias";
+  to?:
+    | "/"
+    | "/transacciones"
+    | "/cuentas"
+    | "/comercios"
+    | "/perfil"
+    | "/conectar"
+    | "/guias";
 };
 
 const DESTINATIONS: Destination[] = [
@@ -48,7 +55,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
   { label: "Cuentas", icon: Wallet, to: "/cuentas" },
   { label: "Reportes", icon: BarChart3 },
-  { label: "Comercios", icon: Store },
+  { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },
 ];
 

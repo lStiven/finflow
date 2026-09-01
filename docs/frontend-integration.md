@@ -660,10 +660,21 @@ Reglas:
 - **Las correcciones del usuario son permanentes.** Mover un alias a otro
   comercio hace que esa grafía se resuelva por coincidencia exacta desde
   entonces; ninguna regla vuelve a decidir por él. Conviene que la UI lo diga.
+- **Ojo con qué comercio devuelve cada acción**, porque no siempre es el del
+  path: `move` devuelve el comercio **destino**, `split` el comercio **nuevo**
+  que acaba de crear, y `merge`, `confirm` y `PATCH` sí devuelven el del path.
+  Un cliente que meta la respuesta en la caché del comercio que abrió la
+  pantalla se pintaría a sí mismo con los datos de otro; invalida la familia
+  entera en vez de escribir una clave.
 - `fingerprint` acepta tanto la huella que viene en la lista de alias como el
   texto crudo detrás de ella.
-- **Sacar el último alias de un comercio → `409`**: un comercio sin alias no
-  existe. Ofrece "fusionar" en su lugar.
+- **Quitarle a un comercio su último alias → `409`**, y eso vale tanto para
+  `split` como para `move`: los dos lo dejarían sin ninguno, y un comercio sin
+  alias no existe. Comprobado contra la API: ambos responden
+  `'<grafía>' is the only way to reach this merchant`. La UI debería negarse
+  antes de llamar —el frontend lo hace en `merchants/edits.ts::lastAliasBlocker`—
+  y ofrecer las dos salidas que sí funcionan: renombrar ese comercio, o
+  fusionarlo con el que debía ser.
 - **Fusionar con uno mismo → `400`.** En un merge, el del path sobrevive.
 - **`times_seen` cuenta apariciones del nombre, no dinero.** El gasto lo
   responde Financial: `GET /financial/summary?group_by=merchant` para el
