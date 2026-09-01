@@ -211,7 +211,7 @@ function AccountLink() {
   return (
     <Link
       to="/perfil"
-      className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left transition-all duration-200 hover:bg-surface-raised"
+      className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-left transition-all duration-200 hover:bg-surface-raised"
       activeProps={{ className: "border-accent/25 bg-surface-raised" }}
     >
       <span
