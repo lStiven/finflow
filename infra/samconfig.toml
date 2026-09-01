@@ -55,7 +55,11 @@ parameter_overrides = [
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
-    "CorsOrigins=http://localhost:5173",
+    # El bundle de este stack. El subdominio **no** es el nombre del
+    # proyecto: `*.pages.dev` es único en todo Cloudflare, así que un nombre
+    # ya tomado recibe un sufijo — `finflow-dev.pages.dev` es de otra
+    # cuenta. Es el origen que imprime `just web-publish-dev`.
+    "CorsOrigins=http://localhost:5173,https://finflow-dev-2tc.pages.dev",
     # Cheaper on the free tier and plenty for a rehearsal environment.
     'IngestScheduleExpression="rate(5 minutes)"',
     # Both stacks poll now, each its own mailbox. This was DISABLED while the
@@ -102,7 +106,12 @@ parameter_overrides = [
     # — scheme and host, no path — and redeploy; the list is matched exactly,
     # so a custom domain is a second entry and a Pages preview URL can never
     # be one. Empty accepts no browser origin at all.
-    'CorsOrigins="http://localhost:5173"',
+    # El bundle de producción, publicado con `just web-publish`. El subdominio
+    # lo asigna Cloudflare y no es el nombre del proyecto: `finflow` ya estaba
+    # tomado. `http://localhost:5173` sigue aquí para poder apuntar el servidor
+    # de desarrollo a esta API; quítalo cuando deje de hacer falta, porque
+    # habilita a cualquier página servida en ese puerto, en cualquier máquina.
+    'CorsOrigins="https://finflow-apk.pages.dev,http://localhost:5173"',
     'IngestScheduleExpression="rate(1 minute)"',
     # Reads `IngestMailboxAddress` above, which is not development's. See the
     # note there before pointing two stacks at one account again.

@@ -452,6 +452,11 @@ web-build: (_require-env "frontend/.env.production")
 # where the bundle lives.
 pages_project := "finflow"
 
+# Must match the production branch the Pages project was created with, or every
+# upload lands as a preview: a subdomain of its own, per deploy, which can
+# never be in the API's exact-match CORS list.
+pages_branch := "master"
+
 # Log in once per machine before the first run:
 #   cd frontend && npx wrangler login
 #
@@ -494,18 +499,30 @@ _web-publish stack profile project:
 
     (cd {{frontend_dir}} && npm run build)
 
-    # `--branch main` is what makes this the project's production deployment.
-    # Without it Pages treats the upload as a preview and gives it a subdomain
-    # of its own, per deploy — and an origin that changes every time can never
-    # be in the API's CORS list, which is an exact-match list of origins.
-    (cd {{frontend_dir}} && npx wrangler pages deploy dist \
-        --project-name '{{project}}' --branch main --commit-dirty=true)
+    # The output is captured as well as shown, because the address the app
+    # ends up on is in it and nowhere else — see below.
+    log=$(mktemp)
+    trap 'rm -f "$log"' EXIT
 
-    # The bundle is served from an origin the API has never heard of until
-    # somebody adds it. That failure looks like a working app — the screens
-    # draw, the login posts, and the preflight is refused — so say it here,
-    # where the origin is known, rather than leaving it to a browser console.
-    origin="https://{{project}}.pages.dev"
+    # `--branch` has to name the project's production branch or Pages files
+    # the upload as a preview, on a subdomain of its own per deploy, which can
+    # never be in the API's exact-match CORS list.
+    (cd {{frontend_dir}} && npx wrangler pages deploy dist \
+        --project-name '{{project}}' --branch '{{pages_branch}}' \
+        --commit-dirty=true) 2>&1 | tee "$log"
+
+    # The subdomain is **not** the project name. `*.pages.dev` is globally
+    # unique, so a name already taken anywhere gets a random suffix
+    # (`finflow-dev` -> `finflow-dev-2tc`), and the guessed origin would then
+    # name a stranger's site. Read it from what was just published instead:
+    # every URL wrangler prints is `<deploy-or-branch>.<subdomain>.pages.dev`,
+    # so the last three labels are the production origin.
+    host=$(grep -oE 'https://[A-Za-z0-9.-]+\.pages\.dev' "$log" | tail -n 1 \
+        | sed 's|https://||' | awk -F. '{print $(NF-2)"."$(NF-1)"."$NF}')
+    origin="https://${host:-{{project}}.pages.dev}"
+
+    echo
+    echo "published at ${origin}"
     if ! grep -q "${origin}" {{justfile_directory()}}/infra/samconfig.toml; then
         echo
         echo "warning: ${origin} is not in CorsOrigins in infra/samconfig.toml."

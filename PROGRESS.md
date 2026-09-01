@@ -77,6 +77,10 @@ and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
+- 2026-09-01 — The frontend is live against development at
+  https://finflow-dev-2tc.pages.dev — headers, SPA fallback and the bundle
+  verified over HTTPS. Its calls fail the preflight until `just deploy-dev`
+  carries the origin now in `CorsOrigins`.
 - 2026-09-01 — The docs answer four questions without overlapping: deploying
   (new `docs/deploy.md`), running (`running.md`, now 646 lines instead of
   972), integrating (`frontend-integration.md`) and where to start

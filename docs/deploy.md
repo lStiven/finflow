@@ -220,10 +220,23 @@ y produce una app que carga bien y llama a la URL de ayer.
 **Y después, el paso que no hace el comando** — solo hace falta la primera
 vez, y cada vez que cambie el dominio:
 
-1. Copia el origen que imprime el despliegue (`https://<proyecto>.pages.dev`).
+1. Copia el origen que imprime el despliegue, en la línea `published at`.
 2. Añádelo a `CorsOrigins` en `infra/samconfig.toml`, en el entorno que
    corresponda.
 3. Vuelve a desplegar el backend (`just deploy-prod` / `just deploy-dev`).
+
+**No deduzcas ese origen del nombre del proyecto.** Los subdominios
+`*.pages.dev` son únicos en todo Cloudflare, así que un nombre ya tomado por
+otra cuenta recibe un sufijo al crearse: el proyecto `finflow-dev` se publica
+en `finflow-dev-2tc.pages.dev`, y `finflow-dev.pages.dev` es el sitio de un
+desconocido. Por eso la receta lee el origen de lo que acaba de publicar en
+vez de construirlo.
+
+La primera ejecución crea el proyecto y pregunta por su **rama de
+producción**. La respuesta tiene que coincidir con `pages_branch` en el
+`justfile` (`master`): si no, cada subida queda archivada como *preview*, en
+un subdominio distinto por despliegue que jamás podrá estar en la lista de
+CORS.
 
 Sin ese segundo despliegue **la app carga, se dibuja entera y ninguna llamada
 funciona**: el navegador las bloquea en el preflight. La receta avisa al
