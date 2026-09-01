@@ -55,7 +55,7 @@ parameter_overrides = [
     # One Gmail account behind both stacks, and the reader consumes what it
     # reads. Production polls it; this one would steal the messages. Flip the
     # two if the rehearsal environment ever needs the intake back.
-    "IngestScheduleState=DISABLED",
+    "IngestScheduleState=ENABLED",
     "LogRetentionDays=7",
 ]
 
@@ -95,6 +95,6 @@ parameter_overrides = [
     'CorsOrigins=""',
     'IngestScheduleExpression="rate(1 minute)"',
     # The one stack that reads the mailbox. See IngestScheduleState.
-    "IngestScheduleState=ENABLED",
+    "IngestScheduleState=DISABLED",
     "LogRetentionDays=30",
 ]
