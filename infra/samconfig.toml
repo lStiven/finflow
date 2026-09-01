@@ -49,8 +49,6 @@ parameter_overrides = [
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
-    # The deployed frontend's own origin is added by the template. This is
-    # the addition: a dev server on the laptop, pointed at this API.
     "CorsOrigins=http://localhost:5173",
     # Cheaper on the free tier and plenty for a rehearsal environment.
     'IngestScheduleExpression="rate(5 minutes)"',
@@ -81,17 +79,20 @@ resolve_s3 = true
 confirm_changeset = true
 parameter_overrides = [
     "EnvironmentName=production",
-    "ResourcePrefix=",
+    # Quoted, and it has to be: SAM's override parser accepts an empty value
+    # only between quotes — bare `ResourcePrefix=` is rejected before the
+    # deploy starts. Production is the only environment with empty values, so
+    # this surfaced on its very first deploy and never on `deploy-dev`.
+    'ResourcePrefix=""',
     "IngestMailboxAddress=finflowingest@gmail.com",
     "JwtSecretParameter=/finflow/production/jwt-secret",
     # Empty deploys, but the dead-letter alarms then page nobody.
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
-    # Empty on purpose. The only browser origin production answers is the
-    # CloudFront distribution this same stack creates, and the template adds
-    # that itself — nothing to copy here, nothing to go stale.
-    "CorsOrigins=",
+    # Empty until there is a frontend on its own origin. See
+    # docs/frontend-integration.md.
+    'CorsOrigins=""',
     'IngestScheduleExpression="rate(1 minute)"',
     # The one stack that reads the mailbox. See IngestScheduleState.
     "IngestScheduleState=ENABLED",

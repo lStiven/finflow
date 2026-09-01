@@ -53,23 +53,24 @@ ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
 account and linking its alerts), `/perfil`, the `/conectar` onboarding guide
 and the `/guias` section all run against the local emulator.
 
-The frontend now has somewhere to live: a private S3 bucket behind CloudFront,
-declared in the same SAM template as the API, and `just web-deploy-prod` /
-`-dev` builds and publishes it in one command. Declared but not yet run — the
-production stack does not exist, so this is where the first `just deploy-prod`
-is.
+The frontend still has nowhere to live. S3 plus CloudFront was built, deployed
+and reverted on 2026-09-01: this AWS account is not allowed to create a
+CloudFront distribution at all, and lifting that needs a support case nobody
+is waiting for. See **Decisions → Deployment**. Hosting is an open question
+again.
 
-What is missing for production is the production stack itself (its AWS
-profile, its three SSM secrets, its data plane), observability's one manual
-step, and a cap on LLM spending — see **Next steps**.
+What is missing for production is somewhere to serve the frontend, the
+production stack itself (its AWS profile, its three SSM secrets, its data
+plane), observability's one manual step, and a cap on LLM spending — see
+**Next steps**.
 
 ## Last completed
 
-- 2026-08-31 — The app wears its own brand: favicon, Apple touch icon,
-  manifest, link-preview card and the mark itself on the rail, the login panel
-  and the welcome dialog, all derived from the supplied artwork by
-  `frontend/brand/build-icons.py`. `just web-check` green (139); `just prepare`
-  clean apart from one pre-existing pyright error in `gemini.py`.
+- 2026-09-01 — The CloudFront hosting is out of the tree again, after the
+  account refused to create a distribution. What stayed is what was never
+  about the frontend: `IngestScheduleState`, and the quoting that lets
+  production's empty parameters through SAM's parser at all. AWS holds
+  nothing — every attempt rolled back and deleted its own resources.
 
 ## Next steps
 
@@ -82,9 +83,8 @@ step, and a cap on LLM spending — see **Next steps**.
       2. The three secrets under `/finflow/production/*`, none of which exist
          (`just secret-put`, once each). The development three do.
       3. `just provision-prod` — the data plane, unprefixed.
-      4. `just deploy-prod`, then `just web-deploy-prod`, then `just smoke`.
-         The first one is slow: creating the CloudFront distribution is ten
-         to fifteen minutes and CloudFormation waits for it.
+      4. `just deploy-prod`, then `just smoke-prod <ApiUrl>`. This deploys
+         the API only: where the frontend gets served from is open again.
       Deploying `finflow-dev` again is part of this, not optional: it is what
       turns that stack's mailbox polling off, and until it runs both stacks
       race for every forwarded email.
@@ -115,9 +115,9 @@ step, and a cap on LLM spending — see **Next steps**.
          connect-your-bank guide, `/cuentas` and the `/guias` section. What is
          left is screens, not plumbing: merchant review, the spending summary
          and reports, and configuration. `docs/frontend-integration.md` is
-         still the contract each of them has to honour. Hosting is no longer
-         the blocker: it is declared and one command away (`just
-         web-deploy-prod`).
+         still the contract each of them has to honour. Nothing is deployed,
+         and hosting is a live question again — see **Decisions →
+         Deployment**.
 - [ ] **Three account edits the API cannot do, so the app cannot offer
       them.** Reopening a closed account (`close` is one-way and there is no
       inverse); deleting one outright (deliberate — a closed account still
@@ -777,41 +777,39 @@ step, and a cap on LLM spending — see **Next steps**.
   Both Dockerfile stages sit on Lambda's own base image because `bcrypt` is a
   compiled extension: wheels built against another distribution's glibc import
   fine and fail at runtime.
-- **The frontend is hosted by the same stack that serves it data**
-  (2026-08-31). A private S3 bucket, Origin Access Control, and a CloudFront
-  distribution, in `infra/template.yaml` beside the five functions. The
-  alternative considered was Cloudflare Pages, which is genuinely less work —
-  one command, SPA fallback and HTTPS included, free. It was rejected for one
-  reason that outweighs the convenience: the frontend's origin and the API's
-  `API_CORS_ORIGINS` have to agree, and on a second provider they agree only
-  because somebody copied a domain into `samconfig.toml`. In one stack the
-  template passes `!GetAtt WebDistribution.DomainName` to the API directly, so
-  the value cannot go stale — and a stale one fails as a CORS error in a
-  browser, which reads as a broken app and never as a wrong deploy parameter.
-  What it costs is a cache invalidation per release and a distribution that
-  takes ten minutes to create the first time. `CorsOrigins` survives as the
-  parameter for *additional* origins only.
-- **`PriceClass_All`, deliberately, against the cheaper default.** The
-  audience is in South America, which the cheaper classes serve from another
-  continent — the one thing a CDN is for. Free either way inside CloudFront's
-  permanent 1 TB tier.
-- **403 and 404 are answered with `/index.html` and a 200.** Client-side
-  routing means `/cuentas` is a route in the bundle and not a key in the
-  bucket. Without the rewrite every deep link and every refresh away from `/`
-  breaks — and only in the deployed app, never under `vite dev`, which is the
-  expensive kind of bug. The 200 matters as much as the rewrite: a 404 would
-  make the browser treat a working screen as an error page.
-- **The bundle is uploaded in two passes with opposite caching.** `assets/`
-  carries content hashes, so it is immutable for a year; `index.html` is the
-  one fixed name that points at those hashes and goes up `no-cache`.
-  Cached, it serves the previous bundle from the browser long after the
-  invalidation cleared the edge — the failure looks like a deploy that did
-  nothing.
-- **`frontend/.env.production` is generated by the deploy, not maintained.**
-  It holds exactly one value, the stack's own `ApiUrl`. Maintained by hand it
-  is the second place the two halves have to agree, and the one that goes
-  stale silently: the app loads, looks right, and fails every call against
-  yesterday's URL.
+- **The frontend is not hosted on this AWS account, because it cannot be**
+  (2026-09-01). S3 plus CloudFront was written, reviewed and deployed, and
+  died on a gate no template can pass: *"Your account must be verified before
+  you can add new CloudFront resources."* An account-level block AWS puts on
+  young accounts — CloudFront is a favourite of whoever wants a trustworthy
+  domain in front of a phishing page — and lifting it means a support case and
+  a wait. The bucket, the Origin Access Control and the response headers
+  policy all created fine; the distribution alone is gated. Reverted rather
+  than left half-built, because a template that cannot deploy blocks every
+  unrelated change to the same stack, and this one had already cost three
+  rollbacks.
+- **What that design was for, in case it comes back.** The reason to put
+  hosting in the same stack was never S3: it was that the frontend's origin
+  and the API's `API_CORS_ORIGINS` have to agree, and `!GetAtt
+  WebDistribution.DomainName` made them agree by construction. Anywhere else
+  — Cloudflare Pages, Amplify, a bucket behind another CDN — that agreement
+  is a domain somebody copies into `samconfig.toml`, and a stale copy fails as
+  a CORS error in a browser, which reads as a broken app and never as a wrong
+  deploy parameter. Whatever replaces this has to answer that, and the answer
+  is probably a documented step rather than a mechanism. The rest of what was
+  built is ordinary and worth redoing on any host: a rewrite of 403/404 to
+  `/index.html` with a **200** (without it every deep link and refresh away
+  from `/` breaks, and only in the deployed app, never under `vite dev`), and
+  a two-pass upload — `assets/` is content-hashed and immutable for a year,
+  `index.html` goes up `no-cache` or the browser serves the previous bundle
+  long after the edge was cleared.
+- **The IAM policy grew a second file and then lost its reason**
+  (2026-09-01). Granting CloudFront pushed `finflow-deploy-policy.json` past
+  the 6,144-character cap on a managed policy — it was at 6,006, so the
+  headroom was 138 characters that nothing in the file mentioned. The split
+  into a second attached policy was right and is worth remembering the day
+  anything else is added; the CloudFront half of it is now unused, and
+  `finflow-web-deploy` can be detached from `dev-proyecto-ddd` in IAM.
 - **One stack polls the mailbox, and it is production** (`IngestScheduleState`,
   2026-08-31). The `dev-` prefix separates tables, queues and the bus; it
   cannot separate a Gmail account. The reader searches `UNSEEN` and marks what
@@ -1028,7 +1026,7 @@ also open as a tab.
 The slogan lives only in metadata — `<meta description>`, `og:description`,
 the manifest — and nowhere on screen. That is a gap, not an oversight: no
 placement was agreed. The `og:*` URLs are relative because the address belongs
-to the CloudFront distribution and the bundle is not told it.
+to whatever ends up serving the bundle, which the bundle is not told.
 
 ### Frontend (2026-08-29)
 

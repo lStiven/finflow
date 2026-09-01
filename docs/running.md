@@ -467,51 +467,6 @@ just web                                             # http://localhost:5173
 **Todo lo que pongas en esos ficheros viaja dentro del bundle.** No son
 secretos: cualquiera que abra la app puede leerlos. Nunca metas ahí una clave.
 
-### Publicarlo
-
-El bundle son ficheros: no hay servidor que encender. Van a un bucket de S3
-**privado** y los sirve CloudFront, que es quien pone el HTTPS y el nombre que
-nadie tiene que comprar. Las dos piezas están en `infra/template.yaml`, en el
-mismo stack que la API, así que se crean con `just deploy-dev` / `just
-deploy-prod` como todo lo demás.
-
-```bash
-just deploy-prod        # una vez: crea (o actualiza) API, bucket y distribución
-just web-deploy-prod    # cada vez que cambie la interfaz
-```
-
-`just web-deploy-prod` hace los cuatro pasos en orden y termina imprimiendo la
-dirección de la app:
-
-1. **Genera `frontend/.env.production`** con la `ApiUrl` del propio stack. No
-   se mantiene a mano: es el valor que las dos mitades tienen que compartir, y
-   copiado se queda viejo sin avisar —una app que carga, se ve bien y falla en
-   cada llamada.
-2. `npm run build`.
-3. Sube `dist/` en **dos pasadas**, porque las dos mitades del bundle quieren
-   lo contrario: lo de `assets/` lleva un hash en el nombre y se cachea un año;
-   `index.html` es el nombre fijo que apunta a esos hashes y va con
-   `no-cache`, o el navegador sigue sirviendo la versión anterior.
-4. Invalida la caché del borde.
-
-Lo mismo con `-dev` contra el stack de development.
-
-**El CORS del frontend desplegado no se configura.** El template le pasa a la
-API el origen de su propia distribución (`API_CORS_ORIGINS`), así que no hay
-ningún sitio donde copiarlo ni donde se pueda quedar viejo. `CorsOrigins` en
-`infra/samconfig.toml` es solo para los **añadidos**: un `localhost:5173`
-apuntando a una API desplegada, por ejemplo.
-
-**Las rutas profundas funcionan porque la distribución las traduce.** Pedir
-`/cuentas` es una ruta del router, no una clave del bucket; S3 responde 403.
-La distribución convierte 403 y 404 en `/index.html` con un 200. Sin eso,
-cualquier recarga fuera de `/` se rompe, y solo en el entorno desplegado —
-nunca en `just web`.
-
-**La primera vez tarda.** Crear la distribución son diez o quince minutos, y
-`just deploy-prod` no acaba hasta que CloudFormation la da por lista. Las
-veces siguientes ya no.
-
 ### Lo que se rompe y no lo parece
 
 **El frontend no sabe si el backend está levantado, y la interfaz pinta
@@ -534,13 +489,12 @@ or password*. Contra un entorno desplegado hay que **registrarse** desde la
 propia pantalla de registro, una vez.
 
 **El origen del frontend tiene que estar en `API_CORS_ORIGINS` del backend.**
-El del frontend desplegado lo pone el template solo (ver
-[Publicarlo](#publicarlo)); esto va por los demás. El puerto 5173 ya viene
-puesto en las plantillas, y por eso `vite.config.ts` lo fija con `strictPort`:
-un puerto que se mueva solo produce un error de CORS que parece un fallo del
-cliente. Si sirves el frontend desde otro origen —otro puerto, un túnel, un
-dominio— hay que añadirlo **y volver a desplegar** el backend. Un origen
-ausente falla en el *preflight*, antes de que tu código vea nada.
+El puerto 5173 ya viene puesto en las plantillas, y por eso `vite.config.ts`
+lo fija con `strictPort`: un puerto que se mueva solo produce un error de CORS
+que parece un fallo del cliente. Si sirves el frontend desde otro origen —otro
+puerto, un túnel, un dominio— hay que añadirlo **y volver a desplegar** el
+backend. Un origen ausente falla en el *preflight*, antes de que tu código vea
+nada.
 
 **La URL que Vite imprime como `Network` (`172.17.x.x`) no funciona desde el
 navegador del host.** Es la dirección del contenedor en la red interna de

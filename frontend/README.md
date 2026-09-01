@@ -37,20 +37,7 @@ Two consequences worth knowing before they cost you an afternoon:
 
 Everything in these files ships inside the bundle — never put a secret there.
 Whatever origin serves this app must also be in the backend's
-`API_CORS_ORIGINS`, or every call dies in preflight. The deployed app is the
-exception and needs nothing: the SAM template hands the API its own CloudFront
-origin.
-
-### Publishing it
-
-```bash
-just web-deploy-prod     # or -dev
-```
-
-One command: it writes `.env.production` from the stack's `ApiUrl`, builds,
-uploads to the private S3 bucket behind CloudFront, invalidates the edge and
-prints the address. `.env.production` is generated, not maintained — see
-[`docs/running.md`](../docs/running.md#publicarlo).
+`API_CORS_ORIGINS`, or every call dies in preflight.
 
 The whole picture, for all three environments and both halves:
 [`docs/running.md`](../docs/running.md#el-frontend).
