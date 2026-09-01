@@ -53,38 +53,41 @@ ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
 account and linking its alerts), `/perfil`, the `/conectar` onboarding guide
 and the `/guias` section all run against the local emulator.
 
-The frontend still has nowhere to live. S3 plus CloudFront was built, deployed
-and reverted on 2026-09-01: this AWS account is not allowed to create a
-CloudFront distribution at all, and lifting that needs a support case nobody
-is waiting for. See **Decisions → Deployment**. Hosting is an open question
-again.
+The frontend lives on **Cloudflare Pages**, not on this AWS account: S3 plus
+CloudFront was built, deployed and reverted on 2026-09-01 because the account
+is not allowed to create a distribution at all. `just web-publish` reads the
+stack's `ApiUrl`, builds and uploads in one command. The support case that
+would lift the CloudFront block is worth opening anyway — until it answers,
+this is where the bundle is served from. See **Decisions → Deployment**.
 
-What is missing for production is somewhere to serve the frontend, the
-production stack itself (its AWS profile, its three SSM secrets, its data
-plane), observability's one manual step, and a cap on LLM spending — see
-**Next steps**.
+What is missing for production is the production stack itself (its three SSM
+secrets and its data plane; the AWS profile now exists), observability's one
+manual step, and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
-- 2026-09-01 — The CloudFront hosting is out of the tree again, after the
-  account refused to create a distribution. What stayed is what was never
-  about the frontend: `IngestScheduleState`, and the quoting that lets
-  production's empty parameters through SAM's parser at all. AWS holds
-  nothing — every attempt rolled back and deleted its own resources.
+- 2026-09-01 — The bundle has a host again: `just web-publish` builds against
+  a stack's own `ApiUrl` and uploads to Cloudflare Pages, with `_headers` and
+  `_redirects` carrying what CloudFront's response-headers policy and error
+  responses used to. `just web-check` green (139); the template still
+  transforms for both environments.
 
 ## Next steps
 
 - [ ] **Next: the production stack does not exist yet, and everything below
       waits on it.** The frontend is what friends will open, and it can only
       be published against a stack. In order:
-      1. An AWS profile named `finflow-production`. It does not exist on this
-         machine — see **Open questions**, where the two environments still
-         resolve to one account and one IAM user.
-      2. The three secrets under `/finflow/production/*`, none of which exist
-         (`just secret-put`, once each). The development three do.
-      3. `just provision-prod` — the data plane, unprefixed.
-      4. `just deploy-prod`, then `just smoke-prod <ApiUrl>`. This deploys
-         the API only: where the frontend gets served from is open again.
+      1. The three secrets under `/finflow/production/*`, none of which exist
+         (`just secret-put`, once each). The development three do. The
+         `finflow-production` profile itself is configured now, though it
+         still resolves to the same account as `finflow-dev` — see
+         **Open questions**.
+      2. `just provision-prod` — the data plane, unprefixed.
+      3. `just deploy-prod`, then `just smoke-prod <ApiUrl>`.
+      4. `just web-publish`, then the origin it prints into `CorsOrigins`
+         (`infra/samconfig.toml`) and `just deploy-prod` once more. The
+         second deploy is not optional: until it runs, the published app
+         loads and every call it makes fails the preflight.
       Deploying `finflow-dev` again is part of this, not optional: it is what
       turns that stack's mailbox polling off, and until it runs both stacks
       race for every forwarded email.
@@ -200,9 +203,9 @@ plane), observability's one manual step, and a cap on LLM spending — see
   `infra/samconfig.toml` and `docs/running.md` overstate the isolation.
   It stops being a note the moment production holds other people's finances,
   which is the next thing that happens: a mistyped profile then points a
-  rehearsal command at real money. Worse, `finflow-production` is not
-  configured on this machine at all, so every `*-prod` recipe fails outright —
-  which is at least the safe direction to fail in.
+  rehearsal command at real money. The `finflow-production` profile is
+  configured on this machine as of 2026-09-01, so the `*-prod` recipes now run
+  — they simply run against the same account as the `dev-` ones.
 
 ## Decisions
 
@@ -795,14 +798,22 @@ plane), observability's one manual step, and a cap on LLM spending — see
   — Cloudflare Pages, Amplify, a bucket behind another CDN — that agreement
   is a domain somebody copies into `samconfig.toml`, and a stale copy fails as
   a CORS error in a browser, which reads as a broken app and never as a wrong
-  deploy parameter. Whatever replaces this has to answer that, and the answer
-  is probably a documented step rather than a mechanism. The rest of what was
-  built is ordinary and worth redoing on any host: a rewrite of 403/404 to
-  `/index.html` with a **200** (without it every deep link and refresh away
-  from `/` breaks, and only in the deployed app, never under `vite dev`), and
-  a two-pass upload — `assets/` is content-hashed and immutable for a year,
-  `index.html` goes up `no-cache` or the browser serves the previous bundle
-  long after the edge was cleared.
+  deploy parameter. Cloudflare Pages does not get that for free, so
+  `_web-publish` ends by grepping `samconfig.toml` for the origin it just
+  published to and saying so when it is absent — a check, where the template
+  had a guarantee. The rest of what was built came back unchanged in form:
+  `_redirects` rewrites everything to `/index.html` with a **200** (without it
+  every deep link and refresh away from `/` breaks, and only in the published
+  app, never under `vite dev`), and `_headers` marks `/assets/*` immutable for
+  a year while leaving `index.html` alone — Pages revalidates it per request,
+  which is the invalidation this no longer has to buy.
+- **`wrangler` is a devDependency whose install scripts are deliberately not
+  approved** (2026-09-01). It arrives with two — `workerd` and a second copy
+  of `esbuild` — and `package.json`'s `allowScripts` covers neither. Both
+  exist for `wrangler dev`, which this repo never runs: a Pages direct upload
+  of a built `dist/` bundles nothing and starts no worker, and `npx wrangler
+  --version` answers fine with the scripts unrun. Approving them to silence
+  the npm warning would buy nothing and widen what executes at install time.
 - **The IAM policy grew a second file and then lost its reason**
   (2026-09-01). Granting CloudFront pushed `finflow-deploy-policy.json` past
   the 6,144-character cap on a managed policy — it was at 6,006, so the

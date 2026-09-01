@@ -90,8 +90,12 @@ parameter_overrides = [
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
-    # Empty until there is a frontend on its own origin. See
-    # docs/frontend-integration.md.
+    # The bundle is on Cloudflare Pages while this account cannot create a
+    # CloudFront distribution, so the frontend is on an origin the API does
+    # not otherwise know. Put the exact origin `just web-publish` prints here
+    # — scheme and host, no path — and redeploy; the list is matched exactly,
+    # so a custom domain is a second entry and a Pages preview URL can never
+    # be one. Empty accepts no browser origin at all.
     'CorsOrigins=""',
     'IngestScheduleExpression="rate(1 minute)"',
     # The one stack that reads the mailbox. See IngestScheduleState.

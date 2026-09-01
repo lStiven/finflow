@@ -1,0 +1,19 @@
+# What CloudFront's ResponseHeadersPolicy used to attach, in the form
+# Cloudflare Pages reads. The headers are the same ones the SAM template
+# declared; only the thing that sends them changed. Vite copies everything in
+# public/ to the root of dist/ untouched, which is what Pages looks for.
+#
+# HSTS because the app is HTTPS-only from here on, and a bearer token in
+# localStorage is worth saying so about.
+/*
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+
+# Every file under assets/ carries a content hash in its name, so a changed
+# file is a different name and this can never serve a stale one. index.html is
+# deliberately left out: Pages revalidates it on every request, and that is
+# what makes a new deploy visible without an invalidation to buy.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

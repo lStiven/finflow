@@ -1,0 +1,10 @@
+# Client-side routing: the browser asks for /cuentas, which is a route in the
+# bundle and not a file in the upload. Without this Pages answers 404 — every
+# deep link and every refresh away from `/` breaks, and only in the published
+# app, never in `vite dev`. This is the CloudFront CustomErrorResponses rule
+# in the form Pages reads.
+#
+# 200, not 302: the address bar has to keep the route the router is about to
+# read. And it must stay last, below any real redirect, because the first
+# matching rule wins.
+/*  /index.html  200

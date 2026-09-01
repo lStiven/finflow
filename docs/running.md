@@ -447,6 +447,7 @@ fichero:
 |---|---|---|---|
 | `just web` | development | `frontend/.env.development` | Servidor de desarrollo con recarga en caliente |
 | `just web-build` | production | `frontend/.env.production` | Construye `dist/` para publicar |
+| `just web-publish` | production | `frontend/.env.production`, generado | Construye y sube el bundle a Cloudflare Pages |
 
 Solo hay una variable que importe: **`VITE_API_BASE_URL`**, y es la que decide
 contra qué backend habla. Los tres entornos del backend no son tres
@@ -515,19 +516,46 @@ Si no lo haces, `just openapi-check` falla porque el contrato versionado ya no
 es el que produce el código. Ese es el punto del montaje: un endpoint que
 cambia rompe la compilación del frontend en vez de romper una pantalla.
 
-### Publicarlo todavía no está resuelto
+### Publicarlo: Cloudflare Pages
 
-`just web-build` deja un `dist/` estático, pero **nada en `infra/template.yaml`
-lo publica**: no hay bucket de S3 ni CloudFront. Hoy el frontend solo corre en
-el servidor de desarrollo, contra el backend que le digas. Publicarlo es
-trabajo pendiente, no un paso que falte documentar.
+El bundle vive en **Cloudflare Pages**, no en S3 con CloudFront. La razón es
+de cuenta, no de diseño: AWS bloquea la creación de distribuciones de
+CloudFront en cuentas jóvenes hasta que Support las verifica, y las
+declaraciones de hosting salieron del template para que el backend pudiera
+seguir desplegándose. Volver a CloudFront cuando contesten es devolverlas y
+borrar la receta.
 
-Cuando llegue, hay que resolver dos cosas a la vez: `frontend/.env.production`
-con la URL real de la API, y el origen desde el que se sirva añadido a
-`API_CORS_ORIGINS`. `just web-build` se niega a correr sin
-`frontend/.env.production`, a propósito: sin él Vite mete `undefined` en el
-bundle y la app revienta al cargar, un fallo que solo descubriría quien
-despliega.
+```bash
+cd frontend && npx wrangler login   # una vez por máquina
+just web-publish                    # contra producción
+just web-publish-dev                # contra el stack de development
+```
+
+`just web-publish` hace las tres cosas que tienen que ir juntas: lee la
+`ApiUrl` del stack, **genera** `frontend/.env.production` con ella —no la
+copies a mano, ese es justo el valor que se queda viejo— construye, y sube
+`dist/`. Es *direct upload*: lo que se publica es el `dist/` de tu árbol de
+trabajo, y Cloudflare nunca necesita acceso al repositorio.
+
+**El origen de Pages tiene que estar en `CorsOrigins`.** Es un despliegue en
+otro dominio: `https://<proyecto>.pages.dev` no lo conoce la API hasta que
+alguien lo añade en `infra/samconfig.toml` y **vuelve a desplegar el backend**.
+La receta avisa al terminar si no lo encuentra, porque el fallo no se parece a
+un fallo: la app carga, las pantallas se dibujan y cada llamada muere en el
+*preflight*. La lista es de coincidencia exacta, así que un dominio propio es
+una entrada más, y las URL de *preview* de Pages —un subdominio distinto por
+despliegue— no pueden estar en ella. Por eso la receta publica siempre en la
+rama de producción del proyecto y nunca como preview.
+
+Dos ficheros en `frontend/public/` sostienen lo que antes hacía CloudFront, y
+Vite los copia tal cual a la raíz de `dist/`:
+
+- **`_headers`** — HSTS, `nosniff`, `X-Frame-Options: DENY` y el
+  *referrer-policy*, más `immutable` para `/assets/*`. Es la
+  `ResponseHeadersPolicy` que declaraba el template.
+- **`_redirects`** — `/* /index.html 200`, el equivalente de las
+  `CustomErrorResponses`. Sin él, `/cuentas` recargado desde el navegador es un
+  404: la ruta existe en el bundle, no en la subida.
 
 ---
 
