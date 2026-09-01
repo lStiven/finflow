@@ -173,35 +173,6 @@ en la tabla y lo gastan en el endpoint real
 operador, no una puerta trasera — necesita permisos de escritura en DynamoDB y
 no está expuesto por HTTP.
 
-### 2.c ¿El correo sale de verdad?
-
-Es lo único del flujo de credenciales que ninguna prueba puede responder: los
-códigos, los tickets y las escrituras condicionales se prueban solos, pero
-"el mensaje salió y llegó" no. Y un despliegue que no puede enviar es uno
-donde nadie puede registrarse ni recuperar su cuenta.
-
-```bash
-just mail-check                          # configuración y login, sin enviar nada
-just mail-check tu@correo.com            # …y un mensaje real
-just mail-check tu@correo.com .env.production
-```
-
-Recorre los mismos cuatro pasos que hace la API —configuración, conectar,
-autenticar, enviar— y dice cuál falló, porque fallan por razones distintas.
-Sin dirección se detiene después del login: comprueba la credencial sin dejar
-nada en el buzón de nadie.
-
-El error más común es un `535`, y casi siempre significa lo mismo: la App
-Password es de una cuenta de Gmail y `IDENTITY_MAIL_FROM_ADDRESS` es otra. Son
-una sola credencial partida en dos sitios, y solo SMTP se entera de que no
-coinciden. La casilla de ingesta ya tiene una App Password que funciona: usar
-esa misma pareja (dirección **y** contraseña) es lo más simple.
-
-Que llegue no es lo mismo que que funcione. Cuando envíes uno de verdad, mira
-también si cayó en spam —una cuenta de Gmail personal escribiendo a
-desconocidos suele hacerlo al principio— y abre el enlace de
-`IDENTITY_PASSWORD_RESET_URL` para comprobar que esa página existe.
-
 ### 3. Datos de prueba
 
 moto guarda todo **en memoria**: cuando el emulador se para —`just aws-down`,

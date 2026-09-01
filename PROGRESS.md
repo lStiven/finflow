@@ -47,7 +47,10 @@ without the file changing, so it was the installed stubs, not the code.
 
 DynamoDB runs on-demand: at this deployment's volume the bill is on the order
 of a cent a month, and the free tier's 25 provisioned units were shaping the
-schema for no real saving.
+schema for no real saving. Spending is watched from outside the repo: the
+`OverFiveDollars` alarm on `AWS/Billing EstimatedCharges` mails
+`stiven.ddh@gmail.com` through the `over_five_dollars` topic — subscription
+confirmed, state OK.
 
 **Both stacks are deployed and running** (2026-09-01), five Lambda functions
 each from one container image, the API on a Function URL with no domain to
@@ -80,10 +83,11 @@ would lift the CloudFront block is worth opening anyway — until it answers,
 this is where the bundle is served from. See **Deployment** in
 [docs/decisions.md](docs/decisions.md).
 
-What is missing for production: publishing the bundle against it (its
-`CorsOrigins` names `http://localhost:5173`, not the Pages origin, so a
-published app would fail every preflight), observability's one manual step,
-and a cap on LLM spending — see **Next steps**.
+Both bundles are published and answered: `https://finflow-apk.pages.dev`
+and `https://finflow-dev-2tc.pages.dev` are in each stack's deployed
+`CorsOrigins`. What is missing for production is the verification/recovery
+release — table, configuration and a redeploy — plus observability's one
+manual step and a cap on LLM spending. See **Next steps**.
 
 ## Last completed
 
@@ -92,8 +96,8 @@ and a cap on LLM spending — see **Next steps**.
   record expires, SMTP over the deployment's own Gmail, and the screens that
   use them — the door's code step, `/recuperar`, `/restablecer` and a password
   card on `/perfil`. A password change now invalidates every token issued
-  before it. **Neither stack has the new table or the new configuration yet**
-  — see Next steps.
+  before it. Development is provisioned and running it; **production is
+  not** — see Next steps.
 - 2026-09-01 — `/comercios` is built: the review queue with one-tap confirm,
   search and filters, and a detail screen for renaming, recategorizing,
   moving or splitting a spelling and merging two merchants. Found and
@@ -101,12 +105,11 @@ and a cap on LLM spending — see **Next steps**.
   does, and neither `move` nor `split` returns the merchant in the path.
 - 2026-09-01 — Production has a frontend: https://finflow-apk.pages.dev,
   built against the production API and verified over HTTPS (headers, SPA
-  fallback, the bundle's own API address). Its origin is in `CorsOrigins` but
-  not yet deployed — `just deploy-prod` is what lets the API answer it.
+  fallback, the bundle's own API address). Its origin is in the deployed
+  `CorsOrigins` and the API answers it.
 - 2026-09-01 — The frontend is live against development at
   https://finflow-dev-2tc.pages.dev — headers, SPA fallback and the bundle
-  verified over HTTPS. Its calls fail the preflight until `just deploy-dev`
-  carries the origin now in `CorsOrigins`.
+  verified over HTTPS. The deployed stack carries that origin.
 - 2026-09-01 — The docs answer four questions without overlapping: deploying
   (new `docs/deploy.md`), running (`running.md`, now 646 lines instead of
   972), integrating (`frontend-integration.md`) and where to start
@@ -114,49 +117,52 @@ and a cap on LLM spending — see **Next steps**.
   command named in them exists.
 ## Next steps
 
-- [ ] **Next: registration is now impossible on both deployed stacks until
-      they are provisioned and redeployed.** In this order, per environment:
-      1. `just secret-put /finflow/<env>/mail-app-password` — the same Gmail
-         App Password the ingest worker already uses; the API sends from that
-         casilla over SMTP.
-      2. `just provision-dev` / `provision-prod` — creates
-         `credential_challenges`. Without it every `/identity/verification/*`
-         call fails.
-      3. `just deploy-dev` / `deploy-prod` — carries `MailFromAddress`,
-         `MailAppPasswordParameter` and `PasswordResetUrl`, which are
-         **required**: the API refuses to start without them.
+- [ ] **Next: production still has no verification/recovery release.**
+      Development is done — `dev-credential_challenges` exists and the stack
+      carries `MailFromAddress`, `MailAppPasswordParameter` and
+      `PasswordResetUrl`. Production has none of it: its API publishes 28
+      routes, no `/identity/verification/*` or `/identity/password/*`, and
+      `POST /identity/register` still takes email and password alone. In this
+      order:
+      1. `just provision-prod` — creates `credential_challenges`. Without it
+         every `/identity/verification/*` call fails.
+      2. `just deploy-prod` — carries the three parameters above, which are
+         **required**: the API refuses to start without them. The secret they
+         point at already exists (`/finflow/production/mailbox-app-password`,
+         the ingest worker's own App Password — one credential, read by IMAP
+         and written by SMTP), so there is nothing to `secret-put`.
+      3. `just web-publish` — **not optional, and it is what breaks the
+         moment step 2 lands**: the published bundle predates this work and
+         posts a registration without `verification_token`, which the new API
+         answers 422. Republish right after the deploy, not later.
+      4. `just smoke-prod <ApiUrl>`.
       Note the deploy also rotates every session, twice over: tokens now carry
       a `cv` claim and are refused without it. Everybody logs in again.
 
-- [ ] **Two fixes and a mailbox split are written but not deployed.**
-      Both stacks are running older code than this working tree:
-      1. `just deploy-dev` — carries development's own ingest mailbox
-         (`IngestMailboxAddress` in `infra/samconfig.toml`). Until it runs,
-         the deployed dev stack still polls production's account and the two
-         race for every forwarded email.
-      2. `just deploy-prod` — carries the CORS fix (`PUT` was missing from
-         the allow-list, so restating a balance and setting a credit limit
-         failed the preflight in every deployed environment) and the
-         forwarding-confirmation fix (a 302 was being read as a refusal).
-         Note it also picks up the JWT secret rotated on 2026-09-01, which
-         invalidates every token issued before it: expect to log in again.
-      3. `just smoke-prod <ApiUrl>` / `just smoke <dev-url>` after each.
-- [ ] **Publish the frontend against production.** `just web-publish` builds
-      from the stack's own `ApiUrl` and uploads to Cloudflare Pages, then
-      the origin it prints has to go into `CorsOrigins`
-      (`infra/samconfig.toml`) and `just deploy-prod` run once more. That
-      second deploy is not optional: production currently allows
-      `http://localhost:5173` and nothing else, so a published bundle would
-      load and then fail every call. Both origins can be listed at once.
+- [ ] **Registration is broken on the development Pages site right now**, and
+      for the same reason: the API asks for `verification_token` since
+      2026-09-01 21:03 and the bundle on
+      https://finflow-dev-2tc.pages.dev was built before the door's code step
+      existed, so `POST /identity/register` answers 422. `just
+      web-publish-dev` fixes it.
+
+- [ ] **`finflow-dev` is nine minutes behind the working tree.** It was
+      deployed at 21:03 and commit fce2186 landed at 21:12, so the deployed
+      dev API is missing `expose_headers: ["Retry-After"]` (the frontend
+      cannot read how long to wait after a 429 from the credential endpoints)
+      and still answers 401, not 403, when the current password is wrong at
+      `/identity/password/change` — which logs the person out instead of
+      telling them what happened. `just deploy-dev` carries both.
 
 - [ ] **Next: what production actually needs.** In order of what hurts
       soonest:
-      1. **Observability.** Closed, pending one manual step. Logs go to
-         `/finflow/<stack>/<name>`, and three CloudWatch alarms — one per DLQ
-         — publish to an SNS topic on any message at all. What remains is not
-         code: `AlertEmail` must be set in `infra/samconfig.toml` per
-         environment, and the SNS subscription confirmed from the email AWS
-         sends, or the alarms page nobody.
+      1. **Observability.** One click away, and only in production. Logs go
+         to `/finflow/<stack>/<name>`, three CloudWatch alarms — one per DLQ
+         — publish to an SNS topic on any message at all, and `AlertEmail` is
+         set and deployed in both environments. Development's subscription is
+         confirmed; **production's is still `PendingConfirmation`**, so its
+         alarms page nobody. Confirm it from the mail AWS sent to
+         `llstiven.work@gmail.com`, or resubscribe if it expired.
       2. **CI.** There is a Dockerfile, a SAM template and now a post-deploy
          gate (`just smoke`), but nothing builds or deploys automatically.
          Both stacks have been built and deployed by hand from the
@@ -180,19 +186,15 @@ and a cap on LLM spending — see **Next steps**.
          still disabled in the shell's nav.
          `docs/frontend-integration.md` is the contract each of them has to
          honour.
-- [ ] **Three account edits the API cannot do, so the app cannot offer
-      them.** Reopening a closed account (`close` is one-way and there is no
-      inverse); deleting one outright (deliberate — a closed account still
-      explains its past movements, so this may stay refused rather than be
-      built); and unlinking an instrument from an account, which is the one
-      that hurts: `POST .../instruments` only adds, so a card linked to the
-      wrong account cannot be moved off it from anywhere. Each needs an
-      endpoint before a screen.
-- [ ] **`access_token_ttl_minutes` defaults to 1, not 1440.** Every `.env*`
-      sets 1440 and `docs/frontend-integration.md` documents it, so this only
-      bites a deployment where the variable is missing — where it logs people
-      out about thirty seconds after login, since the client keeps a 30 s
-      expiry margin. Reads like a debugging leftover.
+- [ ] **An instrument cannot be unlinked from an account.** Giving an
+      account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
+      exists and `/cuentas` calls it, with a "Cerradas" tab to see what was
+      closed. What is missing is narrower, and only the first one hurts:
+      `POST .../instruments` only adds, so a card attached to the wrong
+      account cannot be moved off it from anywhere; there is no inverse of
+      `close`, so a closed account cannot be reopened; and there is no
+      `DELETE` at all, which is deliberate — a closed account still explains
+      its past movements. The first needs an endpoint before a screen.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.
@@ -201,10 +203,6 @@ and a cap on LLM spending — see **Next steps**.
       decisions, and `times_seen` would leak one person's habits into
       another's list. The middle option nobody has designed yet: a shared
       catalogue of canonical merchants with per-user overrides on top.
-- [ ] **Set a billing alarm on the AWS account.** The per-table request
-      ceiling bounds a runaway's *rate*, not a month's spend, and it is the
-      only guard there is. Nothing in this repo can create it; it is a
-      console/CLI step on the account itself.
 - [ ] **A manual entry can be attributed but never creates a merchant.** The
       join is a fingerprint lookup, so a hand-entered `TIENDAS ARA` does find
       the merchant that owns that spelling — but a name that never arrived by

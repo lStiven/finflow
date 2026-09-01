@@ -409,6 +409,15 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   so every token issued before this change is refused — one forced login for
   everybody, chosen over accepting a token that cannot reach its own account.
 
+- **`access_token_ttl_minutes` defaults to 1 minute, and stays that way.**
+  Every `.env*`, the SAM template and both deployed stacks set 1440, and
+  `docs/frontend-integration.md` documents that number, so the default is
+  reached only by a deployment that forgot the variable — where a one-minute
+  token is a loud, immediate failure (the client keeps a 30 s expiry margin,
+  so login lasts about thirty seconds) rather than a quiet one. Raising the
+  default to 1440 would make that same mistake silent and long-lived, which
+  is the worse of the two. Not a leftover; leave it.
+
 ### Identity — proving an address, and getting back in (2026-09-01)
 
 - **An address has to answer before an account exists behind it.**
@@ -1422,9 +1431,15 @@ to whatever ends up serving the bundle, which the bundle is not told.
   `INGESTION_DYNAMODB_MAX_*_UNITS` caps requests per second per table and per
   index, so a runaway loop throttles instead of billing; pegged for a month it
   would still cost real money. The guard for spending is a billing alarm on
-  the account, which nothing in this repo can create. Twenty-five is what the
-  entire free allowance used to be *shared across all seven objects*, so as a
-  per-object ceiling it is far more headroom than this ever had.
+  the account, which nothing in this repo can create — set up by hand and
+  verified on 2026-09-01: `OverFiveDollars` watches
+  `AWS/Billing EstimatedCharges` (USD, threshold 5, six-hour period) and
+  mails `stiven.ddh@gmail.com` through the `over_five_dollars` topic, whose
+  subscription is confirmed. It lives only in the console, so it is invisible
+  to `sam deploy` and survives nothing but the account itself. Twenty-five is
+  what the entire free allowance used to be *shared across all seven
+  objects*, so as a per-object ceiling it is far more headroom than this ever
+  had.
 
 
 ### Review findings worth remembering

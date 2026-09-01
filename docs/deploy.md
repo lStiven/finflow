@@ -253,6 +253,14 @@ stack, **genera** `frontend/.env.production` con ella, construye y sube
 `dist/`. No escribas ese fichero a mano: es justo el valor que se queda viejo
 y produce una app que carga bien y llama a la URL de ayer.
 
+**Un despliegue que cambia el contrato arrastra una publicación**, en el
+mismo rato y no más tarde: el bundle publicado sigue mandando el cuerpo de
+ayer. Cuando `POST /identity/register` empezó a exigir `verification_token`,
+la API de development lo pidió a las 21:03 y el sitio publicado siguió
+mandando email y contraseña a secas — registrarse desde el navegador
+respondía 422 aunque las dos mitades estuvieran bien. Despliega y publica
+seguido, o el registro queda roto en medio.
+
 **Y después, el paso que no hace el comando** — solo hace falta la primera
 vez, y cada vez que cambie el dominio:
 
