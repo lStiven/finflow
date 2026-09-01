@@ -59,6 +59,95 @@ def test_a_redirect_is_not_followed() -> None:
     assert requested == [URL]
 
 
+def test_a_redirect_back_into_gmail_reports_success() -> None:
+    """How Google actually answers a link it accepted. Read, never followed:
+    requiring a 2xx here recorded every real confirmation as refused.
+    """
+    requested: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(str(request.url))
+
+        return httpx.Response(
+            302,
+            headers={"Location": "https://mail.google.com/mail/u/0/#settings"},
+        )
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
+    assert requested == [URL]
+
+
+def test_a_relative_redirect_stays_on_the_confirmation_host() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(302, headers={"Location": "/mail/vf-done"})
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
+
+
+def test_any_google_subdomain_counts_as_confirmed() -> None:
+    """Which host answers is not documented, and guessing narrowly is what
+    broke this before. A checkmark set early costs less than a feature that
+    reports every real confirmation as refused.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(
+            302,
+            headers={"Location": "https://accounts.google.com/ServiceLogin"},
+        )
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is True
+
+
+def test_a_redirect_to_a_lookalike_host_is_not_a_confirmation() -> None:
+    """The same trap the request-side host check exists for, on the way back."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(
+            302,
+            headers={"Location": "https://mail.google.com.evil.test/ok"},
+        )
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+
+
+def test_a_host_merely_ending_in_the_domain_is_not_a_confirmation() -> None:
+    """`notgoogle.com` ends in `google.com` and is somebody else."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(302, headers={"Location": "https://notgoogle.com/ok"})
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+
+
+def test_a_plain_http_redirect_is_not_a_confirmation() -> None:
+    """Downgrading the scheme is not something Google's own flow does."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(302, headers={"Location": "http://mail.google.com/ok"})
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+
+
+def test_a_redirect_status_without_a_location_is_refused() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+
+        return httpx.Response(302)
+
+    assert _confirmer(handler).confirm(ForwardingConfirmation(url=URL)) is False
+
+
 def test_a_url_on_another_host_is_refused_before_any_request() -> None:
     """Defence in depth: the value object refuses this too, but this is the
     call site, and a value object can be constructed anywhere.

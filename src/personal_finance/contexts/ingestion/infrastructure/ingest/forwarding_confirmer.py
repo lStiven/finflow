@@ -11,14 +11,18 @@ to keep that from becoming a way to make the worker fetch arbitrary addresses:
 * redirects are not followed, so a 302 cannot walk the request somewhere the
   checks above already rejected.
 
-Google answers the confirm link with an ordinary page; there is no API and no
-machine-readable result, so a 2xx is the whole signal available.
+Google answers the confirm link with a **redirect**, not with a page. There is
+no API and no machine-readable result, so the signal is the status plus where
+the redirect points — read out of the `Location` header and never requested.
+Requiring a 2xx here, as this once did, recorded every real confirmation as
+refused: the fetch did confirm the forwarding, and the worker then dropped the
+mail as spent without marking anything.
 """
 
 from __future__ import annotations
 
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -31,6 +35,17 @@ from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
 _logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
+
+# Where a redirect may land and still mean "confirmed". Google does not
+# document which of its hosts answers, and naming the two obvious ones would
+# be a guess that breaks this again the day it answers from a third.
+#
+# Wide on purpose, because the two mistakes do not cost the same. Reading a
+# real confirmation as refused breaks the feature outright — it already did,
+# for every user. Reading a refusal as confirmed sets a checkmark early, and
+# `InboxSetup.ready` does not depend on that checkmark: what says a setup
+# works is an alert that actually arrived.
+ACCEPTED_REDIRECT_DOMAIN = "google.com"
 
 
 class UnexpectedConfirmationHostError(Exception):
@@ -86,9 +101,56 @@ def _accepted(response: httpx.Response) -> bool:
     if response.is_success:
         return True
 
+    # `has_redirect_location`, not `is_redirect`: the latter is only the
+    # status class, and a 3xx with no `Location` says nothing about where this
+    # went. It falls through to the refusal below, where it belongs.
+    if response.has_redirect_location:
+        return _redirect_means_confirmed(response)
+
     _logger.warning(
         "confirmation link was not accepted",
         extra={"status_code": response.status_code},
+    )
+
+    return False
+
+
+def _is_google(hostname: str | None) -> bool:
+    """The domain itself or a subdomain of it, never a name that merely ends
+    in those letters: `mail.google.com.evil.test` and `notgoogle.com` are the
+    two shapes this has to keep out.
+    """
+    if hostname is None:
+        return False
+
+    return hostname == ACCEPTED_REDIRECT_DOMAIN or hostname.endswith(
+        f".{ACCEPTED_REDIRECT_DOMAIN}",
+    )
+
+
+def _redirect_means_confirmed(response: httpx.Response) -> bool:
+    """Whether a redirect is Google acknowledging the confirmation.
+
+    The target is read, never fetched. That keeps the guarantee the module
+    docstring makes — a `Location` out of untrusted mail cannot become a
+    request — while still telling an acknowledgement apart from a bounce to
+    somewhere else.
+    """
+    # Relative targets are ordinary and resolve against the URL already pinned
+    # to the confirmation host, so they are checked rather than assumed.
+    target = urljoin(str(response.request.url), response.headers["location"])
+    parsed = urlparse(target)
+
+    if parsed.scheme == "https" and _is_google(parsed.hostname):
+        return True
+
+    _logger.warning(
+        "confirmation link redirected somewhere that does not mean confirmed",
+        extra={
+            "status_code": response.status_code,
+            # The host only: the rest of a confirmation URL is a credential.
+            "location_host": parsed.hostname,
+        },
     )
 
     return False

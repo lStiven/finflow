@@ -301,6 +301,11 @@ El prefijo separa tablas, colas y bus — **no el buzón**. Si vas a correr
 producción; si no, deja la App Password vacía y el worker no arrancará. Ver el
 aviso en [Configurar `.env`](#1-configurar-env).
 
+Los secretos del stack `finflow-dev` van a **su** cuenta, no a la de
+producción — ver [Los mismos secretos, en
+development](#los-mismos-secretos-en-development), porque el comando apunta a
+producción si no se le dice otra cosa.
+
 Eso mismo vale entre los dos stacks desplegados, y ahí no hay App Password que
 dejar vacía: los dos tendrían la suya en SSM. Lo decide el parámetro
 **`IngestScheduleState`**, que apaga el temporizador de un stack entero.
@@ -637,6 +642,60 @@ just secret-put /finflow/production/jwt-secret
 just secret-put /finflow/production/mailbox-app-password
 just secret-put /finflow/production/llm-api-key
 ```
+
+#### Los mismos secretos, en development
+
+Igual que en producción, sin argumento extra: el fichero de entorno **se
+deduce de la ruta**, que ya dice de qué entorno es.
+
+```bash
+just secret-put /finflow/development/jwt-secret
+just secret-put /finflow/development/mailbox-app-password
+just secret-put /finflow/development/llm-api-key
+```
+
+Ese fichero es el que decide el `AWS_PROFILE` con el que se escribe y el que
+aparece en la línea final, la que te dice dónde pegar la referencia. Se puede
+pasar como segundo argumento para una ruta fuera de `/finflow/<entorno>/`,
+pero uno que contradiga la ruta se rechaza antes de pedirte el valor: pegar
+una referencia de development en `.env.production` haría que producción
+firmara con el secreto de dev, y un token emitido en dev valdría en
+producción.
+
+Hoy los dos perfiles resuelven a la **misma cuenta de AWS** —usuarios IAM
+distintos, cuenta única—, así que equivocarse de perfil todavía no cambia
+dónde acaba el parámetro. Compruébalo antes de fiarte de esto:
+
+```bash
+aws sts get-caller-identity --profile finflow-production --query '[Account,Arn]' --output text
+aws sts get-caller-identity --profile finflow-dev        --query '[Account,Arn]' --output text
+```
+
+El día que development tenga cuenta propia, eso empieza a importar de verdad:
+el secreto se escribiría en la cuenta que no es y el stack arrancaría sin
+encontrarlo.
+
+Las rutas no son convención suelta: cada stack recibe la suya en
+`infra/samconfig.toml` (`JwtSecretParameter`, `MailboxPasswordParameter`,
+`LlmApiKeyParameter`), así que ahí se comprueba cuál lee cada entorno.
+
+#### Cambiar o rotar uno
+
+El mismo comando: `secret-put` escribe con `Overwrite=True`, así que no hay
+que borrar nada antes. Lo que **no** hace es propagarlo — el valor se lee una
+vez por proceso:
+
+- desplegado, hay que volver a desplegar el stack (`just deploy-prod` /
+  `just deploy-dev`) o esperar a que Lambda recicle sus contenedores, que no
+  es un momento que tú decidas;
+- en local, reiniciar el proceso.
+
+Cambiar la **cuenta de correo** de un entorno son dos cosas, no una: la App
+Password nueva con `secret-put`, y la dirección en `IngestMailboxAddress`
+dentro de `infra/samconfig.toml` —que es de dónde sale la parte antes del `+`
+de la dirección de reenvío de cada usuario— más el despliegue. Cambiarla
+después de que haya usuarios registrados les invalida la dirección que ya
+pegaron en Gmail.
 
 ### Desplegar
 

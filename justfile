@@ -166,7 +166,27 @@ financial-worker-prod: (_require-env ".env.production")
 # command line is visible in `ps` to every process on the box, and lands in
 # shell history.
 # Usage: just secret-put /finflow/production/jwt-secret
-secret-put name env_file=".env.production": (_require-env env_file)
+#
+# The env file is **deduced from the path**, because the path already says
+# which environment it belongs to and asking for it twice only creates a way
+# to disagree. It picks the AWS profile that writes and the file the printed
+# reference has to be pasted into; crossed, both are wrong quietly — the
+# write succeeds, and the reference lands in the env file of the *other*
+# environment, which is how production ends up signing with development's
+# secret. Passing it explicitly still works, for a path outside
+# `/finflow/<environment>/`; the check below is only there to refuse one that
+# contradicts the path.
+secret-put name env_file=(if name =~ '^/finflow/development/' { ".env.development" } else { ".env.production" }): (_require-env env_file)
+    @case '{{name}}' in \
+        /finflow/development/*) owner=.env.development ;; \
+        /finflow/production/*) owner=.env.production ;; \
+        *) owner='{{env_file}}' ;; \
+    esac; \
+    if [ "$owner" != '{{env_file}}' ]; then \
+        echo "{{name}} belongs to $owner, not {{env_file}}." >&2; \
+        echo "run:  just secret-put {{name}} $owner" >&2; \
+        exit 1; \
+    fi
     @printf 'value: ' >&2; \
     read -rs FINFLOW_SECRET_VALUE; echo >&2; \
     ENV_FILE={{env_file}} PYTHONPATH=src \

@@ -66,11 +66,9 @@ manual step, and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
-- 2026-09-01 — The bundle has a host again: `just web-publish` builds against
-  a stack's own `ApiUrl` and uploads to Cloudflare Pages, with `_headers` and
-  `_redirects` carrying what CloudFront's response-headers policy and error
-  responses used to. `just web-check` green (139); the template still
-  transforms for both environments.
+- 2026-09-01 — Automatic forwarding confirmation works against the real
+  Google: a redirect is read as the acknowledgement it is, instead of being
+  refused for not being a 2xx. `uv run pytest` green (953).
 
 ## Next steps
 
@@ -924,13 +922,27 @@ manual step, and a cap on LLM spending — see **Next steps**.
   What confirming does **not** do is widen access: anybody holding the alias
   can already mail it directly, so forwarding is a delivery route rather than
   a permission, and the approved-sender filter is the boundary either way.
-  **Accepted risk: a 2xx is the only signal there is** (2026-08-28). Google
-  answers the link with an ordinary page, not an API, so an error page served
-  with status 200 — an expired or already-used link — is indistinguishable
-  from success and would be counted as a confirmation. Not solved; what was
-  fixed is the conflation beside it, since a link Google refuses at the HTTP
-  level now counts as `refused_confirmations` and never as `confirmations`,
-  which is the number that claims somebody's forwarding is set up.
+  **A redirect is the acknowledgement, and requiring a 2xx broke this for
+  everybody** (2026-09-01, found in production). Google answers a link it
+  accepted with a 302, not a page. Demanding `is_success` recorded every real
+  confirmation as `refused`, and because a refusal is acknowledged on purpose
+  — an expired link answers that way forever — the mail was dropped and never
+  retried: the forwarding was live in Gmail while the app still showed the
+  step waiting. The `Location` is now read and never requested, so a header
+  out of untrusted mail still cannot become a fetch, and any `google.com`
+  subdomain over https counts as accepted. **Deliberately wide**: Google does
+  not document which host answers, and the two mistakes are not symmetric —
+  reading a real confirmation as refused breaks the feature outright, while
+  reading a refusal as confirmed only sets a checkmark early, and
+  `InboxSetup.ready` does not depend on that checkmark. Which host it actually
+  redirects to is still unknown; the refusal path logs `location_host` so the
+  next mismatch names itself.
+  **Accepted risk: an error page served with status 200** (2026-08-28) — an
+  expired or already-used link — remains indistinguishable from success. Not
+  solved; what was fixed is the conflation beside it, since a link Google
+  refuses at the HTTP level counts as `refused_confirmations` and never as
+  `confirmations`, which is the number that claims somebody's forwarding is
+  set up.
 - **Declaring takes the enum; receiving keeps the bank's own words.** A real
   run lost five of six movements to one silent failure: a savings account
   declared with `instrument_kind: "savings"` — the *account* kind — while its

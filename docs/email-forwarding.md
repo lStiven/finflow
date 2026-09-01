@@ -103,11 +103,15 @@ igual —:
    Si el enlace ya venció o alguien lo usó, Google lo rechaza: eso sale como
    `refused_confirmations=1` y **no** como una confirmación, porque el
    reenvío no quedó configurado. Es un contador distinto justamente para que
-   no se confundan. Con la salvedad de que Google contesta el enlace con una
-   página normal y no con una API: un 2xx es toda la señal que hay, así que
-   una página de error servida con estado 200 se leería como aceptada. Si el
-   log dice `confirmations=1` y el reenvío no quedó activo en Gmail, ese es
-   el caso — hay que rehacer el paso 2.
+   no se confundan. Con la salvedad de que Google no contesta con una API:
+   lo que hay es el estado y, si redirige, a dónde. Una redirección a
+   `google.com` o a un subdominio suyo cuenta como aceptada; a cualquier otro
+   host, no. El criterio es ancho a propósito: leer una confirmación real como
+   rechazada rompe la función entera, y leer un rechazo como confirmado solo
+   adelanta un check del que `ready` no depende. Sigue sin poder
+   distinguirse una página de error servida con estado 200. Si el log dice
+   `confirmations=1` y el reenvío no quedó activo en Gmail, ese es el caso —
+   hay que rehacer el paso 2.
 
    Es **una por usuario**, no una por instalación: cada quien tiene su propio
    `+alias`, así que Gmail pide confirmación para cada uno. Antes eso
@@ -202,7 +206,10 @@ solo en una línea de log.
   un correo, que es entrada no confiable, así que está fijado por esquema,
   host exacto (`mail-settings.google.com`) y el prefijo de ruta `vf-` que lo
   distingue del enlace de *cancelar* que viene en el mismo mensaje. No se
-  siguen redirecciones. Un enlace que no cumpla todo eso no se pide.
+  siguen redirecciones: el `Location` de la respuesta se **lee** para saber si
+  Google aceptó, y no se pide nunca, así que una cabecera venida de un correo
+  no puede convertirse en una petición. Un enlace que no cumpla todo eso no se
+  pide.
 - **Nunca se lee el buzón del usuario.** El `ingest worker` solo abre la
   cuenta que el propio despliegue posee — nunca pide permiso sobre la cuenta
   de nadie más, porque nunca la toca.

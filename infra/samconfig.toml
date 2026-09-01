@@ -43,7 +43,13 @@ confirm_changeset = true
 parameter_overrides = [
     "EnvironmentName=development",
     "ResourcePrefix=dev-",
-    "IngestMailboxAddress=finflowingest@gmail.com",
+    # Its own Gmail account, not production's. This is what lets both stacks
+    # poll at once: the reader searches UNSEEN and marks what it takes \Seen,
+    # so two pollers on one mailbox do not duplicate a message, they race for
+    # it. Separate mailboxes, no race. It also has to match the App Password
+    # stored at `MailboxPasswordParameter` below — they are one credential
+    # split across two places, and only IMAP finds out they disagree.
+    "IngestMailboxAddress=finflowdevelopment@gmail.com",
     "JwtSecretParameter=/finflow/development/jwt-secret",
     # Empty deploys, but the dead-letter alarms then page nobody.
     "AlertEmail=llstiven.work@gmail.com",
@@ -52,9 +58,9 @@ parameter_overrides = [
     "CorsOrigins=http://localhost:5173",
     # Cheaper on the free tier and plenty for a rehearsal environment.
     'IngestScheduleExpression="rate(5 minutes)"',
-    # One Gmail account behind both stacks, and the reader consumes what it
-    # reads. Production polls it; this one would steal the messages. Flip the
-    # two if the rehearsal environment ever needs the intake back.
+    # Both stacks poll now, each its own mailbox. This was DISABLED while the
+    # two shared one account — the only arrangement in which a second poller
+    # is a thief rather than a second environment.
     "IngestScheduleState=ENABLED",
     "LogRetentionDays=7",
 ]
@@ -96,9 +102,10 @@ parameter_overrides = [
     # — scheme and host, no path — and redeploy; the list is matched exactly,
     # so a custom domain is a second entry and a Pages preview URL can never
     # be one. Empty accepts no browser origin at all.
-    'CorsOrigins=""',
+    'CorsOrigins="http://localhost:5173"',
     'IngestScheduleExpression="rate(1 minute)"',
-    # The one stack that reads the mailbox. See IngestScheduleState.
-    "IngestScheduleState=DISABLED",
+    # Reads `IngestMailboxAddress` above, which is not development's. See the
+    # note there before pointing two stacks at one account again.
+    "IngestScheduleState=ENABLED",
     "LogRetentionDays=30",
 ]
