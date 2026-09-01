@@ -14,8 +14,13 @@ role. None of that is exercised by a `TestClient`.
 Three depths, because the environments can afford different things:
 
 * **Default.** One throwaway user per run: register, declare two accounts,
-  enter a movement by hand, read it back. Touches no queue, so it needs no
-  AWS credentials at all — a base URL is the whole configuration.
+  enter a movement by hand, read it back. Touches no queue. It does need AWS
+  credentials, for one reason: registering now requires a ticket that only
+  whoever read the mailed code can get, and the canary's address
+  (`@finflow.local`) is not one any mail server would deliver to. So the
+  ticket is written straight into the challenges table and spent through the
+  real endpoint — see
+  `identity/presentation/cli/verification_tickets.py`.
 * **`--with-pipeline`.** Also forwards one bank alert and waits for the
   movement to surface. This is what proves the worker functions are alive,
   and the only depth that needs AWS credentials: the alert enters through
@@ -50,6 +55,9 @@ from zoneinfo import ZoneInfo
 
 import httpx2
 
+from personal_finance.contexts.identity.presentation.cli.verification_tickets import (
+    issue_registration_ticket,
+)
 from personal_finance.shared.infrastructure.config.settings import (
     Environment,
     get_aws_settings,
@@ -239,6 +247,11 @@ def _register(client: httpx2.Client, canary: Canary, report: Report) -> Session:
                 json={
                     "email": canary.email,
                     "password": canary.password,
+                    # Nothing could ever read mail at `@finflow.local`, so the
+                    # ticket is issued through the operator path rather than
+                    # the code exchange. Spending it here still exercises the
+                    # real endpoint and the real conditional consume.
+                    "verification_token": issue_registration_ticket(canary.email),
                     "allowed_domains": [BANK_DOMAIN],
                 },
             ),

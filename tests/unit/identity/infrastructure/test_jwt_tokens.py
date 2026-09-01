@@ -116,6 +116,7 @@ def test_an_unusable_name_claim_is_dropped_rather_than_failing_the_request() -> 
             "sub": str(USER_ID.value),
             "email": EMAIL.value,
             "name": "   ",
+            "cv": 1,
             "exp": 9_999_999_999,
         },
         "test-secret",
@@ -123,3 +124,54 @@ def test_an_unusable_name_claim_is_dropped_rather_than_failing_the_request() -> 
     )
 
     assert issuer.verify(tampered).name is None
+
+
+def test_a_token_carries_the_credential_version_it_was_cut_from() -> None:
+    issuer = _issuer()
+
+    token = issuer.issue(
+        AuthenticatedUser(
+            user_id=USER_ID, email=EMAIL, credential_version=1_700_000_000
+        ),
+    )
+
+    assert issuer.verify(token.value).credential_version == 1_700_000_000
+
+
+def test_a_token_without_a_credential_version_is_refused() -> None:
+    """Every token issued before the claim existed names an account whose
+    credentials have since moved on. Defaulting the claim would be the one
+    case where a token nothing can check still authenticates.
+    """
+    issuer = _issuer()
+    old = pyjwt.encode(
+        {
+            "sub": str(USER_ID.value),
+            "email": EMAIL.value,
+            "exp": 9_999_999_999,
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    with pytest.raises(InvalidAccessTokenError):
+        issuer.verify(old)
+
+
+def test_a_boolean_credential_version_is_refused() -> None:
+    # `True` is an `int` in Python, so a claim of `true` would otherwise
+    # decode to version 1 and match an account registered on that second.
+    issuer = _issuer()
+    tampered = pyjwt.encode(
+        {
+            "sub": str(USER_ID.value),
+            "email": EMAIL.value,
+            "cv": True,
+            "exp": 9_999_999_999,
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    with pytest.raises(InvalidAccessTokenError):
+        issuer.verify(tampered)

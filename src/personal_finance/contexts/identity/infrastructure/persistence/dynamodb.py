@@ -23,6 +23,11 @@ USER_ID_ATTRIBUTE = "user_id"
 # to reach it through an expression-attribute name.
 NAME_ATTRIBUTE = "name"
 _NAME_PLACEHOLDER = "#name"
+# Which generation of the account's credentials is current. Absent on a record
+# written before this attribute existed, which reads as the first generation —
+# and every token cut before it lacks the claim entirely, so none of them
+# verify anyway.
+CREDENTIAL_VERSION_ATTRIBUTE = "credential_version"
 
 
 class CorruptUserItemError(Exception):
@@ -51,6 +56,8 @@ def to_item(user: User) -> dict[str, AttributeValueTypeDef]:
         # attribute here rather than an empty string standing in for it.
         item[NAME_ATTRIBUTE] = {"S": user.name.value}
 
+    item[CREDENTIAL_VERSION_ATTRIBUTE] = {"N": str(user.credential_version)}
+
     return item
 
 
@@ -59,6 +66,7 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> User:
     a previous attempt already published must never be replayed.
     """
     name = item.get(NAME_ATTRIBUTE, {}).get("S")
+    credential_version = item.get(CREDENTIAL_VERSION_ATTRIBUTE, {}).get("N")
 
     return User(
         id=UserId(value=uuid.UUID(_read_string(item, USER_ID_ATTRIBUTE))),
@@ -68,6 +76,7 @@ def to_entity(item: dict[str, AttributeValueTypeDef]) -> User:
             int(item.get("registered_at", {}).get("N", "0")),
         ),
         name=PersonName(name) if name else None,
+        credential_version=int(credential_version) if credential_version else 1,
     )
 
 
@@ -127,6 +136,39 @@ class DynamoDBUserRepository:
                 ExpressionAttributeNames={_NAME_PLACEHOLDER: NAME_ATTRIBUTE},
                 ExpressionAttributeValues={
                     ":name": {"S": name.value},
+                    ":user_id": {"S": str(user.id.value)},
+                },
+            )
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+        return True
+
+    def change_password(self, user: User) -> bool:
+        """Set the stored password hash and the new credential version, at once.
+
+        One `UpdateItem` for both, because they are one fact: a hash written
+        without the version beside it would leave every already-issued token
+        valid, which is the thing a password change exists to stop.
+        """
+        try:
+            self._client.update_item(
+                TableName=self._table_name,
+                Key={PARTITION_KEY: {"S": user.email.value}},
+                UpdateExpression=(
+                    "SET password_hash = :password_hash, "
+                    f"{CREDENTIAL_VERSION_ATTRIBUTE} = :version"
+                ),
+                # Same id guard `rename` uses: this must never land on an
+                # account that took over the address after the caller read
+                # theirs.
+                ConditionExpression=(
+                    f"attribute_exists({PARTITION_KEY}) "
+                    f"AND {USER_ID_ATTRIBUTE} = :user_id"
+                ),
+                ExpressionAttributeValues={
+                    ":password_hash": {"S": user.password_hash.value},
+                    ":version": {"N": str(user.credential_version)},
                     ":user_id": {"S": str(user.id.value)},
                 },
             )

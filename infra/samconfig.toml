@@ -54,6 +54,14 @@ parameter_overrides = [
     # Empty deploys, but the dead-letter alarms then page nobody.
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/development/mailbox-app-password",
+    # De dónde salen los códigos de verificación y los enlaces para
+    # restablecer la contraseña. La misma cuenta que lee el correo entrante
+    # sirve: son la misma casilla, sólo que una se lee por IMAP y la otra
+    # escribe por SMTP, y la App Password es la misma.
+    "MailFromAddress=finflowdevelopment@gmail.com",
+    "MailAppPasswordParameter=/finflow/development/mailbox-app-password",
+    # La página del frontend que recibe el token del enlace.
+    "PasswordResetUrl=https://finflow-dev-2tc.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
     # El bundle de este stack. El subdominio **no** es el nombre del
     # proyecto: `*.pages.dev` es único en todo Cloudflare, así que un nombre
@@ -99,6 +107,16 @@ parameter_overrides = [
     # Empty deploys, but the dead-letter alarms then page nobody.
     "AlertEmail=llstiven.work@gmail.com",
     "MailboxPasswordParameter=/finflow/production/mailbox-app-password",
+    # De dónde salen los códigos de verificación y los enlaces para
+    # restablecer la contraseña. Es la misma casilla que lee el correo
+    # entrante: una se lee por IMAP y la otra escribe por SMTP, con la misma
+    # App Password. Sin esto la API no arranca — deliberado: un despliegue que
+    # no puede enviar un código es uno donde nadie puede registrarse.
+    "MailFromAddress=finflowingest@gmail.com",
+    "MailAppPasswordParameter=/finflow/production/mailbox-app-password",
+    # La página del frontend que recibe el token del enlace. Tiene que ser
+    # https: el token viaja en la query.
+    "PasswordResetUrl=https://finflow-apk.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
     # The bundle is on Cloudflare Pages while this account cannot create a
     # CloudFront distribution, so the frontend is on an origin the API does

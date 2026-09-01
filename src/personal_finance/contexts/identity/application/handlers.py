@@ -11,14 +11,18 @@ from personal_finance.contexts.identity.application.commands import (
 from personal_finance.contexts.identity.application.ports import (
     AccessToken,
     AuthenticatedUser,
+    EmailVerificationRepository,
     InboxRegistrar,
     PasswordHasher,
+    SecretHasher,
     TokenIssuer,
     UserRepository,
 )
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.exceptions import (
     EmailAlreadyRegisteredError,
+    EmailNotVerifiedError,
+    InvalidAccessTokenError,
     InvalidCredentialsError,
     UserNotFoundError,
 )
@@ -62,6 +66,11 @@ class RegisterUserUseCase:
     Registration and login are kept as one round trip on purpose: the whole
     point of this context is to get a usable account — and the address to
     start forwarding bank email to — fast enough to act on immediately.
+
+    What has to happen *before* this is the address proving it can be read.
+    The ticket that proves it is spent here, first and atomically, and that
+    ordering is what keeps the duplicate-email answer from being an oracle:
+    learning that an address is taken now costs reading that address.
     """
 
     def __init__(
@@ -72,18 +81,34 @@ class RegisterUserUseCase:
         token_issuer: TokenIssuer,
         inbox_registrar: InboxRegistrar,
         event_publisher: EventPublisher,
+        verifications: EmailVerificationRepository,
+        ticket_hasher: SecretHasher,
     ) -> None:
         self._repository = repository
         self._hasher = hasher
         self._token_issuer = token_issuer
         self._inbox_registrar = inbox_registrar
         self._event_publisher = event_publisher
+        self._verifications = verifications
+        self._ticket_hasher = ticket_hasher
 
     def execute(self, command: RegisterUserCommand) -> RegisterUserResult:
         validate_password_strength(command.password)
 
+        email = Email(command.email)
+
+        if not self._verifications.consume_ticket(
+            email=email,
+            ticket_hash=self._ticket_hasher.hash(command.verification_token),
+            now=PosixTime.now(),
+        ):
+            raise EmailNotVerifiedError(
+                "This address has not been verified, or the verification "
+                "expired. Ask for a new code.",
+            )
+
         user = User.register(
-            email=Email(command.email),
+            email=email,
             password_hash=self._hasher.hash(command.password),
             registered_at=PosixTime.now(),
             name=PersonName(command.name) if command.name is not None else None,
@@ -190,8 +215,58 @@ class UpdateProfileUseCase:
         return UserProfile(user_id=user.id, email=user.email, name=user.name)
 
 
+class AuthenticateUseCase:
+    """Turns a bearer token into who is calling, or refuses it.
+
+    A signature check alone is not enough, which is the whole reason this is a
+    use case and not a call to `TokenIssuer.verify`. A JWT is valid until it
+    expires no matter what happens to the account behind it, so a token stolen
+    before a password reset would keep working through the reset that was
+    supposed to stop it — for as long as the token lives, a day by default.
+
+    So the token's `credential_version` is compared against the account's, and
+    the account is read to get it. That is one strongly-consistent read per
+    authenticated request. At this deployment's volume it is far below the
+    cost of any of the endpoints behind it, and it buys two things worth more:
+    a password change ends other sessions immediately, and a token for an
+    account that no longer exists stops authenticating.
+    """
+
+    def __init__(
+        self,
+        *,
+        token_issuer: TokenIssuer,
+        repository: UserRepository,
+    ) -> None:
+        self._token_issuer = token_issuer
+        self._repository = repository
+
+    def execute(self, token: str) -> AuthenticatedUser:
+        claims = self._token_issuer.verify(token)
+        user = self._repository.find_by_email(claims.email)
+
+        if (
+            user is None
+            or user.id != claims.user_id
+            or user.credential_version != claims.credential_version
+        ):
+            # One answer for all of them: the account is gone, the address was
+            # reassigned, or the password moved on. The caller is simply not
+            # authenticated, and which it was is not their business.
+            raise InvalidAccessTokenError("Invalid or expired access token")
+
+        # From storage rather than from the claims: a renamed account should
+        # not carry its old name around until the token expires.
+        return _as_authenticated(user)
+
+
 def _as_authenticated(user: User) -> AuthenticatedUser:
-    return AuthenticatedUser(user_id=user.id, email=user.email, name=user.name)
+    return AuthenticatedUser(
+        user_id=user.id,
+        email=user.email,
+        name=user.name,
+        credential_version=user.credential_version,
+    )
 
 
 def _load_own_account(

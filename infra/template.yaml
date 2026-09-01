@@ -48,6 +48,30 @@ Parameters:
     Default: /finflow/production/llm-api-key
     Description: SSM parameter holding the Gemini API key.
 
+  MailFromAddress:
+    Type: String
+    Description: >
+      The Gmail account identity mails verification codes and password-reset
+      links from. Required: without it the API refuses to start, because a
+      deployment that cannot mail a code is one where nobody can register or
+      recover an account. May be the ingest mailbox or a separate account —
+      it only has to match MailAppPasswordParameter below.
+
+  MailAppPasswordParameter:
+    Type: String
+    Default: /finflow/production/mail-app-password
+    Description: >
+      SSM parameter holding the App Password for MailFromAddress. One
+      credential split across two places; only SMTP finds out if they
+      disagree.
+
+  PasswordResetUrl:
+    Type: String
+    Description: >
+      The frontend page a reset link points at. Must be https outside local:
+      the token travels in the query string, and http would put it in front of
+      anything on the path. The API appends `?token=...` to it.
+
   CorsOrigins:
     Type: String
     Default: ""
@@ -134,6 +158,7 @@ Globals:
         INGESTION_INGEST_MAILBOX_HOST: imap.gmail.com
         INGESTION_INGEST_MAILBOX_PORT: "993"
         IDENTITY_USERS_TABLE: users
+        IDENTITY_CHALLENGES_TABLE: credential_challenges
         IDENTITY_JWT_ALGORITHM: HS256
         IDENTITY_ACCESS_TOKEN_TTL_MINUTES: "1440"
         MERCHANT_MERCHANTS_TABLE: merchants
@@ -180,6 +205,13 @@ Resources:
           API_CORS_ORIGINS: !Ref CorsOrigins
           # Only the API signs and verifies tokens.
           IDENTITY_JWT_SECRET: !Sub "ssm:${JwtSecretParameter}"
+          # And only the API sends mail: the codes and reset links belong to
+          # endpoints, not to any worker. Both references sit here for the
+          # same reason the signing secret does — a reference carried is a
+          # permission needed.
+          IDENTITY_MAIL_FROM_ADDRESS: !Ref MailFromAddress
+          IDENTITY_MAIL_APP_PASSWORD: !Sub "ssm:${MailAppPasswordParameter}"
+          IDENTITY_PASSWORD_RESET_URL: !Ref PasswordResetUrl
       FunctionUrlConfig:
         # The application authenticates every request itself with a bearer
         # token, so IAM auth here would only lock out the browser it exists
@@ -189,6 +221,11 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Sub "${ResourcePrefix}users"
+        # Verification codes, registration tickets and reset links. Only the
+        # API touches them: nothing asynchronous is involved in proving that
+        # somebody can read their own mail.
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}credential_challenges"
         - DynamoDBCrudPolicy:
             TableName: !Sub "${ResourcePrefix}user_inboxes"
         - DynamoDBReadPolicy:
@@ -212,6 +249,7 @@ Resources:
               Action: ssm:GetParameter
               Resource:
                 - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${JwtSecretParameter}"
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MailAppPasswordParameter}"
             # SecureString decryption goes through the AWS-managed SSM key,
             # reachable only via SSM itself.
             - Effect: Allow

@@ -439,6 +439,12 @@ class LLMSettings(BaseSettings):
         return bool(self.api_key.get_secret_value())
 
 
+# Where a developer's own Vite server serves the reset page. Only ever used
+# when `ENVIRONMENT=local`, where the mail is written to the log rather than
+# sent, so nothing real is ever pointed at a laptop.
+_LOCAL_PASSWORD_RESET_URL = "http://localhost:5173/restablecer"
+
+
 class IdentitySettings(BaseSettings):
     """Resources owned by the identity context."""
 
@@ -456,11 +462,45 @@ class IdentitySettings(BaseSettings):
         validation_alias=AliasChoices("ENVIRONMENT"),
     )
     users_table: str = "users"
+    # One table for every short-lived proof about an address: the pending
+    # verification code, the ticket it becomes, and the live reset links.
+    # Everything in it expires, and DynamoDB's own sweep is what removes it.
+    challenges_table: str = "credential_challenges"
     # Empty by default so a deployment that forgot to set it fails loudly at
     # startup instead of signing every token with a well-known value.
     jwt_secret: SecretStr = SecretStr("")
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 1
+
+    # --- The mailbox this context sends from -------------------------------
+    #
+    # SMTP rather than SES: SES will not mail a stranger until a domain is
+    # verified and the sandbox is lifted, and this deployment owns no domain.
+    # Empty by default so a deployment that has not set it up fails at startup
+    # with a specific message, instead of accepting registrations it can never
+    # complete. The one exception is ENVIRONMENT=local, which logs what it
+    # would have sent — see the identity router.
+    mail_host: str = "smtp.gmail.com"
+    mail_port: int = 465
+    mail_from_address: str = ""
+    mail_from_name: str = "Finflow"
+    # Defaults to `mail_from_address`: on Gmail they are the same account.
+    mail_username: str = ""
+    mail_app_password: SecretStr = SecretStr("")
+
+    # Where the emailed reset link points. A frontend route, not an API one:
+    # the token is handed to a page that asks for the new password and then
+    # posts it back to `POST /identity/password/reset`.
+    password_reset_url: str = ""
+
+    # How long each short-lived proof lives. The code is short because it is
+    # six digits read off a screen; the ticket is longer because somebody is
+    # filling in a form behind it; the window is what caps how much mail one
+    # address can cause, and outlives both on purpose.
+    verification_code_ttl_minutes: int = 15
+    registration_ticket_ttl_minutes: int = 30
+    password_reset_ttl_minutes: int = 30
+    delivery_window_minutes: int = 60
 
     @model_validator(mode="after")
     def _namespace_resources(self) -> Self:
@@ -468,13 +508,57 @@ class IdentitySettings(BaseSettings):
             self.users_table,
             environment=self.environment,
         )
+        self.challenges_table = _namespaced(
+            self.challenges_table,
+            environment=self.environment,
+        )
 
         return self
 
-    @field_validator("jwt_secret")
+    @model_validator(mode="after")
+    def _check_reset_url(self) -> Self:
+        """The reset link has to be a link, and outside a laptop, an https one.
+
+        Checked at startup for the same reason the CORS origins are: the
+        alternative failure is a mail that has already gone out with an
+        unusable address in it, and by then it is somebody else's problem.
+        """
+        if not self.password_reset_url:
+            if self.environment is Environment.LOCAL:
+                self.password_reset_url = _LOCAL_PASSWORD_RESET_URL
+
+            return self
+
+        parts = urllib.parse.urlsplit(self.password_reset_url)
+        allowed = (
+            {"https"} if self.environment is not Environment.LOCAL else _ORIGIN_SCHEMES
+        )
+
+        if parts.scheme not in allowed or not parts.netloc or parts.fragment:
+            raise ValueError(
+                "IDENTITY_PASSWORD_RESET_URL must be an absolute https:// URL "
+                "with no fragment: it is emailed to somebody who cannot log "
+                f"in, and {self.password_reset_url!r} is not one they could "
+                "open. A reset token travelling over http would be readable "
+                "by anything between them and this deployment.",
+            )
+
+        return self
+
+    @field_validator("jwt_secret", "mail_app_password")
     @classmethod
     def _resolve(cls, value: SecretStr) -> SecretStr:
         return resolve(value)
+
+    @property
+    def mail_configured(self) -> bool:
+        return bool(
+            self.mail_from_address and self.mail_app_password.get_secret_value(),
+        )
+
+    @property
+    def mail_login(self) -> str:
+        return self.mail_username or self.mail_from_address
 
 
 @functools.lru_cache(maxsize=1)

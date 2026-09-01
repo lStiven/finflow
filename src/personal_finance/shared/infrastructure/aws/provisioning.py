@@ -20,6 +20,9 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
     PARTITION_KEY as FINANCIAL_PARTITION_KEY,
     SORT_KEY as FINANCIAL_SORT_KEY,
 )
+from personal_finance.contexts.identity.infrastructure.persistence.credentials_dynamodb import (  # noqa: E501
+    PARTITION_KEY as CHALLENGES_PARTITION_KEY,
+)
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as USERS_PARTITION_KEY,
 )
@@ -110,6 +113,7 @@ class ProvisionedResources:
     table_name: str
     inboxes_table_name: str
     users_table_name: str
+    challenges_table_name: str
     merchants_table_name: str
     financial_table_name: str
     queue_url: str
@@ -819,6 +823,25 @@ def provision() -> ProvisionedResources:
     )
     _done(started)
 
+    started = _step(f"table {identity_settings.challenges_table}")
+    provision_table(
+        get_dynamodb_client(),
+        table_name=identity_settings.challenges_table,
+        partition_key=CHALLENGES_PARTITION_KEY,
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
+        # Everything in here expires by design — a code, a ticket, a reset
+        # link, a send window — so the sweep is the only thing that empties
+        # it. Nothing *depends* on the sweep: every expiry that decides
+        # anything is compared in a condition expression too, because
+        # DynamoDB's own deletion is eventual and can be hours late.
+        enable_ttl=True,
+    )
+    _done(started)
+
     started = _step(f"table {merchant_settings.merchants_table}")
     provision_table(
         get_dynamodb_client(),
@@ -919,6 +942,7 @@ def provision() -> ProvisionedResources:
         table_name=settings.notifications_table,
         inboxes_table_name=settings.user_inboxes_table,
         users_table_name=identity_settings.users_table,
+        challenges_table_name=identity_settings.challenges_table,
         merchants_table_name=merchant_settings.merchants_table,
         financial_table_name=financial_settings.accounts_table,
         queue_url=queue_url,
@@ -958,6 +982,10 @@ def main() -> None:
     # and it is the one thing here that cannot be added after it is needed.
     print(f"  DynamoDB table : {resources.inboxes_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.users_table_name} ({capacity})")
+    print(
+        f"  DynamoDB table : {resources.challenges_table_name} "
+        f"({capacity}, TTL on {TTL_ATTRIBUTE})",
+    )
     print(f"  DynamoDB table : {resources.merchants_table_name} ({capacity})")
     print(f"  DynamoDB table : {resources.financial_table_name} ({capacity})")
     print("                   every table restorable to any second, last 35 days")

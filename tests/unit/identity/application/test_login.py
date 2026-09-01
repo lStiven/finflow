@@ -29,6 +29,17 @@ class InMemoryUserRepository:
     def rename(self, user: User) -> bool:
         raise NotImplementedError
 
+    def change_password(self, user: User) -> bool:
+        stored = self.by_email.get(user.email)
+
+        if stored is None or stored.id != user.id:
+            return False
+
+        stored.password_hash = user.password_hash
+        stored.credential_version = user.credential_version
+
+        return True
+
 
 class FakeHasher:
     def __init__(self) -> None:

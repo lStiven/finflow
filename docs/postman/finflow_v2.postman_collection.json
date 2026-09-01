@@ -31,6 +31,114 @@
       "name": "Identity",
       "item": [
         {
+          "name": "Verification",
+          "description": "Proving that an address can be read, before an account is built on it. Both requests are unauthenticated and both are deliberately uninformative: the first answers the same way whether or not the address is registered (and sends mail either way), and the second gives one answer for a wrong code, an expired one and an address with no challenge at all.\n\nRate limited per address: one message a minute, five an hour, answered with 429 and a `Retry-After` header.",
+          "item": [
+            {
+              "name": "Request verification code",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/verification/request",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "verification",
+                    "request"
+                  ]
+                },
+                "description": "Mails a six-digit code, valid 15 minutes. Answers 202 in every case — an address that already has an account gets a different message rather than no message, so this cannot be used to ask who is registered here.\n\nAgainst a local run (`ENVIRONMENT=local`) no mail is sent at all and the code comes back in `code`, which the test script stores as `verification_code`. Anywhere else that field is `null` and the code is only in the mailbox.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"you@example.com\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 202) {",
+                      "    const body = pm.response.json();",
+                      "    // Only a local run echoes the code; elsewhere it",
+                      "    // is null and has to be read from the mailbox.",
+                      "    if (body.code) {",
+                      "        pm.environment.set('verification_code', body.code);",
+                      "    }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Confirm verification code",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/verification/confirm",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "verification",
+                    "confirm"
+                  ]
+                },
+                "description": "Trades the code for the one-time token `POST /identity/register` spends, valid 30 minutes. Five wrong guesses spend the challenge (429); the right code works once. The test script stores the token as `verification_token`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"code\": \"{{verification_code}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 200) {",
+                      "    pm.environment.set(",
+                      "        'verification_token',",
+                      "        pm.response.json().verification_token,",
+                      "    );",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "Auth",
           "item": [
             {
@@ -61,7 +169,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"name\": \"Your Name\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
+                  "raw": "{\n  \"email\": \"you@example.com\",\n  \"password\": \"a-long-real-passphrase\",\n  \"verification_token\": \"{{verification_token}}\",\n  \"name\": \"Your Name\",\n  \"allowed_domains\": [],\n  \"allowed_addresses\": []\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -78,7 +186,7 @@
                     "register"
                   ]
                 },
-                "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. `name` is optional — an account is identified by its email, and a name can be set later via `PATCH /identity/me`. `allowed_domains`/`allowed_addresses` are optional too — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
+                "description": "Creates an account, assigns it a forwarding address, and returns a usable access token. The last step of three: run **Request verification code** and **Confirm verification code** first — `verification_token` is what the second one fills in, and without it registration answers 403. It is spent here, once: a replay of the same request cannot make a second account.\n\n`name` is optional — an account is identified by its email, and a name can be set later via `PATCH /identity/me`. `allowed_domains`/`allowed_addresses` are optional too — approved senders can be set later via `PATCH /identity/inbox`. The forwarding address itself is always assigned regardless; see Identity > Inbox > Get inbox to read it. On success, the test script fills `fetch_token`/`token`/`user_id` on this environment."
               },
               "response": []
             },
@@ -257,6 +365,135 @@
                 "description": "Replaces — not merges — who may send to the caller's forwarding address. Leave both lists empty and the address is approved for nobody, the safe default. See docs/email-forwarding.md for the full flow, including how the user then sets up the actual forwarding rule in their own mail client."
               },
               "response": []
+            }
+          ]
+        },
+        {
+          "name": "Password",
+          "description": "Recovering a password through the mail, and changing one while logged in. Every one of these ends the sessions opened with the old password — including, for **Change password**, the token that asked, which is why it returns a replacement.",
+          "item": [
+            {
+              "name": "Forgot password",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/password/forgot",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "password",
+                    "forgot"
+                  ]
+                },
+                "description": "Mails a link with a one-time token, valid 30 minutes. Answers 202 and an empty body whether or not the address has an account, and mails something either way — an address with no account gets a message saying so, rather than silence.\n\nRate limited per address: one a minute, five an hour (429 with `Retry-After`). Asking again retires the previous link.\n\nThe token is only in the mail; against a local run it is written to the API's log instead.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"you@example.com\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Reset password",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/password/reset",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "password",
+                    "reset"
+                  ]
+                },
+                "description": "Spends the token out of the emailed link and sets the password behind it. 204 and no token: log in with the new password, which is also the proof it worked. Unknown, expired and already-spent links are one answer (400), so this never confirms that a token was real.\n\nSet `password_reset_token` by hand from the link — nothing can fill it automatically, which is the point of it.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"token\": \"{{password_reset_token}}\",\n  \"new_password\": \"a-different-long-passphrase\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Change password",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/identity/password/change",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "identity",
+                    "password",
+                    "change"
+                  ]
+                },
+                "description": "For somebody who can still log in. The current password is required even though the request is authenticated: a session left open on a shared machine must not be enough to take the account over.\n\nReturns a fresh access token because the change invalidates the one that made this request, along with every other session. The test script replaces `fetch_token`/`token` with it.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"current_password\": \"a-long-real-passphrase\",\n  \"new_password\": \"a-different-long-passphrase\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "if (pm.response.code === 200) {",
+                      "    const body = pm.response.json();",
+                      "    // The old token stopped working the moment this",
+                      "    // answered: every session is cut, this one too.",
+                      "    pm.environment.set('fetch_token', body.access_token);",
+                      "    pm.environment.set('token', 'Bearer ' + body.access_token);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
             }
           ]
         }

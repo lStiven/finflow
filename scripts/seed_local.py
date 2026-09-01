@@ -43,6 +43,9 @@ from personal_finance.api.main import create_app
 from personal_finance.contexts.financial.presentation.cli.run_financial_worker import (
     build_worker as build_financial_worker,
 )
+from personal_finance.contexts.identity.presentation.cli.verification_tickets import (
+    issue_registration_ticket,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     DynamoDBUserInboxRepository,
@@ -290,6 +293,10 @@ def _authenticate(client: TestClient, *, email: str, password: str) -> str:
         json={
             "email": email,
             "password": password,
+            # Seeded addresses are invented and nobody reads them, so the
+            # ticket is written straight into the table rather than mailed.
+            # See `scripts/registration.py`.
+            "verification_token": issue_registration_ticket(email),
             "name": DEFAULT_NAME,
             "allowed_domains": [BANK_DOMAIN],
         },

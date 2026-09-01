@@ -48,6 +48,9 @@ from personal_finance.api.main import create_app
 from personal_finance.contexts.financial.presentation.cli.run_financial_worker import (
     build_worker as build_financial_worker,
 )
+from personal_finance.contexts.identity.presentation.cli.verification_tickets import (
+    issue_registration_ticket,
+)
 from personal_finance.contexts.ingestion.application.commands import (
     ReceiveBankNotificationCommand,
 )
@@ -427,6 +430,9 @@ def _register(client: TestClient, person: Person) -> Session:
         json={
             "email": person.email,
             "password": PASSWORD,
+            # Nobody reads these addresses, so the ticket is written straight
+            # into the table. See `scripts/registration.py`.
+            "verification_token": issue_registration_ticket(person.email),
             "allowed_domains": [BANK_DOMAIN],
         },
     )

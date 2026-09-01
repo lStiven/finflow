@@ -3,17 +3,30 @@ from __future__ import annotations
 import functools
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from personal_finance.contexts.identity.application.commands import (
+    ChangePasswordCommand,
+    ConfirmEmailVerificationCommand,
     LoginCommand,
     RegisterUserCommand,
+    RequestEmailVerificationCommand,
+    RequestPasswordResetCommand,
+    ResetPasswordCommand,
     UpdateApprovedSendersCommand,
     UpdateProfileCommand,
 )
+from personal_finance.contexts.identity.application.credential_handlers import (
+    ChangePasswordUseCase,
+    ConfirmEmailVerificationUseCase,
+    RequestEmailVerificationUseCase,
+    RequestPasswordResetUseCase,
+    ResetPasswordUseCase,
+)
 from personal_finance.contexts.identity.application.handlers import (
+    AuthenticateUseCase,
     GetProfileUseCase,
     LoginUseCase,
     RegisterUserUseCase,
@@ -29,19 +42,39 @@ from personal_finance.contexts.identity.application.integration_events import (
 )
 from personal_finance.contexts.identity.application.ports import (
     AuthenticatedUser,
+    CredentialNotifier,
     InboxRegistration,
     RegisteredInbox,
 )
 from personal_finance.contexts.identity.domain.exceptions import (
+    DeliveryThrottledError,
     EmailAlreadyRegisteredError,
+    EmailNotVerifiedError,
     InvalidAccessTokenError,
     InvalidCredentialsError,
+    InvalidPasswordResetTokenError,
+    InvalidVerificationCodeError,
+    PasswordUnchangedError,
+    TooManyVerificationAttemptsError,
     UserNotFoundError,
+    VerificationExpiredError,
 )
 from personal_finance.contexts.identity.domain.policies import WeakPasswordError
-from personal_finance.contexts.identity.domain.value_objects import PersonName
+from personal_finance.contexts.identity.domain.value_objects import (
+    PersonName,
+    VerificationCode,
+)
+from personal_finance.contexts.identity.infrastructure.email.smtp import (
+    LoggingCredentialNotifier,
+    MailDeliveryError,
+    SmtpCredentialNotifier,
+)
 from personal_finance.contexts.identity.infrastructure.inbox.ingestion_inbox_registrar import (  # noqa: E501
     IngestionInboxRegistrar,
+)
+from personal_finance.contexts.identity.infrastructure.persistence.credentials_dynamodb import (  # noqa: E501
+    DynamoDBEmailVerificationRepository,
+    DynamoDBPasswordResetRepository,
 )
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
     DynamoDBUserRepository,
@@ -51,6 +84,13 @@ from personal_finance.contexts.identity.infrastructure.security.jwt_tokens impor
 )
 from personal_finance.contexts.identity.infrastructure.security.password_hashing import (  # noqa: E501
     BcryptPasswordHasher,
+)
+from personal_finance.contexts.identity.infrastructure.security.secret_generator import (  # noqa: E501
+    SecretsSecretGenerator,
+)
+from personal_finance.contexts.identity.infrastructure.security.secret_hashing import (
+    BcryptSecretHasher,
+    Sha256SecretHasher,
 )
 from personal_finance.contexts.ingestion.application.inbox_handlers import (
     ListUserInboxesUseCase,
@@ -70,6 +110,7 @@ from personal_finance.shared.infrastructure.aws.session import (
     get_eventbridge_client,
 )
 from personal_finance.shared.infrastructure.config.settings import (
+    get_aws_settings,
     get_identity_settings,
     get_ingestion_settings,
 )
@@ -126,6 +167,10 @@ class RegisterPayload(InboxSendersPayload):
 
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=8, max_length=256)
+    # What `POST /identity/verification/confirm` handed back for this same
+    # address. Required: an account is never built on an address that has not
+    # answered.
+    verification_token: str = Field(min_length=16, max_length=256)
     # Optional: an account is identified by its email. Skipping it here leaves
     # the account nameless until `PATCH /identity/me` sets one.
     name: str | None = Field(
@@ -163,6 +208,46 @@ class RegisteredInboxResponse(BaseModel):
     address: str
     allowed_domains: list[str]
     allowed_addresses: list[str]
+
+
+class EmailPayload(BaseModel):
+    """An address, and nothing else. Used by both unauthenticated flows."""
+
+    email: str = Field(min_length=3, max_length=320)
+
+
+class VerificationCodePayload(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    # A little longer than the code itself, so a paste with a space or a dash
+    # in it is normalized rather than refused.
+    code: str = Field(min_length=VerificationCode.LENGTH, max_length=16)
+
+
+class VerificationRequestedResponse(BaseModel):
+    """Deliberately says nothing about the address it was given.
+
+    Same body whether the address is new, already registered, or a typo, so
+    the endpoint cannot be used to ask which. `code` is filled in only on a
+    developer's own machine, where no mail is sent at all.
+    """
+
+    expires_in_minutes: int
+    code: str | None = None
+
+
+class VerificationConfirmedResponse(BaseModel):
+    verification_token: str
+    expires_at: int
+
+
+class ResetPasswordPayload(BaseModel):
+    token: str = Field(min_length=16, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+class ChangePasswordPayload(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
 
 
 @functools.lru_cache(maxsize=1)
@@ -242,6 +327,152 @@ def _build_user_repository() -> DynamoDBUserRepository:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_verification_repository() -> DynamoDBEmailVerificationRepository:
+    return DynamoDBEmailVerificationRepository(
+        client=get_dynamodb_client(),
+        table_name=get_identity_settings().challenges_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_password_reset_repository() -> DynamoDBPasswordResetRepository:
+    return DynamoDBPasswordResetRepository(
+        client=get_dynamodb_client(),
+        table_name=get_identity_settings().challenges_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_code_hasher() -> BcryptSecretHasher:
+    return BcryptSecretHasher()
+
+
+@functools.lru_cache(maxsize=1)
+def _build_token_hasher() -> Sha256SecretHasher:
+    return Sha256SecretHasher()
+
+
+@functools.lru_cache(maxsize=1)
+def _build_secret_generator() -> SecretsSecretGenerator:
+    return SecretsSecretGenerator()
+
+
+@functools.lru_cache(maxsize=1)
+def _build_notifier() -> CredentialNotifier:
+    """The mailbox this context sends from, or a refusal to start.
+
+    An unconfigured mailbox is a startup failure everywhere but a developer's
+    own machine, and deliberately so: the degraded alternative is a deployment
+    that accepts registrations it can never complete, and the *other* degraded
+    alternative — falling back to the logging notifier — would write live
+    codes and reset links into CloudWatch.
+    """
+    settings = get_identity_settings()
+
+    if settings.mail_configured:
+        return SmtpCredentialNotifier(
+            host=settings.mail_host,
+            port=settings.mail_port,
+            username=settings.mail_login,
+            password=settings.mail_app_password.get_secret_value(),
+            from_address=settings.mail_from_address,
+            from_name=settings.mail_from_name,
+        )
+
+    if get_aws_settings().is_local:
+        return LoggingCredentialNotifier()
+
+    raise ValueError(
+        "IDENTITY_MAIL_FROM_ADDRESS and IDENTITY_MAIL_APP_PASSWORD are not "
+        "set: this deployment could not mail a verification code or a "
+        "password-reset link, so nobody could register or recover an "
+        "account. See docs/deploy.md.",
+    )
+
+
+def _local_echo() -> bool:
+    """Whether the code may be returned in the response.
+
+    Only where this deployment is a developer's own machine, and derived from
+    nothing but that: a separate switch would be a switch somebody could set
+    in production, which would publish every code to whoever asked for it.
+    """
+    return get_aws_settings().is_local
+
+
+@functools.lru_cache(maxsize=1)
+def _build_request_verification_use_case() -> RequestEmailVerificationUseCase:
+    settings = get_identity_settings()
+
+    return RequestEmailVerificationUseCase(
+        verifications=_build_verification_repository(),
+        users=_build_user_repository(),
+        generator=_build_secret_generator(),
+        code_hasher=_build_code_hasher(),
+        notifier=_build_notifier(),
+        code_ttl_minutes=settings.verification_code_ttl_minutes,
+        window_minutes=settings.delivery_window_minutes,
+        local_echo=_local_echo(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_confirm_verification_use_case() -> ConfirmEmailVerificationUseCase:
+    return ConfirmEmailVerificationUseCase(
+        verifications=_build_verification_repository(),
+        generator=_build_secret_generator(),
+        code_hasher=_build_code_hasher(),
+        ticket_hasher=_build_token_hasher(),
+        ticket_ttl_minutes=get_identity_settings().registration_ticket_ttl_minutes,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_request_password_reset_use_case() -> RequestPasswordResetUseCase:
+    settings = get_identity_settings()
+
+    return RequestPasswordResetUseCase(
+        resets=_build_password_reset_repository(),
+        users=_build_user_repository(),
+        generator=_build_secret_generator(),
+        token_hasher=_build_token_hasher(),
+        notifier=_build_notifier(),
+        reset_url=settings.password_reset_url,
+        ttl_minutes=settings.password_reset_ttl_minutes,
+        window_minutes=settings.delivery_window_minutes,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_reset_password_use_case() -> ResetPasswordUseCase:
+    return ResetPasswordUseCase(
+        resets=_build_password_reset_repository(),
+        users=_build_user_repository(),
+        hasher=_build_hasher(),
+        token_hasher=_build_token_hasher(),
+        event_publisher=_build_event_publisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_change_password_use_case() -> ChangePasswordUseCase:
+    return ChangePasswordUseCase(
+        users=_build_user_repository(),
+        hasher=_build_hasher(),
+        token_issuer=_build_token_issuer(),
+        event_publisher=_build_event_publisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_authenticator() -> AuthenticateUseCase:
+    return AuthenticateUseCase(
+        token_issuer=_build_token_issuer(),
+        repository=_build_user_repository(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def _build_register_use_case() -> RegisterUserUseCase:
     return RegisterUserUseCase(
         repository=_build_user_repository(),
@@ -249,6 +480,8 @@ def _build_register_use_case() -> RegisterUserUseCase:
         token_issuer=_build_token_issuer(),
         inbox_registrar=_build_inbox_registrar(),
         event_publisher=_build_event_publisher(),
+        verifications=_build_verification_repository(),
+        ticket_hasher=_build_token_hasher(),
     )
 
 
@@ -309,13 +542,44 @@ def get_token_issuer() -> JWTTokenIssuer:
     return _build_token_issuer()
 
 
+def get_authenticator() -> AuthenticateUseCase:
+    return _build_authenticator()
+
+
+def get_request_verification_use_case() -> RequestEmailVerificationUseCase:
+    return _build_request_verification_use_case()
+
+
+def get_confirm_verification_use_case() -> ConfirmEmailVerificationUseCase:
+    return _build_confirm_verification_use_case()
+
+
+def get_request_password_reset_use_case() -> RequestPasswordResetUseCase:
+    return _build_request_password_reset_use_case()
+
+
+def get_reset_password_use_case() -> ResetPasswordUseCase:
+    return _build_reset_password_use_case()
+
+
+def get_change_password_use_case() -> ChangePasswordUseCase:
+    return _build_change_password_use_case()
+
+
 def get_current_user(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
         Depends(_bearer_scheme),
     ],
-    token_issuer: Annotated[JWTTokenIssuer, Depends(get_token_issuer)],
+    authenticator: Annotated[AuthenticateUseCase, Depends(get_authenticator)],
 ) -> AuthenticatedUser:
+    """Who is calling, according to a token this deployment signed.
+
+    More than a signature check: the account behind the token is read and its
+    credential generation compared, so a password change ends the sessions
+    opened before it. See `AuthenticateUseCase` for what that costs and why it
+    is worth it.
+    """
     unauthorized = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing or invalid access token",
@@ -326,7 +590,7 @@ def get_current_user(
         raise unauthorized
 
     try:
-        return token_issuer.verify(credentials.credentials)
+        return authenticator.execute(credentials.credentials)
     except InvalidAccessTokenError as error:
         raise unauthorized from error
 
@@ -364,8 +628,14 @@ def register(
 ) -> AccessTokenResponse:
     """Create an account and assign it a forwarding address.
 
-    The address itself never appears in this response — it depends only on
-    the new account's id, so `GET /identity/inbox` right after this call
+    The last step of three: `POST /identity/verification/request` mails a
+    code, `POST /identity/verification/confirm` trades it for the token this
+    endpoint spends. Without that token there is no account, which is what
+    keeps this from being a way to fill the deployment with addresses nobody
+    can reach.
+
+    The forwarding address never appears in this response — it depends only
+    on the new account's id, so `GET /identity/inbox` right after this call
     already has it.
     """
     try:
@@ -373,6 +643,7 @@ def register(
             RegisterUserCommand(
                 email=payload.email,
                 password=payload.password,
+                verification_token=payload.verification_token,
                 name=payload.name,
                 inbox=payload.to_registration(),
             ),
@@ -380,6 +651,11 @@ def register(
     except WeakPasswordError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+    except EmailNotVerifiedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
             detail=str(error),
         ) from error
     except EmailAlreadyRegisteredError as error:
@@ -526,6 +802,227 @@ def _profile_response(profile: UserProfile) -> CurrentUserResponse:
         user_id=str(profile.user_id.value),
         email=profile.email.value,
         name=profile.name.value if profile.name is not None else None,
+    )
+
+
+# ----------------------------------------------------------------------
+# Proving an address, before an account is built on it
+# ----------------------------------------------------------------------
+#
+# Both of these are unauthenticated, so both are written to give nothing away.
+# `request` answers the same way for an address that is free, one that is
+# already taken and one that does not exist, and it sends mail in every case —
+# a silent branch would itself be the answer. `confirm` gives one error for a
+# wrong code, an expired one and an address with no challenge at all.
+
+
+@router.post(
+    "/verification/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=VerificationRequestedResponse,
+)
+def request_email_verification(
+    payload: EmailPayload,
+    use_case: Annotated[
+        RequestEmailVerificationUseCase,
+        Depends(get_request_verification_use_case),
+    ],
+) -> VerificationRequestedResponse:
+    """Mail a one-time code to an address that wants an account.
+
+    202 rather than 200: what this promises is that a message was handed to
+    the mail server, not that anybody read it.
+    """
+    try:
+        requested = use_case.execute(
+            RequestEmailVerificationCommand(email=payload.email),
+        )
+    except DeliveryThrottledError as error:
+        raise _throttled(error) from error
+    except MailDeliveryError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not send the verification email. Try again shortly.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    return VerificationRequestedResponse(
+        expires_in_minutes=requested.expires_in_minutes,
+        code=requested.code,
+    )
+
+
+@router.post("/verification/confirm", response_model=VerificationConfirmedResponse)
+def confirm_email_verification(
+    payload: VerificationCodePayload,
+    use_case: Annotated[
+        ConfirmEmailVerificationUseCase,
+        Depends(get_confirm_verification_use_case),
+    ],
+) -> VerificationConfirmedResponse:
+    """Trade a code for the token `POST /identity/register` spends.
+
+    The token is what reserves the address: verifying is not registering, and
+    somebody who merely knows that an address was just verified must not be
+    able to race its owner to the account.
+    """
+    try:
+        ticket = use_case.execute(
+            ConfirmEmailVerificationCommand(email=payload.email, code=payload.code),
+        )
+    except TooManyVerificationAttemptsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many attempts. Ask for a new code.",
+        ) from error
+    except VerificationExpiredError as error:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="That code expired. Ask for a new one.",
+        ) from error
+    except (InvalidVerificationCodeError, ValueError) as error:
+        # One answer for a wrong code, a malformed address and an address with
+        # no challenge behind it.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That code is not valid",
+        ) from error
+
+    return VerificationConfirmedResponse(
+        verification_token=ticket.token,
+        expires_at=ticket.expires_at.as_epoch_seconds(),
+    )
+
+
+# ----------------------------------------------------------------------
+# Passwords: forgotten, reset, changed
+# ----------------------------------------------------------------------
+
+
+@router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
+def request_password_reset(
+    payload: EmailPayload,
+    use_case: Annotated[
+        RequestPasswordResetUseCase,
+        Depends(get_request_password_reset_use_case),
+    ],
+) -> Response:
+    """Mail a link that lets somebody who cannot log in set a new password.
+
+    Answers 202 whether or not the address has an account, and sends mail
+    either way, so this is not a way to find out who is registered here.
+    """
+    try:
+        use_case.execute(RequestPasswordResetCommand(email=payload.email))
+    except DeliveryThrottledError as error:
+        raise _throttled(error) from error
+    except MailDeliveryError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not send the email. Try again shortly.",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(
+    payload: ResetPasswordPayload,
+    use_case: Annotated[ResetPasswordUseCase, Depends(get_reset_password_use_case)],
+) -> Response:
+    """Spend an emailed link and set the password behind it.
+
+    No token comes back: the account this just handed over is reached by
+    logging in with the new password, which is also the proof that it worked.
+    Every session opened with the old password stops working here.
+    """
+    try:
+        use_case.execute(
+            ResetPasswordCommand(
+                token=payload.token,
+                new_password=payload.new_password,
+            ),
+        )
+    except WeakPasswordError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+    except InvalidPasswordResetTokenError as error:
+        # Unknown, expired and already spent are one answer: confirming that a
+        # token was ever real is already more than a stranger should learn.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That link is no longer valid. Ask for a new one.",
+        ) from error
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/password/change", response_model=AccessTokenResponse)
+def change_password(
+    payload: ChangePasswordPayload,
+    caller: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    use_case: Annotated[ChangePasswordUseCase, Depends(get_change_password_use_case)],
+) -> AccessTokenResponse:
+    """Change the password of somebody who can still log in.
+
+    The current password is required even though the caller already holds a
+    token: a session left open on a shared machine must not be enough to take
+    an account over.
+
+    A token comes back because the change invalidates the one that made this
+    request, along with every other session. The client is expected to replace
+    what it holds with this.
+    """
+    try:
+        token = use_case.execute(
+            caller=caller,
+            command=ChangePasswordCommand(
+                current_password=payload.current_password,
+                new_password=payload.new_password,
+            ),
+        )
+    except InvalidCredentialsError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is not correct",
+        ) from error
+    except (WeakPasswordError, PasswordUnchangedError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+    except UserNotFoundError as error:
+        raise _account_is_gone() from error
+
+    return _as_response(
+        user_id=caller.user_id,
+        access_token_value=token.value,
+        expires_at_epoch_seconds=token.expires_at.as_epoch_seconds(),
+    )
+
+
+def _throttled(error: DeliveryThrottledError) -> HTTPException:
+    """A refusal to send more mail to this address just yet.
+
+    `Retry-After` is the standard way to say how long, and it is the only
+    detail given: how many messages have already gone out, and to what, stays
+    between the deployment and the address.
+    """
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many messages requested for this address. Try again later.",
+        headers={"Retry-After": str(error.retry_after_seconds)},
     )
 
 

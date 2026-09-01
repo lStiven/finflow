@@ -18,6 +18,10 @@ from personal_finance.shared.domain.value_objects import PosixTime, UserId
 _SUBJECT_CLAIM = "sub"
 _EMAIL_CLAIM = "email"
 _NAME_CLAIM = "name"
+# Not a registered claim: which generation of the account's credentials this
+# token was cut from. `AuthenticateUseCase` compares it against the stored
+# account, which is what makes a password change end other sessions.
+_CREDENTIAL_VERSION_CLAIM = "cv"
 
 
 class JWTTokenIssuer:
@@ -43,6 +47,7 @@ class JWTTokenIssuer:
         claims: dict[str, object] = {
             _SUBJECT_CLAIM: str(user.user_id.value),
             _EMAIL_CLAIM: user.email.value,
+            _CREDENTIAL_VERSION_CLAIM: user.credential_version,
             "exp": expires_at.to_datetime(),
         }
 
@@ -65,6 +70,7 @@ class JWTTokenIssuer:
             user_id=_read_user_id(payload),
             email=_read_email(payload),
             name=_read_name(payload),
+            credential_version=_read_credential_version(payload),
         )
 
 
@@ -94,6 +100,22 @@ def _read_email(payload: dict[str, object]) -> Email:
         raise InvalidAccessTokenError(
             "Access token email claim is not an email address",
         ) from error
+
+
+def _read_credential_version(payload: dict[str, object]) -> int:
+    """Which credentials this token was cut from.
+
+    Required rather than defaulted: a token without the claim predates it, and
+    the accounts it names have all moved on. Reading it as "no version" would
+    be the one case where an unverifiable token still authenticates.
+    """
+    version = payload.get(_CREDENTIAL_VERSION_CLAIM)
+
+    # `bool` is an `int` in Python and would sail through the check.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise InvalidAccessTokenError("Access token is missing its credential version")
+
+    return version
 
 
 def _read_name(payload: dict[str, object]) -> PersonName | None:

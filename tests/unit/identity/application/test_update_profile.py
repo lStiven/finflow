@@ -39,6 +39,17 @@ class InMemoryUserRepository:
 
         return True
 
+    def change_password(self, user: User) -> bool:
+        stored = self.by_email.get(user.email)
+
+        if stored is None or stored.id != user.id:
+            return False
+
+        stored.password_hash = user.password_hash
+        stored.credential_version = user.credential_version
+
+        return True
+
 
 def _user(*, email: str = EMAIL, name: str | None = None) -> User:
     return User.register(

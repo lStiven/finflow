@@ -120,3 +120,38 @@ def test_rename_refuses_an_account_whose_address_now_belongs_to_someone_else(
     stored = repository.find_by_email(current.email)
     assert stored is not None
     assert stored.name is None
+
+
+def test_changing_a_password_writes_the_hash_and_the_moment_together(
+    repository: DynamoDBUserRepository,
+) -> None:
+    user = _user()
+    repository.add_if_new(user)
+    user.change_password(PasswordHash("$2b$12$brandnew"))
+
+    assert repository.change_password(user)
+
+    stored = repository.find_by_email(user.email)
+    assert stored is not None
+    assert stored.password_hash == PasswordHash("$2b$12$brandnew")
+    # The two are one fact: a hash stored without the version beside it would
+    # leave every already-issued token valid.
+    assert stored.credential_version == 2
+
+
+def test_a_password_change_refuses_to_land_on_a_different_account(
+    repository: DynamoDBUserRepository,
+) -> None:
+    # The address was reassigned between the read and the write. Guarded by
+    # the account id, exactly as `rename` is.
+    stored = _user()
+    repository.add_if_new(stored)
+    stale = _user()
+    stale.change_password(PasswordHash("$2b$12$theirs"))
+
+    assert not repository.change_password(stale)
+
+    unchanged = repository.find_by_email(stored.email)
+    assert unchanged is not None
+    assert unchanged.id == stored.id
+    assert unchanged.password_hash == stored.password_hash
