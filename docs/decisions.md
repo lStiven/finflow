@@ -582,6 +582,18 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   Both Dockerfile stages sit on Lambda's own base image because `bcrypt` is a
   compiled extension: wheels built against another distribution's glibc import
   fine and fail at runtime.
+- **Running and deploying are two guides, not one** (2026-09-01).
+  `docs/running.md` had grown to 972 lines covering both, and the deploy steps
+  for one environment were spread across three sections that each held part of
+  the answer — secrets in one, provisioning in another, `sam deploy` in a
+  third. Split into `docs/deploy.md` (getting the system into AWS: permissions,
+  secrets, provision, deploy, publish, smoke) and `running.md` (running the
+  processes: local, and from your machine against a real account), with
+  `docs/README.md` as the index. The rule that keeps them from merging back:
+  if a step needs AWS credentials to change something that persists, it
+  belongs in `deploy.md`. Anchors other docs link to —
+  `running.md#el-frontend`, `#4-configurar-la-cuenta-de-ingesta`,
+  `#cuando-algo-falla` — were kept where they were on purpose.
 - **The frontend is not hosted on this AWS account, because it cannot be**
   (2026-09-01). S3 plus CloudFront was written, reviewed and deployed, and
   died on a gate no template can pass: *"Your account must be verified before

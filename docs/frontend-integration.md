@@ -12,8 +12,9 @@ Complementos, no sustitutos de esta guía:
 |---|---|
 | [overview.md](overview.md) | Qué hace el sistema y por qué está partido así. Léelo primero si nunca lo has visto. |
 | [running.md](running.md) | Cómo levantar el backend, los workers y el emulador. |
+| [deploy.md](deploy.md) | Cómo se despliega el backend y cómo se publica el frontend. |
 | [email-forwarding.md](email-forwarding.md) | El contrato de la bandeja de entrada, en detalle. |
-| [postman/](postman/README.md) | Los 27 requests listos para importar en Postman o Bruno. |
+| [postman/](postman/README.md) | Los 36 requests listos para importar en Postman o Bruno. |
 | `http://localhost:8000/docs` | OpenAPI en vivo. Es la fuente de verdad de esquemas y códigos. |
 | [openapi.json](openapi.json) | El mismo contrato, exportado y versionado (`just openapi`). De aquí salen los tipos TypeScript del frontend. |
 | [frontend/](../frontend/README.md) | La app que consume todo esto. Cómo levantarla y regenerar los tipos. |
@@ -24,7 +25,7 @@ Complementos, no sustitutos de esta guía:
 
 | | |
 |---|---|
-| **Base URL** | `http://localhost:8000` en desarrollo. No hay prefijo `/api` ni versión en la ruta. |
+| **Base URL** | `http://localhost:8000` en local; contra un entorno desplegado, la `ApiUrl` del stack (`just deploy-outputs-dev` / `-prod`). No hay prefijo `/api` ni versión en la ruta. En el frontend es la única variable que lo decide: `VITE_API_BASE_URL`. |
 | **Autenticación** | `Authorization: Bearer <token>`. JWT firmado (HS256), sin refresh y sin logout: cuando expira, se vuelve a hacer login. En local dura 24 h (`IDENTITY_ACCESS_TOKEN_TTL_MINUTES`). |
 | **Dinero** | Siempre **string decimal** (`"158800"`, `"45000.50"`). Nunca number. Parséalo a decimal, no a `float`: un float pierde centavos. |
 | **Tiempos** | Siempre **epoch en segundos** (int), UTC. Las alertas se interpretan en hora de Bogotá y se guardan convertidas. |
@@ -47,7 +48,7 @@ comas— y reinicia `just dev`.
 
 Lo que hay que saber para escribir el cliente:
 
-- **Métodos permitidos: `GET`, `POST`, `PATCH`.** Son los que la API usa; el
+- **Métodos permitidos: `GET`, `POST`, `PATCH`, `PUT`.** Son los que la API usa; el
   preflight `OPTIONS` lo responde el middleware.
 - **Cabeceras permitidas: `Authorization` y `Content-Type`**, además de las que
   el navegador considera seguras por sí mismo. Si mandas una cabecera propia

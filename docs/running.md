@@ -1,12 +1,13 @@
 # Levantar y operar Finflow
 
-Guía **operativa**: arrancar el sistema, crear su infraestructura, mirarla y
-desplegarla.
+Guía **operativa**: arrancar el sistema en los tres entornos, mirarlo y
+comprobar que cuadra. **Desplegarlo es otra guía**: [deploy.md](deploy.md).
 
 Lo demás vive en otro sitio, a propósito:
 
 | Para | Ver |
 |---|---|
+| Poner el sistema en AWS y publicar el frontend | [deploy.md](deploy.md) |
 | Qué hace el sistema y por qué | [overview.md](overview.md) |
 | Qué endpoints hay y en qué orden se llaman | [frontend-integration.md](frontend-integration.md) |
 | Probar la API a mano, sin `curl` | [postman/](postman/README.md) |
@@ -48,7 +49,7 @@ variable `ENV_FILE` lo decide, y cada recipe de `just` ya la fija por ti:
 
 Los ficheros `.env` configuran lo que corre **desde tu máquina**. Lo que corre
 **desplegado** son cinco funciones Lambda, y su configuración vive en
-`infra/template.yaml` — ver [Desplegar en Lambda](#desplegar-en-lambda).
+`infra/template.yaml` — ver [deploy.md](deploy.md).
 
 **El frontend no sigue esta tabla, y conviene saberlo antes de perder una
 tarde.** No tiene tres entornos: tiene dos modos de Vite (`dev` y `build`), y
@@ -65,10 +66,10 @@ con **todo prefijado `dev-`** para que no pueda tocar los datos de producción
 porque el mensaje se borra antes de que producción lo lea. El prefijo lo
 aplica el código (`ENVIRONMENT=development`), no nueve variables a mano.
 
-Vive en **su propia cuenta de AWS**, con su propio perfil (`finflow-dev`
-frente a `finflow-production`). El prefijo `dev-` sigue encima de eso: si
-alguna vez apuntas el entorno a la cuenta equivocada, los nombres tampoco
-coinciden con los de producción.
+Tiene **su propio perfil** (`finflow-dev` frente a `finflow-production`), pero
+hoy los dos resuelven a la **misma cuenta de AWS**: la separación real es el
+prefijo `dev-`, no la cuenta. Compruébalo cuando importe:
+`aws sts get-caller-identity --profile finflow-dev --query '[Account,Arn]' --output text`.
 
 **Los ficheros `.example`.** Cada `.env*` tiene su `.env*.example` **sí**
 versionado en git; los `.env*` reales están ignorados. El `.example` es la
@@ -290,6 +291,10 @@ just provision-dev          # crea los recursos dev-*, una sola vez
 just up-dev                 # los cinco procesos, en una terminal
 ```
 
+Eso corre los procesos **desde tu máquina** contra los recursos `dev-`. Para
+dejarlos corriendo en AWS como cinco funciones Lambda, ver
+[deploy.md → Backend → development](deploy.md#backend--development).
+
 Aquí `ingest-worker` **sí** arranca: development es un entorno donde el correo
 entra por donde entra en producción. No corras a la vez el poller de dos
 entornos — se pelean por el mismo buzón.
@@ -301,21 +306,16 @@ El prefijo separa tablas, colas y bus — **no el buzón**. Si vas a correr
 producción; si no, deja la App Password vacía y el worker no arrancará. Ver el
 aviso en [Configurar `.env`](#1-configurar-env).
 
-Los secretos del stack `finflow-dev` van a **su** cuenta, no a la de
-producción — ver [Los mismos secretos, en
-development](#los-mismos-secretos-en-development), porque el comando apunta a
-producción si no se le dice otra cosa.
+Los secretos del stack `finflow-dev` son los suyos, bajo
+`/finflow/development/`: `just secret-put` deduce del prefijo de la ruta a qué
+entorno pertenece, así que no hay un argumento que equivocar — ver
+[deploy.md → Los tres secretos](deploy.md#4-los-tres-secretos-en-parameter-store).
 
-Eso mismo vale entre los dos stacks desplegados, y ahí no hay App Password que
-dejar vacía: los dos tendrían la suya en SSM. Lo decide el parámetro
-**`IngestScheduleState`**, que apaga el temporizador de un stack entero.
-Development está en `DISABLED` y producción en `ENABLED`, porque el lector
-busca `UNSEEN` y marca `\Seen` lo que se lleva: dos pollers no duplican un
-correo, **se lo disputan** —cada mensaje cae en el que preguntó primero y es
-invisible para el otro. Un stack apagado sigue funcionando entero; lo único
-que se detiene es la entrada automática de correo. Para ensayar la ingesta en
-development, invierte los dos valores en `infra/samconfig.toml` y vuelve a
-desplegar ambos.
+Entre los dos stacks desplegados el problema ya no existe: cada uno tiene su
+propia cuenta de Gmail (`IngestMailboxAddress` en `infra/samconfig.toml`), y
+por eso los dos pueden poll-ear a la vez — ver [deploy.md → Cada stack tiene
+su propio buzón](deploy.md#cada-stack-tiene-su-propio-buzón). Lo que sigue sin
+poder compartirse es **una misma cuenta entre dos pollers**.
 
 Development hereda **todas** las restricciones de producción menos una: puede
 usar `AWS_ENDPOINT_URL`, que es lo que permite ensayar esta configuración
@@ -332,7 +332,7 @@ Misma imagen, mismo código; cambian el fichero de entorno y las credenciales.
 `AWS_ENDPOINT_URL` está **prohibido** con `ENVIRONMENT=production`: un
 endpoint de emulador olvidado no puede desviar tráfico real.
 
-### 1. Credenciales y secretos
+### 1. Credenciales y ficheros
 
 ```bash
 cp .env.production.example .env.production
@@ -340,22 +340,12 @@ aws configure --profile finflow-production
 ```
 
 **Ninguna clave de AWS se escribe en el fichero**: en local vienen del perfil
-de `~/.aws`, y desplegado del rol de la instancia o la tarea (deja
-`AWS_PROFILE` sin valor en ese caso).
+de `~/.aws`, y desplegado del rol de la función (deja `AWS_PROFILE` sin valor
+en ese caso).
 
-Los secretos de la aplicación —`IDENTITY_JWT_SECRET`,
-`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— van en **SSM Parameter
-Store**, y el fichero solo guarda una referencia:
-
-```bash
-uv run python -c "import secrets; print(secrets.token_hex(32))"   # genera el valor
-just secret-put /finflow/production/jwt-secret                    # y pégalo cuando lo pida
-```
-
-`secret-put` **pide el valor por prompt**, no lo acepta como argumento: una
-línea de comandos es visible en `ps` para cualquier proceso de la máquina y
-queda en el historial del shell. Termina imprimiendo la referencia que hay que
-pegar:
+Los tres secretos de la aplicación —`IDENTITY_JWT_SECRET`,
+`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— **no** van en el
+fichero: van en SSM Parameter Store y el fichero solo guarda la referencia.
 
 ```
 IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret
@@ -363,49 +353,29 @@ IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret
 
 Cualquier valor que **no** empiece por `ssm:` se toma como el secreto mismo,
 que es lo que mantiene el desarrollo local con valores planos. La conversión
-es por secreto, no global, así que `grep ssm: .env.production` responde cuáles
-ya están fuera del fichero. Se leen una vez por proceso: rotar uno exige
+es por secreto, no global: `grep ssm: .env.production` responde cuáles ya
+están fuera del fichero. Se leen una vez por proceso, así que rotar uno exige
 reiniciar.
 
-Los parámetros estándar son gratuitos (hasta diez mil) y se cifran con KMS —
-por eso Parameter Store y no Secrets Manager, que cobra por secreto y mes a
-cambio de una rotación automática que aquí nadie usa todavía.
+Cómo se ponen ahí, y cómo se rotan, en
+[deploy.md → Los tres secretos](deploy.md#4-los-tres-secretos-en-parameter-store).
 
-### 2. Crear los recursos
+### 2. Los recursos
 
-```bash
-aws sso login --profile finflow-production   # si usas SSO
-just provision-prod
-```
+Producción necesita sus tablas, colas y bus antes de que nada arranque:
+`just provision-prod`, y pegar en `.env.production` las cuatro URLs de cola
+que imprime — solo existen una vez creada la cola, porque la URL incluye el id
+de cuenta. Los pasos completos están en
+[deploy.md → Backend → producción](deploy.md#backend--producción).
 
-Termina con un bloque **`Put this in .env.production:`**. Esas cuatro líneas
-hay que pegarlas:
+Comprueba qué existe ahora mismo con `just aws-status .env.production`.
 
-```
-INGESTION_PARSE_QUEUE_URL=...
-INGESTION_INTEGRATION_EVENTS_QUEUE_URL=...
-MERCHANT_EVENTS_QUEUE_URL=...
-FINANCIAL_EVENTS_QUEUE_URL=...
-```
+### 3. Correr producción desde tu máquina
 
-Solo existen una vez creada la cola, porque la URL incluye el id de cuenta. Es
-la razón de que cada cola tenga dos ajustes: el aprovisionamiento conoce el
-nombre, la aplicación exige la URL completa.
-
-Comprueba con `just aws-status .env.production`.
-
-### 3. Desplegar
-
-El destino son **cinco funciones Lambda**, no una máquina encendida. Ver
-[Desplegar en Lambda](#desplegar-en-lambda) más abajo para el detalle:
-
-```bash
-just deploy-prod
-```
-
-Los cinco procesos de siempre siguen existiendo y siguen sirviendo para correr
-producción **desde tu máquina** —depurar contra datos reales, una migración
-puntual, comprobar algo sin desplegar—:
+Lo normal es que producción corra desplegada, como cinco funciones Lambda
+([deploy.md](deploy.md)). Aun así los cinco procesos de siempre siguen
+sirviendo para depurar contra datos reales, hacer una migración puntual o
+comprobar algo sin desplegar:
 
 ```bash
 just run-prod              # uvicorn, sin recarga, puerto 8000
@@ -415,8 +385,9 @@ just merchant-worker-prod
 just financial-worker-prod
 ```
 
-No los corras a la vez que el despliegue: el `ingest-worker` local competiría
-con la función por el mismo buzón, y los de cola por los mismos mensajes.
+**No los corras a la vez que el despliegue**: el `ingest-worker` local
+competiría con la función por el mismo buzón, y los de cola por los mismos
+mensajes.
 
 ### 4. Configurar la cuenta de ingesta
 
@@ -470,6 +441,20 @@ just web-install                                     # una vez
 just web                                             # http://localhost:5173
 ```
 
+Para trabajar contra un backend **desplegado**, cambia esa única variable y
+vuelve a arrancar `just web`:
+
+```bash
+just deploy-outputs-dev     # copia el valor de ApiUrl
+# pégalo en frontend/.env.development como VITE_API_BASE_URL, sin barra final
+```
+
+`http://localhost:5173` está hoy en el `CorsOrigins` de los dos entornos, así
+que funciona contra cualquiera de los dos. Si sirves el frontend desde otro
+puerto o dominio, ese origen hay que añadirlo en `infra/samconfig.toml` y
+volver a desplegar el backend — comprueba la lista antes de suponerla:
+`grep -n CorsOrigins infra/samconfig.toml`.
+
 **Todo lo que pongas en esos ficheros viaja dentro del bundle.** No son
 secretos: cualquiera que abra la app puede leerlos. Nunca metas ahí una clave.
 
@@ -521,323 +506,26 @@ Si no lo haces, `just openapi-check` falla porque el contrato versionado ya no
 es el que produce el código. Ese es el punto del montaje: un endpoint que
 cambia rompe la compilación del frontend en vez de romper una pantalla.
 
-### Publicarlo: Cloudflare Pages
+### Publicarlo
 
-El bundle vive en **Cloudflare Pages**, no en S3 con CloudFront. La razón es
-de cuenta, no de diseño: AWS bloquea la creación de distribuciones de
-CloudFront en cuentas jóvenes hasta que Support las verifica, y las
-declaraciones de hosting salieron del template para que el backend pudiera
-seguir desplegándose. Volver a CloudFront cuando contesten es devolverlas y
-borrar la receta.
+El bundle se publica en Cloudflare Pages con `just web-publish` (producción) o
+`just web-publish-dev`. El comando genera `frontend/.env.production` desde la
+`ApiUrl` del stack, construye y sube, para que las dos mitades no puedan
+discrepar sobre una dirección.
 
-```bash
-cd frontend && npx wrangler login   # una vez por máquina
-just web-publish                    # contra producción
-just web-publish-dev                # contra el stack de development
-```
-
-`just web-publish` hace las tres cosas que tienen que ir juntas: lee la
-`ApiUrl` del stack, **genera** `frontend/.env.production` con ella —no la
-copies a mano, ese es justo el valor que se queda viejo— construye, y sube
-`dist/`. Es *direct upload*: lo que se publica es el `dist/` de tu árbol de
-trabajo, y Cloudflare nunca necesita acceso al repositorio.
-
-**El origen de Pages tiene que estar en `CorsOrigins`.** Es un despliegue en
-otro dominio: `https://<proyecto>.pages.dev` no lo conoce la API hasta que
-alguien lo añade en `infra/samconfig.toml` y **vuelve a desplegar el backend**.
-La receta avisa al terminar si no lo encuentra, porque el fallo no se parece a
-un fallo: la app carga, las pantallas se dibujan y cada llamada muere en el
-*preflight*. La lista es de coincidencia exacta, así que un dominio propio es
-una entrada más, y las URL de *preview* de Pages —un subdominio distinto por
-despliegue— no pueden estar en ella. Por eso la receta publica siempre en la
-rama de producción del proyecto y nunca como preview.
-
-Dos ficheros en `frontend/public/` sostienen lo que antes hacía CloudFront, y
-Vite los copia tal cual a la raíz de `dist/`:
-
-- **`_headers`** — HSTS, `nosniff`, `X-Frame-Options: DENY` y el
-  *referrer-policy*, más `immutable` para `/assets/*`. Es la
-  `ResponseHeadersPolicy` que declaraba el template.
-- **`_redirects`** — `/* /index.html 200`, el equivalente de las
-  `CustomErrorResponses`. Sin él, `/cuentas` recargado desde el navegador es un
-  404: la ruta existe en el bundle, no en la subida.
+Queda un paso que el comando no hace: el origen desde el que se sirve la app
+tiene que estar en `CorsOrigins` y el backend volver a desplegarse, o cada
+llamada muere en el preflight. Los pasos, en
+[deploy.md → Frontend](deploy.md#frontend--cloudflare-pages).
 
 ---
 
-## Desplegar en Lambda
+## Desplegar
 
-Los cinco procesos se despliegan como **cinco funciones Lambda**, desde una
-sola imagen de contenedor. Nada de esto se hace a mano: `infra/template.yaml`
-(AWS SAM) declara las funciones, sus disparadores, sus permisos y la URL de la
-API.
-
-### Quién crea qué
-
-Hay **dos herramientas**, y la línea entre ellas no es arbitraria:
-
-| | Lo crea | Por qué |
-|---|---|---|
-| Tablas, colas, DLQ, bus, reglas | `provisioning.py` (`just provision-prod`) | moto las emula, y **local las necesita** |
-| Funciones, roles, disparadores, URL | SAM (`just deploy-prod`) | moto no ejecuta tu código; esto solo existe en AWS real |
-
-De ahí el orden: **aprovisionar primero, desplegar después.** Las funciones se
-enganchan a colas que tienen que existir ya.
-
-### Requisitos
-
-Docker y el [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-en la máquina que despliega. El DevContainer los trae: la feature
-`docker-outside-of-docker` le presta el daemon del host —no levanta uno
-propio— y `postCreateCommand` instala `sam` con `uv tool install
-aws-sam-cli`. Comprueba con `docker info` y `sam --version` antes de
-desplegar.
-
-Las credenciales **sobreviven a un rebuild**: `~/.aws` está montado en un
-volumen Docker con nombre (`finflow-v2-aws`, declarado en
-`.devcontainer/devcontainer.json`), no en la capa del contenedor.
-Configúralas una vez con `aws configure --profile ...` y siguen ahí.
-
-Es un volumen y **no** un bind mount del `~/.aws` del host, a propósito: así
-el contenedor no ve ninguna otra credencial tuya —solo las que crees dentro
-para este proyecto—, y nada aterriza en el workspace, donde únicamente
-`.gitignore` separaría una clave de un commit. Para empezar de cero:
-`docker volume rm finflow-v2-aws` y reconstruye.
-
-Si tu cuenta está detrás de IAM Identity Center, `aws configure sso` es
-preferible a `aws configure`: lo que queda guardado en el volumen es un token
-que caduca, no una clave de acceso permanente.
-
-### Permisos del usuario que despliega
-
-Desplegar necesita mucho más que correr la app. `just provision-*` solo toca
-DynamoDB, SQS y EventBridge; `sam deploy` además crea el stack, sube la imagen
-y crea los cinco roles de ejecución. Un usuario de plano de datos falla con
-`AccessDenied` a mitad del despliegue y deja el stack en `ROLLBACK`.
-
-`infra/iam/finflow-deploy-policy.json` es la política mínima para eso, acotada
-por prefijo: los stacks `finflow` y `finflow-dev`, los roles `finflow-*`, las
-funciones `finflow-*`, los grupos de logs `/finflow/*` y los parámetros
-`/finflow/*`. `iam:PassRole` está condicionado a `lambda.amazonaws.com`, así
-que el usuario no puede prestarle un rol a ningún otro servicio.
-
-Adjúntala con una identidad que **sí** tenga permisos de IAM (la consola con
-el usuario administrador, normalmente):
-
-```bash
-aws iam create-policy --policy-name FinflowDeploy \
-  --policy-document file://infra/iam/finflow-deploy-policy.json
-aws iam attach-user-policy --user-name <tu-usuario> \
-  --policy-arn arn:aws:iam::<cuenta>:policy/FinflowDeploy
-```
-
-Dos sitios quedan en `*` a propósito, y no por pereza: los repositorios de ECR
-los nombra el *companion stack* de SAM con un hash impredecible, y los
-*event source mappings* de SQS se identifican por UUID, no por nombre. No hay
-prefijo al que agarrarse en ninguno de los dos.
-
-Y los tres secretos ya puestos en Parameter Store:
-
-```bash
-just secret-put /finflow/production/jwt-secret
-just secret-put /finflow/production/mailbox-app-password
-just secret-put /finflow/production/llm-api-key
-```
-
-#### Los mismos secretos, en development
-
-Igual que en producción, sin argumento extra: el fichero de entorno **se
-deduce de la ruta**, que ya dice de qué entorno es.
-
-```bash
-just secret-put /finflow/development/jwt-secret
-just secret-put /finflow/development/mailbox-app-password
-just secret-put /finflow/development/llm-api-key
-```
-
-Ese fichero es el que decide el `AWS_PROFILE` con el que se escribe y el que
-aparece en la línea final, la que te dice dónde pegar la referencia. Se puede
-pasar como segundo argumento para una ruta fuera de `/finflow/<entorno>/`,
-pero uno que contradiga la ruta se rechaza antes de pedirte el valor: pegar
-una referencia de development en `.env.production` haría que producción
-firmara con el secreto de dev, y un token emitido en dev valdría en
-producción.
-
-Hoy los dos perfiles resuelven a la **misma cuenta de AWS** —usuarios IAM
-distintos, cuenta única—, así que equivocarse de perfil todavía no cambia
-dónde acaba el parámetro. Compruébalo antes de fiarte de esto:
-
-```bash
-aws sts get-caller-identity --profile finflow-production --query '[Account,Arn]' --output text
-aws sts get-caller-identity --profile finflow-dev        --query '[Account,Arn]' --output text
-```
-
-El día que development tenga cuenta propia, eso empieza a importar de verdad:
-el secreto se escribiría en la cuenta que no es y el stack arrancaría sin
-encontrarlo.
-
-Las rutas no son convención suelta: cada stack recibe la suya en
-`infra/samconfig.toml` (`JwtSecretParameter`, `MailboxPasswordParameter`,
-`LlmApiKeyParameter`), así que ahí se comprueba cuál lee cada entorno.
-
-#### Cambiar o rotar uno
-
-El mismo comando: `secret-put` escribe con `Overwrite=True`, así que no hay
-que borrar nada antes. Lo que **no** hace es propagarlo — el valor se lee una
-vez por proceso:
-
-- desplegado, hay que volver a desplegar el stack (`just deploy-prod` /
-  `just deploy-dev`) o esperar a que Lambda recicle sus contenedores, que no
-  es un momento que tú decidas;
-- en local, reiniciar el proceso.
-
-Cambiar la **cuenta de correo** de un entorno son dos cosas, no una: la App
-Password nueva con `secret-put`, y la dirección en `IngestMailboxAddress`
-dentro de `infra/samconfig.toml` —que es de dónde sale la parte antes del `+`
-de la dirección de reenvío de cada usuario— más el despliegue. Cambiarla
-después de que haya usuarios registrados les invalida la dirección que ya
-pegaron en Gmail.
-
-### Desplegar
-
-```bash
-aws sso login --profile finflow-production
-just provision-prod        # una vez, y cada vez que cambie una tabla o cola
-just deploy-prod           # construye la imagen y despliega las cinco funciones
-just deploy-outputs-prod   # imprime la URL de la API
-```
-
-`just deploy-outputs-prod` devuelve algo como
-`https://abc123.lambda-url.us-east-1.on.aws/`. **Esa es la dirección de la
-app**: HTTPS ya resuelto, sin dominio, sin certificado y sin balanceador. Es
-la que va en el navegador del móvil y en la configuración del frontend.
-
-Para dev es lo mismo con `just provision-dev` y `just deploy-dev`, contra el
-stack `finflow-dev` y con todo prefijado `dev-`.
-
-### Comprobar que el despliegue sirve
-
-Que el `deploy` termine bien dice que CloudFormation creó cinco funciones, no
-que la aplicación funcione. Eso lo responde `just smoke`, que habla **por HTTP
-contra la URL desplegada** —lo único que ejerce el arranque en frío, el
-adaptador, y que la API resolviera su secreto de firma en Parameter Store:
-
-```bash
-just smoke $(just deploy-outputs-dev | grep ApiUrl | awk '{print $4}')
-just smoke https://abc123.lambda-url.us-east-1.on.aws --with-pipeline
-```
-
-Tres profundidades, porque los entornos no pueden permitirse lo mismo:
-
-| | Qué hace | Qué necesita |
-|---|---|---|
-| por defecto | Un usuario desechable por ejecución: registro, dos cuentas, un movimiento a mano, y las lecturas de la primera pantalla. | Solo la URL. **Ninguna credencial de AWS.** |
-| `--with-pipeline` | Además reenvía una alerta y **espera** a que el movimiento aparezca. Es la comprobación de que las funciones worker están vivas. | Credenciales del entorno que nombre `ENV_FILE`. |
-| `--read-only` | Salud y el guardián de autenticación. Nada escribe. | Solo la URL. |
-
-`--with-pipeline` **no drena ninguna cola**, y esa es la diferencia con
-`just verify`: contra un despliegue, quienes consumen son los *event source
-mappings*, así que un segundo consumidor competiría con ellos por los mismos
-mensajes y el resultado dependería de quién ganara. El script mete la alerta y
-pregunta a la API hasta que el movimiento aparece.
-
-Producción se comprueba con `just smoke-prod <url>`, que fuerza
-`--read-only`: cada escritura deja un usuario que ningún endpoint puede
-borrar. Y no depende de que te acuerdes: el script le pregunta a `/health`
-contra qué despliegue está —`local`, `development` o `production`— y se niega
-a escribir si la respuesta es producción, sin mirar el fichero de entorno que
-cargó. `just smoke` lee `.env.development` sea cual sea la URL que le sigas
-poniendo, así que un guardián basado en ese fichero no guarda nada. Si el
-despliegue no dice qué es, tampoco escribe.
-
-Sale con código 0 solo si pasó todo, que es lo que permite usarlo como puerta
-en CI.
-
-### Qué corre dónde
-
-| Función | Qué la despierta | Notas |
-|---|---|---|
-| `ApiFunction` | Function URL (HTTPS) | El mismo `uvicorn` de `just run-prod`, detrás del Lambda Web Adapter. **Cero líneas de código propias.** |
-| `IngestFunction` | Un temporizador (cada minuto) | Una pasada de IMAP por tick. Limitada a **una** ejecución simultánea: dos competirían por los mismos correos `UNSEEN`. |
-| `ParseFunction` | La cola `parse-notifications` | Lotes de 3 |
-| `MerchantFunction` | La cola `merchant-events` | Lotes de 3, y **una** ejecución simultánea |
-| `FinancialFunction` | La cola `financial-events` | Lotes de 10, sin límite de concurrencia |
-
-**Por qué esos números.** El timeout de una función no puede pasar del
-`VisibilityTimeout` de su cola (120s): si lo pasara, AWS rechaza el enganche
-al crearlo, y si se forzara, el mensaje volvería a hacerse visible a mitad de
-proceso y se trabajaría dos veces a la vez. Con 120s de techo y un modelo que
-puede tardar 30s por mensaje, el lote es lo que tiene que ceder — de ahí 3 en
-parse y merchant, y 10 en financial, que no llama a ningún modelo.
-
-**Por qué financial escala y merchant no.** El ledger escribe la fila con una
-condición y mueve el saldo con un `ADD` atómico, las dos cosas en una sola
-transacción: el mismo movimiento aplicado dos veces no hace nada y dos
-movimientos sobre una cuenta no se pisan. Merchant no tiene esa garantía
-probada, así que se serializa hasta que la tenga.
-
-### Cómo vuelve un mensaje a la cola
-
-Es lo único que cambia de fondo respecto a los workers. Con `poll_once`, un
-mensaje **sobrevive por defecto** y el worker lo borra explícitamente al
-terminar. En Lambda es al revés: **se borra por defecto**, y solo se conserva
-lo que la respuesta nombra.
-
-Esa inversión vive en un sitio,
-[`shared/infrastructure/messaging/lambda_batch.py`](../src/personal_finance/shared/infrastructure/messaging/lambda_batch.py),
-y depende de `FunctionResponseTypes: [ReportBatchItemFailures]` en la
-plantilla: sin esa línea la respuesta se ignora y se borra el lote entero,
-incluidos los mensajes que pedían volver.
-
-### Registros
-
-Cada función escribe a `/finflow/<stack>/<nombre>` con retención de 30 días
-(7 en dev). Nombres propios y no los `/aws/lambda/...` que Lambda se crea sola:
-declarar ese nombre es competir con ella y el stack pierde en el segundo
-despliegue.
-
-```bash
-just deploy-logs-prod ApiFunction        # seguir uno en vivo
-just deploy-logs-prod FinancialFunction  # y `-dev` para el otro entorno
-```
-
-### Avisos cuando algo deja de procesarse
-
-Un mensaje llega a una cola de fallos (`-dlq`) **después** de que SQS ya lo
-reintentara, así que uno solo no es un hipo: es trabajo que nunca se hará si
-nadie mira. El silencio era el fallo más peligroso — si un banco cambia su
-plantilla, no se vacía ninguna cola y nadie ve ningún error.
-
-La plantilla crea un tema SNS y tres alarmas, una por cada DLQ: `parse`,
-`merchant` y `financial`. Cualquier mensaje en cualquiera de ellas dispara un
-correo.
-
-El destinatario es el parámetro `AlertEmail` en `infra/samconfig.toml`, uno
-por entorno. **Vacío despliega igual**, pero entonces las alarmas publican en
-un tema que nadie lee, que es exactamente el estado que esto venía a arreglar.
-
-```toml
-"AlertEmail=tu-correo@ejemplo.com",
-```
-
-Tras el primer despliegue con un correo puesto, **AWS te manda un mensaje de
-confirmación de la suscripción**. Hasta que pulses ese enlace no llega ningún
-aviso, y la alarma parecerá funcionar. Es el paso que más se olvida.
-
-Dos detalles del diseño, por si algún día extrañan:
-
-- Las alarmas usan `Maximum`, no `Average`. Un mensaje que entra y se drena
-  dentro del mismo periodo se promedia hasta casi cero y no reportaría nada.
-- Las colas son plano de datos y las crea `provisioning.py`, así que las
-  alarmas las nombran en vez de referenciarlas. Renombrar una cola allí deja
-  aquí una alarma vigilando un nombre que ya no existe — y una alarma sobre
-  una cola inexistente informa `INSUFFICIENT_DATA`, no un error.
-
-### Lo que no se puede desplegar
-
-Dos cosas siguen siendo manuales, y ninguna es código: crear la cuenta de
-Gmail con su App Password (paso 4 de arriba) y poner los valores de los tres
-secretos en Parameter Store. La plantilla solo guarda sus **rutas**; los
-valores nunca pasan por git ni por la imagen.
+Está en su propia guía: [deploy.md](deploy.md) — qué crea cada herramienta,
+los permisos y secretos que hacen falta una vez, los pasos para development y
+para producción, cómo publicar el frontend y cómo comprobar que lo desplegado
+sirve.
 
 ---
 

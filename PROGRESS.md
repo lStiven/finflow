@@ -77,6 +77,11 @@ and a cap on LLM spending — see **Next steps**.
 
 ## Last completed
 
+- 2026-09-01 — The docs answer four questions without overlapping: deploying
+  (new `docs/deploy.md`), running (`running.md`, now 646 lines instead of
+  972), integrating (`frontend-integration.md`) and where to start
+  (`docs/README.md`). Every relative link and anchor checked; every `just`
+  command named in them exists.
 - 2026-09-01 — Forwarding confirmation actually confirms: it is a `POST` to
   the form behind the link, not a `GET` of the link, which only rendered the
   page a person would have clicked.
