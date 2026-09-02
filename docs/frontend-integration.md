@@ -567,9 +567,30 @@ mitades y las marca.
   "transfer": {
     "id": "c0f6ef69…",                   // el mismo en las dos mitades
     "role": "source",                    // source | destination
+    "external": false,                   // el otro lado está en la app
     "counterpart_movement_id": "21e907…",
     "counterpart_instrument_kind": "credit_card",
     "counterpart_last_four": "1234"
+  }
+}
+```
+
+Y la otra forma que puede tener: una mitad sola, cuando la tarjeta se pagó
+desde un banco, una billetera o efectivo que esta app no lleva.
+
+```jsonc
+{
+  "direction": "incoming",
+  "amount": "150000",
+  "counterparty": "Nequi",               // texto del usuario: sí se muestra
+  "origin": "manual",
+  "transfer": {
+    "id": "9b2c1a…",
+    "role": "destination",
+    "external": true,                    // no hay otra fila que buscar
+    "counterpart_movement_id": null,
+    "counterpart_instrument_kind": null,
+    "counterpart_last_four": null
   }
 }
 ```
@@ -578,32 +599,79 @@ Reglas:
 
 1. **`transfer` no nulo significa que este movimiento no es gasto ni ingreso.**
    Nunca lo sumes a un total tuyo. Los totales del backend ya lo excluyen.
-2. **`counterparty` es texto de máquina** (`credit_card *1234`) porque forma
-   parte de la identidad del movimiento y no puede reescribirse nunca. Para la
-   pantalla, arma la frase con `role` + `counterpart_instrument_kind` +
-   `counterpart_last_four` ("Pago a tu tarjeta ···· 1234").
-3. **`role: "source"`** es la mitad de donde salió la plata; **`destination`**
+2. **`external` dice cuál de las dos formas tienes delante.** Léelo a él, no
+   los tres `counterpart_*`: es la pregunta que la pantalla realmente hace, y
+   los tres son `null` exactamente cuando es `true`. No sigas nunca un
+   `counterpart_movement_id` sin comprobarlo antes.
+3. **`counterparty` cambia de naturaleza con `external`.** En una mitad de un
+   par es texto de máquina (`credit_card *1234`): forma parte de la identidad
+   del movimiento y no puede reescribirse nunca, así que para la pantalla
+   armas la frase con `role` + `counterpart_instrument_kind` +
+   `counterpart_last_four` ("Pago a tu tarjeta ···· 1234"). En una mitad
+   externa es lo que el usuario escribió ("Nequi", "efectivo") y se muestra
+   tal cual — es lo único que nombra el otro lado.
+4. **`role: "source"`** es la mitad de donde salió la plata; **`destination`**
    donde llegó — en una tarjeta, su deuda bajando.
-4. **Las dos mitades se enrutan por separado.** Si solo declaraste una de las
-   dos cuentas, la otra mitad queda `unassigned` y se adopta cuando declares la
-   que falta. Es el mismo camino retroactivo de siempre.
-5. **`PATCH` del monto, la fecha o la contraparte de una mitad responde `409`**:
-   las dos dicen un mismo movimiento y corregir una sola dejaría dos saldos que
-   no cuadran. Es un conflicto con el estado, no con la forma del cuerpo —por
-   eso 409 y no 400—, y ninguna reescritura de la petición lo arregla. Sí se
-   puede cambiar `account_id`, `detach` y la nota.
-6. **`transfers`** controla qué se ve: `include` (por defecto en
+5. **Las dos mitades de un par se enrutan por separado.** Si solo declaraste
+   una de las dos cuentas, la otra queda `unassigned` y se adopta cuando
+   declares la que falta. Es el mismo camino retroactivo de siempre. Una
+   mitad externa no: nombra un instrumento de nadie, así que nunca la adopta
+   una cuenta declarada después, y por eso su `account_id` es obligatorio
+   desde el principio.
+6. **`PATCH` del monto, la fecha o la contraparte de una mitad de un par
+   responde `409`**: las dos dicen un mismo movimiento y corregir una sola
+   dejaría dos saldos que no cuadran. Es un conflicto con el estado, no con la
+   forma del cuerpo —por eso 409 y no 400—, y ninguna reescritura de la
+   petición lo arregla. Sí se puede cambiar `account_id`, `detach` y la nota.
+   **Una mitad externa sí se corrige entera**, porque no hay segunda fila con
+   la que quedar desfasada: el `PATCH` responde 200 y mueve el saldo con él.
+7. **`transfers`** controla qué se ve: `include` (por defecto en
    `/transactions`), `exclude` (por defecto en `/summary`) y `only`. Si una
    pantalla enseña una cifra del resumen y la lista detrás, pide `exclude` en
    las dos o los números no cuadrarán.
-7. **`sort=amount` contesta "mis diez gastos más grandes del mes"** en una
+8. **`sort=amount` contesta "mis diez gastos más grandes del mes"** en una
    llamada, en vez de paginar y ordenar en el cliente. Exige `currency` (`400`
    sin ella) por lo mismo que `/summary?order=amount`. Para un reporte pide
    también `transfers=exclude`, o el pago de la tarjeta encabezará la lista.
-8. El único que hoy los produce es el **parser determinista de Bancolombia**.
-   El LLM tiene instrucción explícita de responder `understood=false` ante un
-   correo así: elegir a ojo cuál de los dos instrumentos es el origen es
-   exactamente cómo un saldo se mueve al revés.
+9. **Un par completo solo lo produce hoy el parser determinista de
+   Bancolombia.** El LLM tiene instrucción explícita de responder
+   `understood=false` ante un correo así: elegir a ojo cuál de los dos
+   instrumentos es el origen es exactamente cómo un saldo se mueve al revés.
+   Una mitad externa no la produce ningún correo — la escribe el usuario, con
+   `POST /financial/transactions/transfer`.
+
+#### Registrar una mitad externa
+
+```http
+POST /financial/transactions/transfer
+```
+
+```jsonc
+{
+  "role": "destination",      // destination = la deuda de esa cuenta baja
+  "amount": "150000",         // string, nunca número JSON
+  "currency": "COP",
+  "occurred_at": 1787500000,  // epoch en segundos
+  "counterparty": "Nequi",    // cómo llama el usuario al otro lado
+  "account_id": "…",          // OBLIGATORIO, a diferencia del alta manual
+  "bank": "Bancolombia",
+  "note": null
+}
+```
+
+Responde `201` con el movimiento ya con su bloque `transfer` externo. Notas
+para la pantalla:
+
+- **No lleva `direction`.** El `role` la fija: `source` es plata saliendo,
+  `destination` plata entrando, siempre. Es lo que impide registrar un pago
+  que *sube* la deuda en vez de bajarla.
+- **`account_id` es obligatorio** (`422` sin él, `404` si no es una cuenta del
+  usuario). El movimiento afirma que un saldo se movió; sin cuenta no hay
+  saldo que mover, y nada lo adoptaría después.
+- **Cuándo ofrecerlo**: pagar la tarjeta desde el *mismo* banco no lo necesita
+  — ese correo llega solo y escribe las dos filas. Esto es para el otro caso.
+- Los valores de `role` salen de `transfer_roles` en `GET /financial/catalog`,
+  como cualquier otro vocabulario.
 
 ### 6. Cuentas
 

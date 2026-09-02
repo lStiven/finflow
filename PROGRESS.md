@@ -23,10 +23,16 @@ watching only what comes in and goes out. Declaring an account starts the
 association and is retroactive. Money that never emails can be entered by
 hand, and anything recorded can be corrected.
 
-One email is not always one movement: paying a credit card from an account at
-the same bank moves two balances and is neither spending nor income. That path
-is closed end to end — a deterministic template, its own integration event,
-two linked ledger rows, and totals that leave both of them out.
+One email is not always one movement, and one movement is not always half of
+an email. Paying a credit card from an account at the same bank moves two
+balances and is neither spending nor income: that path is closed end to end —
+a deterministic template, its own integration event, two linked ledger rows,
+and totals that leave both of them out. Paid from **another** bank, a wallet
+or cash, no alert can name both instruments, so the side that is knowable is
+entered by hand through `POST /financial/transactions/transfer` and recorded
+as a transfer leg whose counterpart is external. It moves its account's
+balance and counts for nothing, which is what stops a card payment reporting
+as the month's largest income.
 
 Identity now proves an address before it will build an account on it, and
 knows how to let somebody back in. Registering is three calls — a six-digit
@@ -36,14 +42,14 @@ Changing a password ends every session opened with the old one, which is the
 one thing that makes the reset worth anything: every authenticated request now
 compares the token's credential generation against the account's.
 
-Thirty-five endpoints across the four contexts, the three SQS workers, the
+Thirty-six endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
 canonical merchant behind the bank's text, and the reporting surface is
 finished backend-side: `GET /financial/summary` answers what a period adds up
 to, ranks and folds it, and compares it against the window before; `GET
 /financial/trends` answers the stacked chart. `just prepare` passes end to end
-— format, lint, types and 1148 tests. The pyright error in
+— format, lint, types and 1233 tests. The pyright error in
 `shared/infrastructure/llm/gemini.py:120` that had been stopping it is gone
 without the file changing, so it was the installed stubs, not the code.
 
@@ -94,6 +100,17 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **A card paid from outside the app is no longer an expense.**
+  `TransferLeg`'s counterpart became optional — all three fields together,
+  refused half-written in the domain and again in the DynamoDB reader — so a
+  leg can say plainly that its other side is elsewhere. `POST
+  /financial/transactions/transfer` enters one: `role` fixes the direction and
+  the account is required, because the movement asserts a balance moved and
+  nothing would ever adopt it later. A lone leg is correctable where a paired
+  one answers 409, and cannot be detached at all. The seed now covers both
+  shapes side by side, plus Lulo's three alerts and the account that adopts
+  them. `/code-review high` found the detach hole; it is closed with tests.
+  **Frontend follow-up is open** — see Next steps.
 - 2026-09-02 — **`/reportes` is built**, both halves now done. One filter row
   (periodo, cuenta, moneda) scopes seven reads, so every figure on screen
   describes the same window: four KPI tiles with deltas, cashflow columns,
@@ -127,14 +144,30 @@ spending is what production still misses. See **Next steps**.
   `/recuperar` and `/restablecer` call `password/forgot` and
   `password/reset`. `just smoke <dev-url>` passes 17/17 against it.
   Production is held back on purpose until this has run a few days.
-- 2026-09-01 — Email verification at registration and password recovery, in
-  both halves: five endpoints, a `credential_challenges` table whose every
-  record expires, SMTP over the deployment's own Gmail, and the screens that
-  use them — the door's code step, `/recuperar`, `/restablecer` and a password
-  card on `/perfil`. A password change now invalidates every token issued
-  before it.
-
 ## Next steps
+
+- [ ] **The frontend has not been updated for external transfer legs**, and
+      three concrete breakages are already known (found by the `/code-review`
+      pass over the backend change, not guessed at). Only the backend and its
+      docs were in scope on 2026-09-02; this is the other half.
+      1. `frontend/src/api/schema.d.ts` is stale — regenerate with
+         `just web-types`. It still types `counterpart_movement_id` as
+         `string`, has no `external`, no `transfer_roles` and no
+         `POST /financial/transactions/transfer`, which is precisely why
+         `tsc` does not catch the two below.
+      2. `routes/transacciones/$transactionId.tsx:384` links to
+         `transfer.counterpart_movement_id` unconditionally — null on an
+         external leg, so "ver la otra mitad" navigates to
+         `/transacciones/null`. Gate it on `transfer.external`.
+      3. `lib/transfers.ts:34` renders `Pago a otra cuenta tuya ···· null` on
+         the dashboard, the list and the detail, and the detail hides the
+         `Contraparte` row for any transfer — so "Nequi", the only thing
+         naming the other side, is never shown. Both need the `external`
+         branch.
+      Then the screen that makes the endpoint reachable: a "fue un pago de
+      tarjeta / traslado entre mis cuentas" option on the manual-entry form,
+      posting `role` + `account_id` instead of `direction`. `just seed` already
+      leaves two of these in the local data to look at.
 
 - [ ] **Production waits for development to prove itself.** Deliberate, and
       the reason the steps below are not being run today: the release is live

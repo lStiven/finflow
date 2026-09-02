@@ -619,6 +619,18 @@ class TransferId(ValueObject):
         object.__setattr__(self, "value", value)
 
     @classmethod
+    def new(cls) -> Self:
+        """Identity for a transfer only one side of which this app holds.
+
+        Random, unlike `from_parts`, and for the same reason `MovementId.new`
+        is: the content that would be hashed is a person's claim rather than a
+        bank's statement, and there is no second delivery of it to deduplicate
+        against. A uuid is 32 characters where the hash below is 64, so the two
+        can never name the same transfer by accident.
+        """
+        return cls(value=uuid.uuid4().hex)
+
+    @classmethod
     def from_parts(
         cls,
         *,
@@ -672,19 +684,58 @@ class TransferLeg(ValueObject):
     Carried on the row rather than looked up, so reading a movement never
     needs a second query to find out that it is not spending — which is the
     one thing a summary must know about it.
+
+    The other side is not always here. Paying a card from an account at the
+    same bank produces both legs from one alert, but paying it from another
+    bank, from a wallet or in cash produces a movement whose counterpart this
+    app never sees — and that movement is still not income. So the three
+    fields describing the other side are optional, and **optional together**:
+    a leg either names a movement in this ledger or names nothing at all.
+    Half a description is the state this class exists to make impossible,
+    because a leg holding an id nothing can resolve is worse than one that
+    says plainly that the other side is elsewhere.
     """
 
     transfer_id: TransferId
     role: TransferRole
-    # The other side's movement id. Both sides are built together and both
-    # ids come from content, so this is known without asking storage.
-    counterpart_id: MovementId
-    counterpart_instrument_kind: str
-    counterpart_last_four: str
+    # The other side's movement id. Both sides of an alert-derived transfer
+    # are built together and both ids come from content, so this is known
+    # without asking storage. None when the other side is outside this app —
+    # see `counterpart_is_external`.
+    counterpart_id: MovementId | None = None
+    counterpart_instrument_kind: str | None = None
+    counterpart_last_four: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.counterpart_instrument_kind.strip():
+        described = (
+            self.counterpart_id,
+            self.counterpart_instrument_kind,
+            self.counterpart_last_four,
+        )
+
+        if any(part is not None for part in described) and not all(
+            part is not None for part in described
+        ):
+            raise ValueError(
+                "A transfer leg describes the other side fully or not at all",
+            )
+
+        if (
+            self.counterpart_instrument_kind is not None
+            and not self.counterpart_instrument_kind.strip()
+        ):
             raise ValueError("A transfer leg names the other side's instrument")
+
+    @property
+    def counterpart_is_external(self) -> bool:
+        """Whether the other side of this transfer is outside this app.
+
+        True for a card paid from a bank the user has not declared, from a
+        wallet, or in cash. It changes nothing about what this leg does to a
+        balance and nothing about it being kept out of spending totals — only
+        whether there is a second row to point a reader at.
+        """
+        return self.counterpart_id is None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

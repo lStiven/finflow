@@ -8,6 +8,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountKind,
     InstrumentKind,
     MovementDirection,
+    TransferRole,
 )
 from personal_finance.shared.domain.value_objects import (
     Currency,
@@ -166,6 +167,30 @@ class EnterTransactionCommand:
     occurred_at: PosixTime
     counterparty: str
     account_id: AccountId | None = None
+    bank: str = ""
+    note: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class EnterTransferLegCommand:
+    """The owner's side of money they moved between their own balances.
+
+    For a card paid from another bank, from a wallet or in cash — anything
+    whose other side this app does not hold, and which is therefore neither
+    spending nor income no matter how the single alert reads.
+
+    No `direction`: `role` decides it, because a source is money leaving and a
+    destination is money arriving, always. And the account is required, unlike
+    a plain manual entry — a leg names no instrument, so nothing could ever
+    adopt it later.
+    """
+
+    user_id: UserId
+    role: TransferRole
+    amount: Money
+    occurred_at: PosixTime
+    counterparty: str
+    account_id: AccountId
     bank: str = ""
     note: str | None = None
 

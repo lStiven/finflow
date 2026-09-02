@@ -1070,7 +1070,20 @@
             },
             "description": "Declare an account. `instrument_kind` must come from `/financial/catalog` -> instrument_kinds: it is what the BANK calls the thing the money moved through, not what you call the account. A savings account is kind `savings`, and its transfers arrive as instrument `account`. On a liability, `opening_balance` is what has been spent so far and `credit_limit` is what may be spent — two different numbers."
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    pm.environment.set('account_id', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
         },
         {
           "name": "Get account",
@@ -1746,6 +1759,44 @@
               ]
             },
             "description": "Money that moved without an alert to announce it: an automatic payment the bank stays quiet about, cash, a transfer that produced no email.\n\ndirection: outgoing | incoming. amount is a string, never a JSON number — a float loses cents. occurred_at is epoch seconds. account_id is optional: somebody watching only what comes in and goes out has no accounts."
+          },
+          "response": []
+        },
+        {
+          "name": "Enter transfer leg",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"destination\",\n  \"amount\": \"150000\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1787500000,\n  \"counterparty\": \"Nequi\",\n  \"account_id\": \"{{account_id}}\",\n  \"bank\": \"Bancolombia\",\n  \"note\": \"pago de la tarjeta desde otro banco\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/transfer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                "transfer"
+              ]
+            },
+            "description": "A payment between two of the owner's own balances whose other side this app does not hold: a credit card paid from another bank, from a wallet, or in cash.\n\nPaying a card from an account at the SAME bank needs nothing here — that alert names both instruments and the two linked rows are written from it. This is the other case, where no single alert can name both, and recording it as an ordinary movement would count the payment as income on the card or as an expense on the account it left.\n\nrole: source (money left the named account) | destination (it arrived; on a credit card that is its debt going down). There is no `direction` — role fixes it.\n\naccount_id is REQUIRED, unlike the plain manual entry: this asserts that a balance moved, and a leg names no instrument, so nothing could ever adopt it later. counterparty is free text for whatever the owner calls the other side (\"Nequi\", \"efectivo\", \"PSE\"). amount is a string, never a JSON number.\n\nThe answer carries transfer.external = true and every transfer.counterpart_* field null. The movement is listed by GET /financial/transactions and left out of /summary, /trends and /history — which is the whole point of entering it this way."
           },
           "response": []
         },

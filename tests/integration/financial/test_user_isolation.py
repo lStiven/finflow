@@ -8,11 +8,19 @@ adapters, with both users' records in the same table — which is the shape
 production has, and the only one where a missing partition condition shows up.
 """
 
+from collections.abc import Sequence
 from decimal import Decimal
 
 from mypy_boto3_dynamodb.client import DynamoDBClient
 import pytest
 
+from personal_finance.contexts.financial.application.commands import (
+    EnterTransferLegCommand,
+)
+from personal_finance.contexts.financial.application.handlers import (
+    AccountNotFoundError,
+    ManageTransactionsUseCase,
+)
 from personal_finance.contexts.financial.application.queries import (
     ListTransactionsUseCase,
     MovementFilter,
@@ -26,6 +34,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountKind,
     InstrumentKind,
     MovementDirection,
+    TransferRole,
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     PARTITION_KEY,
@@ -33,6 +42,7 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
     DynamoDBAccountRepository,
     DynamoDBTransactionLedger,
 )
+from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import (
     Currency,
     Money,
@@ -127,6 +137,13 @@ def _both_spend(ledger: DynamoDBTransactionLedger) -> tuple[Transaction, Transac
         _spend(ledger, user_id=ANA, counterparty="TIENDAS ARA", amount="50000"),
         _spend(ledger, user_id=BRUNO, counterparty="RAPPI COLOMBIA", amount="20000"),
     )
+
+
+class _NullPublisher:
+    """Nothing here asserts on events; only on who can reach whose rows."""
+
+    def publish(self, events: Sequence[Event]) -> None:
+        del events
 
 
 def test_a_ledger_read_returns_only_the_owners_movements(
@@ -270,3 +287,36 @@ def test_clearing_a_credit_limit_removes_it_from_storage(
     assert cleared is not None
     assert cleared.credit_limit is None
     assert cleared.available is None
+
+
+def test_a_transfer_leg_cannot_be_entered_on_another_users_account(
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Paying a card from outside the app names its account by id, and an id
+    travels in a request body where a partition key does not. Ana asking to
+    clear Bruno's card must miss in her own partition, not find his."""
+    bruno_card = _declare(accounts, user_id=BRUNO, name="Tarjeta de Bruno")
+    owed_before = bruno_card.balance.signed_amount
+    use_case = ManageTransactionsUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=_NullPublisher(),
+    )
+
+    with pytest.raises(AccountNotFoundError):
+        use_case.enter_transfer_leg(
+            EnterTransferLegCommand(
+                user_id=ANA,
+                role=TransferRole.DESTINATION,
+                amount=Money(amount=Decimal("100000"), currency=Currency.COP),
+                occurred_at=WHEN,
+                counterparty="Nequi",
+                account_id=bruno_card.id,
+            ),
+        )
+
+    still_there = accounts.find(user_id=BRUNO, account_id=bruno_card.id)
+    assert still_there is not None
+    assert still_there.balance.signed_amount == owed_before
+    assert ledger.list_all(ANA) == []

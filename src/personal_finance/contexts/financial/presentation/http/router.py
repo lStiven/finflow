@@ -29,6 +29,7 @@ from personal_finance.contexts.financial.application.commands import (
     CloseAccountCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
+    EnterTransferLegCommand,
     LinkInstrumentCommand,
     OpenAccountCommand,
     RenameAccountCommand,
@@ -98,6 +99,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     MovementDirection,
     TransactionOrigin,
     TransactionStatus,
+    TransferRole,
 )
 from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
     build_merchant_directory,
@@ -225,15 +227,26 @@ class TransferResponse(BaseModel):
     counterparty text — `role` says which way the money went and
     `counterpart_*` names the other side — and, more importantly, knows not to
     read the amount as an expense.
+
+    The other side is not always here. A card paid from another bank, from a
+    wallet or in cash has one knowable side, entered by hand through
+    `POST /financial/transactions/transfer`: `external` is true there and
+    every `counterpart_*` field is null. Read `external` rather than
+    null-checking the three — it is the question a client is actually asking,
+    and the movement's own `counterparty` already carries what the owner
+    called the other side ("Nequi", "efectivo").
     """
 
     id: str
     # `source` (money left this account) | `destination` (it arrived here; on
     # a credit card that is its debt going down).
     role: str
-    counterpart_movement_id: str
-    counterpart_instrument_kind: str
-    counterpart_last_four: str
+    # True when the other side is outside this app, which is exactly when the
+    # three fields below are null.
+    external: bool
+    counterpart_movement_id: str | None
+    counterpart_instrument_kind: str | None
+    counterpart_last_four: str | None
 
 
 class TransactionResponse(BaseModel):
@@ -461,6 +474,10 @@ class FinancialCatalogResponse(BaseModel):
     # own accounts. `/transactions` defaults to `include`, every total to
     # `exclude`.
     transfer_views: list[CatalogOption]
+    # Which side of a transfer a hand-entered leg is. `source` is money
+    # leaving the named account, `destination` money arriving on it — and on a
+    # credit card, arriving is the debt going down.
+    transfer_roles: list[CatalogOption]
 
 
 class OpenAccountPayload(BaseModel):
@@ -558,6 +575,32 @@ class EnterTransactionPayload(BaseModel):
     occurred_at: int
     counterparty: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
     account_id: str | None = None
+    bank: str = Field(default="", max_length=MAX_TEXT_LENGTH)
+    note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+
+
+class EnterTransferLegPayload(BaseModel):
+    """The owner's side of a payment between two of their own balances.
+
+    For the card paid from another bank, from a wallet or in cash — the case
+    where no single alert can name both instruments, so nothing can write the
+    pair. What this records is that the movement is *not* spending and *not*
+    income, which is the one thing a total has to know about it.
+
+    No `direction`: `role` fixes it. And `account_id` is required, unlike a
+    plain manual entry — this asserts that a balance moved, and there is no
+    balance to move without it.
+    """
+
+    role: TransferRole
+    amount: Decimal = Field(gt=0)
+    currency: Currency = Currency.COP
+    occurred_at: int
+    # What the owner calls the other side: "Nequi", "efectivo", "PSE". Free
+    # text on purpose — it names something this app does not hold, so there is
+    # no vocabulary it could be checked against.
+    counterparty: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+    account_id: str
     bank: str = Field(default="", max_length=MAX_TEXT_LENGTH)
     note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
 
@@ -764,6 +807,7 @@ def get_catalog() -> FinancialCatalogResponse:
         trend_intervals=options(TrendInterval),
         trend_dimensions=options(TrendDimension),
         transfer_views=options(TransferView),
+        transfer_roles=options(TransferRole),
     )
 
 
@@ -1309,6 +1353,49 @@ def enter_transaction(
     return _transaction_response(_attributed(transaction, merchants))
 
 
+@router.post(
+    "/transactions/transfer",
+    response_model=TransactionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def enter_transfer_leg(
+    user_id: CurrentUser,
+    payload: EnterTransferLegPayload,
+    use_case: Annotated[
+        ManageTransactionsUseCase,
+        Depends(get_manage_transactions_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> TransactionResponse:
+    """Record paying a card, or moving money, from outside this app.
+
+    Paying a credit card from an account at the *same* bank needs nothing
+    here: that alert names both instruments and the pair is written from it.
+    This is for the other way round — paid from another bank, from a wallet,
+    in cash — where only one side is ever knowable, and recording it as an
+    ordinary movement would count a payment as an expense or as income.
+
+    The movement lands on the account named, moving its balance like any
+    other, and stays out of every total. On a credit card, `role=destination`
+    is its debt going down.
+    """
+    with _domain_errors():
+        transaction = use_case.enter_transfer_leg(
+            EnterTransferLegCommand(
+                user_id=user_id,
+                role=payload.role,
+                amount=Money(amount=payload.amount, currency=payload.currency),
+                occurred_at=PosixTime.from_epoch_seconds(payload.occurred_at),
+                counterparty=payload.counterparty,
+                account_id=_account_id(payload.account_id),
+                bank=payload.bank,
+                note=payload.note,
+            ),
+        )
+
+    return _transaction_response(_attributed(transaction, merchants))
+
+
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
 def get_transaction(
     user_id: CurrentUser,
@@ -1559,7 +1646,10 @@ def _transaction_response(entry: AttributedTransaction) -> TransactionResponse:
             else TransferResponse(
                 id=leg.transfer_id.value,
                 role=leg.role.value,
-                counterpart_movement_id=leg.counterpart_id.value,
+                external=leg.counterpart_is_external,
+                counterpart_movement_id=(
+                    None if leg.counterpart_id is None else leg.counterpart_id.value
+                ),
                 counterpart_instrument_kind=leg.counterpart_instrument_kind,
                 counterpart_last_four=leg.counterpart_last_four,
             )

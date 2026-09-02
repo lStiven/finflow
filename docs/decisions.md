@@ -363,6 +363,66 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   stated: a card payment from a bank with no template is deferred, visible,
   and not recorded — which is the safe half of the trade.
 
+- **A transfer leg may have no other side, and that is a different case from
+  a half-written pair** (2026-09-02). Everything above assumes one alert names
+  both instruments, which only happens inside one bank. Paying a Bancolombia
+  card from Nequi, from Lulo or in cash produces at most one alert per bank
+  and neither names the pair, so the movement that *is* knowable was being
+  recorded as ordinary spending — a card payment counted as the month's
+  largest income, or the money leaving the other account counted as an
+  expense. Net worth stayed right the whole time, which is why it went
+  unnoticed: the two errors are equal and opposite, and only the totals show
+  them.
+
+  So `TransferLeg.counterpart_id` became optional, together with the two
+  fields describing that instrument — **optional together**, enforced in
+  `__post_init__` and again in the reader, because a leg holding an id nothing
+  can resolve is worse than one that says plainly the other side is elsewhere.
+  Rejected: a placeholder counterpart (a link every reader follows into
+  nothing), and a boolean "not spending" flag independent of `transfer` (two
+  ways to say one thing, and every total would have had to ask both).
+
+  What follows from it, and what does not: `is_transfer` is unchanged, so
+  every total already excluded these the day the field existed. `Account.apply`
+  is unchanged — a lone leg moves one balance, which is correct, because the
+  other one is not this app's. But **`edit` now asks
+  `has_counterpart_movement` rather than `is_transfer`**: the refusal exists
+  because two rows state one fact and one aggregate cannot move the other's
+  balance, and with no second row that reason is gone. A lone leg is
+  correctable; a paired one still answers 409.
+
+  **Entered by hand, never inferred.** `POST /financial/transactions/transfer`
+  is its own endpoint rather than a flag on the manual entry: `role` fixes the
+  direction (a payload free to pair `source` with an incoming movement is a
+  payload free to record a payment that *raises* what is owed) and the account
+  is required, so neither field could have carried the plain entry's meaning.
+  The identity is random like any manual entry — the content is a person's
+  claim, not a bank's statement, so there is no redelivery to deduplicate
+  against, and `TransferId.new()` is 32 characters where `from_parts` hashes
+  to 64, which is what keeps the two from ever naming one transfer.
+
+  **Matching two movements automatically was rejected**, and this is the
+  decision most likely to be revisited. Given an outgoing movement on one
+  account and an incoming one on a card, same amount, a day apart, a matcher
+  could pair them. It would also pair a coincidence, and being wrong moves two
+  real balances the wrong way — the same reasoning that has the LLM refuse
+  these outright rather than guess which instrument is the source. If it comes
+  back, it comes back as a *suggestion* a person confirms, never as a write.
+
+  **The cost, stated, because it has no workaround today.** Nothing links a
+  lone leg to a movement that may already be in the ledger for the other side.
+  Somebody who tracks *both* the Lulo account and the Bancolombia card, and
+  pays one from the other, gets Lulo's own alert recorded as spending — it
+  names one instrument and an external destination, which is exactly what an
+  ordinary transfer looks like — and then enters this leg on the card to clear
+  the debt. The debt is then right, the balances are right, and there is a
+  phantom expense the size of the payment that nothing can clear: no endpoint
+  turns an existing alert-derived movement into a transfer leg, and `edit`
+  deliberately does not touch what a row says about itself. That is the
+  narrower half of the pairing work above, and the next thing worth building
+  here. Somebody who tracks only one of the two sides — much the commoner
+  case at this deployment's size — is unaffected.
+
 ### Reading Financial and Merchant together (2026-08-25)
 
 - **The movement↔merchant join is made on read, never stored.**

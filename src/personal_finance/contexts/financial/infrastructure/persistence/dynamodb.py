@@ -261,20 +261,13 @@ def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDe
         # the other's movement id. Absent on everything else, which is what an
         # older row read back as: no attribute, no transfer, ordinary
         # spending.
+        #
+        # The three `counterpart_*` attributes are written together or not at
+        # all — omitted when the other side is outside this app. Writing an
+        # empty string instead would read back as a leg pointing at a movement
+        # whose id is "", which is the one shape `TransferLeg` refuses.
         **(
-            {
-                "transfer": {
-                    "M": {
-                        "transfer_id": {"S": leg.transfer_id.value},
-                        "role": {"S": leg.role.value},
-                        "counterpart_id": {"S": leg.counterpart_id.value},
-                        "counterpart_instrument_kind": {
-                            "S": leg.counterpart_instrument_kind,
-                        },
-                        "counterpart_last_four": {"S": leg.counterpart_last_four},
-                    },
-                },
-            }
+            {"transfer": {"M": _transfer_to_item(leg)}}
             if (leg := transaction.transfer) is not None
             else {}
         ),
@@ -295,6 +288,27 @@ def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDe
             else {}
         ),
     }
+
+
+def _transfer_to_item(leg: TransferLeg) -> dict[str, AttributeValueTypeDef]:
+    """The stored shape of one transfer leg."""
+    stored: dict[str, AttributeValueTypeDef] = {
+        "transfer_id": {"S": leg.transfer_id.value},
+        "role": {"S": leg.role.value},
+    }
+
+    if (
+        leg.counterpart_id is None
+        or leg.counterpart_instrument_kind is None
+        or leg.counterpart_last_four is None
+    ):
+        return stored
+
+    stored["counterpart_id"] = {"S": leg.counterpart_id.value}
+    stored["counterpart_instrument_kind"] = {"S": leg.counterpart_instrument_kind}
+    stored["counterpart_last_four"] = {"S": leg.counterpart_last_four}
+
+    return stored
 
 
 def movement_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Transaction:
@@ -362,24 +376,43 @@ def _transfer_to_entity(
     Refuses a half-written one rather than dropping it: a leg that read back
     without its transfer marker would be counted as spending, and a balance
     would still be right while every total around it was wrong.
+
+    The other side is optional but indivisible. All three `counterpart_*`
+    attributes absent is a leg whose counterpart is outside this app —
+    a card paid from another bank, a wallet or cash. *Some* of them absent is
+    a row nothing wrote, and it is refused for the same reason the missing
+    marker is: a movement pointing at a counterpart that cannot be resolved is
+    a link every reader follows into nothing.
     """
     if item is None:
         return None
 
     transfer_id = _string(item, "transfer_id")
     role = _string(item, "role")
+
+    if transfer_id is None or role is None:
+        raise CorruptFinancialItemError("Stored transfer leg is missing fields")
+
     counterpart_id = _string(item, "counterpart_id")
     instrument_kind = _string(item, "counterpart_instrument_kind")
     last_four = _string(item, "counterpart_last_four")
+    described = (counterpart_id, instrument_kind, last_four)
 
-    if (
-        transfer_id is None
-        or role is None
-        or counterpart_id is None
-        or instrument_kind is None
-        or last_four is None
-    ):
-        raise CorruptFinancialItemError("Stored transfer leg is missing fields")
+    if all(part is None for part in described):
+        return TransferLeg(
+            transfer_id=TransferId(value=transfer_id),
+            role=_enum(TransferRole, role, "transfer role"),
+        )
+
+    if any(part is None for part in described):
+        raise CorruptFinancialItemError(
+            "Stored transfer leg describes half a counterpart",
+        )
+
+    # Narrowing for the type checker; the branch above already proved it.
+    assert counterpart_id is not None
+    assert instrument_kind is not None
+    assert last_four is not None
 
     return TransferLeg(
         transfer_id=TransferId(value=transfer_id),

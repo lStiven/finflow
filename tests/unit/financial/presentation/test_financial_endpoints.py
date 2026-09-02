@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -212,9 +213,10 @@ def client() -> TestClient:
 def wired() -> tuple[TestClient, InMemoryLedger]:
     """The same app, plus the ledger behind it.
 
-    Transfers reach the ledger from the bus and there is no endpoint that
-    writes one, so a test about how the API *reads* them has to put the pair
-    in place itself.
+    A transfer whose two sides are both known reaches the ledger from the bus,
+    and no endpoint writes that pair (`POST /transactions/transfer` writes a
+    lone leg, never two), so a test about how the API *reads* them puts the
+    pair in place itself.
     """
     return _build()
 
@@ -1342,6 +1344,286 @@ def test_each_side_points_at_the_other_row(
         counterpart = by_id[row["transfer"]["counterpart_movement_id"]]
         assert counterpart["id"] != row["id"]
         assert counterpart["transfer"]["counterpart_movement_id"] == row["id"]
+
+
+# --------------------------------------- un traslado desde fuera de la app
+
+
+def _pay_from_outside(client: TestClient, **overrides: object) -> dict[str, Any]:
+    """A card paid from a bank, wallet or pocket this app does not hold."""
+    payload: dict[str, object] = {
+        "role": "destination",
+        "amount": "3540258",
+        "currency": "COP",
+        "occurred_at": WHEN,
+        "counterparty": "Nequi",
+    }
+    payload.update(overrides)
+    response = client.post("/financial/transactions/transfer", json=payload)
+
+    assert response.status_code == 201, response.text
+
+    return response.json()
+
+
+def test_a_payment_from_outside_is_recorded_as_a_transfer(
+    client: TestClient,
+) -> None:
+    card = _declare(client)
+
+    body = _pay_from_outside(client, account_id=card["id"])
+
+    assert body["transfer"] is not None
+    assert body["transfer"]["role"] == "destination"
+    assert body["direction"] == "incoming"
+    assert body["origin"] == "manual"
+
+
+def test_its_counterpart_is_reported_as_external(client: TestClient) -> None:
+    """A client reads one boolean rather than null-checking three fields."""
+    card = _declare(client)
+
+    leg = _pay_from_outside(client, account_id=card["id"])["transfer"]
+
+    assert leg["external"] is True
+    assert leg["counterpart_movement_id"] is None
+    assert leg["counterpart_instrument_kind"] is None
+    assert leg["counterpart_last_four"] is None
+
+
+def test_a_payment_from_outside_lowers_the_debt(client: TestClient) -> None:
+    card = _declare(client, opening_balance="3540258")
+
+    _pay_from_outside(client, account_id=card["id"])
+
+    after = client.get(f"/financial/accounts/{card['id']}").json()
+    assert Decimal(after["balance"]) == Decimal("0")
+
+
+def test_a_payment_from_outside_is_not_income(client: TestClient) -> None:
+    """The reason the endpoint exists. Entered as an ordinary movement this
+    would be the month's largest income.
+
+    A real expense sits beside it so the assertion cannot pass by the summary
+    simply being empty: what is counted is counted, and the leg is not.
+    """
+    card = _declare(client)
+    _enter(client, account_id=card["id"], amount="50000")
+    _pay_from_outside(client, account_id=card["id"])
+
+    totals = client.get("/financial/summary").json()["totals"]
+
+    assert len(totals) == 1
+    assert Decimal(totals[0]["outgoing"]) == Decimal("50000")
+    assert Decimal(totals[0]["incoming"]) == Decimal("0")
+    assert totals[0]["movements"] == 1
+
+
+def test_paying_a_card_elsewhere_is_not_an_expense(client: TestClient) -> None:
+    """The mirror: money leaving a tracked account towards a card that is
+    not here."""
+    savings = _declare(
+        client,
+        kind="savings",
+        instrument_kind="account",
+        last_four="5261",
+        opening_balance="5000000",
+    )
+    _enter(client, account_id=savings["id"], amount="50000")
+    _pay_from_outside(client, account_id=savings["id"], role="source")
+
+    totals = client.get("/financial/summary").json()["totals"]
+
+    assert len(totals) == 1
+    assert Decimal(totals[0]["outgoing"]) == Decimal("50000")
+
+
+def test_the_leg_is_still_listed_among_the_movements(client: TestClient) -> None:
+    """Excluded from totals, never hidden: it is what explains the fall."""
+    card = _declare(client)
+    entered = _pay_from_outside(client, account_id=card["id"])
+
+    listed = client.get("/financial/transactions").json()["transactions"]
+
+    assert [row["id"] for row in listed] == [entered["id"]]
+
+
+def test_the_leg_can_be_asked_for_on_its_own(client: TestClient) -> None:
+    card = _declare(client)
+    _enter(client, account_id=card["id"])
+    entered = _pay_from_outside(client, account_id=card["id"])
+
+    body = client.get("/financial/transactions", params={"transfers": "only"}).json()
+
+    assert [row["id"] for row in body["transactions"]] == [entered["id"]]
+
+
+def test_the_source_role_records_money_leaving(client: TestClient) -> None:
+    savings = _declare(
+        client,
+        kind="savings",
+        instrument_kind="account",
+        last_four="5261",
+        opening_balance="5000000",
+    )
+
+    body = _pay_from_outside(client, account_id=savings["id"], role="source")
+
+    assert body["direction"] == "outgoing"
+
+
+def test_a_leg_without_an_account_is_refused(client: TestClient) -> None:
+    """It asserts a balance moved; there is no balance to move without one,
+    and nothing would ever adopt it later."""
+    response = client.post(
+        "/financial/transactions/transfer",
+        json={
+            "role": "destination",
+            "amount": "100",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Nequi",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_leg_on_an_account_that_does_not_exist_is_refused(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/financial/transactions/transfer",
+        json={
+            "role": "destination",
+            "amount": "100",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Nequi",
+            "account_id": "8f14e45f-ceea-467a-9c2b-6a2c0a1b1111",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_role_the_api_does_not_know_is_refused(client: TestClient) -> None:
+    card = _declare(client)
+    response = client.post(
+        "/financial/transactions/transfer",
+        json={
+            "role": "sideways",
+            "amount": "100",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Nequi",
+            "account_id": card["id"],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_leg_with_no_amount_is_refused(client: TestClient) -> None:
+    card = _declare(client)
+    response = client.post(
+        "/financial/transactions/transfer",
+        json={
+            "role": "destination",
+            "amount": "0",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Nequi",
+            "account_id": card["id"],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_leg_entered_from_outside_can_still_be_corrected(
+    client: TestClient,
+) -> None:
+    """Allowed where a paired leg is refused: there is no second row to leave
+    out of step."""
+    card = _declare(client, opening_balance="3540258")
+    entered = _pay_from_outside(client, account_id=card["id"], amount="3000000")
+
+    response = client.patch(
+        f"/financial/transactions/{entered['id']}",
+        json={"amount": "3540258", "currency": "COP"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["transfer"]["external"] is True
+
+
+def test_correcting_it_moves_the_balance_with_it(client: TestClient) -> None:
+    card = _declare(client, opening_balance="3540258")
+    entered = _pay_from_outside(client, account_id=card["id"], amount="3000000")
+
+    client.patch(
+        f"/financial/transactions/{entered['id']}",
+        json={"amount": "3540258", "currency": "COP"},
+    )
+
+    after = client.get(f"/financial/accounts/{card['id']}").json()
+    assert Decimal(after["balance"]) == Decimal("0")
+
+
+def test_a_leg_entered_from_outside_cannot_be_detached(
+    client: TestClient,
+) -> None:
+    """409, and the balance stays where the payment left it: detached, the
+    row would say a payment happened while no balance shows one, and nothing
+    would ever adopt it back."""
+    card = _declare(client, opening_balance="3540258")
+    entered = _pay_from_outside(client, account_id=card["id"])
+
+    response = client.patch(
+        f"/financial/transactions/{entered['id']}",
+        json={"detach": True},
+    )
+
+    assert response.status_code == 409
+    after = client.get(f"/financial/accounts/{card['id']}").json()
+    assert Decimal(after["balance"]) == Decimal("0")
+
+
+def test_a_leg_entered_from_outside_can_be_moved_to_another_account(
+    client: TestClient,
+) -> None:
+    """Moving is what a leg on the wrong card needs, and it stays allowed."""
+    card = _declare(client, opening_balance="3540258")
+    other = _declare(
+        client,
+        name="Otra tarjeta",
+        last_four="9090",
+        opening_balance="1000000",
+    )
+    entered = _pay_from_outside(client, account_id=card["id"], amount="500000")
+
+    response = client.patch(
+        f"/financial/transactions/{entered['id']}",
+        json={"account_id": other["id"]},
+    )
+
+    assert response.status_code == 200
+    assert Decimal(
+        client.get(f"/financial/accounts/{card['id']}").json()["balance"]
+    ) == Decimal("3540258")
+    assert Decimal(
+        client.get(f"/financial/accounts/{other['id']}").json()["balance"]
+    ) == Decimal("500000")
+
+
+def test_the_catalog_publishes_the_transfer_roles(client: TestClient) -> None:
+    body = client.get("/financial/catalog").json()
+
+    assert {option["value"] for option in body["transfer_roles"]} == {
+        "source",
+        "destination",
+    }
 
 
 def test_an_ordinary_movement_reports_no_transfer(client: TestClient) -> None:

@@ -699,6 +699,70 @@ class Transaction(AggregateRoot[MovementId]):
 
         return transaction
 
+    @classmethod
+    def enter_transfer_leg(
+        cls,
+        *,
+        user_id: UserId,
+        role: TransferRole,
+        amount: Money,
+        occurred_at: PosixTime,
+        counterparty: str,
+        account_id: AccountId,
+        bank: str = "",
+        note: str | None = None,
+    ) -> Self:
+        """The owner's side of money they moved between their own balances.
+
+        Paying a credit card from an account at the same bank arrives as one
+        alert naming both instruments, and `as_transfer` writes the pair. Paid
+        from another bank, from a wallet or in cash, only one side of it is
+        ever knowable here — and recorded as an ordinary manual entry that
+        side is *wrong*, not merely incomplete: money arriving on a card would
+        be counted as income, money leaving an account as an expense, and the
+        month would report a payment nobody spent and nobody earned.
+
+        So it is entered as a transfer leg whose counterpart is external. It
+        moves its account's balance exactly like any movement — a card's debt
+        falls because `Account.apply` reads an incoming movement on a
+        liability that way, with nothing here to teach it — and it stays out
+        of every total because `is_transfer` answers True.
+
+        `role` decides the direction rather than the caller: the source of a
+        transfer is money leaving and its destination is money arriving,
+        always. A caller free to pair `SOURCE` with an incoming movement is a
+        caller free to record a card payment that *raises* what is owed.
+
+        The account is required, unlike a plain manual entry. A leg names no
+        instrument, so no account can ever adopt it by matching the way an
+        unassigned alert is adopted; entered without one it would be a row
+        claiming a balance moved while no balance moved, which is the
+        discrepancy this whole path exists to prevent.
+        """
+        transaction = cls(
+            id=MovementId.new(),
+            user_id=user_id,
+            direction=(
+                MovementDirection.OUTGOING
+                if role is TransferRole.SOURCE
+                else MovementDirection.INCOMING
+            ),
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(counterparty),
+            bank=bank.strip().lower(),
+            origin=TransactionOrigin.MANUAL,
+            account_id=account_id,
+            note=note,
+            # No counterpart at all rather than a placeholder one: the other
+            # side is not a movement this ledger can be asked for, and a
+            # fabricated id would be a link every reader follows into nothing.
+            transfer=TransferLeg(transfer_id=TransferId.new(), role=role),
+        )
+        transaction._announce()
+
+        return transaction
+
     @property
     def status(self) -> TransactionStatus:
         """Derived, never stored: the link and the state cannot disagree."""
@@ -717,6 +781,17 @@ class Transaction(AggregateRoot[MovementId]):
         somebody never spent and never earned.
         """
         return self.transfer is not None
+
+    @property
+    def has_counterpart_movement(self) -> bool:
+        """Whether the other side of this transfer is a row in this ledger.
+
+        False both for ordinary spending and for a leg paid from outside the
+        app. What it gates is correction: two rows stating one movement of
+        money cannot be edited apart, while a lone leg has nothing to disagree
+        with.
+        """
+        return self.transfer is not None and not self.transfer.counterpart_is_external
 
     @property
     def is_routable(self) -> bool:
@@ -760,7 +835,7 @@ class Transaction(AggregateRoot[MovementId]):
             else _valid_counterparty(counterparty)
         )
 
-        if self.is_transfer and (
+        if self.has_counterpart_movement and (
             replacement_amount != self.amount
             or replacement_time != self.occurred_at
             or replacement_party != self.counterparty
@@ -769,6 +844,12 @@ class Transaction(AggregateRoot[MovementId]):
             # one of them, and moving the other's balance from here would be a
             # write nothing in this transaction boundary can guarantee. What a
             # wrong transfer needs is to be re-read, not half-corrected.
+            #
+            # A leg whose counterpart is external is not refused, and the
+            # difference is the whole reason it is asked about here rather
+            # than `is_transfer`: there is no second row to fall out of step
+            # with, so correcting a mistyped amount touches one balance and
+            # leaves nothing inconsistent behind it.
             raise TransferLegError(
                 "One side of a transfer cannot be corrected on its own: the "
                 "two sides state one movement of money",
@@ -840,6 +921,24 @@ class Transaction(AggregateRoot[MovementId]):
             ),
         )
 
+    def detach(self) -> None:
+        """Take this movement off its account and leave it off.
+
+        Refused on a transfer leg nothing could ever put back. A leg asserts
+        that a balance moved; detached, it moves none, and it names no
+        instrument for an account to claim it by — so unlike an alert waiting
+        to be adopted, it would sit there permanently saying a payment
+        happened while no balance shows it. Moving it to another account is
+        still allowed, and is what a leg on the wrong one actually needs.
+        """
+        if self.is_transfer and not self.is_routable:
+            raise TransferLegError(
+                "A transfer leg cannot be left without an account: it states "
+                "that a balance moved, and no account would ever adopt it",
+            )
+
+        self.unassign()
+
     def unassign(self) -> None:
         """Take this movement off the account holding it.
 
@@ -847,6 +946,9 @@ class Transaction(AggregateRoot[MovementId]):
         write. Nothing here can do it: the aggregate does not know the
         balance, which is exactly what keeps a balance from moving without a
         ledger row behind it.
+
+        Not the same thing as `detach`: this is also the first half of moving
+        a movement between two accounts, which stays allowed for everything.
         """
         if self.account_id is None:
             return

@@ -5,10 +5,17 @@
 
 moto keeps everything in memory, so every restart begins from an empty
 environment. Rather than making that data durable, this makes it cheap to
-recreate: one command walks the whole chain — register, approve the bank's
-domain, mark the forwarding Google would have confirmed, forward six alerts,
-drain the three workers, declare the accounts that adopt them — and leaves an
-account somebody can log into and browse, with its setup already finished.
+recreate: one command walks the whole chain — register, approve both banks'
+domains, mark the forwarding Google would have confirmed, forward the alerts,
+drain the three workers, declare the accounts that adopt them, and enter by
+hand what no bank emails — and leaves an account somebody can log into and
+browse, with its setup already finished.
+
+The dataset is meant to cover the cases the app actually has, not to be
+large: two banks with deterministic parsers, a card payment inside one bank
+(two linked rows from one alert), a card paid from outside it (one row whose
+other side this app never sees), ordinary purchases, incoming pay, cash, and
+a transfer to somebody else — which is spending, unlike the two above it.
 
 The application is driven in process, so nothing needs to be running except
 the emulator (`just aws-init`), and the workers built here are the ones
@@ -74,6 +81,20 @@ BANK = "Bancolombia"
 BANK_DOMAIN = "an.notificacionesbancolombia.com"
 BANK_SENDER = f"alertasynotificaciones@{BANK_DOMAIN}"
 
+# The second bank with a deterministic parser. Seeded so the local
+# environment exercises more than one template set — and so an account whose
+# alerts word themselves completely differently is there to look at.
+LULO_BANK = "Lulo bank"
+LULO_DOMAIN = "lulobank.com"
+LULO_SENDER = f"notificaciones@{LULO_DOMAIN}"
+
+# Every Lulo alert carries it, and the templates have to match with it behind
+# them. Abridged from the real one; nothing here reads it.
+LULO_FOOTER = (
+    "© 2026. Lulo bank, Bogotá, Colombia. En Lulo bank, nunca te pediremos "
+    "datos como claves o usuarios mediante correo electrónico."
+)
+
 # Alerts state a local wall clock with no zone marker, and so does this file.
 BOGOTA = ZoneInfo("America/Bogota")
 
@@ -95,6 +116,10 @@ class Alert:
     subject: str
     body: str
     received_at: datetime
+    # Which bank sent it. Defaulted because most of these are Bancolombia's,
+    # and the domain has to be approved or the filter drops the alert exactly
+    # as it is meant to.
+    sender: str = BANK_SENDER
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -110,6 +135,24 @@ class SeedAccount:
     # Other (instrument kind, last four) pairs whose alerts land here too —
     # the debit card and the account it draws on are two names for one thing.
     also_answers_to: tuple[tuple[str, str], ...] = ()
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SeedTransferLeg:
+    """A payment between the owner's own balances, only one side of which is
+    here: a card paid from another bank, a wallet, or cash.
+
+    No alert can announce these — the one that would name both instruments
+    comes from a bank that only knows its own half — so they are entered by
+    hand and marked as transfers, which is what keeps them out of every total.
+    """
+
+    role: str
+    amount: str
+    counterparty: str
+    occurred_at: datetime
+    account_name: str
+    note: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -194,6 +237,71 @@ ALERTS: tuple[Alert, ...] = (
         ),
         received_at=_local(2026, 8, 22, 8, 1),
     ),
+    # Two more purchases, on other days and at other merchants, so the
+    # reporting screens have more than one bar to draw and a weekday
+    # breakdown that is not a single column.
+    Alert(
+        message_id="<seed-fuel@finflow.local>",
+        subject="Notificación de compra",
+        body=(
+            "Bancolombia: Compraste $120.000 en ESTACION TEXACO NORTE con tu "
+            "T.Cred *1234, el 26/08/2026 a las 07:50"
+        ),
+        received_at=_local(2026, 8, 26, 7, 51),
+    ),
+    Alert(
+        message_id="<seed-restaurant@finflow.local>",
+        subject="Notificación de compra",
+        body=(
+            "Bancolombia: Compraste $67.400 en CREPES & WAFFLES 45 con tu "
+            "T.Deb *5261, el 29/08/2026 a las 20:10"
+        ),
+        received_at=_local(2026, 8, 29, 20, 11),
+    ),
+    # Lulo bank, whose alerts word the same facts nothing like Bancolombia's:
+    # labelled legs separated by bullets, a Spanish long date and a 12-hour
+    # clock. Its own leg is the one chosen by direction — `Destino` on money
+    # arriving, `Origen` on money leaving.
+    Alert(
+        message_id="<seed-lulo-breb-in@finflow.local>",
+        subject="Conoce el detalle de la transacción",
+        body=(
+            "Conoce el detalle de la transacción "
+            "Recibiste $150,000 de CARLOS MEJIA "
+            "Origen cuenta • 5261 Destino ahorro • 4407 "
+            "ID. transacción • 155682205 "
+            "Fecha 16 de agosto de 2026 Hora 11:20 a.m. " + LULO_FOOTER
+        ),
+        received_at=_local(2026, 8, 16, 11, 21),
+        sender=LULO_SENDER,
+    ),
+    Alert(
+        message_id="<seed-lulo-breb-out@finflow.local>",
+        subject="Conoce el detalle de la transacción",
+        body=(
+            "Conoce el detalle de la transacción "
+            "Realizaste una transferencia a MARIA GOMEZ por $80,000 "
+            "Origen cuenta • 4407 Llave • 3005557788 "
+            "ID. transacción • 155682311 "
+            "Fecha 21 de agosto de 2026 Hora 6:40 p.m. " + LULO_FOOTER
+        ),
+        received_at=_local(2026, 8, 21, 18, 41),
+        sender=LULO_SENDER,
+    ),
+    Alert(
+        message_id="<seed-lulo-incoming@finflow.local>",
+        subject="Recibiste dinero en tu cuenta",
+        body=(
+            "Recibiste dinero en tu cuenta "
+            "Recibiste de OMNIPRO COLOMBIA $1.250.000. "
+            "Origen ahorro • 7291 BANCO DAVIVIENDA "
+            "Destino cuenta • 4407 Lulo Bank "
+            "ID. transacción • 998877 "
+            "Fecha 25 de agosto de 2026 Hora 9:15 a.m. " + LULO_FOOTER
+        ),
+        received_at=_local(2026, 8, 25, 9, 16),
+        sender=LULO_SENDER,
+    ),
 )
 
 ACCOUNTS: tuple[SeedAccount, ...] = (
@@ -216,9 +324,44 @@ ACCOUNTS: tuple[SeedAccount, ...] = (
         also_answers_to=(("debit_card", "5261"),),
     ),
     SeedAccount(
+        name="Ahorros Lulo",
+        kind="savings",
+        opening_balance="400000",
+        bank=LULO_BANK,
+        # Lulo calls the same account `ahorro` in one alert and `cuenta` in
+        # the next, so its parser files every leg as `account` and there is
+        # only ever one key to declare.
+        instrument_kind="account",
+        last_four="4407",
+    ),
+    SeedAccount(
         name="Efectivo",
         kind="cash",
         opening_balance="200000",
+    ),
+)
+
+TRANSFER_LEGS: tuple[SeedTransferLeg, ...] = (
+    # The card paid from a wallet this app does not hold. Recorded as an
+    # ordinary movement it would be the month's largest *income*.
+    SeedTransferLeg(
+        role="destination",
+        amount="150000",
+        counterparty="Nequi",
+        occurred_at=_local(2026, 8, 27, 10, 0),
+        account_name="Tarjeta Bancolombia",
+        note="pago de la tarjeta desde Nequi",
+    ),
+    # The mirror, and the one that would otherwise inflate a month's spending:
+    # money leaving a tracked account towards a card at a bank that is not
+    # here, so only the outgoing side can ever be known.
+    SeedTransferLeg(
+        role="source",
+        amount="150000",
+        counterparty="Tarjeta Nu",
+        occurred_at=_local(2026, 8, 28, 15, 30),
+        account_name="Ahorros Lulo",
+        note="pago de la tarjeta Nu, que no esta declarada",
     ),
 )
 
@@ -321,22 +464,23 @@ def _authenticate(client: TestClient, *, email: str, password: str) -> str:
 
 
 def _approve_sender(client: TestClient, *, token: str) -> str:
-    """Approve the bank's domain and return the forwarding address.
+    """Approve both banks' domains and return the forwarding address.
 
     Sent on every run, not only after a registration: an inbox that predates
     this seed may approve nobody, and then every alert below would be dropped
     exactly as the filter is meant to drop them.
     """
+    domains = [BANK_DOMAIN, LULO_DOMAIN]
     response = _expect(
         client.patch(
             "/identity/inbox",
-            json={"allowed_domains": [BANK_DOMAIN], "allowed_addresses": []},
+            json={"allowed_domains": domains, "allowed_addresses": []},
             headers=_authorization(token),
         ),
         status.HTTP_200_OK,
     )
     address = str(response.json()["address"])
-    print(f"  inbox     {address} (approved: {BANK_DOMAIN})")
+    print(f"  inbox     {address} (approved: {', '.join(domains)})")
 
     return address
 
@@ -382,7 +526,7 @@ def _forward_alerts(client: TestClient, *, address: str) -> Counter[str]:
                 json={
                     "recipient": address,
                     "message_id": alert.message_id,
-                    "sender": BANK_SENDER,
+                    "sender": alert.sender,
                     "subject": alert.subject,
                     "raw_content": alert.body,
                     "received_at": alert.received_at.isoformat(),
@@ -547,6 +691,63 @@ def _enter_manual(
     print(f"  manual    {entered} entered{note}")
 
 
+def _enter_transfer_legs(
+    client: TestClient,
+    *,
+    token: str,
+    accounts: dict[str, str],
+) -> None:
+    """Record the payments between the owner's own balances that no alert can
+    announce, because only one of the two banks involved is this one.
+
+    Looked up before writing for the same reason the manual entries are: the
+    identity is random, so nothing in the domain stops a second run from
+    doubling them.
+    """
+    headers = _authorization(token)
+    listed = _expect(
+        client.get(
+            "/financial/transactions",
+            params={"origin": "manual", "transfers": "only", "limit": 200},
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
+    already_there = {
+        (str(movement["counterparty"]), int(movement["occurred_at"]))
+        for movement in listed["transactions"]
+    }
+    entered = 0
+
+    for leg in TRANSFER_LEGS:
+        occurred_at = int(leg.occurred_at.timestamp())
+
+        if (leg.counterparty, occurred_at) in already_there:
+            continue
+
+        _expect(
+            client.post(
+                "/financial/transactions/transfer",
+                json={
+                    "role": leg.role,
+                    "amount": leg.amount,
+                    "currency": "COP",
+                    "occurred_at": occurred_at,
+                    "counterparty": leg.counterparty,
+                    "account_id": accounts[leg.account_name],
+                    "note": leg.note,
+                },
+                headers=headers,
+            ),
+            status.HTTP_201_CREATED,
+        )
+        entered += 1
+
+    skipped = len(TRANSFER_LEGS) - entered
+    note = f", {skipped} already there" if skipped else ""
+    print(f"  traslados {entered} entered{note}")
+
+
 def _summarize(client: TestClient, *, token: str, email: str, password: str) -> None:
     headers = _authorization(token)
     accounts = _expect(
@@ -664,6 +865,7 @@ def main() -> None:
     _drain_workers()
     accounts = _declare_accounts(client, token=token)
     _enter_manual(client, token=token, accounts=accounts)
+    _enter_transfer_legs(client, token=token, accounts=accounts)
     _summarize(client, token=token, email=args.email, password=args.password)
 
 

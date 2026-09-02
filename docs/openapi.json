@@ -567,6 +567,72 @@
         "title": "EnterTransactionPayload",
         "type": "object"
       },
+      "EnterTransferLegPayload": {
+        "description": "The owner's side of a payment between two of their own balances.\n\nFor the card paid from another bank, from a wallet or in cash — the case\nwhere no single alert can name both instruments, so nothing can write the\npair. What this records is that the movement is *not* spending and *not*\nincome, which is the one thing a total has to know about it.\n\nNo `direction`: `role` fixes it. And `account_id` is required, unlike a\nplain manual entry — this asserts that a balance moved, and there is no\nbalance to move without it.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "bank": {
+            "default": "",
+            "maxLength": 512,
+            "title": "Bank",
+            "type": "string"
+          },
+          "counterparty": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "integer"
+          },
+          "role": {
+            "$ref": "#/components/schemas/TransferRole"
+          }
+        },
+        "required": [
+          "role",
+          "amount",
+          "occurred_at",
+          "counterparty",
+          "account_id"
+        ],
+        "title": "EnterTransferLegPayload",
+        "type": "object"
+      },
       "FinancialCatalogResponse": {
         "description": "Every vocabulary this context's endpoints accept.\n\n`instrument_kinds` is the one that is not an account kind and is the one\npeople reach for anyway: a savings account is `savings`, but the alerts it\nsends name the instrument `account`. Offer it as its own list, never a\ntext field.",
         "properties": {
@@ -647,6 +713,13 @@
             "title": "Transaction Statuses",
             "type": "array"
           },
+          "transfer_roles": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Transfer Roles",
+            "type": "array"
+          },
           "transfer_views": {
             "items": {
               "$ref": "#/components/schemas/CatalogOption"
@@ -683,7 +756,8 @@
           "transaction_sorts",
           "trend_intervals",
           "trend_dimensions",
-          "transfer_views"
+          "transfer_views",
+          "transfer_roles"
         ],
         "title": "FinancialCatalogResponse",
         "type": "object"
@@ -2168,19 +2242,44 @@
         "type": "string"
       },
       "TransferResponse": {
-        "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.",
+        "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.\n\nThe other side is not always here. A card paid from another bank, from a\nwallet or in cash has one knowable side, entered by hand through\n`POST /financial/transactions/transfer`: `external` is true there and\nevery `counterpart_*` field is null. Read `external` rather than\nnull-checking the three — it is the question a client is actually asking,\nand the movement's own `counterparty` already carries what the owner\ncalled the other side (\"Nequi\", \"efectivo\").",
         "properties": {
           "counterpart_instrument_kind": {
-            "title": "Counterpart Instrument Kind",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Instrument Kind"
           },
           "counterpart_last_four": {
-            "title": "Counterpart Last Four",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Last Four"
           },
           "counterpart_movement_id": {
-            "title": "Counterpart Movement Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Movement Id"
+          },
+          "external": {
+            "title": "External",
+            "type": "boolean"
           },
           "id": {
             "title": "Id",
@@ -2194,12 +2293,22 @@
         "required": [
           "id",
           "role",
+          "external",
           "counterpart_movement_id",
           "counterpart_instrument_kind",
           "counterpart_last_four"
         ],
         "title": "TransferResponse",
         "type": "object"
+      },
+      "TransferRole": {
+        "description": "Which side of a transfer one movement is.\n\n`SOURCE` is where the money left, `DESTINATION` where it arrived. On a\ncard payment the destination is the card, and money \"arriving\" on a\nliability is its debt falling — the same rule `Account.apply` already\nuses, unchanged.",
+        "enum": [
+          "source",
+          "destination"
+        ],
+        "title": "TransferRole",
+        "type": "string"
       },
       "TransferView": {
         "description": "Whether a set of movements includes the two sides of a transfer.\n\nA transfer between the owner's own accounts is not spending and not\nincome: money moved from one of their balances to another and net worth\ndid not change. So the *list* shows both sides by default — they explain\nwhy an account fell — while every **total** leaves them out, or a card\npayment would report as an expense the size of the card's whole balance.\n\n`ONLY` exists for the screen that asks the opposite question: what did I\nmove between my own accounts this month.",
@@ -3635,6 +3744,53 @@
           }
         ],
         "summary": "Enter Transaction",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/transactions/transfer": {
+      "post": {
+        "description": "Record paying a card, or moving money, from outside this app.\n\nPaying a credit card from an account at the *same* bank needs nothing\nhere: that alert names both instruments and the pair is written from it.\nThis is for the other way round — paid from another bank, from a wallet,\nin cash — where only one side is ever knowable, and recording it as an\nordinary movement would count a payment as an expense or as income.\n\nThe movement lands on the account named, moving its balance like any\nother, and stays out of every total. On a credit card, `role=destination`\nis its debt going down.",
+        "operationId": "enter_transfer_leg_financial_transactions_transfer_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnterTransferLegPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Enter Transfer Leg",
         "tags": [
           "financial"
         ]

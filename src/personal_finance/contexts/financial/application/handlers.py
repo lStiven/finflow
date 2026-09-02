@@ -9,6 +9,7 @@ from personal_finance.contexts.financial.application.commands import (
     CloseAccountCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
+    EnterTransferLegCommand,
     LinkInstrumentCommand,
     OpenAccountCommand,
     RecordMovementCommand,
@@ -558,6 +559,44 @@ class ManageTransactionsUseCase:
 
             return transaction
 
+        return self._record_on(account, transaction)
+
+    def enter_transfer_leg(self, command: EnterTransferLegCommand) -> Transaction:
+        """Record the owner's side of a payment between their own balances.
+
+        Paying a credit card from an account at the same bank arrives as one
+        alert naming both instruments, and the transfer path writes the pair
+        without anybody being asked. Paid from another bank, from a wallet or
+        in cash, no alert can name both — so this is how somebody says that a
+        movement is a payment rather than an expense, and it is entered by
+        hand for the same reason any other unannounced movement is.
+
+        The account is not optional here and the domain says why. What the
+        caller is asserting is that a balance moved; refusing the entry when
+        no balance can move is more use than storing a row that changes
+        nothing and reads as though it did.
+        """
+        account = self._load_account(command.user_id, command.account_id)
+        transaction = Transaction.enter_transfer_leg(
+            user_id=command.user_id,
+            role=command.role,
+            amount=command.amount,
+            occurred_at=command.occurred_at,
+            counterparty=command.counterparty,
+            account_id=account.id,
+            bank=command.bank,
+            note=command.note,
+        )
+
+        return self._record_on(account, transaction)
+
+    def _record_on(self, account: Account, transaction: Transaction) -> Transaction:
+        """Apply one hand-entered movement to its account and store both.
+
+        Shared by the two entry paths because the bookkeeping is identical:
+        what differs between an expense and a transfer leg is what the row
+        says about itself, never what its balance does.
+        """
         balance_before = account.balance
         # Raises on a closed account or a currency it does not hold. Refused
         # rather than filed unassigned, unlike an alert: this movement is a
@@ -614,7 +653,10 @@ class ManageTransactionsUseCase:
         )
 
         if command.detach:
-            transaction.unassign()
+            # Refuses a leg no account could take back. Raising here, after
+            # the edit above, persists nothing: the save and the resettle are
+            # both below, so the mutated aggregate is simply discarded.
+            transaction.detach()
         elif target is not None and transaction.account_id != target.id:
             # Already there is a no-op: unassigning and reassigning would
             # publish a movement leaving and rejoining an account it never

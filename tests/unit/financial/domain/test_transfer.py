@@ -4,6 +4,11 @@ A card payment is the case: an account falls, a card's debt falls with it, and
 net worth does not move. Every test here is about one of the three ways that
 can silently go wrong — one side written and not the other, both sides written
 in the same direction, or the pair written twice.
+
+The last section covers the case where only one side is knowable at all: a
+card paid from another bank, a wallet or cash. There the danger is the
+opposite one — not a half-written pair, but a lone movement recorded as
+ordinary spending or ordinary income when it is neither.
 """
 
 from datetime import UTC, datetime
@@ -14,11 +19,15 @@ import pytest
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import TransferLegError
 from personal_finance.contexts.financial.domain.value_objects import (
+    AccountId,
     AccountKind,
     BalanceSign,
     InstrumentKind,
     MovementDirection,
+    MovementId,
     TransactionOrigin,
+    TransferId,
+    TransferLeg,
     TransferRole,
 )
 from personal_finance.shared.domain.value_objects import (
@@ -279,3 +288,283 @@ def test_a_note_can_still_be_written_on_a_transfer_leg() -> None:
     source.edit(note="pago anticipado")
 
     assert source.note == "pago anticipado"
+
+
+# ------------------------------------------- a leg whose other side is outside
+
+
+def _leg(**overrides: object) -> Transaction:
+    """A card paid from somewhere this app does not hold: Nequi, cash, PSE."""
+    parts: dict[str, object] = {
+        "user_id": USER,
+        "role": TransferRole.DESTINATION,
+        "amount": _cop("3540258"),
+        "occurred_at": PAID_AT,
+        "counterparty": "Nequi",
+        "account_id": AccountId.new(),
+        "bank": "bancolombia",
+    }
+    parts.update(overrides)
+
+    return Transaction.enter_transfer_leg(**parts)  # pyright: ignore[reportArgumentType]
+
+
+def test_the_destination_leg_faces_incoming() -> None:
+    """Money paid *to* the card arrives on it, and on a liability arriving is
+    the debt going down."""
+    assert _leg(role=TransferRole.DESTINATION).direction is MovementDirection.INCOMING
+
+
+def test_the_source_leg_faces_outgoing() -> None:
+    assert _leg(role=TransferRole.SOURCE).direction is MovementDirection.OUTGOING
+
+
+def test_the_role_alone_decides_the_direction() -> None:
+    """There is no way to ask for a source that faces incoming: the pairing of
+    the two is what would record a payment that raises what is owed."""
+    source = _leg(role=TransferRole.SOURCE)
+    destination = _leg(role=TransferRole.DESTINATION)
+
+    assert source.direction is not destination.direction
+
+
+def test_it_is_a_transfer_so_no_total_counts_it() -> None:
+    """The whole reason this exists. `is_transfer` is what every total filters
+    on, and a lone leg answers it exactly like a paired one."""
+    assert _leg().is_transfer is True
+
+
+def test_its_counterpart_is_external() -> None:
+    leg = _leg()
+
+    assert leg.transfer is not None
+    assert leg.transfer.counterpart_is_external is True
+    assert leg.transfer.counterpart_id is None
+
+
+def test_it_has_no_counterpart_movement_to_point_a_reader_at() -> None:
+    assert _leg().has_counterpart_movement is False
+
+
+def test_a_paired_leg_does_have_one() -> None:
+    """The property separates the two cases, which is what lets corrections be
+    refused on one and allowed on the other."""
+    source, _ = _pair()
+
+    assert source.has_counterpart_movement is True
+
+
+def test_two_legs_entered_alike_are_two_different_transfers() -> None:
+    """Unlike an alert, this is a claim somebody made twice on purpose. Paying
+    a card twice in a day for the same amount is two payments."""
+    first = _leg()
+    second = _leg()
+
+    assert first.id != second.id
+    assert first.transfer is not None
+    assert second.transfer is not None
+    assert first.transfer.transfer_id != second.transfer.transfer_id
+
+
+def test_its_transfer_id_can_never_collide_with_an_alert_derived_one() -> None:
+    """A uuid is 32 characters and the fingerprint hash is 64, so the random
+    id and the derived one cannot name the same transfer."""
+    lone = _leg()
+    source, _ = _pair()
+
+    assert lone.transfer is not None
+    assert source.transfer is not None
+    assert len(lone.transfer.transfer_id.value) == 32
+    assert len(source.transfer.transfer_id.value) == 64
+
+
+def test_it_is_recorded_as_the_users_own_claim() -> None:
+    assert _leg().origin is TransactionOrigin.MANUAL
+
+
+def test_it_names_no_instrument_so_nothing_adopts_it_by_matching() -> None:
+    """It carries no account fingerprint: an account declared later must never
+    silently claim a movement whose account its owner already chose."""
+    assert _leg().is_routable is False
+
+
+def test_it_keeps_the_account_its_owner_named() -> None:
+    account = AccountId.new()
+
+    assert _leg(account_id=account).account_id == account
+
+
+def test_it_shows_what_the_owner_called_the_other_side() -> None:
+    """The label lives in the counterparty, where every reader already looks —
+    there is no instrument to name instead."""
+    assert _leg(counterparty="Nequi").counterparty == "Nequi"
+
+
+def test_a_leg_with_no_counterparty_text_is_refused() -> None:
+    with pytest.raises(ValueError, match="counterparty"):
+        _leg(counterparty="   ")
+
+
+# ------------------------------------------------------- what it does to money
+
+
+def test_paying_a_card_from_outside_lowers_only_the_debt() -> None:
+    """The other balance is not here to move, and that is the correct answer:
+    the money came from somewhere this app does not track."""
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="3540258")
+
+    card.apply(_leg(role=TransferRole.DESTINATION).as_movement())
+
+    assert card.balance.signed_amount == Decimal("0")
+    assert card.balance.sign is BalanceSign.POSITIVE
+
+
+def test_paying_a_card_elsewhere_from_a_tracked_account_lowers_only_it() -> None:
+    """The mirror case: the account is here and the card is at another bank."""
+    savings = _account(AccountKind.SAVINGS, "5261", holds="5000000")
+
+    savings.apply(_leg(role=TransferRole.SOURCE, amount=_cop("1000000")).as_movement())
+
+    assert savings.balance.signed_amount == Decimal("4000000")
+
+
+def test_the_leg_moves_the_balance_by_exactly_its_amount() -> None:
+    """No rounding, no sign flip: the figure the owner typed is the figure the
+    debt falls by."""
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="3540258")
+
+    card.apply(_leg(amount=_cop("540258.55")).as_movement())
+
+    assert card.balance.signed_amount == Decimal("2999999.45")
+
+
+# ----------------------------------------------------------- its corrections
+
+
+def test_a_lone_leg_can_be_corrected() -> None:
+    """Allowed where a paired leg is refused, and for a reason that is not a
+    preference: there is no second row to fall out of step with."""
+    leg = _leg()
+
+    leg.edit(amount=_cop("100000"))
+
+    assert leg.amount == _cop("100000")
+
+
+def test_correcting_a_lone_leg_keeps_it_out_of_spending() -> None:
+    """A correction must not quietly turn a payment back into an expense."""
+    leg = _leg()
+
+    leg.edit(amount=_cop("100000"), counterparty="Daviplata")
+
+    assert leg.is_transfer is True
+    assert leg.transfer is not None
+    assert leg.transfer.counterpart_is_external is True
+
+
+def test_correcting_a_lone_leg_keeps_no_stated_movement() -> None:
+    """`stated` preserves what the *bank* said, so a correction can be told
+    apart from a misparse. Nobody stated this one but its owner, and keeping a
+    copy of their own earlier typo would claim a source that never existed."""
+    leg = _leg()
+
+    leg.edit(amount=_cop("100000"))
+
+    assert leg.stated is None
+
+
+# ------------------------------------------------- the shape of a leg itself
+
+
+def test_a_leg_describing_half_its_counterpart_is_refused() -> None:
+    """The state this class exists to make impossible: an id nothing can
+    resolve, or digits belonging to no movement."""
+    with pytest.raises(ValueError, match="fully or not at all"):
+        TransferLeg(
+            transfer_id=TransferId.new(),
+            role=TransferRole.SOURCE,
+            counterpart_id=MovementId.new(),
+        )
+
+
+def test_a_leg_naming_digits_but_no_movement_is_refused_too() -> None:
+    with pytest.raises(ValueError, match="fully or not at all"):
+        TransferLeg(
+            transfer_id=TransferId.new(),
+            role=TransferRole.SOURCE,
+            counterpart_instrument_kind="credit_card",
+            counterpart_last_four="7653",
+        )
+
+
+def test_a_fully_described_counterpart_is_accepted() -> None:
+    leg = TransferLeg(
+        transfer_id=TransferId.new(),
+        role=TransferRole.SOURCE,
+        counterpart_id=MovementId.new(),
+        counterpart_instrument_kind="credit_card",
+        counterpart_last_four="7653",
+    )
+
+    assert leg.counterpart_is_external is False
+
+
+def test_a_counterpart_named_by_blank_instrument_is_refused() -> None:
+    with pytest.raises(ValueError, match="instrument"):
+        TransferLeg(
+            transfer_id=TransferId.new(),
+            role=TransferRole.SOURCE,
+            counterpart_id=MovementId.new(),
+            counterpart_instrument_kind="   ",
+            counterpart_last_four="7653",
+        )
+
+
+def test_a_lone_leg_cannot_be_left_without_an_account() -> None:
+    """It states that a balance moved, and it names no instrument, so nothing
+    would ever adopt it — detached it would say a payment happened while no
+    balance shows one."""
+    leg = _leg()
+
+    with pytest.raises(TransferLegError):
+        leg.detach()
+
+    assert leg.account_id is not None
+
+
+def test_a_lone_leg_can_still_be_moved_to_another_account() -> None:
+    """Which is what a leg entered against the wrong card actually needs."""
+    leg = _leg()
+    elsewhere = AccountId.new()
+
+    leg.unassign()
+    leg.assign_to(elsewhere)
+
+    assert leg.account_id == elsewhere
+
+
+def test_an_ordinary_movement_can_still_be_detached() -> None:
+    """The refusal is about transfer legs, not about detaching."""
+    movement = Transaction.enter_manually(
+        user_id=USER,
+        direction=MovementDirection.OUTGOING,
+        amount=_cop("45000"),
+        occurred_at=PAID_AT,
+        counterparty="TIENDAS ARA",
+        account_id=AccountId.new(),
+    )
+
+    movement.detach()
+
+    assert movement.account_id is None
+
+
+def test_a_paired_leg_can_still_be_detached() -> None:
+    """It names an instrument, so declaring that account adopts it back — the
+    retroactive path every unassigned alert already takes."""
+    source, _ = _pair()
+    source.assign_to(AccountId.new())
+
+    source.detach()
+
+    assert source.account_id is None
