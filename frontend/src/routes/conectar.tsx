@@ -491,11 +491,26 @@ function AddressBody({
   );
 }
 
-/** Bancolombia is the one bank with a deterministic parser today. */
-const KNOWN_BANK = {
-  label: "Bancolombia",
-  domains: ["an.notificacionesbancolombia.com", "notificacionesbancolombia.com"],
-};
+/**
+ * The banks with a deterministic parser today, and the domains each one
+ * actually sends from.
+ *
+ * One button per bank rather than one list: approving a sender is approving
+ * what may be read, and somebody who only banks with one of these should not
+ * have to accept the other to get started. Any bank missing here still works
+ * through the field below — it is typed instead of clicked, and read by the
+ * LLM instead of a template.
+ *
+ * Lulo sends from `lulobank.com`. Its message ids come from Amazon SES, which
+ * is shared with every other SES customer and is why that domain is not here.
+ */
+const KNOWN_BANKS = [
+  {
+    label: "Bancolombia",
+    domains: ["an.notificacionesbancolombia.com", "notificacionesbancolombia.com"],
+  },
+  { label: "Lulo bank", domains: ["lulobank.com"] },
+];
 
 /**
  * The approved-sender list, and the only screen that edits it.
@@ -514,7 +529,6 @@ function SendersBody() {
 
   const domains = inbox.allowed_domains;
   const addresses = inbox.allowed_addresses;
-  const hasKnownBank = KNOWN_BANK.domains.every((domain) => domains.includes(domain));
 
   function save(next: { domains?: string[]; addresses?: string[] }) {
     // The endpoint replaces the whole list rather than merging, so both sides
@@ -562,20 +576,23 @@ function SendersBody() {
       </p>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button
-          variant={hasKnownBank ? "ghost" : "primary"}
-          disabled={hasKnownBank || update.isPending}
-          onClick={() =>
-            save({
-              domains: [...new Set([...domains, ...KNOWN_BANK.domains])],
-            })
-          }
-        >
-          {hasKnownBank ? <Check className="size-4 text-incoming" /> : null}
-          {hasKnownBank
-            ? `${KNOWN_BANK.label} aprobado`
-            : `Aprobar ${KNOWN_BANK.label}`}
-        </Button>
+        {KNOWN_BANKS.map((bank) => {
+          const isApproved = bank.domains.every((domain) => domains.includes(domain));
+
+          return (
+            <Button
+              key={bank.label}
+              variant={isApproved ? "ghost" : "primary"}
+              disabled={isApproved || update.isPending}
+              onClick={() =>
+                save({ domains: [...new Set([...domains, ...bank.domains])] })
+              }
+            >
+              {isApproved ? <Check className="size-4 text-incoming" /> : null}
+              {isApproved ? `${bank.label} aprobado` : `Aprobar ${bank.label}`}
+            </Button>
+          );
+        })}
         {update.isPending ? (
           <Loader2 className="size-4 animate-spin text-faint" />
         ) : null}

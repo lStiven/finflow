@@ -85,19 +85,32 @@ this is where the bundle is served from. See **Deployment** in
 
 Both bundles are published and answered: `https://finflow-apk.pages.dev`
 and `https://finflow-dev-2tc.pages.dev` are in each stack's deployed
-`CorsOrigins`. What is missing for production is the verification/recovery
-release — table, configuration and a redeploy — plus observability's one
-manual step and a cap on LLM spending. See **Next steps**.
+`CorsOrigins`. Production's own verification/recovery release is held until
+development has run a few days on it: its table exists, the deploy and the
+republish do not. That plus observability's one manual step and a cap on LLM
+spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **Lulo bank has a deterministic parser**, the second bank to
+  get one: three templates (Bre-B in and out, plain incoming transfer) built
+  from four real alerts, Spanish long dates on a 12-hour clock, and
+  `lulobank.com` both in the registry and as a one-click sender on
+  `/conectar`. Its own word for an account is ignored on purpose — see
+  Decisions.
+- 2026-09-02 — **Development runs the verification/recovery release end to
+  end**: the stack redeployed at 00:21 (so `Retry-After` is exposed and a
+  wrong current password answers 403), and the bundle republished — its
+  registration sends `verification_token`, and the lazy chunks for
+  `/recuperar` and `/restablecer` call `password/forgot` and
+  `password/reset`. `just smoke <dev-url>` passes 17/17 against it.
+  Production is held back on purpose until this has run a few days.
 - 2026-09-01 — Email verification at registration and password recovery, in
   both halves: five endpoints, a `credential_challenges` table whose every
   record expires, SMTP over the deployment's own Gmail, and the screens that
   use them — the door's code step, `/recuperar`, `/restablecer` and a password
   card on `/perfil`. A password change now invalidates every token issued
-  before it. Development is provisioned and running it; **production is
-  not** — see Next steps.
+  before it.
 - 2026-09-01 — `/comercios` is built: the review queue with one-tap confirm,
   search and filters, and a detail screen for renaming, recategorizing,
   moving or splitting a spelling and merging two merchants. Found and
@@ -107,52 +120,32 @@ manual step and a cap on LLM spending. See **Next steps**.
   built against the production API and verified over HTTPS (headers, SPA
   fallback, the bundle's own API address). Its origin is in the deployed
   `CorsOrigins` and the API answers it.
-- 2026-09-01 — The frontend is live against development at
-  https://finflow-dev-2tc.pages.dev — headers, SPA fallback and the bundle
-  verified over HTTPS. The deployed stack carries that origin.
-- 2026-09-01 — The docs answer four questions without overlapping: deploying
-  (new `docs/deploy.md`), running (`running.md`, now 646 lines instead of
-  972), integrating (`frontend-integration.md`) and where to start
-  (`docs/README.md`). Every relative link and anchor checked; every `just`
-  command named in them exists.
 ## Next steps
 
-- [ ] **Next: production still has no verification/recovery release.**
-      Development is done — `dev-credential_challenges` exists and the stack
-      carries `MailFromAddress`, `MailAppPasswordParameter` and
-      `PasswordResetUrl`. Production has none of it: its API publishes 28
-      routes, no `/identity/verification/*` or `/identity/password/*`, and
-      `POST /identity/register` still takes email and password alone. In this
-      order:
-      1. `just provision-prod` — creates `credential_challenges`. Without it
-         every `/identity/verification/*` call fails.
-      2. `just deploy-prod` — carries the three parameters above, which are
+- [ ] **Production waits for development to prove itself.** Deliberate, and
+      the reason the steps below are not being run today: the release is live
+      in development end to end, so production goes second and only once dev
+      has run a few days without surprises. Half of the prerequisite is
+      already done — `credential_challenges` exists in the production account
+      (2026-09-02), so `provision-prod` is behind us. What is left, in this
+      order, the day the decision is made:
+      1. `just deploy-prod` — carries `MailFromAddress`,
+         `MailAppPasswordParameter` and `PasswordResetUrl`, which are
          **required**: the API refuses to start without them. The secret they
-         point at already exists (`/finflow/production/mailbox-app-password`,
-         the ingest worker's own App Password — one credential, read by IMAP
-         and written by SMTP), so there is nothing to `secret-put`.
-      3. `just web-publish` — **not optional, and it is what breaks the
-         moment step 2 lands**: the published bundle predates this work and
-         posts a registration without `verification_token`, which the new API
-         answers 422. Republish right after the deploy, not later.
-      4. `just smoke-prod <ApiUrl>`.
+         point at already exists
+         (`/finflow/production/mailbox-app-password`, the ingest worker's own
+         App Password — one credential, read by IMAP and written by SMTP), so
+         there is nothing to `secret-put`.
+      2. `just web-publish` — **in the same sitting, not later.** Production's
+         published bundle predates this work and posts a registration without
+         `verification_token`, which the new API answers 422. This is exactly
+         what broke development for a few hours on 2026-09-01.
+      3. `just smoke-prod <ApiUrl>` — note it only checks health and the auth
+         guard (`--read-only`, because a write leaves a user nothing can
+         delete), so it will not tell you the new endpoints work. That answer
+         comes from development.
       Note the deploy also rotates every session, twice over: tokens now carry
       a `cv` claim and are refused without it. Everybody logs in again.
-
-- [ ] **Registration is broken on the development Pages site right now**, and
-      for the same reason: the API asks for `verification_token` since
-      2026-09-01 21:03 and the bundle on
-      https://finflow-dev-2tc.pages.dev was built before the door's code step
-      existed, so `POST /identity/register` answers 422. `just
-      web-publish-dev` fixes it.
-
-- [ ] **`finflow-dev` is nine minutes behind the working tree.** It was
-      deployed at 21:03 and commit fce2186 landed at 21:12, so the deployed
-      dev API is missing `expose_headers: ["Retry-After"]` (the frontend
-      cannot read how long to wait after a 429 from the credential endpoints)
-      and still answers 401, not 403, when the current password is wrong at
-      `/identity/password/change` — which logs the person out instead of
-      telling them what happened. `just deploy-dev` carries both.
 
 - [ ] **Next: what production actually needs.** In order of what hurts
       soonest:
@@ -214,10 +207,13 @@ manual step and a cap on LLM spending. See **Next steps**.
       `limit`/`offset` shrink the response, not the read: the counts beside
       the list genuinely need the full set, but the page window does not, and
       the index runs at 3 RCU.
-- [ ] **Only Bancolombia has a parser**, with three sender domains mapped.
-      Every other bank falls through to the LLM, which costs money per email
-      and refuses when unsure. More banks get added over time; this is
-      deliberate, not a gap.
+- [ ] **Two banks have a parser**: Bancolombia (three sender domains) and
+      Lulo bank (`lulobank.com`). Every other bank falls through to the LLM,
+      which costs money per email and refuses when unsure. More banks get
+      added over time; this is deliberate, not a gap. Lulo's own list is not
+      finished either — the four alerts it was built from are two incoming
+      shapes and one outgoing, so a card purchase, a withdrawal or a fee at
+      Lulo still goes to the model.
 - [ ] **No spending cap on the LLM.** Every unrecognised email calls Gemini.
 - [ ] **Validate the authorization filter against real alerts.** An
       authorization and its posting are two different emails with different

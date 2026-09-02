@@ -71,7 +71,7 @@ Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "allowed_domains": ["an.notificacionesbancolombia.com"],
+  "allowed_domains": ["an.notificacionesbancolombia.com", "lulobank.com"],
   "allowed_addresses": []
 }
 ```
@@ -79,6 +79,14 @@ Content-Type: application/json
 **Reemplaza la lista completa**, no la extiende — mandar `allowed_domains`
 vacío borra los dominios ya aprobados. La respuesta es el mismo objeto que
 `GET /identity/inbox`, ya actualizado.
+
+Los dominios de los bancos con parser propio, para copiar:
+`an.notificacionesbancolombia.com` y `notificacionesbancolombia.com`
+(Bancolombia), `lulobank.com` (Lulo bank). El de Lulo es el del `From`, no el
+de sus `Message-ID`: esos salen de `email.amazonses.com`, que comparte con
+todos los demás clientes de SES y aprobarlo sería aprobarlos a ellos también.
+Cualquier otro banco funciona igual aprobando su dominio — lo lee el LLM en
+vez de una plantilla.
 
 ## 4. El usuario configura el reenvío (esto lo hace él, no la API)
 
@@ -119,7 +127,9 @@ igual —:
    el enlace de cada persona, porque nadie más puede leer esa cuenta.
 4. Ya verificada, el usuario crea un **filtro**: "de:
    `alertasynotificaciones@an.notificacionesbancolombia.com`" → **Reenviar a**
-   → su dirección.
+   → su dirección. Con varios bancos, un filtro por remitente o uno solo con
+   `de: (alertasynotificaciones@an.notificacionesbancolombia.com OR
+   notificaciones@lulobank.com)`.
 
 A partir de ahí, cada alerta nueva se copia sola. El `ingest worker` la
 recoge en su siguiente pasada (por defecto, cada

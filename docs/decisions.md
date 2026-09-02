@@ -82,6 +82,25 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   a placeholder institution would merge two banks' cards that share their
   last four into one account holding somebody's money twice. The email keeps
   its body as `pending_fallback`, so a refusal costs a re-read, not the data.
+- **Lulo bank's own word for an account is thrown away** (2026-09-02). Every
+  Lulo alert lays the movement out as two labelled legs — `Origen cuenta •
+  5261`, `Destino ahorro • 7111` — and the label is not a taxonomy: across
+  four real emails the same account, 7111, is `ahorro` in one and `cuenta` in
+  the next. Honouring the word would build two `AccountFingerprint`s for one
+  real account, since the fingerprint is (bank, instrument kind, last four),
+  and the owner would have to declare it twice to catch all its movements.
+  Every Lulo leg is therefore `InstrumentKind.ACCOUNT`. The leg that is
+  *taken* is chosen by direction rather than position — incoming lands on
+  `Destino`, outgoing leaves from `Origen` — because the other leg belongs to
+  the counterparty and routing to it would place a movement on an account the
+  reader does not hold.
+- **The parser's bank string is `"lulo bank"`, with the space** (2026-09-02).
+  It has to survive two comparisons it does not control: the LLM fallback
+  reading an alert no template covers, which answers with the name as the
+  bank signs itself, and the owner typing the bank into `/cuentas` — a free
+  text field, shown back through `describeInstrument`, which only capitalizes
+  the first letter. `"lulo bank"` is what both produce; `"lulobank"` would
+  silently fingerprint a second account the day a template misses.
 - **`PENDING_FALLBACK` carries a `NotificationDeferredReason`**
   (`NO_FALLBACK_CONFIGURED` / `FALLBACK_FOUND_NOTHING`). Without it, an email
   the LLM had already read and declined looked identical to one never
