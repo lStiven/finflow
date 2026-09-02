@@ -462,6 +462,47 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   here. Somebody who tracks only one of the two sides — much the commoner
   case at this deployment's size — is unaffected.
 
+### A headless browser in the DevContainer (2026-09-02)
+
+- **Why at all.** The editor here has no browser, so every screen built in
+  this repo has been verified by types, unit tests over payload shapes, and a
+  build — never by looking. That gap is not theoretical: the first two shots
+  taken with this found the onboarding modal covering every screen and a hint
+  colour that was unreadable on the accent fill, neither of which any check in
+  `check-all` can see.
+
+- **Playwright, Chromium only, and the `playwright` package rather than
+  `@playwright/test`.** The runner would be a second test framework beside
+  vitest, and nothing here is asking for browser tests yet — this is a camera.
+  One browser because the deployment is a web app a handful of people open on
+  a phone, and three engines is three downloads to keep current for no
+  question anybody is asking.
+
+- **The libraries are in the image; the binary is not.** Split on purpose.
+  Chromium's shared libraries need root and never change, so they are a cached
+  Dockerfile layer. The browser build must match the `playwright` package
+  exactly — Playwright refuses a mismatch — and the package version is only
+  known after `npm ci`, so `postCreateCommand` downloads it. Pinning a browser
+  version in the Dockerfile would break the first time the package was
+  upgraded, and in a way whose error names neither file.
+
+- **It photographs what is already running, and starts nothing.** Booting
+  moto, the API and Vite from the script would be a second copy of
+  `run_stack.py` and, worse, processes it could leave behind if it died
+  mid-shot. So it checks the port and says which commands to run. The cost is
+  two terminals before a screenshot; the alternative was a script that can
+  strand a server.
+
+- **It signs in through the form** rather than writing a session into
+  `localStorage`. Slower, and the point: a broken login fails there instead of
+  producing a set of screenshots of the login page. It *does* write the
+  onboarding acks directly, because those are modal and would otherwise be the
+  only thing in every picture — and unlike the session they are per-browser
+  bookkeeping the app already treats as unverifiable.
+
+- **Screenshots are ignored by git.** They describe a moment, and a committed
+  one would be read later as though it still described the app.
+
 ### Reading Financial and Merchant together (2026-08-25)
 
 - **The movement↔merchant join is made on read, never stored.**

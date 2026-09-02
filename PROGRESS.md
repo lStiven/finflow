@@ -100,6 +100,17 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **The DevContainer has a headless browser**, so a screen no
+  longer ships having only been type-checked. `just shot [rutas] [--desktop
+  --full --onboarding]` drives Chromium over the running app and writes PNGs
+  to `frontend/.screenshots` (ignored). It photographs what is already up
+  rather than booting anything, signs in through the real login form, and
+  marks the onboarding acks so the guide's modals stop covering every shot.
+  Chromium's libraries are baked into the image; the binary is downloaded by
+  `postCreateCommand` after `npm ci` so its version matches the package.
+  It earned its keep immediately: the first shots showed the onboarding modal
+  over everything, and a hint on the active Traslado tab that was unreadable
+  on the accent fill. Both fixed.
 - 2026-09-02 — **The frontend speaks the new contract**, so external transfer
   legs are reachable and readable. `/transacciones/nueva` grew a third tab —
   Traslado — with the two roles spelled out in what they do to a balance
@@ -120,17 +131,6 @@ spending is what production still misses. See **Next steps**.
   is required: no default suits both a list and a total, and the old one erred
   toward reading a payment as spending. Neither changed the API — `openapi.json`
   is untouched — and ordinary manual entries still record two coffees as two.
-- 2026-09-02 — **A card paid from outside the app is no longer an expense.**
-  `TransferLeg`'s counterpart became optional — all three fields together,
-  refused half-written in the domain and again in the DynamoDB reader — so a
-  leg can say plainly that its other side is elsewhere. `POST
-  /financial/transactions/transfer` enters one: `role` fixes the direction and
-  the account is required, because the movement asserts a balance moved and
-  nothing would ever adopt it later. A lone leg is correctable where a paired
-  one answers 409, and cannot be detached at all. The seed now covers both
-  shapes side by side, plus Lulo's three alerts and the account that adopts
-  them. `/code-review high` found the detach hole; it is closed with tests.
-  **Frontend follow-up is open** — see Next steps.
 - 2026-09-02 — **`/reportes` is built**, both halves now done. One filter row
   (periodo, cuenta, moneda) scopes seven reads, so every figure on screen
   describes the same window: four KPI tiles with deltas, cashflow columns,
@@ -205,11 +205,9 @@ spending is what production still misses. See **Next steps**.
          door's code step, `/recuperar`, `/restablecer` and the password card
          on `/perfil`. What is left is **one** screen: configuración, still
          the only entry disabled in the shell's nav.
-         Nothing has been looked at in a browser this session — there is no
-         headless browser in the DevContainer, so `/reportes` and the Traslado
-         tab were verified by their queries against the emulator, by unit
-         tests over real payload shapes, and by the build. Neither has been
-         *seen*.
+         Both have now been **seen**: `just shot` drives a headless Chromium
+         over the running app (see Last completed), and the Traslado tab and
+         `/reportes` were checked in a real render.
 - [ ] **An instrument cannot be unlinked from an account.** Giving an
       account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
       exists and `/cuentas` calls it, with a "Cerradas" tab to see what was

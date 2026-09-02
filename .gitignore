@@ -78,6 +78,11 @@ Desktop.ini
 # `frontend/src/reports/`, which is source.
 /reports/
 
+# What `just shot` writes. Pictures of a moment, not of the code — they go
+# stale the next time a screen changes, and a committed one would be read as
+# though it still described the app.
+.screenshots/
+
 # Jupyter
 .ipynb_checkpoints/
 

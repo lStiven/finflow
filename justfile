@@ -553,6 +553,22 @@ _web-publish stack profile project:
 # Kept out of `just prepare` on purpose: that recipe is the fast Python loop,
 # and waiting on Node to find out that a Python test failed is the wrong trade.
 #
+# There is no browser in the DevContainer's editor, so a screen that only
+# type-checks has never been *seen*. This drives a headless Chromium over the
+# running app and writes PNGs — phone-sized by default, because that is what
+# Finflow is.
+#
+# It photographs what is already up rather than starting anything: booting the
+# stack from the script would be a second copy of `run_stack.py` and a process
+# it could leave behind if it died mid-shot. So `just up` in one terminal and
+# `just web` in another, then this. With no arguments it walks the main
+# screens; `--desktop`, `--full` and `--onboarding` are the flags worth
+# knowing. Output lands in `frontend/.screenshots`, which git ignores.
+#
+# Screenshot the running frontend, e.g. `just shot /reportes --full`.
+shot *args:
+    cd {{frontend_dir}} && node scripts/shot.mjs {{args}}
+
 # Format check, lint and typecheck the frontend.
 web-check:
     cd {{frontend_dir}} && npm run check

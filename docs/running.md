@@ -527,6 +527,50 @@ navegador del host.** Es la dirección del contenedor en la red interna de
 Docker. Abre siempre `http://localhost:5173`. Está explicado, con el orden de
 diagnóstico, en [`frontend/README.md`](../frontend/README.md).
 
+### Verlo de verdad: `just shot`
+
+En este DevContainer no hay navegador, así que una pantalla que solo compila
+**nunca se ha visto**. `just shot` arranca un Chromium sin cabeza sobre la app
+que ya está corriendo y escribe PNGs que sí se pueden abrir.
+
+```bash
+just up                       # emulador, datos de prueba y la API
+just web                      # el frontend, en otra terminal
+
+just shot                     # las pantallas principales, tamaño teléfono
+just shot /reportes --full    # una sola, la página entera
+just shot /cuentas --desktop  # 1280x900 en vez de 390x844
+```
+
+Cosas que conviene saber:
+
+- **No levanta nada.** Fotografía lo que ya está arriba, y si no hay nada
+  escuchando en `localhost:5173` te dice qué arrancar. Arrancar el stack desde
+  el script sería una segunda copia de `run_stack.py` y un proceso que se
+  podría quedar colgado si el script muere a mitad.
+- **Entra con la cuenta demo** (`demo@finflow.local`, la que siembra
+  `just seed`) por el formulario de verdad, no escribiendo la sesión en
+  `localStorage`: si el login se rompe, falla ahí en vez de darte seis
+  capturas de la pantalla de acceso.
+- **Silencia el onboarding.** En un perfil nuevo la bienvenida y el "ya quedó
+  conectado" son modales que tapan todo; el script los marca como vistos.
+  `--onboarding` los deja para quien quiera fotografiar la guía.
+- **Tamaño teléfono por defecto**, porque es lo que Finflow es.
+- Las capturas van a `frontend/.screenshots/`, que git ignora: son la foto de
+  un momento y envejecen en cuanto cambia una pantalla.
+
+El navegador se instala solo al crear el contenedor. Sus librerías están en la
+imagen (ver `.devcontainer/Dockerfile`) y el binario lo baja
+`postCreateCommand` después de `npm ci`, para que su versión case con el
+paquete `playwright` que lo maneja. Si Chromium se queja de una librería que
+falta:
+
+```bash
+sudo $(command -v node) frontend/node_modules/playwright/cli.js install-deps chromium
+```
+
+y añade a la lista del Dockerfile lo que ese comando instale.
+
 ### El contrato entre las dos mitades
 
 `docs/openapi.json` se genera desde los routers de Python, y de ahí salen los

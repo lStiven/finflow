@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
+import { cn } from "@/lib/cn";
 import { fromLocalInput, nowInSeconds, toLocalInput } from "@/lib/dates";
 
 export const Route = createFileRoute("/transacciones/nueva")({
@@ -323,7 +324,16 @@ function KindTab({
       }
     >
       <span className={hint ? "block" : "block text-center"}>{label}</span>
-      {hint ? <span className="mt-0.5 block text-faint text-xs">{hint}</span> : null}
+      {hint ? (
+        // `faint` is calibrated against the dark surface, not against the
+        // accent fill an active tab carries — on that background it is barely
+        // there, which a screenshot showed and a type check could not.
+        <span
+          className={cn("mt-0.5 block text-xs", active ? "text-text/70" : "text-faint")}
+        >
+          {hint}
+        </span>
+      ) : null}
     </button>
   );
 }
