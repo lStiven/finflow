@@ -587,6 +587,20 @@ class ManageTransactionsUseCase:
             bank=command.bank,
             note=command.note,
         )
+        # Asked before the balance is touched, not only after the write. The
+        # conditional write below is what makes this safe under two requests
+        # at once; this read is what makes the ordinary case — somebody
+        # pressing the button twice — answer with the payment they already
+        # made instead of a refusal they would have to interpret.
+        already = self._ledger.find(
+            user_id=command.user_id,
+            transaction_id=transaction.id.value,
+        )
+
+        if already is not None:
+            transaction.pull_events()
+
+            return already
 
         return self._record_on(account, transaction)
 
@@ -607,10 +621,30 @@ class ManageTransactionsUseCase:
         # The real delta, in the ledger's own atomic write: adding zero and
         # then replaying the whole account would widen the window in which a
         # concurrent alert can be lost.
-        self._ledger.record(
+        written = self._ledger.record(
             transaction=transaction,
             balance_delta=account.balance.signed_amount - balance_before.signed_amount,
         )
+
+        if not written:
+            # A row with this id is already there, so nothing was written and
+            # the stored balance never moved — only the copy in memory, which
+            # is discarded with this call. Reachable from the transfer-leg
+            # path, whose identity comes from its content: two requests racing
+            # each other both get here and exactly one wins. Events are pulled
+            # and dropped rather than published: `event_id` is fresh on every
+            # attempt, so publishing them would read as new work to any
+            # subscriber deduplicating on it.
+            transaction.pull_events()
+            account.pull_events()
+
+            stored = self._ledger.find(
+                user_id=transaction.user_id,
+                transaction_id=transaction.id.value,
+            )
+
+            return transaction if stored is None else stored
+
         self._events.publish(transaction.pull_events())
         self._events.publish(account.pull_events())
 

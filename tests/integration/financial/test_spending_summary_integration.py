@@ -26,6 +26,7 @@ from personal_finance.contexts.financial.application.queries import (
     SummaryGrouping,
     SummaryQuery,
     TransactionQuery,
+    TransferView,
 )
 from personal_finance.contexts.financial.domain.entities import Transaction
 from personal_finance.contexts.financial.domain.value_objects import MovementDirection
@@ -190,7 +191,9 @@ def test_a_movement_reads_back_with_the_merchant_its_own_worker_resolved(
     _spend(ledger, counterparty="TIENDAS ARA 123")
 
     page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
-        TransactionQuery(filter=MovementFilter(user_id=USER_ID)),
+        TransactionQuery(
+            filter=MovementFilter(user_id=USER_ID, transfers=TransferView.INCLUDE),
+        ),
     )
     merchant = page.transactions[0].merchant
 
@@ -218,7 +221,7 @@ def test_two_spellings_of_one_business_add_up_under_a_single_merchant(
         merchants=directory,
     ).execute(
         SummaryQuery(
-            filter=MovementFilter(user_id=USER_ID),
+            filter=MovementFilter(user_id=USER_ID, transfers=TransferView.EXCLUDE),
             group_by=SummaryGrouping.MERCHANT,
         ),
     )
@@ -236,7 +239,9 @@ def test_a_movement_whose_sighting_has_not_landed_yet_still_reads(
     _spend(ledger, counterparty="TIENDAS ARA 123")
 
     page = ListTransactionsUseCase(ledger=ledger, merchants=directory).execute(
-        TransactionQuery(filter=MovementFilter(user_id=USER_ID)),
+        TransactionQuery(
+            filter=MovementFilter(user_id=USER_ID, transfers=TransferView.INCLUDE),
+        ),
     )
 
     assert page.total == 1
@@ -250,7 +255,9 @@ def test_a_late_evening_purchase_is_summarized_in_its_local_month(
     _spend(ledger, counterparty="TIENDAS ARA 123", when=AUGUST_LAST_NIGHT)
 
     summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
-        SummaryQuery(filter=MovementFilter(user_id=USER_ID)),
+        SummaryQuery(
+            filter=MovementFilter(user_id=USER_ID, transfers=TransferView.EXCLUDE),
+        ),
     )
 
     assert [group.key for group in summary.groups] == ["2026-08"]

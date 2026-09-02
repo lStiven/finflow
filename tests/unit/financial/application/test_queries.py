@@ -249,7 +249,16 @@ def _declare(accounts: InMemoryAccounts, name: str) -> Account:
 
 
 def _filter(**overrides: object) -> MovementFilter:
-    return MovementFilter(user_id=USER_ID, **overrides)  # type: ignore[arg-type]
+    """`INCLUDE` unless a test says otherwise, matching what `/transactions`
+    asks for. `MovementFilter` has no default of its own on purpose — see the
+    field — so the choice is made here once instead of drifting per test."""
+    parts: dict[str, object] = {
+        "user_id": USER_ID,
+        "transfers": TransferView.INCLUDE,
+    }
+    parts.update(overrides)
+
+    return MovementFilter(**parts)  # type: ignore[arg-type]
 
 
 # ------------------------------------------------------- movement ↔ merchant
@@ -1676,3 +1685,11 @@ def test_a_weekday_is_compared_against_itself_because_mondays_come_round_again(
     assert monday.totals[0].outgoing == Decimal("8000")
     assert monday.previous_totals is not None
     assert monday.previous_totals[0].outgoing == Decimal("5000")
+
+
+def test_a_filter_cannot_be_built_without_saying_what_to_do_with_transfers() -> None:
+    """No default, on purpose: a list wants both sides of a transfer and every
+    total wants neither, so any default is silently wrong for one of them —
+    and wrong in the direction that reads a card payment as spending."""
+    with pytest.raises(TypeError):
+        MovementFilter(user_id=USER_ID)  # type: ignore[call-arg]

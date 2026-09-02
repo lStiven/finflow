@@ -27,6 +27,7 @@ from personal_finance.contexts.financial.application.queries import (
     SummarizeSpendingUseCase,
     SummaryQuery,
     TransactionQuery,
+    TransferView,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -241,7 +242,9 @@ def test_a_summary_never_totals_another_users_spending(
     _both_spend(ledger)
 
     summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
-        SummaryQuery(filter=MovementFilter(user_id=ANA)),
+        SummaryQuery(
+            filter=MovementFilter(user_id=ANA, transfers=TransferView.EXCLUDE),
+        ),
     )
 
     assert summary.totals[0].outgoing == Decimal("50000")
@@ -255,7 +258,13 @@ def test_a_search_never_reaches_another_users_counterparties(
     _both_spend(ledger)
 
     page = ListTransactionsUseCase(ledger=ledger).execute(
-        TransactionQuery(filter=MovementFilter(user_id=ANA, search="RAPPI")),
+        TransactionQuery(
+            filter=MovementFilter(
+                user_id=ANA,
+                search="RAPPI",
+                transfers=TransferView.INCLUDE,
+            ),
+        ),
     )
 
     assert page.total == 0

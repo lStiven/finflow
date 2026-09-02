@@ -738,9 +738,23 @@ class Transaction(AggregateRoot[MovementId]):
         unassigned alert is adopted; entered without one it would be a row
         claiming a balance moved while no balance moved, which is the
         discrepancy this whole path exists to prevent.
+
+        Its identity comes from its content, unlike a plain manual entry and
+        like every alert: two coffees of one price are two purchases, but two
+        identical payments to one card in one minute are a double submit, and
+        counted twice the debt falls twice. See
+        `MovementFingerprint.from_transfer_leg`.
         """
+        fingerprint = MovementFingerprint.from_transfer_leg(
+            user_id=user_id,
+            account_id=account_id,
+            role=role,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(counterparty),
+        )
         transaction = cls(
-            id=MovementId.new(),
+            id=MovementId.from_fingerprint(fingerprint),
             user_id=user_id,
             direction=(
                 MovementDirection.OUTGOING
@@ -757,7 +771,10 @@ class Transaction(AggregateRoot[MovementId]):
             # No counterpart at all rather than a placeholder one: the other
             # side is not a movement this ledger can be asked for, and a
             # fabricated id would be a link every reader follows into nothing.
-            transfer=TransferLeg(transfer_id=TransferId.new(), role=role),
+            transfer=TransferLeg(
+                transfer_id=TransferId.from_lone_leg(fingerprint),
+                role=role,
+            ),
         )
         transaction._announce()
 

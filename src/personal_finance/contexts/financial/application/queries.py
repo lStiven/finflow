@@ -157,6 +157,15 @@ class MovementFilter:
     """
 
     user_id: UserId
+    # No default, alone among these, and deliberately: there is no answer that
+    # suits both readers. A list wants both sides of a transfer because they
+    # explain why an account fell; every total wants neither, or a card
+    # payment reports as the month's largest expense and again as income on
+    # the card. A default would therefore be right for one caller and silently
+    # wrong for the other — and wrong in the direction that reads a payment as
+    # spending, which is the whole bug this type exists to keep out. Spelling
+    # it at every call site is the cost of not having to notice.
+    transfers: TransferView
     account_id: AccountId | None = None
     # True lists only what no account claimed — the queue somebody works
     # through after declaring an account, or the whole ledger for somebody who
@@ -179,9 +188,6 @@ class MovementFilter:
     # both of them.
     since: PosixTime | None = None
     until: PosixTime | None = None
-    # Both sides of a transfer, neither, or only those. The default suits a
-    # list; a total asks for `EXCLUDE`.
-    transfers: TransferView = TransferView.INCLUDE
     # One currency only. Nothing here ever sums two of them, so a report that
     # ranks buckets by amount or stacks them in one chart has to pin this
     # first — otherwise the biggest bucket is whichever currency has the

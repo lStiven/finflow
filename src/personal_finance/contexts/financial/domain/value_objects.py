@@ -575,8 +575,61 @@ class MovementFingerprint(ValueObject):
 
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
+    @classmethod
+    def from_transfer_leg(
+        cls,
+        *,
+        user_id: UserId,
+        account_id: AccountId,
+        role: TransferRole,
+        amount: Money,
+        occurred_at: PosixTime,
+        counterparty: str,
+    ) -> Self:
+        """What makes one hand-entered transfer leg the same leg.
+
+        Derived rather than random, unlike an ordinary manual entry, and the
+        difference is what the amount means. Two coffees of the same price on
+        the same day are two purchases and both belong in a ledger; two
+        identical payments to one card in the same minute are a double submit,
+        and taken as two the debt falls twice — a wrong balance nobody sees,
+        which is exactly what the alert-derived path already refuses to
+        produce. So this path gets the same protection by the same mechanism:
+        the id comes from the content, and the ledger's conditional write
+        rejects the second attempt on its own key.
+
+        The **account** stands where an alert's instrument would, and has to:
+        a leg names no card, so without it two cards paid from one wallet for
+        one amount on one day would collapse into a single row.
+
+        Tagged, so this can never canonicalize to what `from_movement`
+        produces. `bank` is deliberately absent — it is a label here, not part
+        of which balance moved, and including it would make the same payment
+        typed with and without one into two rows.
+        """
+        canonical = _canonical(
+            (
+                _TRANSFER_LEG_TAG,
+                str(user_id.value),
+                str(account_id.value),
+                role.value,
+                _canonical_amount(amount),
+                amount.currency.value,
+                str(occurred_at.as_epoch_seconds()),
+                normalize_counterparty(counterparty),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
     def to_dict(self) -> JsonValue:
         return self.value
+
+
+# Prefixed into the canonical form above so a leg and an alert can never hash
+# alike. Changing it re-identifies every leg entered after it, and the same
+# payment would then be enterable a second time.
+_TRANSFER_LEG_TAG = "transfer-leg"
 
 
 class TransferRole(enum.Enum):
@@ -619,16 +672,19 @@ class TransferId(ValueObject):
         object.__setattr__(self, "value", value)
 
     @classmethod
-    def new(cls) -> Self:
+    def from_lone_leg(cls, fingerprint: MovementFingerprint) -> Self:
         """Identity for a transfer only one side of which this app holds.
 
-        Random, unlike `from_parts`, and for the same reason `MovementId.new`
-        is: the content that would be hashed is a person's claim rather than a
-        bank's statement, and there is no second delivery of it to deduplicate
-        against. A uuid is 32 characters where the hash below is 64, so the two
-        can never name the same transfer by accident.
+        Derived from that side, because it *is* the transfer: there is no
+        second row to tie to this one, and a random id would make the same
+        payment entered twice produce two transfers whose single legs claim
+        the same money. Hashed again rather than reused verbatim so a transfer
+        and a movement never share an id, and tagged so this can never equal
+        what `from_parts` builds for a pair.
         """
-        return cls(value=uuid.uuid4().hex)
+        canonical = _canonical((_LONE_TRANSFER_TAG, fingerprint.value))
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
     @classmethod
     def from_parts(
@@ -661,6 +717,10 @@ class TransferId(ValueObject):
 
     def to_dict(self) -> JsonValue:
         return self.value
+
+
+# Same contract as `_TRANSFER_LEG_TAG`: changing it re-identifies transfers.
+_LONE_TRANSFER_TAG = "lone-transfer"
 
 
 def transfer_counterparty(*, instrument_kind: str, last_four: str) -> str:

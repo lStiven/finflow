@@ -49,7 +49,7 @@ canonical merchant behind the bank's text, and the reporting surface is
 finished backend-side: `GET /financial/summary` answers what a period adds up
 to, ranks and folds it, and compares it against the window before; `GET
 /financial/trends` answers the stacked chart. `just prepare` passes end to end
-— format, lint, types and 1233 tests. The pyright error in
+— format, lint, types and 1251 tests. The pyright error in
 `shared/infrastructure/llm/gemini.py:120` that had been stopping it is gone
 without the file changing, so it was the installed stubs, not the code.
 
@@ -100,6 +100,16 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **The hand-entered card payment is idempotent, and the filter
+  that keeps it out of totals no longer has a default.** Both were found by
+  auditing the change above rather than by anything failing. The leg's id now
+  comes from its content (`MovementFingerprint.from_transfer_leg`, with the
+  account standing where an alert's instrument would), so a double click
+  answers 201 twice with the same movement and the debt falls once — the
+  protection the alert-derived path always had. And `MovementFilter.transfers`
+  is required: no default suits both a list and a total, and the old one erred
+  toward reading a payment as spending. Neither changed the API — `openapi.json`
+  is untouched — and ordinary manual entries still record two coffees as two.
 - 2026-09-02 — **A card paid from outside the app is no longer an expense.**
   `TransferLeg`'s counterpart became optional — all three fields together,
   refused half-written in the domain and again in the DynamoDB reader — so a
@@ -131,12 +141,6 @@ spending is what production still misses. See **Next steps**.
   (a bucket cut short by `to` not saying so, a period miscounted off an
   exclusive `to`, and `compare` wrongly dropped for `weekday`); all three are
   fixed with regression tests.
-- 2026-09-02 — **Lulo bank has a deterministic parser**, the second bank to
-  get one: three templates (Bre-B in and out, plain incoming transfer) built
-  from four real alerts, Spanish long dates on a 12-hour clock, and
-  `lulobank.com` both in the registry and as a one-click sender on
-  `/conectar`. Its own word for an account is ignored on purpose — see
-  Decisions.
 - 2026-09-02 — **Development runs the verification/recovery release end to
   end**: the stack redeployed at 00:21 (so `Retry-After` is exposed and a
   wrong current password answers 403), and the bundle republished — its

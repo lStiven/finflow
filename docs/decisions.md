@@ -396,10 +396,49 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   direction (a payload free to pair `source` with an incoming movement is a
   payload free to record a payment that *raises* what is owed) and the account
   is required, so neither field could have carried the plain entry's meaning.
-  The identity is random like any manual entry — the content is a person's
-  claim, not a bank's statement, so there is no redelivery to deduplicate
-  against, and `TransferId.new()` is 32 characters where `from_parts` hashes
-  to 64, which is what keeps the two from ever naming one transfer.
+  **Its identity comes from its content, unlike every other manual entry**
+  (revised 2026-09-02, after the first version shipped with a random one).
+  A manual entry is a claim rather than a redelivery, so the usual rule is
+  that typing it twice records it twice — two coffees of one price on one day
+  are two purchases, and refusing the second would lose real money. A card
+  payment inverts that: two identical payments to one card in the same minute
+  are a double submit, and taken as two the debt falls twice. The balance is
+  then wrong, no screen says so, and the alert-derived path was already
+  refusing exactly this by deriving its id from the alert. So this path gets
+  the same protection by the same mechanism — `MovementFingerprint`'s own
+  `from_transfer_leg`, and the ledger's conditional write on that key. The
+  cost, accepted: two genuinely separate payments of one amount to one card
+  in one minute become one row.
+
+  Three details that are load-bearing. The **account** stands where an alert's
+  instrument would — a leg names no card, so without it two cards paid from
+  one wallet for one amount would collapse into a single row. `bank` and
+  `note` are **out**: neither says which money moved, so a retry that added a
+  note would otherwise write a second row. And both canonical forms carry a
+  **tag**, which is what keeps a leg from ever hashing to what an alert hashes
+  to now that lengths no longer separate them; `TransferId.from_lone_leg`
+  hashes the fingerprint again rather than reusing it, so a transfer and a
+  movement never answer to one id.
+
+  The second attempt is answered with the row that already exists, not a
+  refusal: the outcome the caller asked for holds. The use case reads before
+  it touches a balance so the ordinary double-click is exact, and still
+  handles a losing conditional write so two concurrent requests are safe —
+  the read alone would be a race, and the write alone would answer a
+  double-click with a rejection somebody has to interpret.
+
+  **`MovementFilter.transfers` lost its default** in the same pass, and for
+  the same reason this entry exists. It defaulted to `INCLUDE`, and only the
+  query-parameter defaults on `/summary`, `/trends` and `/history` kept a card
+  payment out of a total — so the safeguard lived in the presentation layer
+  while the rule belongs to the read model. There is no default that suits
+  both readers: a list wants both sides because they explain why an account
+  fell, and every total wants neither. A default is therefore silently wrong
+  for one of them, and wrong in the direction that reads a payment as
+  spending. Making the field required moves the choice to every call site,
+  where it is a decision rather than an omission. No behaviour changed —
+  the router already passed it everywhere — and a test now pins that the
+  default cannot come back.
 
   **Matching two movements automatically was rejected**, and this is the
   decision most likely to be revisited. Given an outgoing movement on one

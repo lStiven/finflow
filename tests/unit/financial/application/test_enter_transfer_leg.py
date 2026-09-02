@@ -156,6 +156,10 @@ class RecordingPublisher:
         self.published.extend(events)
 
 
+def _cop(amount: str) -> Money:
+    return Money(amount=Decimal(amount), currency=Currency.COP)
+
+
 def _card(
     accounts: FakeAccounts,
     *,
@@ -290,9 +294,10 @@ def test_exactly_one_row_is_written() -> None:
     assert len(ledger.rows) == 1
 
 
-def test_the_same_payment_entered_twice_is_two_movements() -> None:
-    """A manual entry is a claim, not a redelivery: somebody who types it
-    twice paid twice, or can correct one. Nothing here deduplicates."""
+def test_the_same_payment_entered_twice_is_written_once() -> None:
+    """The double submit, at the layer that would have written it. Two rows
+    here means the debt falls twice — the balance is then wrong and nothing
+    on any screen says so."""
     accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
     card = _card(accounts, owes="10000000")
     use_case = _use_case(accounts, ledger, publisher)
@@ -300,7 +305,77 @@ def test_the_same_payment_entered_twice_is_two_movements() -> None:
     first = use_case.enter_transfer_leg(_command(card))
     second = use_case.enter_transfer_leg(_command(card))
 
-    assert first.id != second.id
+    assert first.id == second.id
+    assert len(ledger.rows) == 1
+
+
+def test_the_second_attempt_does_not_move_the_balance_again() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    card = _card(accounts, owes="10000000")
+    use_case = _use_case(accounts, ledger, publisher)
+
+    use_case.enter_transfer_leg(_command(card))
+    owed = card.balance.signed_amount
+    use_case.enter_transfer_leg(_command(card))
+
+    assert card.balance.signed_amount == owed
+
+
+def test_the_second_attempt_announces_nothing() -> None:
+    """`event_id` is fresh on every attempt, so publishing the second one's
+    events would read as new work to a subscriber deduplicating on it."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    card = _card(accounts, owes="10000000")
+    use_case = _use_case(accounts, ledger, publisher)
+
+    use_case.enter_transfer_leg(_command(card))
+    announced = len(publisher.published)
+    use_case.enter_transfer_leg(_command(card))
+
+    assert len(publisher.published) == announced
+
+
+def test_the_second_attempt_answers_with_the_payment_already_recorded() -> None:
+    """Not a refusal the caller has to interpret: the outcome it asked for
+    already holds, so it gets that row."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    card = _card(accounts, owes="10000000")
+    use_case = _use_case(accounts, ledger, publisher)
+
+    first = use_case.enter_transfer_leg(_command(card, note="primer intento"))
+    second = use_case.enter_transfer_leg(_command(card, note="segundo intento"))
+
+    assert second.note == "primer intento"
+    assert second.id == first.id
+
+
+def test_a_genuinely_different_payment_is_still_written() -> None:
+    """The guard must not swallow a real second payment: another amount, or
+    another minute, is another movement."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    card = _card(accounts, owes="10000000")
+    use_case = _use_case(accounts, ledger, publisher)
+
+    use_case.enter_transfer_leg(_command(card))
+    use_case.enter_transfer_leg(_command(card, amount=_cop("500000")))
+
+    assert len(ledger.rows) == 2
+    assert card.balance.signed_amount == Decimal("5959742")
+
+
+def test_two_users_paying_identically_each_get_their_own_row() -> None:
+    """The fingerprint carries the owner, so one person's double-submit guard
+    can never swallow another person's payment."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    mine = _card(accounts, owes="10000000")
+    theirs = _card(accounts, owner=OTHER_USER, owes="10000000")
+    use_case = _use_case(accounts, ledger, publisher)
+
+    use_case.enter_transfer_leg(_command(mine))
+    use_case.enter_transfer_leg(
+        _command(theirs, user_id=OTHER_USER, account_id=theirs.id),
+    )
+
     assert len(ledger.rows) == 2
 
 

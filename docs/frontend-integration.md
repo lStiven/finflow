@@ -668,6 +668,15 @@ para la pantalla:
 - **`account_id` es obligatorio** (`422` sin él, `404` si no es una cuenta del
   usuario). El movimiento afirma que un saldo se movió; sin cuenta no hay
   saldo que mover, y nada lo adoptaría después.
+- **Es idempotente.** Dos peticiones idénticas (mismo usuario, cuenta, rol,
+  monto, instante y contraparte) devuelven `201` con **el mismo movimiento**, y
+  la deuda baja una sola vez. El id sale del contenido, como en las alertas, así
+  que un doble clic o un reintento por red no duplican el pago. No necesitas
+  botón deshabilitado ni token de idempotencia — aunque desactivarlo sigue
+  siendo buena UX. Cambiar el monto, el instante, el rol o la contraparte sí es
+  otro pago. Ojo: `bank` y `note` **no** entran en la identidad, así que
+  reintentar con otra nota devuelve el movimiento original con la nota
+  original.
 - **Cuándo ofrecerlo**: pagar la tarjeta desde el *mismo* banco no lo necesita
   — ese correo llega solo y escribe las dos filas. Esto es para el otro caso.
 - Los valores de `role` salen de `transfer_roles` en `GET /financial/catalog`,

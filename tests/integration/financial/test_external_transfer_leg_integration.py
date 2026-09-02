@@ -292,3 +292,49 @@ def test_the_stored_balance_matches_a_rebuild_from_the_rows(
 
     assert rebuilt.signed_amount == stored.balance.signed_amount
     assert rebuilt.signed_amount == Decimal("2200000")
+
+
+def test_the_same_payment_entered_twice_moves_the_debt_once(
+    manage_accounts: ManageAccountsUseCase,
+    manage_transactions: ManageTransactionsUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Against the real table, where the guarantee actually lives: the id is
+    derived from the content and the ledger's write is conditional on that
+    key, so the second attempt writes nothing at all."""
+    card = _declare_card(manage_accounts, owes="3540258")
+
+    first = _pay_from_outside(manage_transactions, card, "3540258")
+    second = _pay_from_outside(manage_transactions, card, "3540258")
+
+    assert first == second
+
+    stored = accounts.find(user_id=USER_ID, account_id=card.id)
+    assert stored is not None
+    assert stored.balance.signed_amount == Decimal("0")
+    assert len(ledger.list_all(USER_ID)) == 1
+
+
+def test_the_stored_balance_still_matches_a_rebuild_after_a_repeat(
+    manage_accounts: ManageAccountsUseCase,
+    manage_transactions: ManageTransactionsUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """The failure this guards against is a balance moved by a write that was
+    then refused — the row absent and the number already changed."""
+    card = _declare_card(manage_accounts, owes="3540258")
+    _pay_from_outside(manage_transactions, card, "1540258")
+    _pay_from_outside(manage_transactions, card, "1540258")
+
+    stored = accounts.find(user_id=USER_ID, account_id=card.id)
+    assert stored is not None
+
+    rebuilt = stored.balance_after(
+        movement.as_movement()
+        for movement in ledger.list_movements(user_id=USER_ID, account_id=card.id)
+    )
+
+    assert rebuilt.signed_amount == stored.balance.signed_amount
+    assert rebuilt.signed_amount == Decimal("2000000")

@@ -1571,6 +1571,39 @@ def test_correcting_it_moves_the_balance_with_it(client: TestClient) -> None:
     assert Decimal(after["balance"]) == Decimal("0")
 
 
+def test_pressing_the_button_twice_records_one_payment(
+    client: TestClient,
+) -> None:
+    """Both answer 201 with the same movement, and the debt falls once. A
+    second row here would halve a debt that was only paid once."""
+    card = _declare(client, opening_balance="3540258")
+
+    first = _pay_from_outside(client, account_id=card["id"])
+    second = _pay_from_outside(client, account_id=card["id"])
+
+    assert first["id"] == second["id"]
+    after = client.get(f"/financial/accounts/{card['id']}").json()
+    assert Decimal(after["balance"]) == Decimal("0")
+    listed = client.get("/financial/transactions").json()
+    assert listed["total"] == 1
+
+
+def test_paying_the_card_again_later_is_a_second_payment(
+    client: TestClient,
+) -> None:
+    """The guard is about one payment typed twice, not about paying twice."""
+    card = _declare(client, opening_balance="3540258")
+
+    _pay_from_outside(client, account_id=card["id"], amount="1000000")
+    _pay_from_outside(
+        client, account_id=card["id"], amount="1000000", occurred_at=WHEN + 86400
+    )
+
+    after = client.get(f"/financial/accounts/{card['id']}").json()
+    assert Decimal(after["balance"]) == Decimal("1540258")
+    assert client.get("/financial/transactions").json()["total"] == 2
+
+
 def test_a_leg_entered_from_outside_cannot_be_detached(
     client: TestClient,
 ) -> None:

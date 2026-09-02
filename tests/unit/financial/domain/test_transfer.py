@@ -293,6 +293,13 @@ def test_a_note_can_still_be_written_on_a_transfer_leg() -> None:
 # ------------------------------------------- a leg whose other side is outside
 
 
+# Fixed, not fresh per call: the identity of a leg is derived from its
+# content, and an account that changed every time would make two legs
+# "entered alike" differ for a reason no test meant to state.
+LEG_ACCOUNT = AccountId.new()
+OTHER_ACCOUNT = AccountId.new()
+
+
 def _leg(**overrides: object) -> Transaction:
     """A card paid from somewhere this app does not hold: Nequi, cash, PSE."""
     parts: dict[str, object] = {
@@ -301,7 +308,7 @@ def _leg(**overrides: object) -> Transaction:
         "amount": _cop("3540258"),
         "occurred_at": PAID_AT,
         "counterparty": "Nequi",
-        "account_id": AccountId.new(),
+        "account_id": LEG_ACCOUNT,
         "bank": "bancolombia",
     }
     parts.update(overrides)
@@ -354,28 +361,69 @@ def test_a_paired_leg_does_have_one() -> None:
     assert source.has_counterpart_movement is True
 
 
-def test_two_legs_entered_alike_are_two_different_transfers() -> None:
-    """Unlike an alert, this is a claim somebody made twice on purpose. Paying
-    a card twice in a day for the same amount is two payments."""
+def test_two_legs_entered_alike_are_one_and_the_same_row() -> None:
+    """The double submit. Two identical payments to one card in one minute
+    are one payment typed twice, and counted as two the debt falls twice —
+    a wrong balance nobody would see."""
     first = _leg()
     second = _leg()
 
-    assert first.id != second.id
+    assert first.id == second.id
     assert first.transfer is not None
     assert second.transfer is not None
-    assert first.transfer.transfer_id != second.transfer.transfer_id
+    assert first.transfer.transfer_id == second.transfer.transfer_id
+
+
+def test_a_note_or_a_bank_does_not_make_it_a_different_payment() -> None:
+    """Neither says which money moved, so neither may split one payment in
+    two — a second attempt that added a note would otherwise write a row."""
+    assert _leg().id == _leg(note="pago anticipado", bank="").id
+
+
+def test_two_cards_paid_from_one_wallet_stay_apart() -> None:
+    """The account stands where an alert's instrument would. Without it these
+    two would collapse into one row and only one debt would fall."""
+    assert _leg(account_id=LEG_ACCOUNT).id != _leg(account_id=OTHER_ACCOUNT).id
+
+
+@pytest.mark.parametrize(
+    "difference",
+    [
+        {"amount": _cop("100000")},
+        {"occurred_at": PosixTime.from_epoch_seconds(1_700_000_000)},
+        {"role": TransferRole.SOURCE},
+        {"counterparty": "Daviplata"},
+    ],
+    ids=["amount", "instant", "role", "counterparty"],
+)
+def test_anything_that_says_which_money_moved_makes_it_another_payment(
+    difference: dict[str, object],
+) -> None:
+    assert _leg().id != _leg(**difference).id
+
+
+def test_two_people_entering_the_same_payment_never_share_a_row() -> None:
+    assert _leg().id != _leg(user_id=OTHER_USER).id
 
 
 def test_its_transfer_id_can_never_collide_with_an_alert_derived_one() -> None:
-    """A uuid is 32 characters and the fingerprint hash is 64, so the random
-    id and the derived one cannot name the same transfer."""
+    """Both are sha256 now, so length no longer separates them — the tag in
+    each canonical form does, and that is what this pins."""
     lone = _leg()
     source, _ = _pair()
 
     assert lone.transfer is not None
     assert source.transfer is not None
-    assert len(lone.transfer.transfer_id.value) == 32
-    assert len(source.transfer.transfer_id.value) == 64
+    assert lone.transfer.transfer_id != source.transfer.transfer_id
+
+
+def test_a_lone_transfer_id_is_not_its_own_movement_id() -> None:
+    """Hashed again rather than reused, so a transfer and a movement never
+    answer to one id."""
+    leg = _leg()
+
+    assert leg.transfer is not None
+    assert leg.transfer.transfer_id.value != leg.id.value
 
 
 def test_it_is_recorded_as_the_users_own_claim() -> None:
@@ -481,7 +529,7 @@ def test_a_leg_describing_half_its_counterpart_is_refused() -> None:
     resolve, or digits belonging to no movement."""
     with pytest.raises(ValueError, match="fully or not at all"):
         TransferLeg(
-            transfer_id=TransferId.new(),
+            transfer_id=TransferId(value="a-transfer"),
             role=TransferRole.SOURCE,
             counterpart_id=MovementId.new(),
         )
@@ -490,7 +538,7 @@ def test_a_leg_describing_half_its_counterpart_is_refused() -> None:
 def test_a_leg_naming_digits_but_no_movement_is_refused_too() -> None:
     with pytest.raises(ValueError, match="fully or not at all"):
         TransferLeg(
-            transfer_id=TransferId.new(),
+            transfer_id=TransferId(value="a-transfer"),
             role=TransferRole.SOURCE,
             counterpart_instrument_kind="credit_card",
             counterpart_last_four="7653",
@@ -499,7 +547,7 @@ def test_a_leg_naming_digits_but_no_movement_is_refused_too() -> None:
 
 def test_a_fully_described_counterpart_is_accepted() -> None:
     leg = TransferLeg(
-        transfer_id=TransferId.new(),
+        transfer_id=TransferId(value="a-transfer"),
         role=TransferRole.SOURCE,
         counterpart_id=MovementId.new(),
         counterpart_instrument_kind="credit_card",
@@ -512,7 +560,7 @@ def test_a_fully_described_counterpart_is_accepted() -> None:
 def test_a_counterpart_named_by_blank_instrument_is_refused() -> None:
     with pytest.raises(ValueError, match="instrument"):
         TransferLeg(
-            transfer_id=TransferId.new(),
+            transfer_id=TransferId(value="a-transfer"),
             role=TransferRole.SOURCE,
             counterpart_id=MovementId.new(),
             counterpart_instrument_kind="   ",
