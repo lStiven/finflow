@@ -211,3 +211,18 @@ class EditTransactionCommand:
     note: str | None = None
     account_id: AccountId | None = None
     detach: bool = False
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class DeleteTransactionCommand:
+    """Erase a movement and give back whatever it took from a balance.
+
+    The correction for a movement that should never have been recorded at
+    all: a duplicate entered by hand, an alert for a purchase that was
+    reversed, a test row. Not the same thing as detaching it — detached, the
+    movement still exists and still shows up in what came in and what went
+    out. This one leaves nothing behind.
+    """
+
+    user_id: UserId
+    transaction_id: str

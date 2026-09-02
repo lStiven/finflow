@@ -7,7 +7,10 @@ from decimal import Decimal
 
 import pytest
 
-from personal_finance.contexts.financial.application.ports import MerchantAttribution
+from personal_finance.contexts.financial.application.ports import (
+    BalanceReversal,
+    MerchantAttribution,
+)
 from personal_finance.contexts.financial.application.queries import (
     FinancialHistory,
     HistoryQuery,
@@ -72,6 +75,17 @@ class InMemoryLedger:
 
     def save(self, transaction: Transaction) -> None:
         self.rows[transaction.id.value] = transaction
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        del reversals
+
+        for transaction in transactions:
+            self.rows.pop(transaction.id.value, None)
 
     def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
         row = self.rows.get(transaction_id)

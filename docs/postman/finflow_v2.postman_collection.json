@@ -1874,6 +1874,37 @@
             "description": "Everything omitted is left alone; at least one field is required. Changing the amount needs its currency too.\n\nOn a movement that came from a bank alert, the first correction keeps what the bank said in `stated` — that is how a balance that looks wrong can be traced back to whether the alert or the correction was the mistake. The identity never moves with an edit, so a redelivery of a corrected alert still lands on the same row.\n\naccount_id moves it to another account; detach takes it off whatever holds it. Not both. Either way the affected balances replay from the ledger."
           },
           "response": []
+        },
+        {
+          "name": "Delete transaction",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Erases the movement and gives the balance back what it took: a 2000 purchase deleted is 2000 the account holds again. The balance is recomputed from the rows that remain rather than nudged by the amount, so it cannot end up disagreeing with them.\n\nNot the same as PATCH with detach, which only takes the movement off its account — that one still exists and still counts in what came in and went out.\n\nBoth sides of a transfer go together: erasing either row of a payment between two of the owner's own accounts erases the other and restores both balances. A leg paid from outside this app has no second row and goes alone.\n\nAnswers `erased` (every movement id that left) and `accounts` (the accounts whose balances changed, already recomputed — empty when the movement was on no account). 404 for a movement that is not there, including a second delete of one already erased."
+          },
+          "response": []
         }
       ]
     }

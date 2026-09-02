@@ -30,6 +30,9 @@ from decimal import Decimal
 import enum
 from typing import TYPE_CHECKING
 
+from personal_finance.contexts.financial.application.ports import (
+    BalanceReversal,
+)
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
@@ -759,6 +762,68 @@ class DynamoDBTransactionLedger:
             TableName=self._table_name,
             Item=movement_to_item(transaction),
         )
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        """Erase these rows and unwind their balances in one transaction.
+
+        The mirror of `record`, down to the `ADD`: the balance is nudged back
+        by the database rather than written from a number read moments ago,
+        so an alert landing in the same instant is not lost. Deleting first
+        and replaying the rows afterwards would be neither — the replay reads
+        eventually, so it can still count the row that was just deleted and
+        write the balance back unchanged, with the row gone and nothing left
+        to trigger a repair.
+
+        The deletes are unconditional, unlike `record`'s put: the caller has
+        already read the rows and decided they go, and a condition here would
+        only turn a second attempt at a half-finished erasure into a failure.
+        The balance updates keep theirs, for the same reason `record` does —
+        without it `ADD` would create the account it was meant to correct.
+        """
+        if not transactions:
+            return
+
+        items: list[TransactWriteItemTypeDef] = [
+            {
+                "Delete": {
+                    "TableName": self._table_name,
+                    "Key": _key(
+                        transaction.user_id,
+                        f"{MOVEMENT_PREFIX}{transaction.id.value}",
+                    ),
+                },
+            }
+            for transaction in transactions
+        ]
+        owner = transactions[0].user_id
+        items.extend(
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": _key(
+                        owner,
+                        f"{ACCOUNT_PREFIX}{reversal.account_id.value}",
+                    ),
+                    "UpdateExpression": (
+                        f"ADD {BALANCE_ATTRIBUTE} :delta, "
+                        f"{MOVEMENTS_APPLIED_ATTRIBUTE} :removed"
+                    ),
+                    "ExpressionAttributeValues": {
+                        ":delta": {"N": str(reversal.delta)},
+                        ":removed": {"N": str(-reversal.movements)},
+                    },
+                    "ConditionExpression": f"attribute_exists({SORT_KEY})",
+                },
+            }
+            for reversal in reversals
+        )
+
+        self._client.transact_write_items(TransactItems=items)
 
     def list_unassigned_matching(
         self,

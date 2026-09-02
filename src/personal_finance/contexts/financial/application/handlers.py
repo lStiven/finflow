@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 import dataclasses
+from decimal import Decimal
 import enum
 import logging
 
 from personal_finance.contexts.financial.application.commands import (
     CloseAccountCommand,
+    DeleteTransactionCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
     EnterTransferLegCommand,
@@ -20,6 +22,7 @@ from personal_finance.contexts.financial.application.commands import (
 )
 from personal_finance.contexts.financial.application.ports import (
     AccountRepository,
+    BalanceReversal,
     TransactionLedger,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
@@ -515,6 +518,21 @@ class ManageAccountsUseCase:
         return account
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class DeleteTransactionResult:
+    """What an erasure actually took out, and where the money went back.
+
+    Both halves matter to a caller. `erased` is more than one row for a
+    transfer, because the pair goes together, and a client that assumed one
+    would leave the other on screen pointing at nothing. `restored` carries
+    the accounts as they now stand, so a balance on screen does not need a
+    second round trip to stop showing money that no longer moved.
+    """
+
+    erased: Sequence[Transaction]
+    restored: Sequence[Account]
+
+
 class ManageTransactionsUseCase:
     """Entering money by hand, and correcting what is already recorded.
 
@@ -715,6 +733,138 @@ class ManageTransactionsUseCase:
                 _resettle(account, self._accounts, self._ledger)
 
         return transaction
+
+    def delete(self, command: DeleteTransactionCommand) -> DeleteTransactionResult:
+        """Erase a movement, and give the balance back what it took.
+
+        The other half of correcting a mistake. `edit` fixes a movement that
+        happened; this is for one that did not — a purchase that was reversed,
+        a duplicate somebody entered twice, a row created while trying things
+        out. Detaching it is not the same answer: detached it still exists,
+        still shows in what came in and what went out, and still has to be
+        explained every time somebody reads the month.
+
+        The row and the balance change leave together, in the ledger's own
+        atomic write, exactly as they arrived. Deleting first and replaying
+        the account's rows afterwards — the repair path a correction uses —
+        would be wrong here twice over: the replay reads eventually, so it can
+        still count the row just deleted and store the balance unchanged, and
+        a failure between the two would leave the account carrying a movement
+        that is gone with no row left for a retry to find.
+
+        **A transfer goes as a pair.** Two rows stating one movement of money
+        cannot be half-erased: the survivor would claim a transfer to a
+        movement that is no longer there, one balance restored and the other
+        still carrying its side of a payment that, as far as the app is now
+        concerned, never happened. So erasing either side erases both, and
+        both balances unwind in the same write. A leg whose counterpart is
+        outside this app has nothing to take with it and goes alone.
+        """
+        transaction = self._ledger.find(
+            user_id=command.user_id,
+            transaction_id=command.transaction_id,
+        )
+
+        if transaction is None:
+            raise TransactionNotFoundError(
+                f"No movement {command.transaction_id} for this user",
+            )
+
+        doomed = [transaction, *self._counterpart_of(transaction)]
+        restored = self._unwind(command.user_id, doomed)
+        self._ledger.remove(
+            doomed,
+            reversals=[reversal for _, reversal in restored],
+        )
+
+        for movement in doomed:
+            movement.erase()
+            self._events.publish(movement.pull_events())
+
+        for account, _ in restored:
+            self._events.publish(account.pull_events())
+
+        return DeleteTransactionResult(
+            erased=doomed,
+            restored=[account for account, _ in restored],
+        )
+
+    def _counterpart_of(self, transaction: Transaction) -> Sequence[Transaction]:
+        """The other side of a transfer, when it is a row in this ledger.
+
+        Empty for everything else, and also for a leg whose counterpart is
+        named but no longer stored. That second case is a pair already broken
+        — by a row removed some other way — and erasing what is left is the
+        repair, not a second thing to refuse.
+        """
+        leg = transaction.transfer
+
+        if leg is None or leg.counterpart_id is None:
+            return ()
+
+        counterpart = self._ledger.find(
+            user_id=transaction.user_id,
+            transaction_id=leg.counterpart_id.value,
+        )
+
+        return () if counterpart is None else (counterpart,)
+
+    def _unwind(
+        self,
+        user_id: UserId,
+        movements: Sequence[Transaction],
+    ) -> Sequence[tuple[Account, BalanceReversal]]:
+        """Take these movements back off the balances holding them, in memory.
+
+        Nothing is stored here — this is the step that learns how far each
+        balance moves, so the ledger can unwind it in the same write that
+        removes the rows. `Account` owns the rule in both directions, which is
+        what keeps erasing a card purchase from lowering a debt it raised.
+
+        Accounts are collected in the order the movements name them and each
+        appears once: both sides of a transfer can sit on the same account,
+        and two entries for it would apply half the reversal twice. An account
+        that no longer exists is skipped rather than refused — the movement is
+        leaving either way, and there is no balance left to correct.
+        """
+        unwound: dict[AccountId, tuple[Account, Decimal, int]] = {}
+
+        for movement in movements:
+            account_id = movement.account_id
+
+            if account_id is None:
+                continue
+
+            held = unwound.get(account_id)
+            account = (
+                held[0]
+                if held is not None
+                else self._accounts.find(user_id=user_id, account_id=account_id)
+            )
+
+            if account is None:
+                continue
+
+            before = account.balance.signed_amount
+            account.reverse(movement.as_movement())
+            moved = account.balance.signed_amount - before
+            unwound[account_id] = (
+                account,
+                moved if held is None else held[1] + moved,
+                1 if held is None else held[2] + 1,
+            )
+
+        return [
+            (
+                account,
+                BalanceReversal(
+                    account_id=account_id,
+                    delta=delta,
+                    movements=count,
+                ),
+            )
+            for account_id, (account, delta, count) in unwound.items()
+        ]
 
     def _resolve_target(
         self,

@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from personal_finance.contexts.financial.application.commands import (
     CloseAccountCommand,
+    DeleteTransactionCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
     EnterTransferLegCommand,
@@ -273,6 +274,24 @@ class TransactionResponse(BaseModel):
     # Set on both rows of a transfer between the owner's own accounts. Null
     # on ordinary spending, which is nearly everything.
     transfer: TransferResponse | None = None
+
+
+class DeletedTransactionResponse(BaseModel):
+    """What an erasure took out, and what the balances say now.
+
+    `erased` is a list because a transfer is two rows stating one movement of
+    money and they go together: a client that assumed one would leave the
+    other side on screen pointing at a movement that no longer exists.
+
+    `accounts` carries the accounts whose balances the erasure gave money back
+    to, already recomputed, so a screen showing a balance does not need a
+    second call to stop showing money that no longer moved. Empty when the
+    movement was sitting on no account, which is exactly when no balance
+    changed.
+    """
+
+    erased: list[str]
+    accounts: list[AccountResponse]
 
 
 class TransactionListResponse(BaseModel):
@@ -1451,6 +1470,51 @@ def edit_transaction(
         )
 
     return _transaction_response(_attributed(transaction, merchants))
+
+
+@router.delete(
+    "/transactions/{transaction_id}",
+    response_model=DeletedTransactionResponse,
+)
+def delete_transaction(
+    user_id: CurrentUser,
+    transaction_id: str,
+    use_case: Annotated[
+        ManageTransactionsUseCase,
+        Depends(get_manage_transactions_use_case),
+    ],
+) -> DeletedTransactionResponse:
+    """Erase a movement, and give the balance back what it took.
+
+    For a movement that should not be there at all: a purchase that was
+    reversed, something entered twice, a row created while trying things out.
+    Whatever it took off an account comes back — a two-thousand expense
+    deleted is two thousand the account holds again — and the balance is
+    recomputed from the rows that remain rather than nudged, so it cannot end
+    up disagreeing with them.
+
+    Not the same as `PATCH` with `detach`, which only takes the movement off
+    its account: that one still exists and still counts in what came in and
+    went out.
+
+    Both sides of a transfer go together. Erasing either row of a payment
+    between two of the owner's own accounts erases the other and restores both
+    balances — half of it would be a row claiming money moved to a movement
+    that is no longer there. A leg paid from outside this app has no second
+    row and goes alone.
+    """
+    with _domain_errors():
+        result = use_case.delete(
+            DeleteTransactionCommand(
+                user_id=user_id,
+                transaction_id=transaction_id,
+            ),
+        )
+
+    return DeletedTransactionResponse(
+        erased=[movement.id.value for movement in result.erased],
+        accounts=[_account_response(account) for account in result.restored],
+    )
 
 
 # ----------------------------------------------------------------- helpers

@@ -353,7 +353,28 @@ export interface paths {
         get: operations["get_transaction_financial_transactions__transaction_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Transaction
+         * @description Erase a movement, and give the balance back what it took.
+         *
+         *     For a movement that should not be there at all: a purchase that was
+         *     reversed, something entered twice, a row created while trying things out.
+         *     Whatever it took off an account comes back — a two-thousand expense
+         *     deleted is two thousand the account holds again — and the balance is
+         *     recomputed from the rows that remain rather than nudged, so it cannot end
+         *     up disagreeing with them.
+         *
+         *     Not the same as `PATCH` with `detach`, which only takes the movement off
+         *     its account: that one still exists and still counts in what came in and
+         *     went out.
+         *
+         *     Both sides of a transfer go together. Erasing either row of a payment
+         *     between two of the owner's own accounts erases the other and restores both
+         *     balances — half of it would be a row claiming money moved to a movement
+         *     that is no longer there. A leg paid from outside this app has no second
+         *     row and goes alone.
+         */
+        delete: operations["delete_transaction_financial_transactions__transaction_id__delete"];
         options?: never;
         head?: never;
         /** Edit Transaction */
@@ -1034,6 +1055,26 @@ export interface components {
             name?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * DeletedTransactionResponse
+         * @description What an erasure took out, and what the balances say now.
+         *
+         *     `erased` is a list because a transfer is two rows stating one movement of
+         *     money and they go together: a client that assumed one would leave the
+         *     other side on screen pointing at a movement that no longer exists.
+         *
+         *     `accounts` carries the accounts whose balances the erasure gave money back
+         *     to, already recomputed, so a screen showing a balance does not need a
+         *     second call to stop showing money that no longer moved. Empty when the
+         *     movement was sitting on no account, which is exactly when no balance
+         *     changed.
+         */
+        DeletedTransactionResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountResponse"][];
+            /** Erased */
+            erased: string[];
         };
         /** EditMerchantPayload */
         EditMerchantPayload: {
@@ -2492,6 +2533,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TransactionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_transaction_financial_transactions__transaction_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedTransactionResponse"];
                 };
             };
             /** @description Validation Error */

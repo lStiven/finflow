@@ -6,6 +6,7 @@ import pytest
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.events import (
     TransactionAssigned,
+    TransactionErased,
     TransactionRecorded,
 )
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -238,3 +239,55 @@ def test_an_alert_that_names_no_bank_is_refused() -> None:
     # Without it, two banks' cards sharing four digits merge into one account.
     with pytest.raises(ValueError):
         _transaction(bank="   ")
+
+
+def test_erasing_announces_what_the_movement_was_worth() -> None:
+    """The only event whose row a reader cannot go and look at afterwards.
+
+    A balance that fell by fifty thousand has to be explainable, and after the
+    erasure there is nothing left in the ledger to explain it — so the amount,
+    the direction and the account have to travel with the fact itself.
+    """
+    transaction = _transaction()
+    account_id = AccountId.new()
+    transaction.assign_to(account_id)
+    transaction.pull_events()
+
+    transaction.erase()
+    events = transaction.pull_events()
+
+    assert len(events) == 1
+    erased = events[0]
+    assert isinstance(erased, TransactionErased)
+    assert erased.movement_id == transaction.id
+    assert erased.user_id == USER
+    assert erased.amount == _cop("50000")
+    assert erased.direction is MovementDirection.OUTGOING
+    assert erased.account_id == account_id
+
+
+def test_erasing_a_movement_on_no_account_names_no_account() -> None:
+    """Unassigned is exactly the case where no balance moves, so the event
+    saying which balance to look at has nothing to point to.
+    """
+    transaction = _transaction()
+    transaction.pull_events()
+
+    transaction.erase()
+    erased = transaction.pull_events()[0]
+
+    assert isinstance(erased, TransactionErased)
+    assert erased.account_id is None
+
+
+def test_erasing_leaves_the_movement_readable_for_the_caller() -> None:
+    """The caller still has to take the amount off a balance after this, so
+    the aggregate must not have thrown away what it is worth.
+    """
+    transaction = _transaction()
+    transaction.pull_events()
+
+    transaction.erase()
+
+    assert transaction.amount == _cop("50000")
+    assert transaction.status is TransactionStatus.UNASSIGNED

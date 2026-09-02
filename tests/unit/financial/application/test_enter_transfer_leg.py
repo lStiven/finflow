@@ -24,6 +24,7 @@ from personal_finance.contexts.financial.application.handlers import (
     AccountNotFoundError,
     ManageTransactionsUseCase,
 )
+from personal_finance.contexts.financial.application.ports import BalanceReversal
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
@@ -111,6 +112,17 @@ class FakeLedger:
 
     def save(self, transaction: Transaction) -> None:
         self.rows[transaction.id.value] = (transaction, None)
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        del reversals
+
+        for transaction in transactions:
+            self.rows.pop(transaction.id.value, None)
 
     def list_unassigned_matching(
         self,

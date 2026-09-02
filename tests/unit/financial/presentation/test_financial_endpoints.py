@@ -12,7 +12,10 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
 )
-from personal_finance.contexts.financial.application.ports import MerchantAttribution
+from personal_finance.contexts.financial.application.ports import (
+    BalanceReversal,
+    MerchantAttribution,
+)
 from personal_finance.contexts.financial.application.queries import (
     GetAccountUseCase,
     GetTransactionUseCase,
@@ -127,6 +130,17 @@ class InMemoryLedger:
 
     def save(self, transaction: Transaction) -> None:
         self.rows[transaction.id.value] = transaction
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        del reversals
+
+        for transaction in transactions:
+            self.rows.pop(transaction.id.value, None)
 
     def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
         row = self.rows.get(transaction_id)
@@ -582,6 +596,123 @@ def test_detaching_a_movement_takes_it_off_the_balance(client: TestClient) -> No
     assert detached.status_code == 200
     assert detached.json()["status"] == "unassigned"
     assert client.get("/financial/accounts").json()["accounts"][0]["balance"] == "0"
+
+
+# ------------------------------------------------ borrar un movimiento
+
+
+def test_deleting_a_movement_gives_the_account_its_money_back(
+    client: TestClient,
+) -> None:
+    """Two thousand spent at a restaurant, erased, is two thousand the account
+    holds again. The case the endpoint exists for.
+    """
+    account = _declare(
+        client,
+        name="Ahorros",
+        kind="savings",
+        instrument_kind="account",
+        last_four="7111",
+        opening_balance="1000000",
+    )
+    purchase = _enter(
+        client,
+        account_id=account["id"],
+        amount="2000",
+        counterparty="RESTAURANTE EL LAGO",
+    )
+
+    assert client.get("/financial/accounts").json()["accounts"][0]["balance"] == (
+        "998000"
+    )
+
+    response = client.delete(f"/financial/transactions/{purchase['id']}")
+
+    assert response.status_code == 200, response.text
+    assert client.get("/financial/accounts").json()["accounts"][0]["balance"] == (
+        "1000000"
+    )
+
+
+def test_the_answer_names_what_was_erased_and_the_balance_now(
+    client: TestClient,
+) -> None:
+    """So a screen redraws the balance from this answer instead of asking
+    again — and knows which rows to take off the list.
+    """
+    account = _declare(
+        client,
+        name="Ahorros",
+        kind="savings",
+        instrument_kind="account",
+        last_four="7111",
+        opening_balance="1000000",
+    )
+    purchase = _enter(client, account_id=account["id"], amount="2000")
+
+    body = client.delete(f"/financial/transactions/{purchase['id']}").json()
+
+    assert body["erased"] == [purchase["id"]]
+    assert len(body["accounts"]) == 1
+    assert body["accounts"][0]["id"] == account["id"]
+    assert body["accounts"][0]["balance"] == "1000000"
+
+
+def test_a_deleted_movement_can_no_longer_be_read(client: TestClient) -> None:
+    """Erased, not detached: nothing is left to ask for."""
+    account = _declare(client)
+    movement = _enter(client, account_id=account["id"])
+
+    client.delete(f"/financial/transactions/{movement['id']}")
+
+    assert client.get(f"/financial/transactions/{movement['id']}").status_code == 404
+    assert client.get("/financial/transactions").json()["total"] == 0
+
+
+def test_deleting_a_movement_on_no_account_changes_no_balance(
+    client: TestClient,
+) -> None:
+    """The ordinary state for somebody watching only what comes in and goes
+    out: the movement is real, and there is no balance to give back to.
+    """
+    _declare(client)
+    movement = _enter(client)
+
+    body = client.delete(f"/financial/transactions/{movement['id']}").json()
+
+    assert body["erased"] == [movement["id"]]
+    assert body["accounts"] == []
+
+
+def test_deleting_a_movement_that_is_not_there_is_reported_as_missing(
+    client: TestClient,
+) -> None:
+    response = client.delete(
+        "/financial/transactions/0198f4e4-0000-7000-8000-000000000000",
+    )
+
+    assert response.status_code == 404
+
+
+def test_deleting_the_same_movement_twice_answers_404_the_second_time(
+    client: TestClient,
+) -> None:
+    """And the balance moves once: the second attempt never reaches a replay."""
+    account = _declare(
+        client,
+        name="Ahorros",
+        kind="savings",
+        instrument_kind="account",
+        last_four="7111",
+        opening_balance="1000000",
+    )
+    movement = _enter(client, account_id=account["id"], amount="2000")
+
+    assert client.delete(f"/financial/transactions/{movement['id']}").status_code == 200
+    assert client.delete(f"/financial/transactions/{movement['id']}").status_code == 404
+    assert client.get("/financial/accounts").json()["accounts"][0]["balance"] == (
+        "1000000"
+    )
 
 
 def test_an_edit_that_changes_nothing_is_refused(client: TestClient) -> None:
@@ -1331,6 +1462,36 @@ def test_a_transfer_leg_reports_the_other_side_instead_of_a_merchant(
     assert {leg["transfer"]["id"] for leg in legs} == {legs[0]["transfer"]["id"]}
 
 
+def test_deleting_one_side_of_a_transfer_erases_both(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """Two rows state one movement of money. Left half-erased, the survivor
+    claims a payment to a movement that is no longer there.
+    """
+    client, ledger = wired
+    _pay_a_card(ledger)
+    rows = client.get("/financial/transactions").json()["transactions"]
+
+    body = client.delete(f"/financial/transactions/{rows[0]['id']}").json()
+
+    assert set(body["erased"]) == {row["id"] for row in rows}
+    assert client.get("/financial/transactions").json()["total"] == 0
+
+
+def test_either_side_of_a_transfer_erases_the_pair(
+    wired: tuple[TestClient, InMemoryLedger],
+) -> None:
+    """Whichever row the owner is looking at is the one they press delete on."""
+    client, ledger = wired
+    _pay_a_card(ledger)
+    rows = client.get("/financial/transactions").json()["transactions"]
+
+    response = client.delete(f"/financial/transactions/{rows[1]['id']}")
+
+    assert response.status_code == 200
+    assert len(response.json()["erased"]) == 2
+
+
 def test_each_side_points_at_the_other_row(
     wired: tuple[TestClient, InMemoryLedger],
 ) -> None:
@@ -1602,6 +1763,21 @@ def test_paying_the_card_again_later_is_a_second_payment(
     after = client.get(f"/financial/accounts/{card['id']}").json()
     assert Decimal(after["balance"]) == Decimal("1540258")
     assert client.get("/financial/transactions").json()["total"] == 2
+
+
+def test_a_leg_entered_from_outside_can_be_deleted(client: TestClient) -> None:
+    """It has no second row to take with it, and the debt it paid off goes
+    back up by exactly what it took.
+    """
+    card = _declare(client, opening_balance="3540258")
+    leg = _pay_from_outside(client, account_id=card["id"])
+
+    assert client.get("/financial/accounts").json()["accounts"][0]["balance"] == "0"
+
+    body = client.delete(f"/financial/transactions/{leg['id']}").json()
+
+    assert body["erased"] == [leg["id"]]
+    assert body["accounts"][0]["balance"] == "3540258"
 
 
 def test_a_leg_entered_from_outside_cannot_be_detached(

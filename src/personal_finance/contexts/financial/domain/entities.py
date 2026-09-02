@@ -9,12 +9,14 @@ from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
     AccountBalanceRebuilt,
     AccountBalanceRestated,
+    AccountBalanceReversed,
     AccountClosed,
     AccountFingerprintLinked,
     AccountOpened,
     AccountRenamed,
     TransactionAssigned,
     TransactionEdited,
+    TransactionErased,
     TransactionRecorded,
     TransactionUnassigned,
 )
@@ -264,6 +266,37 @@ class Account(AggregateRoot[AccountId]):
             ),
         )
 
+    def reverse(self, movement: LedgerMovement) -> None:
+        """Take a movement back off the balance, exactly as far as it moved it.
+
+        The inverse of `apply`, and the same rule read backwards: what
+        spending did to a credit card is what erasing that spending has to
+        undo, so the direction is crossed with the category here too rather
+        than negated by a caller who would have to know the rule again.
+
+        Allowed on a closed account, unlike `apply`. A closed account stops
+        taking *new* movements; removing one that should never have been on it
+        is a correction of what is already there, which is why `rebuild` and
+        `restate_balance` are allowed on one as well. Refusing here would
+        leave a wrong row on a closed account with nothing that could ever
+        take it off.
+        """
+        self.balance = self._moved(self.balance, movement, backwards=True)
+        # Floored rather than allowed below zero: the count is a running tally
+        # like the balance, and a negative one would be reported to the owner
+        # as a fact about their account instead of as the bug it is.
+        self.movements_applied = max(0, self.movements_applied - 1)
+        self.record_event(
+            AccountBalanceReversed(
+                account_id=self.id,
+                user_id=self.user_id,
+                movement_id=movement.movement_id,
+                direction=movement.direction,
+                amount=movement.amount,
+                balance=self.balance,
+            ),
+        )
+
     # TODO: some banks state the resulting balance in the alert itself. Decide
     # whether that number reconciles the running total (and how to tell a
     # stale alert from a current one, given they arrive out of order) or is
@@ -397,13 +430,26 @@ class Account(AggregateRoot[AccountId]):
             AccountClosed(account_id=self.id, user_id=self.user_id),
         )
 
-    def _moved(self, balance: Balance, movement: LedgerMovement) -> Balance:
-        """Where the balance lands after one movement. The rule, alone."""
+    def _moved(
+        self,
+        balance: Balance,
+        movement: LedgerMovement,
+        *,
+        backwards: bool = False,
+    ) -> Balance:
+        """Where the balance lands after one movement. The rule, alone.
+
+        `backwards` undoes it instead, so erasing a movement cannot end up
+        using a second copy of the rule that drifts from this one.
+        """
         grows = (
             movement.direction is MovementDirection.INCOMING
             if self.category is AccountCategory.ASSET
             else movement.direction is MovementDirection.OUTGOING
         )
+
+        if backwards:
+            grows = not grows
 
         return (
             balance.plus(movement.amount) if grows else balance.minus(movement.amount)
@@ -977,6 +1023,36 @@ class Transaction(AggregateRoot[MovementId]):
                 movement_id=self.id,
                 user_id=self.user_id,
                 account_id=previous,
+            ),
+        )
+
+    def erase(self) -> None:
+        """Record that this movement is leaving the ledger for good.
+
+        The aggregate is not mutated, because there is nothing left to mutate:
+        the row is about to stop existing. What this does is make the removal
+        a fact somebody can read later, which no other event covers — a
+        balance falling by two thousand with no row behind it is unexplainable
+        otherwise.
+
+        The caller has to take the amount back off the balance in the same
+        breath, exactly as `unassign` requires: nothing here knows the
+        balance, which is what keeps a balance from moving without the ledger
+        agreeing.
+
+        No refusal here for a leg whose counterpart is another row, unlike
+        `edit`. What makes erasing one side safe is that the other side goes
+        in the same write, and whether that row is still there is not a
+        question one aggregate can answer — so the rule lives where both rows
+        are held, in the use case that removes them.
+        """
+        self.record_event(
+            TransactionErased(
+                movement_id=self.id,
+                user_id=self.user_id,
+                direction=self.direction,
+                amount=self.amount,
+                account_id=self.account_id,
             ),
         )
 

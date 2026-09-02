@@ -21,7 +21,8 @@ their owner**, never discovered: Finflow works with none at all — every alert
 is recorded and stays unassigned, which is a complete answer for somebody
 watching only what comes in and goes out. Declaring an account starts the
 association and is retroactive. Money that never emails can be entered by
-hand, and anything recorded can be corrected.
+hand, and anything recorded can be corrected — or deleted, which gives the
+balance back what the movement took.
 
 One email is not always one movement, and one movement is not always half of
 an email. Paying a credit card from an account at the same bank moves two
@@ -42,14 +43,14 @@ Changing a password ends every session opened with the old one, which is the
 one thing that makes the reset worth anything: every authenticated request now
 compares the token's credential generation against the account's.
 
-Thirty-six endpoints across the four contexts, the three SQS workers, the
+Forty-three endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
 canonical merchant behind the bank's text, and the reporting surface is
 finished backend-side: `GET /financial/summary` answers what a period adds up
 to, ranks and folds it, and compares it against the window before; `GET
 /financial/trends` answers the stacked chart. `just prepare` passes end to end
-— format, lint, types and 1251 tests. The pyright error in
+— format, lint, types and 1305 tests. The pyright error in
 `shared/infrastructure/llm/gemini.py:120` that had been stopping it is gone
 without the file changing, so it was the installed stubs, not the code.
 
@@ -100,6 +101,28 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **A movement can be deleted, and the money comes back.**
+  `DELETE /financial/transactions/{id}` erases the row and unwinds the
+  balance it moved: a 2000 purchase deleted is 2000 the account holds again.
+  Not the same as `detach`, which leaves the movement counting in what came in
+  and went out. Both sides of a transfer go together — half-erased, the
+  survivor claims a payment to a movement that is no longer there — and a leg
+  paid from outside goes alone. The answer carries `erased` and the accounts
+  already recomputed, so a screen redraws from it. `Account.reverse` is the
+  inverse of `apply` and allowed on a closed account, like `rebuild`.
+  Reviewed: the first version deleted and then replayed the account's rows,
+  which is wrong twice over — a query reads eventually, so it can still count
+  the row just deleted and store the balance unchanged, and a failure between
+  the two leaves an account carrying a movement gone from the ledger with no
+  row left for a retry to find. It now goes out as one `TransactWriteItems`,
+  the mirror of `record`. 44 tests, three levels, plus the frontend types and
+  the Postman entry.
+- 2026-09-02 — **Approving Bancolombia now approves `bancolombia.com.co`.**
+  The frontend's one-click preset carried only the two alert domains, so a
+  transfer between the owner's own accounts — which arrives from that third
+  domain, and which the parser registry has always known — was dropped at the
+  sender filter. Anybody who already approved the bank sees the button offered
+  again and adding the missing domain.
 - 2026-09-02 — **The DevContainer has a headless browser**, so a screen no
   longer ships having only been type-checked. `just shot [rutas] [--desktop
   --full --onboarding]` drives Chromium over the running app and writes PNGs
@@ -131,23 +154,7 @@ spending is what production still misses. See **Next steps**.
   is required: no default suits both a list and a total, and the old one erred
   toward reading a payment as spending. Neither changed the API — `openapi.json`
   is untouched — and ordinary manual entries still record two coffees as two.
-- 2026-09-02 — **`/reportes` is built**, both halves now done. One filter row
-  (periodo, cuenta, moneda) scopes seven reads, so every figure on screen
-  describes the same window: four KPI tiles with deltas, cashflow columns,
-  categories ranked with a delta each, the stacked run over time, top
-  merchants, spend by weekday, and the biggest movements. Charts are boxes,
-  not SVG — hit targets, keyboard labels carrying the figures, and an sr-only
-  table twin. Shaping lives in `reports/shape.ts` and `lib/periods.ts`, both
-  tested (213 frontend tests). Reviewed by hand: the pass caught the stacked
-  chart labelling *unattributed* spending as the folded remainder, and an
-  `aria-describedby` that would have read the whole table once per column.
-- 2026-09-02 — **Development runs the verification/recovery release end to
-  end**: the stack redeployed at 00:21 (so `Retry-After` is exposed and a
-  wrong current password answers 403), and the bundle republished — its
-  registration sends `verification_token`, and the lazy chunks for
-  `/recuperar` and `/restablecer` call `password/forgot` and
-  `password/reset`. `just smoke <dev-url>` passes 17/17 against it.
-  Production is held back on purpose until this has run a few days.
+
 ## Next steps
 
 - [ ] **Production waits for development to prove itself.** Deliberate, and
@@ -207,7 +214,11 @@ spending is what production still misses. See **Next steps**.
          the only entry disabled in the shell's nav.
          Both have now been **seen**: `just shot` drives a headless Chromium
          over the running app (see Last completed), and the Traslado tab and
-         `/reportes` were checked in a real render.
+         `/reportes` were checked in a real render. One backend capability has
+         no screen yet: `DELETE /financial/transactions/{id}` is reachable
+         from the API and from Postman, but nothing on `/transacciones` offers
+         it — the movement detail is where it belongs, with the transfer case
+         saying out loud that both sides go.
 - [ ] **An instrument cannot be unlinked from an account.** Giving an
       account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
       exists and `/cuentas` calls it, with a "Cerradas" tab to see what was
@@ -215,8 +226,9 @@ spending is what production still misses. See **Next steps**.
       `POST .../instruments` only adds, so a card attached to the wrong
       account cannot be moved off it from anywhere; there is no inverse of
       `close`, so a closed account cannot be reopened; and there is no
-      `DELETE` at all, which is deliberate — a closed account still explains
-      its past movements. The first needs an endpoint before a screen.
+      `DELETE` for an *account* at all, which is deliberate — a closed account
+      still explains its past movements, unlike a single wrong movement, which
+      can now be erased. The first needs an endpoint before a screen.
 - [ ] **Decide whether merchants are per-user or shared.** They are per-user
       today — partition key is the owner, and `just verify` shows Ana and
       Bruno holding separate `Éxito` records that renaming one does not touch.

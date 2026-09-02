@@ -81,8 +81,10 @@ vacío borra los dominios ya aprobados. La respuesta es el mismo objeto que
 `GET /identity/inbox`, ya actualizado.
 
 Los dominios de los bancos con parser propio, para copiar:
-`an.notificacionesbancolombia.com` y `notificacionesbancolombia.com`
-(Bancolombia), `lulobank.com` (Lulo bank). El de Lulo es el del `From`, no el
+`an.notificacionesbancolombia.com`, `notificacionesbancolombia.com` y
+`bancolombia.com.co` (Bancolombia — el tercero es el de las transferencias
+entre cuentas propias, y sin él esas alertas se descartan aunque las otras dos
+estén aprobadas), `lulobank.com` (Lulo bank). El de Lulo es el del `From`, no el
 de sus `Message-ID`: esos salen de `email.amazonses.com`, que comparte con
 todos los demás clientes de SES y aprobarlo sería aprobarlos a ellos también.
 Cualquier otro banco funciona igual aprobando su dominio — lo lee el LLM en

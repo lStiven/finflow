@@ -98,7 +98,7 @@ def create_app(
             # it, so restating a balance and setting a credit limit failed the
             # preflight and never reached the API at all. `test_cors` compares
             # it against the routes to keep the copy honest.
-            allow_methods=["GET", "POST", "PATCH", "PUT"],
+            allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
             allow_headers=["Authorization", "Content-Type"],
             # Without this the browser hides it. Only a handful of response
             # headers are readable across origins by default, and

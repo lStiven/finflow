@@ -365,6 +365,31 @@
         "title": "CurrentUserResponse",
         "type": "object"
       },
+      "DeletedTransactionResponse": {
+        "description": "What an erasure took out, and what the balances say now.\n\n`erased` is a list because a transfer is two rows stating one movement of\nmoney and they go together: a client that assumed one would leave the\nother side on screen pointing at a movement that no longer exists.\n\n`accounts` carries the accounts whose balances the erasure gave money back\nto, already recomputed, so a screen showing a balance does not need a\nsecond call to stop showing money that no longer moved. Empty when the\nmovement was sitting on no account, which is exactly when no balance\nchanged.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "erased": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Erased",
+            "type": "array"
+          }
+        },
+        "required": [
+          "erased",
+          "accounts"
+        ],
+        "title": "DeletedTransactionResponse",
+        "type": "object"
+      },
       "EditMerchantPayload": {
         "properties": {
           "category": {
@@ -3797,6 +3822,52 @@
       }
     },
     "/financial/transactions/{transaction_id}": {
+      "delete": {
+        "description": "Erase a movement, and give the balance back what it took.\n\nFor a movement that should not be there at all: a purchase that was\nreversed, something entered twice, a row created while trying things out.\nWhatever it took off an account comes back — a two-thousand expense\ndeleted is two thousand the account holds again — and the balance is\nrecomputed from the rows that remain rather than nudged, so it cannot end\nup disagreeing with them.\n\nNot the same as `PATCH` with `detach`, which only takes the movement off\nits account: that one still exists and still counts in what came in and\nwent out.\n\nBoth sides of a transfer go together. Erasing either row of a payment\nbetween two of the owner's own accounts erases the other and restores both\nbalances — half of it would be a row claiming money moved to a movement\nthat is no longer there. A leg paid from outside this app has no second\nrow and goes alone.",
+        "operationId": "delete_transaction_financial_transactions__transaction_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedTransactionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Transaction",
+        "tags": [
+          "financial"
+        ]
+      },
       "get": {
         "operationId": "get_transaction_financial_transactions__transaction_id__get",
         "parameters": [

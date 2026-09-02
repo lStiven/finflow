@@ -71,6 +71,23 @@ class AccountBalanceChanged(AccountEvent):
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountBalanceReversed(AccountEvent):
+    """A movement was taken back off the balance, and where it landed.
+
+    Its own fact rather than an `AccountBalanceChanged` with the direction
+    flipped: the row is gone, and a reader following `direction` back to a
+    movement that says the opposite would be chasing something that never
+    happened. `movement_id` is what left, and `balance` is what the account
+    holds now that it is gone.
+    """
+
+    movement_id: MovementId
+    direction: MovementDirection
+    amount: Money
+    balance: Balance
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountBalanceRebuilt(AccountEvent):
     """The balance was recomputed from the ledger instead of nudged.
 
@@ -169,3 +186,22 @@ class TransactionUnassigned(TransactionEvent):
     """
 
     account_id: AccountId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionErased(TransactionEvent):
+    """The movement was removed from the ledger at its owner's request.
+
+    The one fact nothing else can reconstruct afterwards. Every other event
+    here describes a row a reader can still go and look at; this one describes
+    a row that is gone, so it carries what it was worth and where it was
+    counting — otherwise a balance that dropped by two thousand has nothing
+    behind it to explain the drop.
+
+    `account_id` is absent when the movement was sitting on no account, which
+    is also exactly when no balance moved.
+    """
+
+    direction: MovementDirection
+    amount: Money
+    account_id: AccountId | None

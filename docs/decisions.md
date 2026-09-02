@@ -310,6 +310,57 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   pulled — `event_id` is fresh on every attempt, so republishing them reads as
   new work to any subscriber deduping on it.
 
+### Erasing a movement (2026-09-02)
+
+- **A movement can be deleted, and deleting is not detaching.** `detach`
+  takes a movement off its account; it still exists, still counts in what came
+  in and went out, and still has to be explained every time somebody reads the
+  month. The row somebody actually wants gone — a purchase that was reversed,
+  a duplicate entered twice, a row created while trying things out — has no
+  other answer, so `DELETE /financial/transactions/{id}` erases it and gives
+  the balance back what it took.
+
+- **The row and its balance change leave in one `TransactWriteItems`, the
+  mirror of `record`.** The first version deleted the rows and then replayed
+  the account to recompute the balance — the repair path a correction uses.
+  That is wrong here twice over, and a review caught both. A query is
+  eventually consistent, so the replay can still count the row that was just
+  deleted, land on the same number, store it and hand it back looking right:
+  the movement gone, the money not returned, and nothing left to trigger a
+  repair because a second delete finds nothing to delete. And splitting the
+  two means a failure between them leaves an account carrying a movement that
+  no longer exists, which — unlike a failed `edit`, whose row survives — no
+  retry can fix, because the row it would need is already gone. So `remove`
+  takes the reversed deltas and applies them with the same `ADD` that recorded
+  them. `Account.reverse` is the inverse of `apply`, sharing `_moved` so the
+  rule cannot exist twice and drift, and allowed on a closed account for the
+  reason `rebuild` and `restate_balance` are: taking a wrong row off is a
+  correction of what is already there, not new money moving. Refusing it would
+  leave a wrong movement on a closed account with nothing that could ever
+  remove it.
+
+- **Erasing either side of a transfer erases both.** `edit` refuses to correct
+  one side alone, and the same fact forbids erasing one alone — but here
+  refusing outright would leave a wrongly recorded transfer unremovable, so it
+  cascades instead. Half-erased, the survivor claims a payment to a movement
+  that is no longer there, with one balance restored and the other still
+  carrying its side of something that never happened. Both rows belong to one
+  user, so both deletes and both balance updates fit in a single write. A leg
+  whose counterpart is outside this app has nothing to take with it. A pair
+  already broken — the counterpart named but not stored — is repaired by
+  erasing the survivor rather than refused, or the row would be permanent.
+
+- **A deleted alert does not come back.** Ingestion dedupes on email identity
+  and the reader flags what it has read, so erasing the financial row does not
+  invite the same alert to re-create it. What the erasure *does* free is the
+  movement's own key: identity comes from content, so a payment deleted by
+  mistake can be entered again and land on the same id.
+
+- **The answer carries the accounts, already recomputed.** A screen showing a
+  balance would otherwise need a second call to stop showing money that no
+  longer moved, and `erased` is a list rather than an id because a transfer
+  takes two rows with it.
+
 ### Transfers between the owner's own accounts (2026-08-31)
 
 - **A card payment is two movements, and the type system says so.** The alert
@@ -926,7 +977,8 @@ way out, and still stores nothing.
   writing to one (isolation). Missing rather than forbidden throughout — a
   403 would itself answer whether somebody else's record exists. It refuses
   `ENVIRONMENT=production`: it registers two users with a password committed
-  to this repository, and writes movements nothing can delete.
+  to this repository, and leaves two accounts behind that nothing can delete —
+  a movement can now be erased, an account still cannot.
 - **Isolation is pinned at the adapter level, not only at the endpoint.**
   `tests/integration/financial/test_user_isolation.py` puts both users'
   records in one real table, because a repository missing its partition

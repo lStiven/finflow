@@ -181,7 +181,7 @@ def test_every_method_the_api_exposes_survives_a_preflight() -> None:
         if method.upper() not in {"HEAD", "OPTIONS"}
     }
 
-    assert {"GET", "POST", "PATCH", "PUT"} <= declared
+    assert {"GET", "POST", "PATCH", "PUT", "DELETE"} <= declared
 
     for method in sorted(declared):
         response = client.options(

@@ -507,7 +507,15 @@ function AddressBody({
 const KNOWN_BANKS = [
   {
     label: "Bancolombia",
-    domains: ["an.notificacionesbancolombia.com", "notificacionesbancolombia.com"],
+    // The three domains the parser registry knows: the two alert domains, plus
+    // `bancolombia.com.co`, which is the one a transfer between the owner's own
+    // accounts arrives from. Approving only the first two accepts the card and
+    // purchase alerts while silently dropping every transfer.
+    domains: [
+      "an.notificacionesbancolombia.com",
+      "notificacionesbancolombia.com",
+      "bancolombia.com.co",
+    ],
   },
   { label: "Lulo bank", domains: ["lulobank.com"] },
 ];

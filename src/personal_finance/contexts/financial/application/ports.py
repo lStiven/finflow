@@ -71,6 +71,24 @@ class MerchantDirectory(Protocol):
         ...
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class BalanceReversal:
+    """How far one account's running total moves when movements are erased.
+
+    Signed, and computed by `Account` before it is handed here, for the same
+    reason `record`'s `balance_delta` is: what erasing an outgoing movement
+    does to a credit card is not what it does to a savings account, and that
+    rule belongs to the aggregate.
+
+    `movements` is how many rows this account loses, so the tally beside the
+    balance moves with it instead of drifting one count at a time.
+    """
+
+    account_id: AccountId
+    delta: Decimal
+    movements: int
+
+
 class AccountRepository(Protocol):
     """Persistence port for `Account`.
 
@@ -182,6 +200,32 @@ class TransactionLedger(Protocol):
         For corrections and for moving a movement between accounts. Never
         moves a balance by itself — `record` owns the atomic write that does,
         and a balance touched here would be one with no row behind it.
+        """
+        ...
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        """Erase these rows and unwind the balances they moved, in one write.
+
+        The mirror of `record`, and one method for the same reason: a balance
+        may not move without the ledger agreeing in the same instant. Split in
+        two, an erasure that failed between them would leave an account
+        carrying a movement that is no longer there, with nothing left to
+        replay and no way for the caller to retry — the row it would need is
+        already gone.
+
+        A sequence of movements because the two sides of a transfer state a
+        single fact: erasing one and failing on the other would leave a row
+        claiming money moved to a movement that no longer exists. They belong
+        to the same user, so an implementation can hold them in one write.
+
+        `reversals` names one entry per account losing rows, never an account
+        that is not there any more — an erasure must not be refused because
+        the account a movement used to sit on has since gone.
         """
         ...
 
