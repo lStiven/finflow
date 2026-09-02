@@ -45,6 +45,7 @@ type Destination = {
     | "/transacciones"
     | "/cuentas"
     | "/comercios"
+    | "/reportes"
     | "/perfil"
     | "/conectar"
     | "/guias";
@@ -54,7 +55,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Resumen", icon: LayoutGrid, to: "/" },
   { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
   { label: "Cuentas", icon: Wallet, to: "/cuentas" },
-  { label: "Reportes", icon: BarChart3 },
+  { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },
 ];

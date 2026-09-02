@@ -155,6 +155,34 @@ export function fromLocalInput(value: string): number | null {
   return asUtc - zoneOffsetSeconds(new Date(asUtc * 1000));
 }
 
+/**
+ * The `YYYY-MM-DD` day an instant falls on, in the display zone.
+ *
+ * What the movement list's date inputs take, so a report can hand its own
+ * range straight to a drill-down link and land on the same days.
+ */
+export function dayStringOf(epochSeconds: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(toDate(epochSeconds));
+}
+
+/**
+ * `count` months before this key, rolling the year over as it goes.
+ *
+ * Stepping by calendar arithmetic rather than by subtracting days: a month is
+ * not a fixed number of them, and walking back 30 days at a time drifts off
+ * the 1st within a year.
+ */
+export function monthKeyMinus(key: string, count: number): string {
+  let cursor = key;
+  for (let step = 0; step < count; step += 1) cursor = previousMonthKey(cursor);
+  return cursor;
+}
+
 /** The `"2026-08"` bucket an instant falls in, for grouping a list by month. */
 export function monthKeyOf(epochSeconds: number): string {
   return currentMonthKey(toDate(epochSeconds));

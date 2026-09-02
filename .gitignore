@@ -73,8 +73,10 @@ Desktop.ini
 # SAM build output
 .aws-sam/
 
-# Coverage / reports
-reports/
+# Coverage / reports. Anchored to the repo root on purpose: unanchored,
+# `reports/` matches at any depth and silently swallowed
+# `frontend/src/reports/`, which is source.
+/reports/
 
 # Jupyter
 .ipynb_checkpoints/

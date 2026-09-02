@@ -74,8 +74,8 @@ change in Python fails the TypeScript build rather than a screen in a browser.
 Session, money and date handling, the door (login/register, on a moving neon
 ground), the dashboard, the Transacciones surface, `/cuentas` (declaring an
 account and linking its alerts), `/comercios` (the review queue and the
-corrections behind it), `/perfil`, the `/conectar` onboarding guide and the
-`/guias` section all run against the local emulator.
+corrections behind it), `/reportes`, `/perfil`, the `/conectar` onboarding
+guide and the `/guias` section all run against the local emulator.
 
 The frontend lives on **Cloudflare Pages**, not on this AWS account: S3 plus
 CloudFront was built, deployed and reverted on 2026-09-01 because the account
@@ -94,6 +94,16 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **`/reportes` is built**, both halves now done. One filter row
+  (periodo, cuenta, moneda) scopes seven reads, so every figure on screen
+  describes the same window: four KPI tiles with deltas, cashflow columns,
+  categories ranked with a delta each, the stacked run over time, top
+  merchants, spend by weekday, and the biggest movements. Charts are boxes,
+  not SVG — hit targets, keyboard labels carrying the figures, and an sr-only
+  table twin. Shaping lives in `reports/shape.ts` and `lib/periods.ts`, both
+  tested (213 frontend tests). Reviewed by hand: the pass caught the stacked
+  chart labelling *unattributed* spending as the folded remainder, and an
+  `aria-describedby` that would have read the whole table once per column.
 - 2026-09-02 — **The reports backend is done.** `/financial/summary` gained
   `day`/`week`/`weekday` buckets, a `currency` pin, `order=amount`, `top` with
   an `others` remainder, and `compare` against the preceding window of equal
@@ -123,11 +133,6 @@ spending is what production still misses. See **Next steps**.
   use them — the door's code step, `/recuperar`, `/restablecer` and a password
   card on `/perfil`. A password change now invalidates every token issued
   before it.
-- 2026-09-01 — `/comercios` is built: the review queue with one-tap confirm,
-  search and filters, and a detail screen for renaming, recategorizing,
-  moving or splitting a spelling and merging two merchants. Found and
-  documented on the way: `move` refuses the last alias exactly as `split`
-  does, and neither `move` nor `split` returns the merchant in the path.
 
 ## Next steps
 
@@ -181,19 +186,14 @@ spending is what production still misses. See **Next steps**.
          missing.
       4. **The rest of the frontend.** The foundation is in (`just web`).
          Done: the dashboard, the whole Transacciones surface, the
-         connect-your-bank guide, `/cuentas`, `/comercios`, the `/guias`
-         section, the door's code step, `/recuperar`, `/restablecer` and the
-         password card on `/perfil`. What is left is two screens, not
-         plumbing: **`/reportes`** and configuration — both still disabled in
-         the shell's nav. The reports backend is finished and verified against
-         the emulator, so that screen is now only a frontend job: sections 9
-         and 10 of `docs/frontend-integration.md` are the contract, and the
-         charts it is shaped for are cashflow (`/trends?dimension=none`), the
-         category donut (`/summary?order=amount&top=8`), the stacked trend
-         (`/trends?dimension=category`), deltas against last month
-         (`/summary?compare=true`), spend by weekday, and the biggest
-         movements (`/transactions?sort=amount`). Types regenerate from the
-         API's OpenAPI document.
+         connect-your-bank guide, `/cuentas`, `/comercios`, `/reportes`, the
+         `/guias` section, the door's code step, `/recuperar`, `/restablecer`
+         and the password card on `/perfil`. What is left is **one** screen:
+         configuración, still the only entry disabled in the shell's nav.
+         Nothing has been looked at in a browser this session — there is no
+         headless browser in the DevContainer, so `/reportes` was verified by
+         its seven queries against the emulator, by unit tests over real
+         payload shapes, and by the build. It has never been *seen*.
 - [ ] **An instrument cannot be unlinked from an account.** Giving an
       account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
       exists and `/cuentas` calls it, with a "Cerradas" tab to see what was

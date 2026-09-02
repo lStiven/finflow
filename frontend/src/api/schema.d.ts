@@ -230,19 +230,35 @@ export interface paths {
         };
         /**
          * Summarize Spending
-         * @description What a period adds up to, broken down by month, category, merchant or
-         *     account — and totalled per currency, never across them.
+         * @description What a period adds up to, broken down by day, week, month, weekday,
+         *     category, merchant or account — and totalled per currency, never across
+         *     them.
          *
-         *     It takes the same filters as `/transactions`, so any bucket here can be
-         *     opened as a list by repeating the query with the bucket's key. `timezone`
-         *     only affects `month`, and it matters: a purchase at 8pm on the 31st falls
-         *     in the next month once it is read in UTC.
+         *     It takes the same filters as `/transactions`, so a bucket here can be
+         *     opened as a list by repeating the query with its key — with `weekday` the
+         *     one exception, since there is no filter for "every Monday". `timezone`
+         *     only affects the time groupings, and it matters: a purchase at 8pm on the
+         *     31st falls in the next month once it is read in UTC.
          *
          *     `transfers` defaults to `exclude` here, unlike on `/transactions`: money
          *     moved between two of the owner's own accounts is neither spending nor
          *     income, and counting it would report a card payment as the month's largest
          *     expense and again as income on the card. `only` answers the opposite
          *     question — what did I move between my own accounts.
+         *
+         *     Three parameters exist for reports specifically:
+         *
+         *     * `currency` pins the answer to one, which is what makes the other two
+         *       answerable — nothing here converts between two currencies.
+         *     * `order=amount` ranks the buckets by money rather than by frequency, and
+         *       `top` keeps that many and adds the rest into `others`. Together they are
+         *       the eight slices a donut can show. `top` is refused on a stretch of time,
+         *       which is narrowed with `from`/`to` instead.
+         *     * `compare=true` also runs the window of equal length immediately before
+         *       this one, so each bucket can be drawn against what it was. It needs
+         *       `from` and `to`, since without a length there is no previous window. On
+         *       a time grouping it reports the period total and nothing per bucket:
+         *       `2026-08` against `2026-07` is two different months, not one month twice.
          */
         get: operations["summarize_spending_financial_summary_get"];
         put?: never;
@@ -275,6 +291,10 @@ export interface paths {
          *     account fell, and in no total, because nothing was spent. A screen showing
          *     a figure from `/summary` beside the list behind it should ask for
          *     `transfers=exclude` on both.
+         *
+         *     `sort=amount` answers "my ten largest expenses this month" in one call. It
+         *     needs a `currency`, because without one the order would be deciding that
+         *     100 USD is smaller than 5 000 COP.
          */
         get: operations["list_transactions_financial_transactions_get"];
         put?: never;
@@ -308,6 +328,50 @@ export interface paths {
         head?: never;
         /** Edit Transaction */
         patch: operations["edit_transaction_financial_transactions__transaction_id__patch"];
+        trace?: never;
+    };
+    "/financial/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Trend
+         * @description How spending moved over time, split into the bands a chart stacks.
+         *
+         *     `/summary` answers one dimension at a time — what a period adds up to, or
+         *     how it splits by category, never both. This answers the two together:
+         *     restaurants against transport against groceries, month by month. Asking
+         *     `/summary` for that a month at a time is twelve round trips whose buckets
+         *     can each be ranked differently, so they cannot be stacked without the
+         *     client reconciling them first.
+         *
+         *     Two properties are what a chart needs and what this guarantees. The bands
+         *     are **ranked once over the whole range**, so every bucket stacks the same
+         *     ones in the same order. And the buckets are **dense** and each series has
+         *     exactly one point per bucket, in the same order: a month nothing happened
+         *     in is a zero, and a client zips `series[].points` against `buckets` by
+         *     index without ever filling a gap.
+         *
+         *     The range is `periods` intervals back from now, or an explicit `from`/`to`
+         *     widened to the intervals it touches — half of August charted beside the
+         *     whole of September reports a fall that did not happen. It takes the same
+         *     filters as `/transactions`, so any band can be opened as the list behind
+         *     it by repeating the query with the band's key.
+         *
+         *     `dimension=none` is one undivided band, which is not the same question as
+         *     the rest: every point already carries `incoming` and `outgoing`, so that
+         *     one band is the cashflow chart.
+         */
+        get: operations["read_trend_financial_trends_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/health": {
@@ -1029,12 +1093,20 @@ export interface components {
             movement_directions: components["schemas"]["CatalogOption"][];
             /** Summary Groupings */
             summary_groupings: components["schemas"]["CatalogOption"][];
+            /** Summary Orders */
+            summary_orders: components["schemas"]["CatalogOption"][];
             /** Transaction Origins */
             transaction_origins: components["schemas"]["CatalogOption"][];
+            /** Transaction Sorts */
+            transaction_sorts: components["schemas"]["CatalogOption"][];
             /** Transaction Statuses */
             transaction_statuses: components["schemas"]["CatalogOption"][];
             /** Transfer Views */
             transfer_views: components["schemas"]["CatalogOption"][];
+            /** Trend Dimensions */
+            trend_dimensions: components["schemas"]["CatalogOption"][];
+            /** Trend Intervals */
+            trend_intervals: components["schemas"]["CatalogOption"][];
         };
         /** FinancialHistoryResponse */
         FinancialHistoryResponse: {
@@ -1442,10 +1514,24 @@ export interface components {
         };
         /** SpendingSummaryResponse */
         SpendingSummaryResponse: {
+            /**
+             * Folded
+             * @default 0
+             */
+            folded: number;
             /** Group By */
             group_by: string;
             /** Groups */
             groups: components["schemas"]["SummaryGroupResponse"][];
+            /** Order */
+            order: string;
+            others?: components["schemas"]["SummaryGroupResponse"] | null;
+            /** Previous Ends At */
+            previous_ends_at?: number | null;
+            /** Previous Starts At */
+            previous_starts_at?: number | null;
+            /** Previous Totals */
+            previous_totals?: components["schemas"]["SpendingTotalsResponse"][] | null;
             /** Timezone */
             timezone: string;
             /** Totals */
@@ -1463,6 +1549,34 @@ export interface components {
             net: string;
             /** Outgoing */
             outgoing: string;
+        };
+        /** SpendingTrendResponse */
+        SpendingTrendResponse: {
+            /** Buckets */
+            buckets: components["schemas"]["TrendBucketResponse"][];
+            /** Dimension */
+            dimension: string;
+            /** Ends At */
+            ends_at: number;
+            /**
+             * Folded
+             * @default 0
+             */
+            folded: number;
+            /** Interval */
+            interval: string;
+            others?: components["schemas"]["TrendSeriesResponse"] | null;
+            /** Series */
+            series: components["schemas"]["TrendSeriesResponse"][];
+            /** Starts At */
+            starts_at: number;
+            /** Timezone */
+            timezone: string;
+            /**
+             * Totals
+             * @default []
+             */
+            totals: components["schemas"]["SpendingTotalsResponse"][];
         };
         /**
          * SplitAliasPayload
@@ -1497,15 +1611,34 @@ export interface components {
             label: string;
             /** Movements */
             movements: number;
+            /** Previous Totals */
+            previous_totals?: components["schemas"]["SpendingTotalsResponse"][] | null;
             /** Totals */
             totals: components["schemas"]["SpendingTotalsResponse"][];
         };
         /**
          * SummaryGrouping
          * @description Which question a summary answers.
+         *
+         *     The first four are stretches of time and the rest are not, and the
+         *     difference decides two things: how the buckets are ordered, and whether
+         *     comparing each of them against the previous period means anything. It
+         *     does not — January against February is not the same bucket twice.
          * @enum {string}
          */
-        SummaryGrouping: "month" | "category" | "merchant" | "account";
+        SummaryGrouping: "day" | "week" | "month" | "weekday" | "category" | "merchant" | "account";
+        /**
+         * SummaryOrder
+         * @description What "biggest" means when the buckets are ranked.
+         *
+         *     `MOVEMENTS` is the honest default: a count means the same thing in two
+         *     currencies and an amount does not. `AMOUNT` is what a chart actually wants
+         *     — the eight categories worth drawing, not the eight most frequent — and it
+         *     is only offered once the filter has pinned a currency, because otherwise
+         *     it would be comparing pesos against dollars and calling the pesos bigger.
+         * @enum {string}
+         */
+        SummaryOrder: "movements" | "amount";
         /** TransactionListResponse */
         TransactionListResponse: {
             /** Limit */
@@ -1556,6 +1689,17 @@ export interface components {
             transfer?: components["schemas"]["TransferResponse"] | null;
         };
         /**
+         * TransactionSort
+         * @description What "first" means in a page of movements.
+         *
+         *     `DATE` is what somebody opening the app wants. `AMOUNT` is what a report
+         *     wants — the ten largest of the month — and like every other ranking here
+         *     it needs a pinned currency, or the order would be deciding that 100 USD is
+         *     smaller than 5 000 COP.
+         * @enum {string}
+         */
+        TransactionSort: "date" | "amount";
+        /**
          * TransferResponse
          * @description The half of a movement that says it was not spending.
          *
@@ -1592,6 +1736,67 @@ export interface components {
          * @enum {string}
          */
         TransferView: "include" | "exclude" | "only";
+        /**
+         * TrendBucketResponse
+         * @description One step of the axis, whether or not anything happened in it.
+         */
+        TrendBucketResponse: {
+            /** Ends At */
+            ends_at: number;
+            /** Key */
+            key: string;
+            /** Partial */
+            partial: boolean;
+            /** Starts At */
+            starts_at: number;
+        };
+        /**
+         * TrendDimension
+         * @description What to split each step of the series by.
+         *
+         *     `NONE` gives one series — the cashflow line — and it is not redundant with
+         *     the others: every point already carries `incoming` and `outgoing`, so one
+         *     undivided series is the income-against-expense chart.
+         * @enum {string}
+         */
+        TrendDimension: "none" | "category" | "merchant" | "account";
+        /**
+         * TrendInterval
+         * @description The width of one step along a time axis.
+         *
+         *     Separate from `SummaryGrouping` because it is a different question: a
+         *     grouping asks what to put in buckets, an interval asks how wide each step
+         *     of a series is, and only three of the groupings are steps at all.
+         * @enum {string}
+         */
+        TrendInterval: "day" | "week" | "month";
+        /** TrendPointResponse */
+        TrendPointResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Totals */
+            totals: components["schemas"]["SpendingTotalsResponse"][];
+        };
+        /**
+         * TrendSeriesResponse
+         * @description One band of the chart, across every bucket.
+         *
+         *     `key` is null for the band the dimension could not place, and for the
+         *     remainder `series` folded. So `label` is what to render and `key` only
+         *     ever what to filter by.
+         */
+        TrendSeriesResponse: {
+            /** Key */
+            key: string | null;
+            /** Label */
+            label: string;
+            /** Movements */
+            movements: number;
+            /** Points */
+            points: components["schemas"]["TrendPointResponse"][];
+            /** Totals */
+            totals: components["schemas"]["SpendingTotalsResponse"][];
+        };
         /**
          * UpdateProfilePayload
          * @description Only the name: the email is the account's identity, not a field.
@@ -2041,6 +2246,10 @@ export interface operations {
                 merchant_id?: string | null;
                 category?: string | null;
                 transfers?: components["schemas"]["TransferView"];
+                currency?: components["schemas"]["Currency"] | null;
+                order?: components["schemas"]["SummaryOrder"];
+                top?: number | null;
+                compare?: boolean;
                 timezone?: string;
             };
             header?: never;
@@ -2082,6 +2291,8 @@ export interface operations {
                 from?: number | null;
                 to?: number | null;
                 transfers?: components["schemas"]["TransferView"];
+                currency?: components["schemas"]["Currency"] | null;
+                sort?: components["schemas"]["TransactionSort"];
                 limit?: number;
                 offset?: number;
             };
@@ -2197,6 +2408,53 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TransactionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_trend_financial_trends_get: {
+        parameters: {
+            query?: {
+                interval?: components["schemas"]["TrendInterval"];
+                dimension?: components["schemas"]["TrendDimension"];
+                periods?: number;
+                series?: number | null;
+                order?: components["schemas"]["SummaryOrder"];
+                from?: number | null;
+                to?: number | null;
+                account_id?: string | null;
+                unassigned?: boolean | null;
+                origin?: components["schemas"]["TransactionOrigin"] | null;
+                direction?: components["schemas"]["MovementDirection"] | null;
+                search?: string | null;
+                merchant_id?: string | null;
+                category?: string | null;
+                transfers?: components["schemas"]["TransferView"];
+                currency?: components["schemas"]["Currency"] | null;
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendingTrendResponse"];
                 };
             };
             /** @description Validation Error */

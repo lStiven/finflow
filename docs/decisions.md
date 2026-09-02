@@ -1098,6 +1098,70 @@ the manifest — and nowhere on screen. That is a gap, not an oversight: no
 placement was agreed. The `og:*` URLs are relative because the address belongs
 to whatever ends up serving the bundle, which the bundle is not told.
 
+### Reportes, the screen (2026-09-02)
+
+- **Charts are boxes, not SVG — the ring and the sparkline stay the
+  exception.** Those two are geometry, so they earn a `viewBox`. Columns and
+  bars are rectangles on a baseline, and ordinary layout gives them three
+  things SVG would have to reinvent: hit targets big enough to hover on a
+  phone, an axis band that grows with its labels instead of being clipped by
+  a fixed height, and a 2px gap in the surface colour doing the separating
+  rather than a stroke drawn round every mark. No charting library either —
+  every one of them arrives with a layout engine, a tooltip system and a tick
+  formatter this would never use.
+
+- **The existing `chart-1..6` tokens were kept, knowingly failing one check.**
+  Run through the palette validator against the dark surface, the ramp fails
+  the lightness band (cyan and green sit at L 0.78, above the 0.48–0.67 the
+  dark band wants) and, with `chart-6` counted as a seventh categorical slot,
+  the chroma floor. It passes everything that decides whether two bands can
+  be told apart: colour-blind separation ΔE 13.0 against a floor of 8, a
+  normal-vision worst pair at 26.8, and contrast ≥3:1 on all six. Repainting
+  the tokens would repaint the dashboard's donut too, which is out of scope
+  for a new screen. `chart-6` is not a seventh hue: it is the de-emphasis gray
+  reserved for the folded remainder, which is why it is excluded from
+  `BAND_FILL` rather than sitting at the end of it.
+
+- **One palette for the screen, built from the category ranking and shared.**
+  A category is the same colour in the ranked list and in the stacked run
+  beside it, because colour follows the entity and not the row it happens to
+  occupy in whichever chart is drawing. Rebuilding it per chart is how a
+  filter ends up repainting the survivors.
+
+- **Three different nulls, and conflating any two of them lies.** On this
+  surface `key: null` inside `groups`/`series` is a bucket the grouping
+  **could not place** — a counterparty no merchant owns yet, real spending
+  with a real hue. `others` is the tail `top`/`series` **folded**: it is not
+  an identity, it wears the gray, and it carries no key because unlike a real
+  bucket it cannot be reopened as the movements behind it. And
+  `previous_totals` absent means **not compared** while `[]` means *compared
+  and there was nothing* — only the second is a fall to zero. The first
+  version of the stacked chart called the unplaced band "Otros", which
+  renamed somebody's unattributed spending into a remainder already on the
+  chart; `reports/shape.ts` exists so those rules have somewhere to be tested.
+
+- **A running period ends at *now*, which is what makes `compare` honest.**
+  "Este mes" asks for `to = now` rather than the end of the month, so the API's
+  previous window is the same elapsed stretch of the month before. Asking for
+  the whole month instead would compare three lived days against thirty-one
+  and report spending down by 90% every time — the same trap the dashboard's
+  `previousToDate` avoids, solved here by the range rather than by a second
+  query. `now` is rounded down to the hour, or it lands in a react-query key
+  and every render becomes a fresh query.
+
+- **The interval is derived from the range, never picked per chart.** Filters
+  belong in one row that scopes everything below it, so a per-chart control
+  would let two charts on the same screen describe different windows. Day up
+  to a month, week up to about four, month beyond — thresholds about
+  legibility, not about the data.
+
+- **Seven reads, and the accounts one first.** The currency is read off the
+  accounts and is a parameter of every other call, because a report ranked by
+  amount cannot be asked for without one. So the loader awaits that one query
+  and fans out the rest — almost always a cache hit, since every screen loads
+  it. The seven each scan the user's partition; at this deployment's volume
+  that is the same cost the dashboard already pays six times over.
+
 ### Frontend (2026-08-29)
 
 - **80% calm, 20% neon.** The ground and the surfaces stay sober; colour

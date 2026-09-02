@@ -619,11 +619,25 @@
             "title": "Summary Groupings",
             "type": "array"
           },
+          "summary_orders": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Summary Orders",
+            "type": "array"
+          },
           "transaction_origins": {
             "items": {
               "$ref": "#/components/schemas/CatalogOption"
             },
             "title": "Transaction Origins",
+            "type": "array"
+          },
+          "transaction_sorts": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Transaction Sorts",
             "type": "array"
           },
           "transaction_statuses": {
@@ -639,6 +653,20 @@
             },
             "title": "Transfer Views",
             "type": "array"
+          },
+          "trend_dimensions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Trend Dimensions",
+            "type": "array"
+          },
+          "trend_intervals": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Trend Intervals",
+            "type": "array"
           }
         },
         "required": [
@@ -651,6 +679,10 @@
           "transaction_statuses",
           "account_scopes",
           "summary_groupings",
+          "summary_orders",
+          "transaction_sorts",
+          "trend_intervals",
+          "trend_dimensions",
           "transfer_views"
         ],
         "title": "FinancialCatalogResponse",
@@ -1641,6 +1673,11 @@
       },
       "SpendingSummaryResponse": {
         "properties": {
+          "folded": {
+            "default": 0,
+            "title": "Folded",
+            "type": "integer"
+          },
           "group_by": {
             "title": "Group By",
             "type": "string"
@@ -1651,6 +1688,56 @@
             },
             "title": "Groups",
             "type": "array"
+          },
+          "order": {
+            "title": "Order",
+            "type": "string"
+          },
+          "others": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SummaryGroupResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous_ends_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Ends At"
+          },
+          "previous_starts_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Starts At"
+          },
+          "previous_totals": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpendingTotalsResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Totals"
           },
           "timezone": {
             "title": "Timezone",
@@ -1667,6 +1754,7 @@
         "required": [
           "group_by",
           "timezone",
+          "order",
           "totals",
           "groups"
         ],
@@ -1704,6 +1792,78 @@
           "movements"
         ],
         "title": "SpendingTotalsResponse",
+        "type": "object"
+      },
+      "SpendingTrendResponse": {
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/TrendBucketResponse"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "dimension": {
+            "title": "Dimension",
+            "type": "string"
+          },
+          "ends_at": {
+            "title": "Ends At",
+            "type": "integer"
+          },
+          "folded": {
+            "default": 0,
+            "title": "Folded",
+            "type": "integer"
+          },
+          "interval": {
+            "title": "Interval",
+            "type": "string"
+          },
+          "others": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrendSeriesResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/TrendSeriesResponse"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "starts_at": {
+            "title": "Starts At",
+            "type": "integer"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          },
+          "totals": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "interval",
+          "dimension",
+          "timezone",
+          "starts_at",
+          "ends_at",
+          "buckets",
+          "series"
+        ],
+        "title": "SpendingTrendResponse",
         "type": "object"
       },
       "SplitAliasPayload": {
@@ -1795,6 +1955,20 @@
             "title": "Movements",
             "type": "integer"
           },
+          "previous_totals": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpendingTotalsResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Totals"
+          },
           "totals": {
             "items": {
               "$ref": "#/components/schemas/SpendingTotalsResponse"
@@ -1813,14 +1987,26 @@
         "type": "object"
       },
       "SummaryGrouping": {
-        "description": "Which question a summary answers.",
+        "description": "Which question a summary answers.\n\nThe first four are stretches of time and the rest are not, and the\ndifference decides two things: how the buckets are ordered, and whether\ncomparing each of them against the previous period means anything. It\ndoes not — January against February is not the same bucket twice.",
         "enum": [
+          "day",
+          "week",
           "month",
+          "weekday",
           "category",
           "merchant",
           "account"
         ],
         "title": "SummaryGrouping",
+        "type": "string"
+      },
+      "SummaryOrder": {
+        "description": "What \"biggest\" means when the buckets are ranked.\n\n`MOVEMENTS` is the honest default: a count means the same thing in two\ncurrencies and an amount does not. `AMOUNT` is what a chart actually wants\n— the eight categories worth drawing, not the eight most frequent — and it\nis only offered once the filter has pinned a currency, because otherwise\nit would be comparing pesos against dollars and calling the pesos bigger.",
+        "enum": [
+          "movements",
+          "amount"
+        ],
+        "title": "SummaryOrder",
         "type": "string"
       },
       "TransactionListResponse": {
@@ -1972,6 +2158,15 @@
         "title": "TransactionResponse",
         "type": "object"
       },
+      "TransactionSort": {
+        "description": "What \"first\" means in a page of movements.\n\n`DATE` is what somebody opening the app wants. `AMOUNT` is what a report\nwants — the ten largest of the month — and like every other ranking here\nit needs a pinned currency, or the order would be deciding that 100 USD is\nsmaller than 5 000 COP.",
+        "enum": [
+          "date",
+          "amount"
+        ],
+        "title": "TransactionSort",
+        "type": "string"
+      },
       "TransferResponse": {
         "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.",
         "properties": {
@@ -2015,6 +2210,124 @@
         ],
         "title": "TransferView",
         "type": "string"
+      },
+      "TrendBucketResponse": {
+        "description": "One step of the axis, whether or not anything happened in it.",
+        "properties": {
+          "ends_at": {
+            "title": "Ends At",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "partial": {
+            "title": "Partial",
+            "type": "boolean"
+          },
+          "starts_at": {
+            "title": "Starts At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "starts_at",
+          "ends_at",
+          "partial"
+        ],
+        "title": "TrendBucketResponse",
+        "type": "object"
+      },
+      "TrendDimension": {
+        "description": "What to split each step of the series by.\n\n`NONE` gives one series — the cashflow line — and it is not redundant with\nthe others: every point already carries `incoming` and `outgoing`, so one\nundivided series is the income-against-expense chart.",
+        "enum": [
+          "none",
+          "category",
+          "merchant",
+          "account"
+        ],
+        "title": "TrendDimension",
+        "type": "string"
+      },
+      "TrendInterval": {
+        "description": "The width of one step along a time axis.\n\nSeparate from `SummaryGrouping` because it is a different question: a\ngrouping asks what to put in buckets, an interval asks how wide each step\nof a series is, and only three of the groupings are steps at all.",
+        "enum": [
+          "day",
+          "week",
+          "month"
+        ],
+        "title": "TrendInterval",
+        "type": "string"
+      },
+      "TrendPointResponse": {
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bucket",
+          "totals"
+        ],
+        "title": "TrendPointResponse",
+        "type": "object"
+      },
+      "TrendSeriesResponse": {
+        "description": "One band of the chart, across every bucket.\n\n`key` is null for the band the dimension could not place, and for the\nremainder `series` folded. So `label` is what to render and `key` only\never what to filter by.",
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "movements": {
+            "title": "Movements",
+            "type": "integer"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPointResponse"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/SpendingTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "points",
+          "totals",
+          "movements"
+        ],
+        "title": "TrendSeriesResponse",
+        "type": "object"
       },
       "UpdateProfilePayload": {
         "description": "Only the name: the email is the account's identity, not a field.",
@@ -2765,7 +3078,7 @@
     },
     "/financial/summary": {
       "get": {
-        "description": "What a period adds up to, broken down by month, category, merchant or\naccount — and totalled per currency, never across them.\n\nIt takes the same filters as `/transactions`, so any bucket here can be\nopened as a list by repeating the query with the bucket's key. `timezone`\nonly affects `month`, and it matters: a purchase at 8pm on the 31st falls\nin the next month once it is read in UTC.\n\n`transfers` defaults to `exclude` here, unlike on `/transactions`: money\nmoved between two of the owner's own accounts is neither spending nor\nincome, and counting it would report a card payment as the month's largest\nexpense and again as income on the card. `only` answers the opposite\nquestion — what did I move between my own accounts.",
+        "description": "What a period adds up to, broken down by day, week, month, weekday,\ncategory, merchant or account — and totalled per currency, never across\nthem.\n\nIt takes the same filters as `/transactions`, so a bucket here can be\nopened as a list by repeating the query with its key — with `weekday` the\none exception, since there is no filter for \"every Monday\". `timezone`\nonly affects the time groupings, and it matters: a purchase at 8pm on the\n31st falls in the next month once it is read in UTC.\n\n`transfers` defaults to `exclude` here, unlike on `/transactions`: money\nmoved between two of the owner's own accounts is neither spending nor\nincome, and counting it would report a card payment as the month's largest\nexpense and again as income on the card. `only` answers the opposite\nquestion — what did I move between my own accounts.\n\nThree parameters exist for reports specifically:\n\n* `currency` pins the answer to one, which is what makes the other two\n  answerable — nothing here converts between two currencies.\n* `order=amount` ranks the buckets by money rather than by frequency, and\n  `top` keeps that many and adds the rest into `others`. Together they are\n  the eight slices a donut can show. `top` is refused on a stretch of time,\n  which is narrowed with `from`/`to` instead.\n* `compare=true` also runs the window of equal length immediately before\n  this one, so each bucket can be drawn against what it was. It needs\n  `from` and `to`, since without a length there is no previous window. On\n  a time grouping it reports the period total and nothing per bucket:\n  `2026-08` against `2026-07` is two different months, not one month twice.",
         "operationId": "summarize_spending_financial_summary_get",
         "parameters": [
           {
@@ -2939,6 +3252,59 @@
           },
           {
             "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Currency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Currency"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SummaryOrder",
+              "default": "movements"
+            }
+          },
+          {
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Top"
+            }
+          },
+          {
+            "in": "query",
+            "name": "compare",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Compare",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "timezone",
             "required": false,
             "schema": {
@@ -2984,7 +3350,7 @@
     },
     "/financial/transactions": {
       "get": {
-        "description": "Movements, newest first, each with the merchant behind its text.\n\n`merchant_id` and `category` are Merchant's answer, so a movement whose\ncounterparty nobody has resolved yet matches neither — it is unknown, not\nuncategorized. `from` is included and `to` is not, so two consecutive\nmonths can be asked for without one movement landing in both.\n\n`transfers` defaults to `include` here and to `exclude` on `/summary`,\nwhich is the one place these two surfaces deliberately disagree: both\nsides of a card payment belong in the list, because they explain why an\naccount fell, and in no total, because nothing was spent. A screen showing\na figure from `/summary` beside the list behind it should ask for\n`transfers=exclude` on both.",
+        "description": "Movements, newest first, each with the merchant behind its text.\n\n`merchant_id` and `category` are Merchant's answer, so a movement whose\ncounterparty nobody has resolved yet matches neither — it is unknown, not\nuncategorized. `from` is included and `to` is not, so two consecutive\nmonths can be asked for without one movement landing in both.\n\n`transfers` defaults to `include` here and to `exclude` on `/summary`,\nwhich is the one place these two surfaces deliberately disagree: both\nsides of a card payment belong in the list, because they explain why an\naccount fell, and in no total, because nothing was spent. A screen showing\na figure from `/summary` beside the list behind it should ask for\n`transfers=exclude` on both.\n\n`sort=amount` answers \"my ten largest expenses this month\" in one call. It\nneeds a `currency`, because without one the order would be deciding that\n100 USD is smaller than 5 000 COP.",
         "operationId": "list_transactions_financial_transactions_get",
         "parameters": [
           {
@@ -3145,6 +3511,31 @@
             "schema": {
               "$ref": "#/components/schemas/TransferView",
               "default": "include"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Currency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Currency"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransactionSort",
+              "default": "date"
             }
           },
           {
@@ -3346,6 +3737,289 @@
           }
         ],
         "summary": "Edit Transaction",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/trends": {
+      "get": {
+        "description": "How spending moved over time, split into the bands a chart stacks.\n\n`/summary` answers one dimension at a time — what a period adds up to, or\nhow it splits by category, never both. This answers the two together:\nrestaurants against transport against groceries, month by month. Asking\n`/summary` for that a month at a time is twelve round trips whose buckets\ncan each be ranked differently, so they cannot be stacked without the\nclient reconciling them first.\n\nTwo properties are what a chart needs and what this guarantees. The bands\nare **ranked once over the whole range**, so every bucket stacks the same\nones in the same order. And the buckets are **dense** and each series has\nexactly one point per bucket, in the same order: a month nothing happened\nin is a zero, and a client zips `series[].points` against `buckets` by\nindex without ever filling a gap.\n\nThe range is `periods` intervals back from now, or an explicit `from`/`to`\nwidened to the intervals it touches — half of August charted beside the\nwhole of September reports a fall that did not happen. It takes the same\nfilters as `/transactions`, so any band can be opened as the list behind\nit by repeating the query with the band's key.\n\n`dimension=none` is one undivided band, which is not the same question as\nthe rest: every point already carries `incoming` and `outgoing`, so that\none band is the cashflow chart.",
+        "operationId": "read_trend_financial_trends_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TrendInterval",
+              "default": "month"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dimension",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TrendDimension",
+              "default": "category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "periods",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 372,
+              "minimum": 1,
+              "title": "Periods",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "series",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 20,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Series"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SummaryOrder",
+              "default": "movements"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unassigned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Unassigned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TransactionOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MovementDirection"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Direction"
+            }
+          },
+          {
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search"
+            }
+          },
+          {
+            "in": "query",
+            "name": "merchant_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Merchant Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transfers",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TransferView",
+              "default": "exclude"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Currency"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Currency"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingTrendResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Trend",
         "tags": [
           "financial"
         ]

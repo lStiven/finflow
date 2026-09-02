@@ -21,6 +21,7 @@ import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
 import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
 import { Route as GuiasIndexRouteImport } from './routes/guias/index'
 import { Route as GuiasCuentasYMovimientosRouteImport } from './routes/guias/cuentas-y-movimientos'
+import { Route as ReportesIndexRouteImport } from './routes/reportes/index'
 import { Route as TransaccionesIndexRouteImport } from './routes/transacciones/index'
 import { Route as TransaccionesTransactionIdRouteImport } from './routes/transacciones/$transactionId'
 import { Route as TransaccionesNuevaRouteImport } from './routes/transacciones/nueva'
@@ -86,6 +87,11 @@ const GuiasCuentasYMovimientosRoute =
     path: '/guias/cuentas-y-movimientos',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ReportesIndexRoute = ReportesIndexRouteImport.update({
+  id: '/reportes/',
+  path: '/reportes/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TransaccionesIndexRoute = TransaccionesIndexRouteImport.update({
   id: '/transacciones/',
   path: '/transacciones/',
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/comercios/': typeof ComerciosIndexRoute
   '/cuentas/': typeof CuentasIndexRoute
   '/guias/': typeof GuiasIndexRoute
+  '/reportes/': typeof ReportesIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -135,6 +142,7 @@ export interface FileRoutesByTo {
   '/comercios': typeof ComerciosIndexRoute
   '/cuentas': typeof CuentasIndexRoute
   '/guias': typeof GuiasIndexRoute
+  '/reportes': typeof ReportesIndexRoute
   '/transacciones': typeof TransaccionesIndexRoute
 }
 export interface FileRoutesById {
@@ -153,6 +161,7 @@ export interface FileRoutesById {
   '/comercios/': typeof ComerciosIndexRoute
   '/cuentas/': typeof CuentasIndexRoute
   '/guias/': typeof GuiasIndexRoute
+  '/reportes/': typeof ReportesIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
 }
 export interface FileRouteTypes {
@@ -172,6 +181,7 @@ export interface FileRouteTypes {
     | '/comercios/'
     | '/cuentas/'
     | '/guias/'
+    | '/reportes/'
     | '/transacciones/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -189,6 +199,7 @@ export interface FileRouteTypes {
     | '/comercios'
     | '/cuentas'
     | '/guias'
+    | '/reportes'
     | '/transacciones'
   id:
     | '__root__'
@@ -206,6 +217,7 @@ export interface FileRouteTypes {
     | '/comercios/'
     | '/cuentas/'
     | '/guias/'
+    | '/reportes/'
     | '/transacciones/'
   fileRoutesById: FileRoutesById
 }
@@ -224,6 +236,7 @@ export interface RootRouteChildren {
   ComerciosIndexRoute: typeof ComerciosIndexRoute
   CuentasIndexRoute: typeof CuentasIndexRoute
   GuiasIndexRoute: typeof GuiasIndexRoute
+  ReportesIndexRoute: typeof ReportesIndexRoute
   TransaccionesIndexRoute: typeof TransaccionesIndexRoute
 }
 
@@ -313,6 +326,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuiasCuentasYMovimientosRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reportes/': {
+      id: '/reportes/'
+      path: '/reportes'
+      fullPath: '/reportes/'
+      preLoaderRoute: typeof ReportesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/transacciones/': {
       id: '/transacciones/'
       path: '/transacciones'
@@ -352,6 +372,7 @@ const rootRouteChildren: RootRouteChildren = {
   ComerciosIndexRoute: ComerciosIndexRoute,
   CuentasIndexRoute: CuentasIndexRoute,
   GuiasIndexRoute: GuiasIndexRoute,
+  ReportesIndexRoute: ReportesIndexRoute,
   TransaccionesIndexRoute: TransaccionesIndexRoute,
 }
 export const routeTree = rootRouteImport

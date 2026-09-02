@@ -28,6 +28,15 @@ export type InboxSetup = components["schemas"]["InboxSetupResponse"];
 export type Summary = components["schemas"]["SpendingSummaryResponse"];
 export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
 export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
+export type SummaryGrouping = components["schemas"]["SummaryGrouping"];
+/** `movements` (the default) | `amount`, which needs a pinned `currency`. */
+export type SummaryOrder = components["schemas"]["SummaryOrder"];
+export type Trend = components["schemas"]["SpendingTrendResponse"];
+export type TrendSeries = components["schemas"]["TrendSeriesResponse"];
+export type TrendBucket = components["schemas"]["TrendBucketResponse"];
+export type TrendInterval = components["schemas"]["TrendInterval"];
+export type TrendDimension = components["schemas"]["TrendDimension"];
+export type Currency = components["schemas"]["Currency"];
 export type Merchant =
   components["schemas"]["personal_finance__contexts__merchant__presentation__http__router__MerchantResponse"];
 export type MerchantDetail = components["schemas"]["MerchantDetailResponse"];
@@ -42,6 +51,7 @@ export const queryKeys = {
   accounts: ["accounts"] as const,
   transactions: ["transactions"] as const,
   summary: ["summary"] as const,
+  trends: ["trends"] as const,
   merchants: ["merchants"] as const,
   notifications: ["notifications"] as const,
   inbox: ["inbox"] as const,
@@ -117,6 +127,14 @@ export type TransactionFilters = {
    * for the same thing, which is why the dashboard's tiles pass `exclude`.
    */
   transfers?: TransferView;
+  /**
+   * Pins the page to one currency. Required by `sort: "amount"` — without it
+   * the order would be deciding that 100 USD is less than 5.000 COP, which is
+   * a fact about the unit and not about the money.
+   */
+  currency?: Currency;
+  /** `date` (newest first, the default) | `amount` (largest first). */
+  sort?: "date" | "amount";
 };
 
 export const transactionsQuery = (filters: TransactionFilters = {}) =>
@@ -145,10 +163,26 @@ export const transactionQuery = (transactionId: string) =>
       ),
   });
 
-export const summaryQuery = (
-  groupBy: "month" | "category" | "merchant" | "account",
-  filters: Omit<TransactionFilters, "limit" | "offset"> = {},
-) =>
+/**
+ * What a breakdown is asked for beyond the filters it shares with the list.
+ *
+ * The three that only a report uses come with one rule between them:
+ * `order: "amount"` and any ranking that follows it need `currency` pinned,
+ * because nothing in the backend converts between two of them. Asking without
+ * it is a 400, not a guess.
+ */
+export type SummaryOptions = Omit<TransactionFilters, "limit" | "offset" | "sort"> & {
+  order?: SummaryOrder;
+  /** Keep this many buckets and add the rest into `others`. */
+  top?: number;
+  /**
+   * Also run the window of equal length immediately before this one, so every
+   * bucket carries `previous_totals`. Needs `from` **and** `to`.
+   */
+  compare?: boolean;
+};
+
+export const summaryQuery = (groupBy: SummaryGrouping, filters: SummaryOptions = {}) =>
   queryOptions({
     queryKey: [...queryKeys.summary, groupBy, filters],
     queryFn: () =>
@@ -157,6 +191,32 @@ export const summaryQuery = (
           params: { query: { group_by: groupBy, ...filters } },
         }),
       ),
+  });
+
+export type TrendOptions = Omit<TransactionFilters, "limit" | "offset" | "sort"> & {
+  interval?: TrendInterval;
+  dimension?: TrendDimension;
+  /** How many intervals back from now. Ignored when `from` is given. */
+  periods?: number;
+  /** Keep this many bands and fold the rest into `others`. */
+  series?: number;
+  order?: SummaryOrder;
+};
+
+/**
+ * The stacked chart, in one call.
+ *
+ * `/financial/summary` answers one dimension at a time, so categories over
+ * twelve months would be twelve calls — and each would rank its own buckets
+ * independently, so the bands could not be stacked without reconciling them
+ * first. This ranks the bands once over the whole range and returns **dense**
+ * buckets: every series holds exactly one point per bucket, in the same
+ * order, so a chart zips the two by index and never fills a gap.
+ */
+export const trendQuery = (options: TrendOptions = {}) =>
+  queryOptions({
+    queryKey: [...queryKeys.trends, options],
+    queryFn: () => unwrap(api.GET("/financial/trends", { params: { query: options } })),
   });
 
 /* --------------------------------------------------------------- merchants */
