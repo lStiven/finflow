@@ -11,7 +11,10 @@ class AmountParseError(ValueError):
 
 
 # The currency marker and the digits, e.g. "COP29.259,00" or "$13,600.00".
-AMOUNT_PATTERN = r"(?:COP|USD|\$)\s*[\d.,]+"
+# It ends on a digit deliberately: Lulo bank writes "$631.439." at the end of
+# a sentence, and a pattern ending in `[\d.,]+` would swallow the full stop
+# and then refuse the amount as ambiguously grouped.
+AMOUNT_PATTERN = r"(?:COP|USD|\$)\s*[\d.,]*\d"
 
 _MARKER = re.compile(r"^\s*(?P<marker>COP|USD|\$)\s*(?P<digits>[\d.,]+)\s*$")
 # A trailing group of exactly two digits after the last separator: cents.

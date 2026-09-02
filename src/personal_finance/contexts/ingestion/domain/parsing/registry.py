@@ -7,6 +7,10 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BANK_NAME as BANCOLOMBIA,
     BancolombiaParser,
 )
+from personal_finance.contexts.ingestion.domain.parsing.lulobank import (
+    BANK_NAME as LULO_BANK,
+    LuloBankParser,
+)
 from personal_finance.contexts.ingestion.domain.transactions import ExtractedMovement
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 
@@ -33,6 +37,11 @@ BANK_DOMAINS: Mapping[str, str] = {
     "an.notificacionesbancolombia.com": BANCOLOMBIA,
     "notificacionesbancolombia.com": BANCOLOMBIA,
     "bancolombia.com.co": BANCOLOMBIA,
+    # Lulo sends from `notificaciones@lulobank.com`. Its message ids come from
+    # Amazon SES, which is where the mail is *sent* from and is shared with
+    # everybody else on SES — the From domain is the part that identifies the
+    # bank, and it is the one DKIM signs.
+    "lulobank.com": LULO_BANK,
 }
 
 
@@ -55,4 +64,4 @@ class ParserRegistry:
 
 
 def default_parsers() -> Mapping[str, DeterministicParser]:
-    return {BANCOLOMBIA: BancolombiaParser()}
+    return {BANCOLOMBIA: BancolombiaParser(), LULO_BANK: LuloBankParser()}

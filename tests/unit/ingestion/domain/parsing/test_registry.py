@@ -1,6 +1,7 @@
 from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BancolombiaParser,
 )
+from personal_finance.contexts.ingestion.domain.parsing.lulobank import LuloBankParser
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 
@@ -44,3 +45,19 @@ def test_a_lookalike_domain_does_not_match() -> None:
         )
         is None
     )
+
+
+def test_lulo_bank_resolves_by_its_from_domain() -> None:
+    registry = ParserRegistry()
+    sender = EmailAddress("notificaciones@lulobank.com")
+
+    assert isinstance(registry.for_sender(sender), LuloBankParser)
+
+
+def test_the_ses_domain_lulo_sends_through_is_not_a_bank() -> None:
+    registry = ParserRegistry()
+
+    # Lulo's message ids come from `email.amazonses.com`, which is shared with
+    # every other SES customer. Keying on it would hand any of them Lulo's
+    # templates.
+    assert registry.for_sender(EmailAddress("bounce@email.amazonses.com")) is None
