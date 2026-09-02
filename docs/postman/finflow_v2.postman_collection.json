@@ -1351,7 +1351,7 @@
                 {
                   "key": "group_by",
                   "value": "month",
-                  "description": "month | category | merchant | account"
+                  "description": "day | week | month | weekday | category | merchant | account"
                 },
                 {
                   "key": "from",
@@ -1410,17 +1410,165 @@
                 {
                   "key": "timezone",
                   "value": "America/Bogota",
-                  "description": "IANA name. Only affects group_by=month, and it matters: 8pm on the 31st in Bogotá is already the next month in UTC"
+                  "description": "IANA name. Only affects the time groupings, and it matters: 8pm on the 31st in Bogotá is already the next month in UTC"
                 },
                 {
                   "key": "transfers",
                   "value": "",
                   "description": "exclude (default here) | include | only. A card payment is not spending: counting it would report it as an expense and again as income on the card.",
                   "disabled": true
+                },
+                {
+                  "key": "currency",
+                  "value": "COP",
+                  "description": "COP | USD. Pins the answer to one currency, which is what makes `order=amount` and a stackable chart answerable — nothing here converts between two.",
+                  "disabled": true
+                },
+                {
+                  "key": "order",
+                  "value": "amount",
+                  "description": "movements (default) | amount. Ranks the buckets by money rather than by frequency. Needs `currency`, or the ranking would be deciding that whichever unit has larger numbers is bigger.",
+                  "disabled": true
+                },
+                {
+                  "key": "top",
+                  "value": "8",
+                  "description": "Keep this many buckets and add the rest into `others`. The eight slices a donut can show. Refused on a stretch of time, which is narrowed with from/to instead.",
+                  "disabled": true
+                },
+                {
+                  "key": "compare",
+                  "value": "true",
+                  "description": "Also run the window of equal length immediately before this one, so each bucket carries `previous_totals`. Needs `from` and `to`. On a time grouping it reports the period total and nothing per bucket: 2026-08 against 2026-07 is two months, not one twice.",
+                  "disabled": true
                 }
               ]
             },
-            "description": "What a period adds up to, totalled per currency and never across them. Takes the same filters as `GET /financial/transactions`, so any bucket here opens as a list by repeating the query with the bucket's `key`. A `key` of null is the bucket the grouping could not place — a movement no account claimed, or a counterparty no merchant owns yet — and it belongs in the answer: without it the groups stop adding up to `totals`. Months come back newest first; every other grouping comes back busiest first, by movement count."
+            "description": "What a period adds up to, totalled per currency and never across them. Takes the same filters as `GET /financial/transactions`, so any bucket here opens as a list by repeating the query with the bucket's `key`. A `key` of null is the bucket the grouping could not place — a movement no account claimed, or a counterparty no merchant owns yet — and it belongs in the answer: without it the groups stop adding up to `totals`.\n\nStretches of time come back newest first and weekdays run Monday to Sunday; every other grouping comes back biggest first, by movement count unless `order=amount` and a `currency` were both asked for.\n\n`others` is what `top` left out, added together. It carries no key on purpose: unlike a real bucket it cannot be reopened as the list behind it. `groups` plus `others` always adds up to `totals`."
+          },
+          "response": []
+        },
+        {
+          "name": "Spending trends",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/trends?interval=month&dimension=category&periods=12&timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "trends"
+              ],
+              "query": [
+                {
+                  "key": "interval",
+                  "value": "month",
+                  "description": "day | week | month. The width of one step of the axis."
+                },
+                {
+                  "key": "dimension",
+                  "value": "category",
+                  "description": "none | category | merchant | account. `none` is one undivided band, which is the cashflow chart: every point already carries incoming and outgoing."
+                },
+                {
+                  "key": "periods",
+                  "value": "12",
+                  "description": "How many intervals back from now. Ignored when `from` is given."
+                },
+                {
+                  "key": "series",
+                  "value": "8",
+                  "description": "Keep this many bands and fold the rest into `others`. A stacked chart with forty bands is a solid block.",
+                  "disabled": true
+                },
+                {
+                  "key": "order",
+                  "value": "amount",
+                  "description": "movements (default) | amount. Needs `currency`.",
+                  "disabled": true
+                },
+                {
+                  "key": "currency",
+                  "value": "COP",
+                  "description": "COP | USD. Pin it for a chart: nothing here converts between two currencies.",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "Epoch seconds, included. Widened to the interval it falls in — half of August charted beside the whole of September reports a fall that did not happen.",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "Epoch seconds, excluded",
+                  "disabled": true
+                },
+                {
+                  "key": "account_id",
+                  "value": "",
+                  "description": "Only this account's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "unassigned",
+                  "value": "",
+                  "description": "true charts only what no account claimed",
+                  "disabled": true
+                },
+                {
+                  "key": "origin",
+                  "value": "",
+                  "description": "bank_alert | manual",
+                  "disabled": true
+                },
+                {
+                  "key": "direction",
+                  "value": "",
+                  "description": "incoming | outgoing",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Matched against the counterparty",
+                  "disabled": true
+                },
+                {
+                  "key": "merchant_id",
+                  "value": "",
+                  "description": "Only this merchant's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Merchant category, from GET /merchants/categories",
+                  "disabled": true
+                },
+                {
+                  "key": "transfers",
+                  "value": "",
+                  "description": "exclude (default here) | include | only",
+                  "disabled": true
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "IANA name. Decides which period a late-evening purchase falls in."
+                }
+              ]
+            },
+            "description": "How spending moved over time, split into the bands a chart stacks.\n\n`/financial/summary` answers one dimension at a time — what a period adds up to, or how it splits by category, never both. This answers the two together: restaurants against transport against groceries, month by month. Asking `/summary` for that a month at a time is twelve round trips whose buckets can each be ranked differently, so they cannot be stacked without reconciling them first.\n\nTwo guarantees are what a chart needs. The bands are **ranked once over the whole range**, so every bucket stacks the same ones in the same order. And the buckets are **dense**, with each series holding exactly one point per bucket in the same order: a month nothing happened in is a zero, so zip `series[].points` against `buckets` by index and never fill a gap.\n\nTakes the same filters as `GET /financial/transactions`, so any band opens as the list behind it by repeating the query with the band's `key`. `others` and the unplaced band both carry a null key and cannot be reopened that way."
           },
           "response": []
         },
@@ -1544,6 +1692,18 @@
                   "key": "transfers",
                   "value": "",
                   "description": "include (default) | exclude | only. Both sides of a transfer between the owner's own accounts. A list shows them; a total never counts them.",
+                  "disabled": true
+                },
+                {
+                  "key": "sort",
+                  "value": "amount",
+                  "description": "date (default) | amount. `amount` answers 'my ten largest expenses this month' in one call, and needs `currency`.",
+                  "disabled": true
+                },
+                {
+                  "key": "currency",
+                  "value": "COP",
+                  "description": "COP | USD. Required by sort=amount.",
                   "disabled": true
                 }
               ]

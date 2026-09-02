@@ -53,6 +53,23 @@ DEFAULT_TIMEZONE = "America/Bogota"
 UNATTRIBUTED_LABEL = "Unattributed"
 UNASSIGNED_LABEL = "Unassigned"
 
+# The bucket `top` folds the tail into. It is never a group: it has no key, so
+# unlike every other bucket it cannot be reopened as a list of movements, and
+# a client has to render it as the remainder it is.
+OTHERS_LABEL = "Others"
+
+# ISO weekday number to name. English like every other label here — a client
+# translates them, the same way it translates `Unattributed`.
+WEEKDAY_LABELS = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
 
 class AccountScope(enum.Enum):
     OPEN = "open"
@@ -165,10 +182,28 @@ class MovementFilter:
     # Both sides of a transfer, neither, or only those. The default suits a
     # list; a total asks for `EXCLUDE`.
     transfers: TransferView = TransferView.INCLUDE
+    # One currency only. Nothing here ever sums two of them, so a report that
+    # ranks buckets by amount or stacks them in one chart has to pin this
+    # first — otherwise the biggest bucket is whichever currency has the
+    # larger numbers, which is a fact about the unit and not about spending.
+    currency: Currency | None = None
 
     @property
     def needs_attribution(self) -> bool:
         return self.merchant_id is not None or self.category is not None
+
+
+class TransactionSort(enum.Enum):
+    """What "first" means in a page of movements.
+
+    `DATE` is what somebody opening the app wants. `AMOUNT` is what a report
+    wants — the ten largest of the month — and like every other ranking here
+    it needs a pinned currency, or the order would be deciding that 100 USD is
+    smaller than 5 000 COP.
+    """
+
+    DATE = "date"
+    AMOUNT = "amount"
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -176,6 +211,14 @@ class TransactionQuery:
     filter: MovementFilter
     limit: int = DEFAULT_PAGE_SIZE
     offset: int = 0
+    sort: TransactionSort = TransactionSort.DATE
+
+    def __post_init__(self) -> None:
+        if self.sort is TransactionSort.AMOUNT and self.filter.currency is None:
+            raise ValueError(
+                "Sorting by amount needs a currency: without one the order "
+                "would compare figures in different units.",
+            )
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -222,11 +265,23 @@ class ListTransactionsUseCase:
         )
         found = _matching_merchant(found, query.filter, attributions)
 
-        # Newest first: what somebody looks at when they open the app.
-        found.sort(
-            key=lambda movement: movement.occurred_at.as_epoch_seconds(),
-            reverse=True,
-        )
+        if query.sort is TransactionSort.AMOUNT:
+            # Largest first, and ties broken by date so the page is stable
+            # across two calls rather than left to the sort's whim.
+            found.sort(
+                key=lambda movement: (
+                    movement.amount.amount,
+                    movement.occurred_at.as_epoch_seconds(),
+                ),
+                reverse=True,
+            )
+        else:
+            # Newest first: what somebody looks at when they open the app.
+            found.sort(
+                key=lambda movement: movement.occurred_at.as_epoch_seconds(),
+                reverse=True,
+            )
+
         window = found[query.offset : query.offset + query.limit]
 
         return TransactionPage(
@@ -274,23 +329,151 @@ class GetTransactionUseCase:
         )
 
 
-class SummaryGrouping(enum.Enum):
-    """Which question a summary answers."""
+class TrendInterval(enum.Enum):
+    """The width of one step along a time axis.
 
+    Separate from `SummaryGrouping` because it is a different question: a
+    grouping asks what to put in buckets, an interval asks how wide each step
+    of a series is, and only three of the groupings are steps at all.
+    """
+
+    DAY = "day"
+    WEEK = "week"
     MONTH = "month"
+
+
+class SummaryGrouping(enum.Enum):
+    """Which question a summary answers.
+
+    The first four are stretches of time and the rest are not, and the
+    difference decides two things: how the buckets are ordered, and whether
+    comparing each of them against the previous period means anything. It
+    does not — January against February is not the same bucket twice.
+    """
+
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+    # Not a stretch of time but a slice through it: all the Mondays together,
+    # which is the one grouping where a bucket recurs instead of passing.
+    WEEKDAY = "weekday"
     CATEGORY = "category"
     MERCHANT = "merchant"
     ACCOUNT = "account"
+
+    @property
+    def is_temporal(self) -> bool:
+        """Whether the bucket is a stretch of time rather than a thing money
+        was spent on. Those order chronologically, and are narrowed with
+        `since`/`until` rather than by folding a tail into a remainder.
+        """
+        return self in {
+            SummaryGrouping.DAY,
+            SummaryGrouping.WEEK,
+            SummaryGrouping.MONTH,
+            SummaryGrouping.WEEKDAY,
+        }
+
+    @property
+    def recurs(self) -> bool:
+        """Whether the same bucket comes round again in the next window, and
+        so has a previous self worth comparing against.
+
+        A month does not: `2026-08` against `2026-07` is two different months,
+        not one month twice. A Monday does — Mondays this month against
+        Mondays last month is a real question — which is the whole difference
+        between `WEEKDAY` and the three periods it sits beside.
+        """
+        return self not in {
+            SummaryGrouping.DAY,
+            SummaryGrouping.WEEK,
+            SummaryGrouping.MONTH,
+        }
+
+
+class SummaryOrder(enum.Enum):
+    """What "biggest" means when the buckets are ranked.
+
+    `MOVEMENTS` is the honest default: a count means the same thing in two
+    currencies and an amount does not. `AMOUNT` is what a chart actually wants
+    — the eight categories worth drawing, not the eight most frequent — and it
+    is only offered once the filter has pinned a currency, because otherwise
+    it would be comparing pesos against dollars and calling the pesos bigger.
+    """
+
+    MOVEMENTS = "movements"
+    AMOUNT = "amount"
+
+
+INTERVAL_OF = {
+    SummaryGrouping.DAY: TrendInterval.DAY,
+    SummaryGrouping.WEEK: TrendInterval.WEEK,
+    SummaryGrouping.MONTH: TrendInterval.MONTH,
+}
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class SummaryQuery:
     filter: MovementFilter
     group_by: SummaryGrouping = SummaryGrouping.MONTH
-    # Only months need it, and they need it badly: a purchase at 8pm on the
-    # 31st is the next month in UTC, which is the wrong answer for everybody
-    # this deployment serves.
+    # Only the time groupings need it, and they need it badly: a purchase at
+    # 8pm on the 31st is the next month in UTC, which is the wrong answer for
+    # everybody this deployment serves.
     timezone: str = DEFAULT_TIMEZONE
+    order: SummaryOrder = SummaryOrder.MOVEMENTS
+    # Keep this many buckets and add the rest together. A donut with sixty
+    # slices shows nothing; eight and a remainder shows where the money went.
+    top: int | None = None
+    # Also run the window immediately before this one, so every bucket can say
+    # what it was last time. Needs `since` and `until` both set — without a
+    # length there is no previous window of the same length to compare with.
+    compare: bool = False
+
+    def __post_init__(self) -> None:
+        if self.order is SummaryOrder.AMOUNT and self.filter.currency is None:
+            raise ValueError(
+                "Ordering by amount needs a currency: without one the ranking "
+                "would compare figures in different units.",
+            )
+
+        if self.top is not None:
+            if self.top < 1:
+                raise ValueError(f"top must be at least 1: {self.top}")
+
+            if self.group_by.is_temporal:
+                raise ValueError(
+                    f"top does not apply to {self.group_by.value}: a stretch of "
+                    "time is narrowed with `since`/`until`, and folding the "
+                    "oldest days into a remainder answers nothing.",
+                )
+
+        if self.compare and (self.filter.since is None or self.filter.until is None):
+            raise ValueError(
+                "Comparing needs `since` and `until`: the previous window is "
+                "the one of the same length ending where this one starts.",
+            )
+
+    @property
+    def previous_window(self) -> tuple[PosixTime, PosixTime] | None:
+        """The window of equal length immediately before this one.
+
+        Half-open like everything else here and butted right up against the
+        current one, so a movement lands in exactly one of the two.
+        """
+        if not self.compare:
+            return None
+
+        since, until = self.filter.since, self.filter.until
+
+        if since is None or until is None:
+            return None
+
+        span = until.as_epoch_seconds() - since.as_epoch_seconds()
+
+        return (
+            PosixTime.from_epoch_seconds(since.as_epoch_seconds() - span),
+            since,
+        )
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -323,18 +506,37 @@ class SummaryGroup:
     key: str | None
     label: str
     totals: Sequence[SpendingTotals]
-    # Across every currency in the bucket, which is what orders the groups: a
-    # count means the same thing in two currencies and an amount does not.
+    # Across every currency in the bucket, which is what orders the groups by
+    # default: a count means the same thing in two currencies and an amount
+    # does not.
     movements: int
+    # The same bucket in the window before this one, when `compare` asked for
+    # it and the grouping is one where that means something. None otherwise —
+    # which is not the same as zero, and a client must not draw it as a fall
+    # to nothing.
+    previous_totals: Sequence[SpendingTotals] | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class SpendingSummary:
     group_by: SummaryGrouping
+    order: SummaryOrder
     # Over everything the filter matched, so a client can show a period total
-    # beside its breakdown without adding the buckets up itself.
+    # beside its breakdown without adding the buckets up itself. `groups` plus
+    # `others` always adds up to this.
     totals: Sequence[SpendingTotals]
     groups: Sequence[SummaryGroup]
+    # What `top` left out, added together. None when nothing was left out. It
+    # is deliberately not a group: it has no key, so it cannot be reopened as
+    # a list the way every real bucket can.
+    others: SummaryGroup | None = None
+    # How many buckets `others` stands for. Zero when nothing was folded.
+    folded: int = 0
+    # The window of equal length immediately before this one, present only
+    # when `compare` asked for it.
+    previous_totals: Sequence[SpendingTotals] | None = None
+    previous_since: PosixTime | None = None
+    previous_until: PosixTime | None = None
 
 
 class SummarizeSpendingUseCase:
@@ -361,18 +563,38 @@ class SummarizeSpendingUseCase:
     def execute(self, query: SummaryQuery) -> SpendingSummary:
         zone = _zone(query.timezone)
         criteria = query.filter
-        found = _narrow(_load(self._ledger, criteria), criteria)
+        window = query.previous_window
+
+        # One read of the partition even when comparing: the two windows
+        # differ only in their bounds, which are applied in memory anyway.
+        loaded = _load(self._ledger, criteria)
+        current = _narrow(loaded, criteria)
+        before = (
+            # The bounds are the whole of the difference: `_narrow` reads them
+            # off the criteria it is handed.
+            _narrow(
+                loaded,
+                dataclasses.replace(criteria, since=window[0], until=window[1]),
+            )
+            if window is not None
+            else []
+        )
+
         attributions = _attribute(
             self._merchants,
             user_id=criteria.user_id,
-            movements=found,
+            # Both windows at once. Two calls would read the same merchant
+            # partition twice to answer one question.
+            movements=[*current, *before],
             # Grouping by merchant or by category needs them; so does filtering
             # on either. A breakdown by month or by account needs neither.
             wanted=query.group_by
             in {SummaryGrouping.MERCHANT, SummaryGrouping.CATEGORY}
             or criteria.needs_attribution,
         )
-        found = _matching_merchant(found, criteria, attributions)
+        current = _matching_merchant(current, criteria, attributions)
+        before = _matching_merchant(before, criteria, attributions)
+
         # Only a breakdown by account needs them, and it needs them to say
         # `Tarjeta Bancolombia` where the row only holds a uuid.
         names = (
@@ -380,19 +602,42 @@ class SummarizeSpendingUseCase:
             if query.group_by is SummaryGrouping.ACCOUNT
             else dict[str, str]()
         )
-        buckets: dict[str | None, list[Transaction]] = {}
-        labels: dict[str | None, str] = {}
 
-        for movement in found:
-            key, label = _bucket(
-                movement,
-                group_by=query.group_by,
-                attribution=attributions.get(movement.counterparty),
-                zone=zone,
-                account_names=names,
-            )
-            buckets.setdefault(key, []).append(movement)
-            labels.setdefault(key, label)
+        def split(
+            movements: Sequence[Transaction],
+        ) -> tuple[dict[str | None, list[Transaction]], dict[str | None, str]]:
+            buckets: dict[str | None, list[Transaction]] = {}
+            labels: dict[str | None, str] = {}
+
+            for movement in movements:
+                key, label = _bucket(
+                    movement,
+                    group_by=query.group_by,
+                    attribution=attributions.get(movement.counterparty),
+                    zone=zone,
+                    account_names=names,
+                )
+                buckets.setdefault(key, []).append(movement)
+                labels.setdefault(key, label)
+
+            return buckets, labels
+
+        buckets, labels = split(current)
+        previous, previous_labels = split(before)
+
+        # A bucket compared against itself only means something when the
+        # bucket outlives the window, so a stretch of time gets the period
+        # total and nothing per bucket. A weekday is the exception among the
+        # temporal groupings: Mondays do come round again.
+        comparable = query.compare and query.group_by.recurs
+
+        if comparable:
+            # Something bought last month and not this one is exactly what a
+            # report exists to surface, so it stays in the answer at zero
+            # rather than disappearing from it.
+            for key, label in previous_labels.items():
+                buckets.setdefault(key, [])
+                labels.setdefault(key, label)
 
         groups = [
             SummaryGroup(
@@ -400,15 +645,25 @@ class SummarizeSpendingUseCase:
                 label=labels[key],
                 totals=_totals(movements),
                 movements=len(movements),
+                previous_totals=(
+                    _totals(previous.get(key, ())) if comparable else None
+                ),
             )
             for key, movements in buckets.items()
         ]
-        _sort_groups(groups, query.group_by)
+        _sort_groups(groups, query.group_by, query.order, criteria.currency)
+        kept, others, folded = _fold(groups, query.top)
 
         return SpendingSummary(
             group_by=query.group_by,
-            totals=_totals(found),
-            groups=groups,
+            order=query.order,
+            totals=_totals(current),
+            groups=kept,
+            others=others,
+            folded=folded,
+            previous_totals=_totals(before) if query.compare else None,
+            previous_since=window[0] if window is not None else None,
+            previous_until=window[1] if window is not None else None,
         )
 
     def _account_names(self, user_id: UserId) -> Mapping[str, str]:
@@ -504,6 +759,13 @@ def _narrow(
             movement for movement in found if movement.direction is criteria.direction
         ]
 
+    if criteria.currency is not None:
+        found = [
+            movement
+            for movement in found
+            if movement.amount.currency is criteria.currency
+        ]
+
     if criteria.since is not None:
         floor = criteria.since.as_epoch_seconds()
         found = [
@@ -597,12 +859,19 @@ def _bucket(
 ) -> tuple[str | None, str]:
     """Which group this movement falls in, and what to call it."""
     match group_by:
-        case SummaryGrouping.MONTH:
-            month = (
-                movement.occurred_at.to_datetime().astimezone(zone).strftime("%Y-%m")
+        case SummaryGrouping.DAY | SummaryGrouping.WEEK | SummaryGrouping.MONTH:
+            key = _period_key(
+                movement.occurred_at.to_datetime().astimezone(zone),
+                INTERVAL_OF[group_by],
             )
 
-            return month, month
+            return key, key
+        case SummaryGrouping.WEEKDAY:
+            # ISO: Monday is 1. Sorting the keys as strings then runs Monday to
+            # Sunday, which is the order a week is read in.
+            weekday = movement.occurred_at.to_datetime().astimezone(zone).isoweekday()
+
+            return str(weekday), WEEKDAY_LABELS[weekday - 1]
         case SummaryGrouping.CATEGORY:
             if attribution is None:
                 return None, UNATTRIBUTED_LABEL
@@ -647,20 +916,115 @@ def _totals(movements: Sequence[Transaction]) -> Sequence[SpendingTotals]:
     ]
 
 
-def _sort_groups(groups: list[SummaryGroup], group_by: SummaryGrouping) -> None:
-    """Months run newest first; everything else runs busiest first.
+def _sort_groups(
+    groups: list[SummaryGroup],
+    group_by: SummaryGrouping,
+    order: SummaryOrder,
+    currency: Currency | None,
+) -> None:
+    """Periods run newest first, weekdays run Monday to Sunday, and everything
+    else runs biggest first — by movement count unless a currency was pinned
+    and `AMOUNT` asked for the other ranking.
 
-    Busiest, not biggest: ordering by amount would have to compare a figure in
-    one currency against a figure in another, and no rate here says what that
-    means. A client showing one currency has every amount it needs to reorder
-    them itself.
+    Count is the default because it means the same thing in two currencies and
+    an amount does not. Pinning a currency is what makes the amount ranking
+    answerable, which is why the query refuses one without the other.
     """
-    if group_by is SummaryGrouping.MONTH:
+    if group_by is SummaryGrouping.WEEKDAY:
+        # Numerically: "10" would come before "9" as text, and while a week
+        # has no tenth day the reader of this should not have to check.
+        groups.sort(key=lambda group: int(group.key or "0"))
+
+        return
+
+    if group_by.is_temporal:
         groups.sort(key=lambda group: group.key or "", reverse=True)
 
         return
 
+    if order is SummaryOrder.AMOUNT and currency is not None:
+        groups.sort(
+            key=lambda group: (-_moved(group.totals, currency), group.label.casefold())
+        )
+
+        return
+
     groups.sort(key=lambda group: (-group.movements, group.label.casefold()))
+
+
+def _moved(totals: Sequence[SpendingTotals], currency: Currency) -> Decimal:
+    """How much money the bucket touched, in the one currency that was pinned.
+
+    Both directions added, not netted: a merchant that took 100 and refunded
+    100 is not a merchant nothing happened at, and netting would rank it last.
+    """
+    for figure in totals:
+        if figure.currency is currency:
+            return figure.incoming + figure.outgoing
+
+    return Decimal(0)
+
+
+def _fold(
+    groups: list[SummaryGroup],
+    top: int | None,
+) -> tuple[list[SummaryGroup], SummaryGroup | None, int]:
+    """Keep the first `top` buckets and add the rest together.
+
+    The remainder carries no key on purpose: every real bucket can be reopened
+    as the list of movements behind it by repeating the query with its key,
+    and this one cannot, so it must not look like it can.
+    """
+    if top is None or len(groups) <= top:
+        return groups, None, 0
+
+    kept, tail = groups[:top], groups[top:]
+    compared = any(group.previous_totals is not None for group in tail)
+
+    return (
+        kept,
+        SummaryGroup(
+            key=None,
+            label=OTHERS_LABEL,
+            totals=_merge(group.totals for group in tail),
+            movements=sum(group.movements for group in tail),
+            previous_totals=(
+                _merge(group.previous_totals or () for group in tail)
+                if compared
+                else None
+            ),
+        ),
+        len(tail),
+    )
+
+
+def _merge(figures: Iterable[Sequence[SpendingTotals]]) -> Sequence[SpendingTotals]:
+    """Several buckets' totals added into one, still one figure per currency."""
+    incoming: dict[Currency, Decimal] = {}
+    outgoing: dict[Currency, Decimal] = {}
+    counted: dict[Currency, int] = {}
+
+    for totals in figures:
+        for figure in totals:
+            incoming[figure.currency] = (
+                incoming.get(figure.currency, Decimal(0)) + figure.incoming
+            )
+            outgoing[figure.currency] = (
+                outgoing.get(figure.currency, Decimal(0)) + figure.outgoing
+            )
+            counted[figure.currency] = (
+                counted.get(figure.currency, 0) + figure.movements
+            )
+
+    return [
+        SpendingTotals(
+            currency=currency,
+            incoming=incoming[currency],
+            outgoing=outgoing[currency],
+            movements=counted[currency],
+        )
+        for currency in sorted(counted, key=lambda currency: currency.value)
+    ]
 
 
 def _zone(name: str) -> dt.tzinfo:
@@ -888,16 +1252,94 @@ def _month_bounds(zone: dt.tzinfo, key: str) -> tuple[dt.datetime, dt.datetime]:
 
 
 def _local_midnight(zone: dt.tzinfo, year: int, month: int) -> dt.datetime:
-    """The first instant of a month, in a zone that may not have a midnight.
+    """The first instant of a month."""
+    return _local_start(zone, dt.date(year, month, 1))
 
-    Havana and Asunción have both started daylight saving *at* midnight on the
-    1st, so that local time does not exist and attaching a zone to it names an
-    instant an hour from where it should be. Round-tripping through UTC
-    resolves it to a real instant, and every zone without that problem is
-    untouched.
+
+def _local_start(zone: dt.tzinfo, day: dt.date) -> dt.datetime:
+    """The first instant of a day, in a zone that may not have a midnight.
+
+    Havana and Asunción have both started daylight saving *at* midnight, so
+    that local time does not exist and attaching a zone to it names an instant
+    an hour from where it should be. Round-tripping through UTC resolves it to
+    a real instant, and every zone without that problem is untouched.
     """
-    naive = dt.datetime(year, month, 1, tzinfo=zone)
+    naive = dt.datetime(day.year, day.month, day.day, tzinfo=zone)
     return naive.astimezone(dt.UTC).astimezone(zone)
+
+
+def _period_key(instant: dt.datetime, interval: TrendInterval) -> str:
+    """What to call the period this local instant falls in.
+
+    A week is named by its ISO year and week, which is not always the calendar
+    year: 2027-01-01 is a Friday and belongs to `2026-W53`. That is the
+    correct answer — the week did start in December — and it is why the year
+    here comes from `%G` and never from `%Y`.
+    """
+    match interval:
+        case TrendInterval.DAY:
+            return instant.strftime("%Y-%m-%d")
+        case TrendInterval.WEEK:
+            return instant.strftime("%G-W%V")
+        case TrendInterval.MONTH:
+            return instant.strftime("%Y-%m")
+
+
+def _period_bounds(
+    zone: dt.tzinfo,
+    key: str,
+    interval: TrendInterval,
+) -> tuple[dt.datetime, dt.datetime]:
+    """The instants a period starts and ends at, in that zone. End exclusive."""
+    match interval:
+        case TrendInterval.DAY:
+            day = dt.date.fromisoformat(key)
+
+            return _local_start(zone, day), _local_start(
+                zone,
+                day + dt.timedelta(days=1),
+            )
+        case TrendInterval.WEEK:
+            year, week = key.split("-W")
+            monday = dt.date.fromisocalendar(int(year), int(week), 1)
+
+            return _local_start(zone, monday), _local_start(
+                zone,
+                monday + dt.timedelta(days=7),
+            )
+        case TrendInterval.MONTH:
+            return _month_bounds(zone, key)
+
+
+def _period_walk(
+    zone: dt.tzinfo,
+    since: dt.datetime,
+    until: dt.datetime,
+    interval: TrendInterval,
+    limit: int,
+) -> list[str]:
+    """Every period touching `[since, until)`, oldest first and none missing.
+
+    Dense on purpose: a month nothing happened in is a zero on the chart, not
+    a gap the client has to notice and fill. Walked through each period's own
+    end instant rather than by adding days, so a daylight-saving shift inside
+    the range cannot slide a boundary.
+    """
+    keys: list[str] = []
+    cursor = _period_bounds(zone, _period_key(since, interval), interval)[0]
+
+    while cursor < until:
+        if len(keys) >= limit:
+            raise ValueError(
+                f"That range is more than {limit} {interval.value}s. Ask for a "
+                "shorter one, or a wider interval.",
+            )
+
+        key = _period_key(cursor, interval)
+        keys.append(key)
+        cursor = _period_bounds(zone, key, interval)[1]
+
+    return keys
 
 
 def _previous_window(
@@ -998,3 +1440,387 @@ def _net_worth_timeline(
         )
 
     return timeline
+
+
+# ------------------------------------------------------------------ trends
+
+
+MAX_TREND_BUCKETS = 372
+DEFAULT_TREND_PERIODS = 12
+MAX_TREND_SERIES = 20
+
+# The single series `NONE` produces. There is nothing to tell apart, so it
+# carries the label rather than a key that would look like a filter value.
+TOTAL_LABEL = "Total"
+
+
+class TrendDimension(enum.Enum):
+    """What to split each step of the series by.
+
+    `NONE` gives one series — the cashflow line — and it is not redundant with
+    the others: every point already carries `incoming` and `outgoing`, so one
+    undivided series is the income-against-expense chart.
+    """
+
+    NONE = "none"
+    CATEGORY = "category"
+    MERCHANT = "merchant"
+    ACCOUNT = "account"
+
+
+_GROUPING_OF = {
+    TrendDimension.CATEGORY: SummaryGrouping.CATEGORY,
+    TrendDimension.MERCHANT: SummaryGrouping.MERCHANT,
+    TrendDimension.ACCOUNT: SummaryGrouping.ACCOUNT,
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TrendQuery:
+    filter: MovementFilter
+    interval: TrendInterval = TrendInterval.MONTH
+    dimension: TrendDimension = TrendDimension.CATEGORY
+    # How far back to go when the filter names no `since`. Ignored when it
+    # does: an explicit range always wins over a default one.
+    periods: int = DEFAULT_TREND_PERIODS
+    # Keep this many series and add the rest into one. A stacked chart with
+    # forty bands is a solid block.
+    series: int | None = None
+    order: SummaryOrder = SummaryOrder.MOVEMENTS
+    timezone: str = DEFAULT_TIMEZONE
+    # Injectable so a test can stand at a chosen instant. Production leaves it
+    # None and the clock answers.
+    now: PosixTime | None = None
+
+    def __post_init__(self) -> None:
+        if self.order is SummaryOrder.AMOUNT and self.filter.currency is None:
+            raise ValueError(
+                "Ordering by amount needs a currency: without one the ranking "
+                "would compare figures in different units.",
+            )
+
+        if self.periods < 1:
+            raise ValueError(f"periods must be at least 1: {self.periods}")
+
+        if self.series is not None and not 1 <= self.series <= MAX_TREND_SERIES:
+            raise ValueError(
+                f"series must be between 1 and {MAX_TREND_SERIES}: {self.series}",
+            )
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TrendBucket:
+    """One step of the axis, whether or not anything happened in it."""
+
+    key: str
+    starts_at: PosixTime
+    # Exclusive, and for the period still being lived it is *now* rather than
+    # the period's end, so nothing is charted as a finished step it is not.
+    ends_at: PosixTime
+    partial: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TrendPoint:
+    bucket: str
+    # Empty when nothing moved in this bucket, which is the ordinary case for
+    # most of a chart and not a hole in it.
+    totals: Sequence[SpendingTotals]
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TrendSeries:
+    """One band of the chart, across every bucket.
+
+    `key` is None for the series a dimension could not place — a counterparty
+    no merchant owns yet, a movement no account claimed — and for the
+    remainder `series` folded, which is why `label` is what a client renders
+    and `key` only ever what it filters by.
+    """
+
+    key: str | None
+    label: str
+    # One per bucket, in the same order, none missing. That is the whole point
+    # of the endpoint: a client zips this against `buckets` by index.
+    points: Sequence[TrendPoint]
+    totals: Sequence[SpendingTotals]
+    movements: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SpendingTrend:
+    interval: TrendInterval
+    dimension: TrendDimension
+    timezone: str
+    starts_at: PosixTime
+    ends_at: PosixTime
+    # Oldest first, so a client draws it without reversing anything.
+    buckets: Sequence[TrendBucket]
+    series: Sequence[TrendSeries]
+    # What `series` left out, added together. None when nothing was left out.
+    others: TrendSeries | None = None
+    folded: int = 0
+    totals: Sequence[SpendingTotals] = ()
+
+
+class ReadSpendingTrendUseCase:
+    """How spending moved over time, split into the bands a chart stacks.
+
+    `/summary?group_by=month` answers one dimension at a time: what a period
+    adds up to, or how it splits by category, never both. A report wants the
+    two together — restaurants against transport against groceries, month by
+    month — and asking for it a month at a time is twelve round trips whose
+    buckets can each be ranked differently, so they cannot even be stacked
+    without the client reconciling them.
+
+    So the ranking happens once, over the whole range, and every bucket is
+    filled against that one set of series. Buckets are dense and points are
+    aligned with them by index: a month nothing happened in is a zero, not a
+    gap.
+    """
+
+    def __init__(
+        self,
+        *,
+        ledger: TransactionLedger,
+        accounts: AccountRepository,
+        merchants: MerchantDirectory | None = None,
+    ) -> None:
+        self._ledger = ledger
+        self._accounts = accounts
+        self._merchants = merchants
+
+    def execute(self, query: TrendQuery) -> SpendingTrend:
+        zone = _zone(query.timezone)
+        criteria = query.filter
+        now = query.now or PosixTime.from_epoch_seconds(
+            int(dt.datetime.now(tz=dt.UTC).timestamp()),
+        )
+        here = dt.datetime.fromtimestamp(now.as_epoch_seconds(), tz=zone)
+
+        since, until = self._range(query, zone=zone, here=here)
+        keys = _period_walk(zone, since, until, query.interval, MAX_TREND_BUCKETS)
+        bounded = dataclasses.replace(
+            criteria,
+            since=PosixTime.from_epoch_seconds(int(since.timestamp())),
+            until=PosixTime.from_epoch_seconds(int(until.timestamp())),
+        )
+
+        found = _narrow(_load(self._ledger, bounded), bounded)
+        attributions = _attribute(
+            self._merchants,
+            user_id=criteria.user_id,
+            movements=found,
+            wanted=query.dimension in {TrendDimension.CATEGORY, TrendDimension.MERCHANT}
+            or criteria.needs_attribution,
+        )
+        found = _matching_merchant(found, bounded, attributions)
+        names = (
+            self._account_names(criteria.user_id)
+            if query.dimension is TrendDimension.ACCOUNT
+            else dict[str, str]()
+        )
+
+        # Which band, and which step of it, each movement lands in.
+        placed: dict[str | None, dict[str, list[Transaction]]] = {}
+        labels: dict[str | None, str] = {}
+
+        for movement in found:
+            band, label = _band(
+                movement,
+                dimension=query.dimension,
+                attribution=attributions.get(movement.counterparty),
+                account_names=names,
+            )
+            step = _period_key(
+                movement.occurred_at.to_datetime().astimezone(zone),
+                query.interval,
+            )
+            placed.setdefault(band, {}).setdefault(step, []).append(movement)
+            labels.setdefault(band, label)
+
+        # Ranked once, over the whole range, so every bucket stacks the same
+        # bands in the same order.
+        ranked = sorted(
+            placed,
+            key=lambda band: _rank(placed[band], labels[band], query, criteria),
+        )
+        kept = ranked if query.series is None else ranked[: query.series]
+        tail = [] if query.series is None else ranked[query.series :]
+
+        series = [_series(band, labels[band], placed[band], keys) for band in kept]
+        others = (
+            _series(
+                None,
+                OTHERS_LABEL,
+                _pool(placed[band] for band in tail),
+                keys,
+            )
+            if tail
+            else None
+        )
+
+        return SpendingTrend(
+            interval=query.interval,
+            dimension=query.dimension,
+            timezone=query.timezone,
+            starts_at=PosixTime.from_epoch_seconds(int(since.timestamp())),
+            ends_at=PosixTime.from_epoch_seconds(int(until.timestamp())),
+            buckets=[_bucket_of(zone, key, query.interval, until) for key in keys],
+            series=series,
+            others=others,
+            folded=len(tail),
+            totals=_totals(found),
+        )
+
+    def _range(
+        self,
+        query: TrendQuery,
+        *,
+        zone: dt.tzinfo,
+        here: dt.datetime,
+    ) -> tuple[dt.datetime, dt.datetime]:
+        """The window to chart, snapped outwards to whole periods.
+
+        Snapped because a chart of half a January beside a whole February
+        reports a fall that did not happen. An explicit `from`/`to` still wins
+        over the default span — it is just widened to the periods it touches.
+        """
+        criteria = query.filter
+        until = (
+            here
+            if criteria.until is None
+            else dt.datetime.fromtimestamp(criteria.until.as_epoch_seconds(), tz=zone)
+        )
+
+        if criteria.since is not None:
+            since = dt.datetime.fromtimestamp(
+                criteria.since.as_epoch_seconds(),
+                tz=zone,
+            )
+        else:
+            # Walk back `periods - 1` whole steps from the last one *inside*
+            # the window, so the answer holds exactly `periods` of them.
+            # `until` is exclusive here as everywhere else, so a `to` landing
+            # exactly on a boundary opens a period the window does not cover.
+            cursor = _period_bounds(
+                zone,
+                _period_key(until - dt.timedelta(seconds=1), query.interval),
+                query.interval,
+            )[0]
+
+            for _ in range(query.periods - 1):
+                cursor = _period_bounds(
+                    zone,
+                    _period_key(cursor - dt.timedelta(seconds=1), query.interval),
+                    query.interval,
+                )[0]
+
+            since = cursor
+
+        if until <= since:
+            raise ValueError("`to` must come after `from`.")
+
+        return (
+            _period_bounds(zone, _period_key(since, query.interval), query.interval)[0],
+            until,
+        )
+
+    def _account_names(self, user_id: UserId) -> Mapping[str, str]:
+        return {
+            str(account.id.value): account.name
+            for account in self._accounts.list_by_user(user_id)
+        }
+
+
+def _band(
+    movement: Transaction,
+    *,
+    dimension: TrendDimension,
+    attribution: MerchantAttribution | None,
+    account_names: Mapping[str, str],
+) -> tuple[str | None, str]:
+    """Which series this movement belongs to, and what to call it."""
+    if dimension is TrendDimension.NONE:
+        return None, TOTAL_LABEL
+
+    return _bucket(
+        movement,
+        group_by=_GROUPING_OF[dimension],
+        attribution=attribution,
+        # Only the temporal groupings read it, and none of them can get here.
+        zone=dt.UTC,
+        account_names=account_names,
+    )
+
+
+def _rank(
+    steps: Mapping[str, Sequence[Transaction]],
+    label: str,
+    query: TrendQuery,
+    criteria: MovementFilter,
+) -> tuple[int | Decimal, str]:
+    """Biggest first, by whichever measure the query can honestly compare."""
+    movements = [movement for bucket in steps.values() for movement in bucket]
+
+    if query.order is SummaryOrder.AMOUNT and criteria.currency is not None:
+        return -_moved(_totals(movements), criteria.currency), label.casefold()
+
+    return -len(movements), label.casefold()
+
+
+def _series(
+    key: str | None,
+    label: str,
+    steps: Mapping[str, Sequence[Transaction]],
+    keys: Sequence[str],
+) -> TrendSeries:
+    """One band, filled against every bucket including the empty ones."""
+    movements = [movement for bucket in steps.values() for movement in bucket]
+
+    return TrendSeries(
+        key=key,
+        label=label,
+        points=[
+            TrendPoint(bucket=key, totals=_totals(steps.get(key, ()))) for key in keys
+        ],
+        totals=_totals(movements),
+        movements=len(movements),
+    )
+
+
+def _pool(
+    tail: Iterable[Mapping[str, Sequence[Transaction]]],
+) -> dict[str, list[Transaction]]:
+    """Every folded band's steps, added into one band."""
+    pooled: dict[str, list[Transaction]] = {}
+
+    for steps in tail:
+        for key, movements in steps.items():
+            pooled.setdefault(key, []).extend(movements)
+
+    return pooled
+
+
+def _bucket_of(
+    zone: dt.tzinfo,
+    key: str,
+    interval: TrendInterval,
+    until: dt.datetime,
+) -> TrendBucket:
+    """One step of the axis, closed off at the end of what it actually covers.
+
+    A period the window stops inside of is `partial` and ends where the window
+    does — whether it was cut short by *now* or by an explicit `to`. Both are
+    the same mistake if left unsaid: half of a period charted beside whole
+    ones reports a fall that did not happen.
+    """
+    starts, ends = _period_bounds(zone, key, interval)
+    partial = ends > until
+
+    return TrendBucket(
+        key=key,
+        starts_at=PosixTime.from_epoch_seconds(int(starts.timestamp())),
+        ends_at=PosixTime.from_epoch_seconds(int(min(ends, until).timestamp())),
+        partial=partial,
+    )

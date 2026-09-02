@@ -36,12 +36,14 @@ Changing a password ends every session opened with the old one, which is the
 one thing that makes the reset worth anything: every authenticated request now
 compares the token's credential generation against the account's.
 
-Thirty-four endpoints across the four contexts, the three SQS workers, the
+Thirty-five endpoints across the four contexts, the three SQS workers, the
 atomic ledger write, secrets from SSM, point-in-time recovery on every table,
 CORS, and `just seed` to refill the emulator. Movements now carry the
-canonical merchant behind the bank's text, and `GET /financial/summary`
-answers what a period adds up to. `just prepare` passes end to end again —
-format, lint, types and 1070 tests. The pyright error in
+canonical merchant behind the bank's text, and the reporting surface is
+finished backend-side: `GET /financial/summary` answers what a period adds up
+to, ranks and folds it, and compares it against the window before; `GET
+/financial/trends` answers the stacked chart. `just prepare` passes end to end
+— format, lint, types and 1148 tests. The pyright error in
 `shared/infrastructure/llm/gemini.py:120` that had been stopping it is gone
 without the file changing, so it was the installed stubs, not the code.
 
@@ -92,6 +94,16 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **The reports backend is done.** `/financial/summary` gained
+  `day`/`week`/`weekday` buckets, a `currency` pin, `order=amount`, `top` with
+  an `others` remainder, and `compare` against the preceding window of equal
+  length; `/financial/transactions` gained `sort=amount`; and
+  `GET /financial/trends` is new — a stacked time series, bands ranked once
+  over the whole range and buckets dense. Postman, the frontend contract and
+  Decisions updated. A `/code-review high` pass found three real bugs
+  (a bucket cut short by `to` not saying so, a period miscounted off an
+  exclusive `to`, and `compare` wrongly dropped for `weekday`); all three are
+  fixed with regression tests.
 - 2026-09-02 — **Lulo bank has a deterministic parser**, the second bank to
   get one: three templates (Bre-B in and out, plain incoming transfer) built
   from four real alerts, Spanish long dates on a 12-hour clock, and
@@ -116,10 +128,7 @@ spending is what production still misses. See **Next steps**.
   moving or splitting a spelling and merging two merchants. Found and
   documented on the way: `move` refuses the last alias exactly as `split`
   does, and neither `move` nor `split` returns the merchant in the path.
-- 2026-09-01 — Production has a frontend: https://finflow-apk.pages.dev,
-  built against the production API and verified over HTTPS (headers, SPA
-  fallback, the bundle's own API address). Its origin is in the deployed
-  `CorsOrigins` and the API answers it.
+
 ## Next steps
 
 - [ ] **Production waits for development to prove itself.** Deliberate, and
@@ -175,10 +184,16 @@ spending is what production still misses. See **Next steps**.
          connect-your-bank guide, `/cuentas`, `/comercios`, the `/guias`
          section, the door's code step, `/recuperar`, `/restablecer` and the
          password card on `/perfil`. What is left is two screens, not
-         plumbing: the spending summary and reports, and configuration — both
-         still disabled in the shell's nav.
-         `docs/frontend-integration.md` is the contract each of them has to
-         honour.
+         plumbing: **`/reportes`** and configuration — both still disabled in
+         the shell's nav. The reports backend is finished and verified against
+         the emulator, so that screen is now only a frontend job: sections 9
+         and 10 of `docs/frontend-integration.md` are the contract, and the
+         charts it is shaped for are cashflow (`/trends?dimension=none`), the
+         category donut (`/summary?order=amount&top=8`), the stacked trend
+         (`/trends?dimension=category`), deltas against last month
+         (`/summary?compare=true`), spend by weekday, and the biggest
+         movements (`/transactions?sort=amount`). Types regenerate from the
+         API's OpenAPI document.
 - [ ] **An instrument cannot be unlinked from an account.** Giving an
       account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
       exists and `/cuentas` calls it, with a "Cerradas" tab to see what was

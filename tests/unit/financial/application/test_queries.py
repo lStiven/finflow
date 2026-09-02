@@ -14,11 +14,19 @@ from personal_finance.contexts.financial.application.queries import (
     ListTransactionsUseCase,
     MovementFilter,
     ReadFinancialHistoryUseCase,
+    ReadSpendingTrendUseCase,
+    SpendingSummary,
+    SpendingTrend,
     SummarizeSpendingUseCase,
     SummaryGrouping,
+    SummaryOrder,
     SummaryQuery,
     TransactionQuery,
+    TransactionSort,
     TransferView,
+    TrendDimension,
+    TrendInterval,
+    TrendQuery,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -40,7 +48,7 @@ USER_ID = UserId.from_string("11111111-1111-1111-1111-111111111111")
 
 # Bogotá is UTC-5, so these two are the same local day and the same month
 # while the second one is already the next day in UTC.
-AUGUST_MIDDAY = 1_787_500_000  # 2026-08-21 15:46 UTC / 10:46 Bogotá
+AUGUST_MIDDAY = 1_787_500_000  # 2026-08-23 15:46 UTC / 10:46 Bogotá, a Sunday
 AUGUST_LAST_NIGHT = 1_788_224_400  # 2026-09-01 01:00 UTC / 2026-08-31 20:00 Bogotá
 JULY_MIDDAY = 1_784_900_000  # 2026-07-22 UTC
 
@@ -988,3 +996,683 @@ def test_history_still_replays_transfers_into_the_balances(
     history = _history(ledger, accounts, months=1)
 
     assert history.months[-1].net_worth[0].total == Decimal("1459742")
+
+
+# --------------------------------------------------------------- reporting
+
+
+# Bogotá never moves, so these are exact.
+JULY_START = 1_782_882_000  # 2026-07-01 00:00 Bogotá
+AUGUST_FIRST_MONDAY = 1_785_769_200  # 2026-08-03 Mon 10:00 Bogotá, week 2026-W32
+AUGUST_SECOND_MONDAY = 1_786_374_000  # 2026-08-10 Mon 10:00 Bogotá, week 2026-W33
+AUGUST_SATURDAY = 1_787_410_800  # 2026-08-22 Sat 10:00 Bogotá
+JULY_MONDAY = 1_783_350_000  # 2026-07-06 Mon 10:00 Bogotá, the window before August
+SEPTEMBER_MIDDAY = 1_788_368_400  # 2026-09-02 12:00 Bogotá
+NEW_YEARS_DAY = 1_798_815_600  # 2027-01-01 Bogotá, which is ISO week 2026-W53
+
+
+def _summary(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory | None = None,
+    **overrides: object,
+) -> SpendingSummary:
+    return SummarizeSpendingUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(SummaryQuery(**overrides))  # type: ignore[arg-type]
+
+
+def test_spending_can_be_broken_down_by_day(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="UNO", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="DOS", when=AUGUST_SECOND_MONDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(),
+        group_by=SummaryGrouping.DAY,
+    )
+
+    # Newest first, like every other stretch of time here.
+    assert [group.key for group in summary.groups] == ["2026-08-10", "2026-08-03"]
+
+
+def test_a_late_evening_purchase_falls_in_the_day_it_was_made_locally(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    # 2026-09-01 01:00 UTC, which is still the 31st of August in Bogotá.
+    _spend(ledger, counterparty="TIENDA", when=AUGUST_LAST_NIGHT)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(),
+        group_by=SummaryGrouping.DAY,
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-08-31"]
+
+
+def test_spending_can_be_broken_down_by_iso_week(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="UNO", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="DOS", when=AUGUST_SECOND_MONDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(),
+        group_by=SummaryGrouping.WEEK,
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-W33", "2026-W32"]
+
+
+def test_a_week_is_named_by_its_iso_year_not_its_calendar_one(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """The 1st of January 2027 is a Friday, so its week began in December."""
+    _spend(ledger, counterparty="TIENDA", when=NEW_YEARS_DAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(),
+        group_by=SummaryGrouping.WEEK,
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-W53"]
+
+
+def test_a_weekday_breakdown_gathers_every_monday_into_one_bucket(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="UNO", when=AUGUST_FIRST_MONDAY, amount="1000")
+    _spend(ledger, counterparty="DOS", when=AUGUST_SECOND_MONDAY, amount="2000")
+    _spend(ledger, counterparty="TRES", when=AUGUST_SATURDAY, amount="4000")
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(),
+        group_by=SummaryGrouping.WEEKDAY,
+    )
+
+    # Monday to Sunday, not busiest first: a week is read in order.
+    assert [(group.key, group.label) for group in summary.groups] == [
+        ("1", "Monday"),
+        ("6", "Saturday"),
+    ]
+    assert summary.groups[0].movements == 2
+    assert summary.groups[0].totals[0].outgoing == Decimal("3000")
+
+
+def test_a_summary_can_be_pinned_to_one_currency(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="LOCAL", amount="50000", currency=Currency.COP)
+    _spend(ledger, counterparty="ABROAD", amount="20", currency=Currency.USD)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(currency=Currency.COP),
+    )
+
+    assert [figure.currency for figure in summary.totals] == [Currency.COP]
+    assert summary.totals[0].movements == 1
+
+
+def test_buckets_can_be_ranked_by_money_rather_than_by_frequency(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    # Three small rides against one large grocery run: the ranking these two
+    # orders produce is the opposite of each other, which is the point.
+    for _ in range(3):
+        _spend(ledger, counterparty="UBER TRIP", amount="10000")
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="500000")
+
+    by_count = _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(),
+        group_by=SummaryGrouping.CATEGORY,
+    )
+    by_money = _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(currency=Currency.COP),
+        group_by=SummaryGrouping.CATEGORY,
+        order=SummaryOrder.AMOUNT,
+    )
+
+    assert [group.key for group in by_count.groups] == ["transport", "groceries"]
+    assert [group.key for group in by_money.groups] == ["groceries", "transport"]
+
+
+def test_ranking_by_money_without_a_currency_is_refused(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Two currencies have no rate here, so the ranking would be deciding that
+    whichever unit has larger numbers is the larger amount.
+    """
+    with pytest.raises(ValueError, match="needs a currency"):
+        SummaryQuery(filter=_filter(), order=SummaryOrder.AMOUNT)
+
+
+def test_the_tail_of_a_breakdown_can_be_folded_into_a_remainder(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="100000")
+    _spend(ledger, counterparty="UBER TRIP", amount="30000")
+    _spend(ledger, counterparty="NOBODY KNOWS", amount="7000")
+
+    summary = _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(currency=Currency.COP),
+        group_by=SummaryGrouping.CATEGORY,
+        order=SummaryOrder.AMOUNT,
+        top=1,
+    )
+
+    assert [group.key for group in summary.groups] == ["groceries"]
+    assert summary.folded == 2
+    assert summary.others is not None
+    # No key: unlike a real bucket, the remainder cannot be reopened as the
+    # list of movements behind it, and must not look as though it can.
+    assert summary.others.key is None
+    assert summary.others.movements == 2
+    assert summary.others.totals[0].outgoing == Decimal("37000")
+    # The parts still add up to the whole, which is what folding must not break.
+    kept = sum(group.totals[0].outgoing for group in summary.groups)
+    assert kept + summary.others.totals[0].outgoing == summary.totals[0].outgoing
+
+
+def test_nothing_is_folded_when_the_breakdown_already_fits(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123")
+
+    summary = _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(),
+        group_by=SummaryGrouping.CATEGORY,
+        top=5,
+    )
+
+    assert summary.others is None
+    assert summary.folded == 0
+
+
+def test_folding_a_stretch_of_time_is_refused(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """A range is narrowed with `since`/`until`. Folding the oldest days into
+    a remainder answers no question anybody has.
+    """
+    with pytest.raises(ValueError, match="does not apply"):
+        SummaryQuery(filter=_filter(), group_by=SummaryGrouping.MONTH, top=3)
+
+
+def test_a_summary_can_report_the_window_before_it(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    _spend(ledger, counterparty="TIENDA", amount="80000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="TIENDA", amount="50000", when=JULY_MIDDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+        group_by=SummaryGrouping.CATEGORY,
+        compare=True,
+    )
+
+    assert summary.totals[0].outgoing == Decimal("80000")
+    assert summary.previous_totals is not None
+    assert summary.previous_totals[0].outgoing == Decimal("50000")
+    # The window of equal length butted right up against this one.
+    assert summary.previous_since is not None
+    assert summary.previous_since.as_epoch_seconds() == JULY_START
+    assert summary.previous_until is not None
+    assert summary.previous_until.as_epoch_seconds() == AUGUST_START
+
+
+def test_a_category_that_stopped_appears_at_zero_rather_than_vanishing(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    """Money that used to go somewhere and no longer does is exactly what a
+    report exists to surface. Dropping the bucket hides the fall.
+    """
+    _spend(ledger, counterparty="UBER TRIP", amount="30000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="90000", when=JULY_MIDDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+        group_by=SummaryGrouping.CATEGORY,
+        compare=True,
+    )
+    groceries = next(group for group in summary.groups if group.key == "groceries")
+
+    assert groceries.movements == 0
+    assert groceries.totals == []
+    assert groceries.previous_totals is not None
+    assert groceries.previous_totals[0].outgoing == Decimal("90000")
+
+
+def test_comparing_two_stretches_of_time_reports_the_period_and_not_each_bucket(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """`2026-08` against `2026-07` is two different months, not one month
+    twice, so there is no previous self to put beside each bucket.
+    """
+    _spend(ledger, counterparty="TIENDA", amount="80000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="TIENDA", amount="50000", when=JULY_MIDDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+        group_by=SummaryGrouping.MONTH,
+        compare=True,
+    )
+
+    assert [group.key for group in summary.groups] == ["2026-08"]
+    assert summary.groups[0].previous_totals is None
+    assert summary.previous_totals is not None
+    assert summary.previous_totals[0].outgoing == Decimal("50000")
+
+
+def test_comparing_without_a_window_is_refused(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    with pytest.raises(ValueError, match="needs `since` and `until`"):
+        SummaryQuery(filter=_filter(), compare=True)
+
+
+def test_comparing_still_asks_the_merchant_list_only_once(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    """Two windows are one question. Reading the same partition twice to
+    answer it would double the cost of every report that shows a delta.
+    """
+    _spend(ledger, counterparty="UBER TRIP", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="TIENDAS ARA 123", when=JULY_MIDDAY)
+
+    _summary(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+        group_by=SummaryGrouping.CATEGORY,
+        compare=True,
+    )
+
+    assert directory.calls == 1
+
+
+# ------------------------------------------------------------------ trends
+
+
+def _trend(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory | None = None,
+    **overrides: object,
+) -> SpendingTrend:
+    overrides.setdefault("now", PosixTime.from_epoch_seconds(SEPTEMBER_MIDDAY))
+
+    return ReadSpendingTrendUseCase(
+        ledger=ledger,
+        accounts=accounts,
+        merchants=directory,
+    ).execute(TrendQuery(**overrides))  # type: ignore[arg-type]
+
+
+def test_a_trend_walks_back_whole_periods_from_now(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    trend = _trend(ledger, accounts, filter=_filter(), periods=3)
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-07", "2026-08", "2026-09"]
+    assert trend.starts_at.as_epoch_seconds() == JULY_START
+
+
+def test_a_period_nothing_happened_in_is_a_zero_and_not_a_gap(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    """The whole reason this endpoint exists: a client zips points against
+    buckets by index and never has to notice a missing month.
+    """
+    _spend(ledger, counterparty="TIENDAS ARA 123", amount="10000", when=JULY_MIDDAY)
+    _spend(
+        ledger,
+        counterparty="TIENDAS ARA 123",
+        amount="20000",
+        when=SEPTEMBER_MIDDAY - 3600,
+    )
+
+    trend = _trend(ledger, accounts, directory, filter=_filter(), periods=3)
+    groceries = trend.series[0]
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-07", "2026-08", "2026-09"]
+    assert [point.bucket for point in groceries.points] == [
+        bucket.key for bucket in trend.buckets
+    ]
+    # August is present and empty, which is not the same as absent.
+    assert groceries.points[1].totals == []
+    assert groceries.points[0].totals[0].outgoing == Decimal("10000")
+    assert groceries.points[2].totals[0].outgoing == Decimal("20000")
+
+
+def test_only_the_period_being_lived_is_partial_and_it_ends_now(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    trend = _trend(ledger, accounts, filter=_filter(), periods=2)
+
+    assert [bucket.partial for bucket in trend.buckets] == [False, True]
+    assert trend.buckets[-1].ends_at.as_epoch_seconds() == SEPTEMBER_MIDDAY
+    assert trend.buckets[0].ends_at.as_epoch_seconds() == SEPTEMBER_START
+
+
+def test_a_trend_is_split_into_one_band_per_category(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="UBER TRIP", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="UBER TRIP", when=AUGUST_SECOND_MONDAY)
+
+    trend = _trend(ledger, accounts, directory, filter=_filter(), periods=2)
+
+    assert [series.key for series in trend.series] == ["transport", "groceries"]
+    assert trend.series[0].movements == 2
+
+
+def test_an_undivided_trend_is_one_band_carrying_both_directions(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """`none` is not redundant with the rest: every point already holds what
+    came in and what went out, so one band is the cashflow chart.
+    """
+    _spend(
+        ledger,
+        counterparty="NOMINA",
+        amount="3000000",
+        when=AUGUST_FIRST_MONDAY,
+        direction=MovementDirection.INCOMING,
+    )
+    _spend(ledger, counterparty="TIENDA", amount="80000", when=AUGUST_FIRST_MONDAY)
+
+    trend = _trend(
+        ledger,
+        accounts,
+        filter=_filter(),
+        dimension=TrendDimension.NONE,
+        periods=2,
+    )
+    august = trend.series[0].points[0]
+
+    assert len(trend.series) == 1
+    assert trend.series[0].label == "Total"
+    assert august.totals[0].incoming == Decimal("3000000")
+    assert august.totals[0].outgoing == Decimal("80000")
+
+
+def test_the_bands_a_chart_cannot_stack_are_folded_into_a_remainder(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(
+        ledger,
+        counterparty="TIENDAS ARA 123",
+        amount="100000",
+        when=AUGUST_FIRST_MONDAY,
+    )
+    _spend(ledger, counterparty="UBER TRIP", amount="30000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="NOBODY KNOWS", amount="7000", when=AUGUST_FIRST_MONDAY)
+
+    trend = _trend(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(currency=Currency.COP),
+        order=SummaryOrder.AMOUNT,
+        series=1,
+        periods=2,
+    )
+
+    assert [series.key for series in trend.series] == ["groceries"]
+    assert trend.folded == 2
+    assert trend.others is not None
+    assert trend.others.key is None
+    # Folded band and all, the remainder is still dense.
+    assert len(trend.others.points) == len(trend.buckets)
+    assert trend.others.points[0].totals[0].outgoing == Decimal("37000")
+
+
+def test_an_explicit_range_is_widened_to_the_periods_it_touches(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Half of August charted beside the whole of September reports a fall
+    that did not happen.
+    """
+    trend = _trend(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_SECOND_MONDAY),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+    )
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-08"]
+    assert trend.starts_at.as_epoch_seconds() == AUGUST_START
+
+
+def test_a_range_too_wide_to_chart_is_refused_rather_than_answered(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    with pytest.raises(ValueError, match="shorter one"):
+        _trend(
+            ledger,
+            accounts,
+            filter=_filter(
+                since=PosixTime.from_epoch_seconds(JULY_START - 3 * 365 * 86400),
+                until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+            ),
+            interval=TrendInterval.DAY,
+        )
+
+
+def test_a_trend_by_month_never_reads_the_merchant_list(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+    directory: FakeDirectory,
+) -> None:
+    _spend(ledger, counterparty="TIENDAS ARA 123", when=AUGUST_FIRST_MONDAY)
+
+    _trend(
+        ledger,
+        accounts,
+        directory,
+        filter=_filter(),
+        dimension=TrendDimension.NONE,
+        periods=2,
+    )
+
+    assert directory.calls == 0
+
+
+# ------------------------------------------------------ biggest movements
+
+
+def test_movements_can_be_ordered_by_size_rather_than_by_date(
+    ledger: InMemoryLedger,
+) -> None:
+    _spend(ledger, counterparty="SMALL", amount="1000", when=AUGUST_SECOND_MONDAY)
+    _spend(ledger, counterparty="LARGE", amount="900000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="MIDDLING", amount="40000", when=AUGUST_SATURDAY)
+
+    page = ListTransactionsUseCase(ledger=ledger).execute(
+        TransactionQuery(
+            filter=_filter(currency=Currency.COP),
+            sort=TransactionSort.AMOUNT,
+        ),
+    )
+
+    assert [entry.transaction.counterparty for entry in page.transactions] == [
+        "LARGE",
+        "MIDDLING",
+        "SMALL",
+    ]
+
+
+def test_ordering_movements_by_size_without_a_currency_is_refused(
+    ledger: InMemoryLedger,
+) -> None:
+    with pytest.raises(ValueError, match="needs a currency"):
+        TransactionQuery(filter=_filter(), sort=TransactionSort.AMOUNT)
+
+
+def test_a_period_the_window_stops_inside_of_says_it_is_partial(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """Cut short by an explicit `to`, not by now. Charting half of a period
+    beside whole ones reports a fall that did not happen, so the bucket has to
+    admit where it actually stops.
+    """
+    trend = _trend(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(AUGUST_SATURDAY),
+        ),
+    )
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-08"]
+    assert trend.buckets[0].partial is True
+    assert trend.buckets[0].ends_at.as_epoch_seconds() == AUGUST_SATURDAY
+
+
+def test_a_period_the_window_covers_whole_is_not_partial(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    trend = _trend(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+    )
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-08"]
+    assert trend.buckets[0].partial is False
+    assert trend.buckets[0].ends_at.as_epoch_seconds() == SEPTEMBER_START
+
+
+def test_periods_are_counted_back_from_the_last_one_the_window_covers(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """`to` is exclusive here as everywhere else, so a `to` landing exactly on
+    a boundary opens a month the window does not cover — and counting back
+    from that one returns a period fewer than asked for.
+    """
+    trend = _trend(
+        ledger,
+        accounts,
+        filter=_filter(until=PosixTime.from_epoch_seconds(SEPTEMBER_START)),
+        periods=3,
+    )
+
+    assert [bucket.key for bucket in trend.buckets] == ["2026-06", "2026-07", "2026-08"]
+
+
+def test_a_weekday_is_compared_against_itself_because_mondays_come_round_again(
+    ledger: InMemoryLedger,
+    accounts: InMemoryAccounts,
+) -> None:
+    """The one temporal grouping whose buckets recur. `2026-08` against
+    `2026-07` is two different months; Monday against Monday is not.
+    """
+    # AUGUST_FIRST_MONDAY is in the current window, JULY_MONDAY in the one
+    # before it, and both are Mondays.
+    _spend(ledger, counterparty="TIENDA", amount="8000", when=AUGUST_FIRST_MONDAY)
+    _spend(ledger, counterparty="TIENDA", amount="5000", when=JULY_MONDAY)
+
+    summary = _summary(
+        ledger,
+        accounts,
+        filter=_filter(
+            since=PosixTime.from_epoch_seconds(AUGUST_START),
+            until=PosixTime.from_epoch_seconds(SEPTEMBER_START),
+        ),
+        group_by=SummaryGrouping.WEEKDAY,
+        compare=True,
+    )
+    monday = next(group for group in summary.groups if group.key == "1")
+
+    assert monday.totals[0].outgoing == Decimal("8000")
+    assert monday.previous_totals is not None
+    assert monday.previous_totals[0].outgoing == Decimal("5000")

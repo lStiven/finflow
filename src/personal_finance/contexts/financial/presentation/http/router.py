@@ -47,8 +47,11 @@ from personal_finance.contexts.financial.application.queries import (
     DEFAULT_HISTORY_MONTHS,
     DEFAULT_PAGE_SIZE,
     DEFAULT_TIMEZONE,
+    DEFAULT_TREND_PERIODS,
     MAX_HISTORY_MONTHS,
     MAX_PAGE_SIZE,
+    MAX_TREND_BUCKETS,
+    MAX_TREND_SERIES,
     AccountScope,
     AttributedTransaction,
     FinancialHistory,
@@ -62,14 +65,23 @@ from personal_finance.contexts.financial.application.queries import (
     NetWorth,
     PeriodComparison,
     ReadFinancialHistoryUseCase,
+    ReadSpendingTrendUseCase,
     SpendingSummary,
     SpendingTotals,
+    SpendingTrend,
     SummarizeSpendingUseCase,
     SummaryGroup,
     SummaryGrouping,
+    SummaryOrder,
     SummaryQuery,
     TransactionQuery,
+    TransactionSort,
     TransferView,
+    TrendBucket,
+    TrendDimension,
+    TrendInterval,
+    TrendQuery,
+    TrendSeries,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -268,26 +280,95 @@ class SpendingTotalsResponse(BaseModel):
 
 
 class SummaryGroupResponse(BaseModel):
-    # `2026-08` for a month, otherwise the merchant, category or account id.
-    # Null is the bucket the grouping could not place — a movement no account
-    # claimed, or a counterparty no merchant owns yet. It belongs in the
-    # answer: without it the groups stop adding up to `totals`.
+    # `2026-08` for a month, `2026-W32` for a week, `1`..`7` for a weekday,
+    # otherwise the merchant, category or account id. Null is the bucket the
+    # grouping could not place — a movement no account claimed, or a
+    # counterparty no merchant owns yet. It belongs in the answer: without it
+    # the groups stop adding up to `totals`.
     key: str | None
     label: str
     totals: list[SpendingTotalsResponse]
     movements: int
+    # The same bucket in the window before this one, when `compare=true` asked
+    # for it and the grouping is one where that means something. Null
+    # otherwise — which is not zero, and must not be drawn as a fall to
+    # nothing. An empty list *is* zero: the bucket existed and nothing moved.
+    previous_totals: list[SpendingTotalsResponse] | None = None
 
 
 class SpendingSummaryResponse(BaseModel):
     group_by: str
     timezone: str
+    order: str
     # Over everything the filter matched, so a period total needs no second
-    # call and no adding up of the buckets.
+    # call and no adding up of the buckets. `groups` plus `others` always adds
+    # up to this.
     totals: list[SpendingTotalsResponse]
-    # Months run newest first; every other grouping runs busiest first, by
-    # movement count — ordering by amount would compare two currencies, which
-    # nothing here has a rate for.
+    # Stretches of time run newest first and weekdays run Monday to Sunday;
+    # every other grouping runs biggest first, by movement count unless
+    # `order=amount` and a `currency` were both asked for.
     groups: list[SummaryGroupResponse]
+    # What `top` left out, added together, or null when nothing was left out.
+    # It carries no key on purpose: every real bucket can be reopened as the
+    # list behind it by repeating the query with its key, and this one cannot.
+    others: SummaryGroupResponse | None = None
+    # How many buckets `others` stands for.
+    folded: int = 0
+    # The window of equal length immediately before this one, present only
+    # when `compare=true`.
+    previous_totals: list[SpendingTotalsResponse] | None = None
+    previous_starts_at: int | None = None
+    previous_ends_at: int | None = None
+
+
+class TrendBucketResponse(BaseModel):
+    """One step of the axis, whether or not anything happened in it."""
+
+    key: str
+    starts_at: int
+    # Exclusive, and for the period still being lived it is *now* rather than
+    # the period's end.
+    ends_at: int
+    partial: bool
+
+
+class TrendPointResponse(BaseModel):
+    bucket: str
+    # Empty when nothing moved in this bucket — the ordinary case for most of
+    # a chart, and not a hole in it.
+    totals: list[SpendingTotalsResponse]
+
+
+class TrendSeriesResponse(BaseModel):
+    """One band of the chart, across every bucket.
+
+    `key` is null for the band the dimension could not place, and for the
+    remainder `series` folded. So `label` is what to render and `key` only
+    ever what to filter by.
+    """
+
+    key: str | None
+    label: str
+    # One per bucket, in the same order, none missing: zip it against
+    # `buckets` by index.
+    points: list[TrendPointResponse]
+    totals: list[SpendingTotalsResponse]
+    movements: int
+
+
+class SpendingTrendResponse(BaseModel):
+    interval: str
+    dimension: str
+    timezone: str
+    starts_at: int
+    ends_at: int
+    # Oldest first, and dense: a period nothing happened in is a zero rather
+    # than a gap the client has to notice and fill.
+    buckets: list[TrendBucketResponse]
+    series: list[TrendSeriesResponse]
+    others: TrendSeriesResponse | None = None
+    folded: int = 0
+    totals: list[SpendingTotalsResponse] = []
 
 
 class MonthlyPointResponse(BaseModel):
@@ -367,6 +448,15 @@ class FinancialCatalogResponse(BaseModel):
     transaction_statuses: list[CatalogOption]
     account_scopes: list[CatalogOption]
     summary_groupings: list[CatalogOption]
+    # How the buckets of a breakdown are ranked. `amount` is only accepted
+    # together with a `currency`, since nothing here converts between two.
+    summary_orders: list[CatalogOption]
+    # How a page of movements is ordered. `amount`, likewise, needs a
+    # `currency`.
+    transaction_sorts: list[CatalogOption]
+    # The axis and the bands of `/financial/trends`.
+    trend_intervals: list[CatalogOption]
+    trend_dimensions: list[CatalogOption]
     # Whether an answer counts the two sides of a transfer between the owner's
     # own accounts. `/transactions` defaults to `include`, every total to
     # `exclude`.
@@ -589,6 +679,15 @@ def _build_summarize_spending() -> SummarizeSpendingUseCase:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _build_read_trend() -> ReadSpendingTrendUseCase:
+    return ReadSpendingTrendUseCase(
+        ledger=build_ledger(),
+        accounts=build_accounts(),
+        merchants=build_merchant_directory(),
+    )
+
+
 def get_manage_accounts_use_case() -> ManageAccountsUseCase:
     return _build_manage_accounts()
 
@@ -611,6 +710,10 @@ def get_list_transactions_use_case() -> ListTransactionsUseCase:
 
 def get_transaction_use_case() -> GetTransactionUseCase:
     return _build_get_transaction()
+
+
+def get_read_trend_use_case() -> ReadSpendingTrendUseCase:
+    return _build_read_trend()
 
 
 def get_summarize_spending_use_case() -> SummarizeSpendingUseCase:
@@ -656,6 +759,10 @@ def get_catalog() -> FinancialCatalogResponse:
         transaction_statuses=options(TransactionStatus),
         account_scopes=options(AccountScope),
         summary_groupings=options(SummaryGrouping),
+        summary_orders=options(SummaryOrder),
+        transaction_sorts=options(TransactionSort),
+        trend_intervals=options(TrendInterval),
+        trend_dimensions=options(TrendDimension),
         transfer_views=options(TransferView),
     )
 
@@ -932,6 +1039,8 @@ def list_transactions(
         Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
     ] = None,
     transfers: Annotated[TransferView, Query()] = TransferView.INCLUDE,
+    currency: Annotated[Currency | None, Query()] = None,
+    sort: Annotated[TransactionSort, Query()] = TransactionSort.DATE,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> TransactionListResponse:
@@ -948,26 +1057,33 @@ def list_transactions(
     account fell, and in no total, because nothing was spent. A screen showing
     a figure from `/summary` beside the list behind it should ask for
     `transfers=exclude` on both.
+
+    `sort=amount` answers "my ten largest expenses this month" in one call. It
+    needs a `currency`, because without one the order would be deciding that
+    100 USD is smaller than 5 000 COP.
     """
-    page = use_case.execute(
-        TransactionQuery(
-            filter=_movement_filter(
-                user_id=user_id,
-                account_id=account_id,
-                unassigned=unassigned,
-                origin=origin,
-                direction=direction,
-                search=search,
-                merchant_id=merchant_id,
-                category=_known_category(category, merchants),
-                since=since,
-                until=until,
-                transfers=transfers,
+    with _domain_errors():
+        page = use_case.execute(
+            TransactionQuery(
+                filter=_movement_filter(
+                    user_id=user_id,
+                    account_id=account_id,
+                    unassigned=unassigned,
+                    origin=origin,
+                    direction=direction,
+                    search=search,
+                    merchant_id=merchant_id,
+                    category=_known_category(category, merchants),
+                    since=since,
+                    until=until,
+                    transfers=transfers,
+                    currency=currency,
+                ),
+                limit=limit,
+                offset=offset,
+                sort=sort,
             ),
-            limit=limit,
-            offset=offset,
-        ),
-    )
+        )
 
     return TransactionListResponse(
         transactions=[_transaction_response(entry) for entry in page.transactions],
@@ -1002,43 +1118,155 @@ def summarize_spending(
     merchant_id: Annotated[str | None, Query(max_length=64)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     transfers: Annotated[TransferView, Query()] = TransferView.EXCLUDE,
+    currency: Annotated[Currency | None, Query()] = None,
+    order: Annotated[SummaryOrder, Query()] = SummaryOrder.MOVEMENTS,
+    top: Annotated[int | None, Query(ge=1, le=100)] = None,
+    compare: Annotated[bool, Query()] = False,
     timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
 ) -> SpendingSummaryResponse:
-    """What a period adds up to, broken down by month, category, merchant or
-    account — and totalled per currency, never across them.
+    """What a period adds up to, broken down by day, week, month, weekday,
+    category, merchant or account — and totalled per currency, never across
+    them.
 
-    It takes the same filters as `/transactions`, so any bucket here can be
-    opened as a list by repeating the query with the bucket's key. `timezone`
-    only affects `month`, and it matters: a purchase at 8pm on the 31st falls
-    in the next month once it is read in UTC.
+    It takes the same filters as `/transactions`, so a bucket here can be
+    opened as a list by repeating the query with its key — with `weekday` the
+    one exception, since there is no filter for "every Monday". `timezone`
+    only affects the time groupings, and it matters: a purchase at 8pm on the
+    31st falls in the next month once it is read in UTC.
 
     `transfers` defaults to `exclude` here, unlike on `/transactions`: money
     moved between two of the owner's own accounts is neither spending nor
     income, and counting it would report a card payment as the month's largest
     expense and again as income on the card. `only` answers the opposite
     question — what did I move between my own accounts.
+
+    Three parameters exist for reports specifically:
+
+    * `currency` pins the answer to one, which is what makes the other two
+      answerable — nothing here converts between two currencies.
+    * `order=amount` ranks the buckets by money rather than by frequency, and
+      `top` keeps that many and adds the rest into `others`. Together they are
+      the eight slices a donut can show. `top` is refused on a stretch of time,
+      which is narrowed with `from`/`to` instead.
+    * `compare=true` also runs the window of equal length immediately before
+      this one, so each bucket can be drawn against what it was. It needs
+      `from` and `to`, since without a length there is no previous window. On
+      a time grouping it reports the period total and nothing per bucket:
+      `2026-08` against `2026-07` is two different months, not one month twice.
     """
-    summary = use_case.execute(
-        SummaryQuery(
-            filter=_movement_filter(
-                user_id=user_id,
-                account_id=account_id,
-                unassigned=unassigned,
-                origin=origin,
-                direction=direction,
-                search=search,
-                merchant_id=merchant_id,
-                category=_known_category(category, merchants),
-                since=since,
-                until=until,
-                transfers=transfers,
+    with _domain_errors():
+        summary = use_case.execute(
+            SummaryQuery(
+                filter=_movement_filter(
+                    user_id=user_id,
+                    account_id=account_id,
+                    unassigned=unassigned,
+                    origin=origin,
+                    direction=direction,
+                    search=search,
+                    merchant_id=merchant_id,
+                    category=_known_category(category, merchants),
+                    since=since,
+                    until=until,
+                    transfers=transfers,
+                    currency=currency,
+                ),
+                group_by=group_by,
+                order=order,
+                top=top,
+                compare=compare,
+                timezone=_known_timezone(timezone),
             ),
-            group_by=group_by,
-            timezone=_known_timezone(timezone),
-        ),
-    )
+        )
 
     return _summary_response(summary, timezone=timezone)
+
+
+@router.get("/trends", response_model=SpendingTrendResponse)
+def read_trend(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ReadSpendingTrendUseCase,
+        Depends(get_read_trend_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    interval: Annotated[TrendInterval, Query()] = TrendInterval.MONTH,
+    dimension: Annotated[TrendDimension, Query()] = TrendDimension.CATEGORY,
+    periods: Annotated[int, Query(ge=1, le=MAX_TREND_BUCKETS)] = DEFAULT_TREND_PERIODS,
+    series: Annotated[int | None, Query(ge=1, le=MAX_TREND_SERIES)] = None,
+    order: Annotated[SummaryOrder, Query()] = SummaryOrder.MOVEMENTS,
+    since: Annotated[
+        int | None,
+        Query(alias="from", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    account_id: Annotated[str | None, Query()] = None,
+    unassigned: Annotated[bool | None, Query()] = None,
+    origin: Annotated[TransactionOrigin | None, Query()] = None,
+    direction: Annotated[MovementDirection | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    merchant_id: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    transfers: Annotated[TransferView, Query()] = TransferView.EXCLUDE,
+    currency: Annotated[Currency | None, Query()] = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> SpendingTrendResponse:
+    """How spending moved over time, split into the bands a chart stacks.
+
+    `/summary` answers one dimension at a time — what a period adds up to, or
+    how it splits by category, never both. This answers the two together:
+    restaurants against transport against groceries, month by month. Asking
+    `/summary` for that a month at a time is twelve round trips whose buckets
+    can each be ranked differently, so they cannot be stacked without the
+    client reconciling them first.
+
+    Two properties are what a chart needs and what this guarantees. The bands
+    are **ranked once over the whole range**, so every bucket stacks the same
+    ones in the same order. And the buckets are **dense** and each series has
+    exactly one point per bucket, in the same order: a month nothing happened
+    in is a zero, and a client zips `series[].points` against `buckets` by
+    index without ever filling a gap.
+
+    The range is `periods` intervals back from now, or an explicit `from`/`to`
+    widened to the intervals it touches — half of August charted beside the
+    whole of September reports a fall that did not happen. It takes the same
+    filters as `/transactions`, so any band can be opened as the list behind
+    it by repeating the query with the band's key.
+
+    `dimension=none` is one undivided band, which is not the same question as
+    the rest: every point already carries `incoming` and `outgoing`, so that
+    one band is the cashflow chart.
+    """
+    with _domain_errors():
+        trend = use_case.execute(
+            TrendQuery(
+                filter=_movement_filter(
+                    user_id=user_id,
+                    account_id=account_id,
+                    unassigned=unassigned,
+                    origin=origin,
+                    direction=direction,
+                    search=search,
+                    merchant_id=merchant_id,
+                    category=_known_category(category, merchants),
+                    since=since,
+                    until=until,
+                    transfers=transfers,
+                    currency=currency,
+                ),
+                interval=interval,
+                dimension=dimension,
+                periods=periods,
+                series=series,
+                order=order,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    return _trend_response(trend)
 
 
 @router.post(
@@ -1203,12 +1431,13 @@ def _movement_filter(
     since: int | None,
     until: int | None,
     transfers: TransferView,
+    currency: Currency | None = None,
 ) -> MovementFilter:
-    """The filters `/transactions` and `/summary` share, read once.
+    """The filters `/transactions`, `/summary` and `/trends` share, read once.
 
-    Both surfaces take them so a bucket in the summary can be opened as the
-    list of movements behind it, and two readings of one query string would be
-    two chances for those answers to disagree.
+    Every surface takes them so a bucket in a report can be opened as the list
+    of movements behind it, and two readings of one query string would be two
+    chances for those answers to disagree.
     """
     return MovementFilter(
         user_id=user_id,
@@ -1222,6 +1451,7 @@ def _movement_filter(
         since=None if since is None else PosixTime.from_epoch_seconds(since),
         until=None if until is None else PosixTime.from_epoch_seconds(until),
         transfers=transfers,
+        currency=currency,
     )
 
 
@@ -1345,8 +1575,26 @@ def _summary_response(
     return SpendingSummaryResponse(
         group_by=summary.group_by.value,
         timezone=timezone,
+        order=summary.order.value,
         totals=[_totals_response(figure) for figure in summary.totals],
         groups=[_group_response(group) for group in summary.groups],
+        others=(None if summary.others is None else _group_response(summary.others)),
+        folded=summary.folded,
+        previous_totals=(
+            None
+            if summary.previous_totals is None
+            else [_totals_response(figure) for figure in summary.previous_totals]
+        ),
+        previous_starts_at=(
+            None
+            if summary.previous_since is None
+            else summary.previous_since.as_epoch_seconds()
+        ),
+        previous_ends_at=(
+            None
+            if summary.previous_until is None
+            else summary.previous_until.as_epoch_seconds()
+        ),
     )
 
 
@@ -1356,6 +1604,51 @@ def _group_response(group: SummaryGroup) -> SummaryGroupResponse:
         label=group.label,
         totals=[_totals_response(figure) for figure in group.totals],
         movements=group.movements,
+        previous_totals=(
+            None
+            if group.previous_totals is None
+            else [_totals_response(figure) for figure in group.previous_totals]
+        ),
+    )
+
+
+def _trend_response(trend: SpendingTrend) -> SpendingTrendResponse:
+    return SpendingTrendResponse(
+        interval=trend.interval.value,
+        dimension=trend.dimension.value,
+        timezone=trend.timezone,
+        starts_at=trend.starts_at.as_epoch_seconds(),
+        ends_at=trend.ends_at.as_epoch_seconds(),
+        buckets=[_trend_bucket_response(bucket) for bucket in trend.buckets],
+        series=[_trend_series_response(series) for series in trend.series],
+        others=(None if trend.others is None else _trend_series_response(trend.others)),
+        folded=trend.folded,
+        totals=[_totals_response(figure) for figure in trend.totals],
+    )
+
+
+def _trend_bucket_response(bucket: TrendBucket) -> TrendBucketResponse:
+    return TrendBucketResponse(
+        key=bucket.key,
+        starts_at=bucket.starts_at.as_epoch_seconds(),
+        ends_at=bucket.ends_at.as_epoch_seconds(),
+        partial=bucket.partial,
+    )
+
+
+def _trend_series_response(series: TrendSeries) -> TrendSeriesResponse:
+    return TrendSeriesResponse(
+        key=series.key,
+        label=series.label,
+        points=[
+            TrendPointResponse(
+                bucket=point.bucket,
+                totals=[_totals_response(figure) for figure in point.totals],
+            )
+            for point in series.points
+        ],
+        totals=[_totals_response(figure) for figure in series.totals],
+        movements=series.movements,
     )
 
 

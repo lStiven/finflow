@@ -390,15 +390,16 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   `merchant: null` — ordinary for the seconds before merchant's worker drains
   its queue, and permanent for a name only a manual entry ever used.
 
-- **A summary totals per currency and orders by movement count.**
-  Ordering the buckets by amount would compare a figure in one currency
-  against a figure in another, and no rate exists anywhere in this system; a
-  count means the same thing in both. A client showing one currency has every
-  amount it needs to reorder them itself. Months are the exception and run
-  newest first. The bucket a grouping cannot place keeps `key: null` rather
-  than being dropped — without it the groups stop adding up to the total,
-  which is the one way a spending screen can lie quietly.
-- **Months are grouped in a stated timezone, defaulting to Bogotá.**
+- **A summary totals per currency and orders by movement count *by
+  default*.** Ordering the buckets by amount would compare a figure in one
+  currency against a figure in another, and no rate exists anywhere in this
+  system; a count means the same thing in both. Stretches of time are the
+  exception and run newest first. The bucket a grouping cannot place keeps
+  `key: null` rather than being dropped — without it the groups stop adding up
+  to the total, which is the one way a spending screen can lie quietly.
+  Superseded in part on 2026-09-02: `order=amount` exists, and pins the answer
+  to one currency to earn it — see **Reports** below.
+- **Periods are grouped in a stated timezone, defaulting to Bogotá.**
   A purchase at 8pm on the 31st is the following month once it
   is read in UTC, which is wrong for everybody this deployment serves. The
   timezone is a query parameter rather than a guess from a locale, and one
@@ -409,6 +410,81 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   Financial asks the directory for the vocabulary and returns 422. An unknown
   merchant id stays an empty page on purpose: saying it does not exist would
   tell a stranger whether it is somebody else's.
+
+### Reports (2026-09-02)
+
+The reporting surface is `/financial/summary` widened, plus one new endpoint.
+Everything is still a read over one user's partition, still computed on the
+way out, and still stores nothing.
+
+- **Ranking by amount is offered, and it requires a pinned `currency`.**
+  The old rule — never rank by amount, because two currencies have no rate —
+  was right about the arithmetic and wrong as a product answer: the eight
+  categories worth drawing in a donut are the eight largest, not the eight
+  most frequent, and "reorder it in the client" does not survive `top`, which
+  has to decide what to fold before the client sees anything. So the ranking
+  exists and the impossible case is refused instead of guessed: `order=amount`
+  without `currency` is a 400, as is `sort=amount` on `/transactions`. The
+  invariant is unchanged — nothing here ever adds two currencies — it is now
+  enforced at the door rather than by having no door.
+  Rejected: ranking by the dominant currency and quietly ignoring the rest;
+  ranking on a converted figure (there is no rate, and inventing one puts a
+  number nobody can reproduce on a money screen).
+
+- **`others` is a field, not a group, and carries no key.** Every real bucket
+  can be reopened as the list of movements behind it by repeating the query
+  with its `key`. The remainder `top` folds cannot, so it must not sit in
+  `groups` looking as though it can. `groups + others == totals` still holds,
+  which is the property that stops a breakdown lying.
+
+- **`compare` runs the window of equal length immediately before, and only
+  for buckets that outlive the window.** A delta per category is the single
+  most useful thing on a reports screen, and `/history`'s comparison only ever
+  answered it for the month as a whole. Two decisions inside it:
+  a bucket that had spending last window and none now **stays in the answer at
+  zero**, because a category that stopped is exactly what the screen exists to
+  surface and dropping it hides the fall; and a bucket only has a previous
+  self if it comes round again. `2026-08` against `2026-07` is two different
+  months, not one month twice, so `day`/`week`/`month` compare only the period
+  total. `weekday` is the exception among the temporal groupings and does
+  compare per bucket — Mondays this month against Mondays last month is a real
+  question. That is what `SummaryGrouping.recurs` names, and why it is not the
+  same predicate as `is_temporal`, which answers the different question of
+  whether `top` applies.
+  `previous_totals: null` (not compared) and `[]` (compared, nothing there)
+  are deliberately different, and the frontend contract says so.
+  The two windows cost one ledger read and one merchant read between them, not
+  two of each: they differ only in bounds, which are applied in memory anyway.
+
+- **`/financial/trends` is its own endpoint because `/summary` cannot answer
+  two dimensions at once.** The stacked chart a reports screen is built around
+  — categories over twelve months — is twelve `/summary` calls otherwise, and
+  worse than merely twelve round trips: each call ranks its own buckets
+  independently, so the bands cannot be stacked without the client
+  reconciling them first. `/trends` ranks the bands **once over the whole
+  range** and fills every bucket against that one ordering. Its buckets are
+  **dense** and each series holds exactly one point per bucket in the same
+  order, so a client zips by index and never fills a gap — a month nothing
+  happened in is a zero, which is a fact, not a hole.
+  Rejected: a `group_by=month,category` matrix on `/summary` — the response
+  shape stops being a breakdown and every existing caller pays for the union;
+  and storing rolled-up monthly aggregates, for the same reason `/history`
+  does not (see below: restating a balance rewrites the past on purpose, and a
+  snapshot table would be a second copy to keep in step).
+
+- **A range is snapped outwards to whole periods, and capped at 372 buckets.**
+  Half of August charted beside the whole of September reports a fall that did
+  not happen, so an explicit `from`/`to` is widened to the intervals it
+  touches. The period being lived is marked `partial` and its `ends_at` is
+  *now*, for the same reason. The cap refuses a chart nobody can read rather
+  than computing one: three years of days is 1 095 bands' worth of points.
+
+- **Weeks are named by their ISO year, not their calendar year.** `2027-01-01`
+  is a Friday and belongs to `2026-W53`. That is the correct answer — the week
+  did start in December — and it is why the key comes from `%G` and never
+  `%Y`. Day and week bounds go through the same UTC round-trip as months, so a
+  zone whose midnight does not exist on a given date still resolves to a real
+  instant.
 
 ### Identity (2026-08-30)
 

@@ -596,7 +596,11 @@ Reglas:
    `/transactions`), `exclude` (por defecto en `/summary`) y `only`. Si una
    pantalla enseña una cifra del resumen y la lista detrás, pide `exclude` en
    las dos o los números no cuadrarán.
-7. El único que hoy los produce es el **parser determinista de Bancolombia**.
+7. **`sort=amount` contesta "mis diez gastos más grandes del mes"** en una
+   llamada, en vez de paginar y ordenar en el cliente. Exige `currency` (`400`
+   sin ella) por lo mismo que `/summary?order=amount`. Para un reporte pide
+   también `transfers=exclude`, o el pago de la tarjeta encabezará la lista.
+8. El único que hoy los produce es el **parser determinista de Bancolombia**.
    El LLM tiene instrucción explícita de responder `understood=false` ante un
    correo así: elegir a ojo cuál de los dos instrumentos es el origen es
    exactamente cómo un saldo se mueve al revés.
@@ -775,16 +779,22 @@ Lo que el cliente no debería calcular paginando: totales de un periodo y su
 desglose. Un año de historial son miles de movimientos y `limit` llega a 200.
 
 ```http
-GET /financial/summary?group_by=month|category|merchant|account
+GET /financial/summary?group_by=day|week|month|weekday|category|merchant|account
 GET /financial/summary?from=<epoch>&to=<epoch>
 GET /financial/summary?group_by=category&from=<epoch>&to=<epoch>
 GET /financial/summary?timezone=America/Bogota
+
+# Para reportes: la dona de ocho quesitos, y el delta contra el periodo anterior
+GET /financial/summary?group_by=category&currency=COP&order=amount&top=8
+GET /financial/summary?group_by=category&from=<epoch>&to=<epoch>&compare=true
 ```
 
 Acepta **los mismos filtros que `/financial/transactions`** (`account_id`,
 `unassigned`, `origin`, `search`, `merchant_id`, `category`, `from`, `to`,
-`transfers`), y eso es a propósito: cualquier bucket del resumen se abre
-repitiendo la misma consulta contra `/transactions` con la `key` del bucket.
+`transfers`), y eso es a propósito: un bucket del resumen se abre repitiendo
+la misma consulta contra `/transactions` con la `key` del bucket. La
+excepción es `group_by=weekday`: no hay filtro para "todos los lunes", así
+que esos buckets no se abren.
 
 Con **una diferencia deliberada en el valor por defecto**: `transfers` es
 `exclude` aquí y `include` en la lista. Un traslado entre cuentas propias no es
@@ -862,15 +872,125 @@ Reglas:
   para `account` el nombre de la cuenta, y para `month` y `category` es igual
   que la `key` (formatea `2026-08` y traduce `groceries` en el cliente, con el
   vocabulario de `GET /merchants/categories`).
-- **Orden**: `month` viene del más reciente al más antiguo; el resto viene por
-  número de movimientos, de mayor a menor. Ordenar por monto exigiría comparar
-  dos monedas, y el backend no tiene con qué. Si tu pantalla enseña una sola
-  moneda, reordena en el cliente: tienes todos los montos.
-- **`timezone` solo afecta a `group_by=month`, y sí importa.** Una compra a
-  las 8pm del 31 en Bogotá es el día 1 del mes siguiente en UTC. Por defecto
-  `America/Bogota`; una zona que no exista devuelve `400`.
+- **Orden**: los tramos de tiempo (`day`, `week`, `month`) vienen del más
+  reciente al más antiguo, `weekday` viene de lunes a domingo, y el resto
+  viene de mayor a menor por número de movimientos. `order=amount` lo cambia a
+  monto, pero **exige `currency`**: sin fijar una, el ranking estaría
+  decidiendo que 100 USD es menos que 5 000 COP. Sin `currency` responde `400`.
+- **`timezone` solo afecta a las agrupaciones de tiempo, y sí importa.** Una
+  compra a las 8pm del 31 en Bogotá es el día 1 del mes siguiente en UTC. Por
+  defecto `America/Bogota`; una zona que no exista devuelve `400`.
 - **`from` incluye y `to` excluye**, igual que en la lista.
 - Sin movimientos: `totals` y `groups` vacíos. Es una respuesta válida.
+
+Y tres parámetros que existen para la pantalla de reportes:
+
+- **`currency=COP|USD`** fija la respuesta a una moneda. Es lo que hace
+  contestables a los otros dos: aquí nada convierte entre monedas.
+- **`top=8` se queda con esos buckets y suma el resto en `others`.** `others`
+  **no** viene dentro de `groups`, es un campo aparte, y su `key` es `null` a
+  propósito: a diferencia de un bucket real no se puede abrir como la lista
+  que hay detrás. `folded` dice cuántos buckets representa. `groups` + `others`
+  siempre suma `totals`. Sobre un tramo de tiempo responde `400`: un rango se
+  recorta con `from`/`to`, no plegando los días más viejos.
+- **`compare=true`** corre además la ventana de igual duración inmediatamente
+  anterior, y cada bucket trae `previous_totals`. Necesita `from` **y** `to`
+  —sin una duración no hay ventana anterior— y devuelve `400` sin ellos. Tres
+  detalles que importan al pintarlo:
+  - `previous_totals: null` es "no se comparó"; `previous_totals: []` es
+    "se comparó y no hubo nada". No los pintes igual: el primero no es una
+    caída a cero.
+  - **Una categoría que dejó de aparecer sigue en la respuesta**, con
+    `totals: []` y su `previous_totals` lleno. Es justo lo que un reporte
+    existe para enseñar; si la escondes, escondes la caída.
+  - Sobre una agrupación de tiempo trae el total del periodo y **nada** por
+    bucket (`previous_totals: null` en cada uno): `2026-08` contra `2026-07`
+    son dos meses distintos, no un mes dos veces.
+  - `previous_starts_at` / `previous_ends_at` dicen exactamente qué ventana
+    se comparó, para rotularla.
+
+### 10. Tendencias (la pantalla de reportes)
+
+Lo que `/summary` no contesta: **dos dimensiones a la vez**. Restaurantes
+contra transporte contra mercado, mes a mes — la gráfica apilada de un reporte.
+Pedírselo a `/summary` un mes por llamada son doce viajes cuyos buckets pueden
+venir ordenados distinto cada uno, así que ni siquiera se pueden apilar sin
+reconciliarlos antes.
+
+```http
+GET /financial/trends?interval=month&dimension=category&periods=12
+GET /financial/trends?interval=week&dimension=none&periods=8
+GET /financial/trends?dimension=merchant&currency=COP&order=amount&series=8
+GET /financial/trends?from=<epoch>&to=<epoch>&interval=day
+```
+
+```json
+{
+  "interval": "month",
+  "dimension": "category",
+  "timezone": "America/Bogota",
+  "starts_at": 1780290000,
+  "ends_at": 1788325634,
+  "buckets": [
+    { "key": "2026-07", "starts_at": 1782882000, "ends_at": 1785560400, "partial": false },
+    { "key": "2026-08", "starts_at": 1785560400, "ends_at": 1788238800, "partial": false },
+    { "key": "2026-09", "starts_at": 1788238800, "ends_at": 1788325634, "partial": true }
+  ],
+  "series": [
+    {
+      "key": "groceries",
+      "label": "groceries",
+      "points": [
+        { "bucket": "2026-07", "totals": [] },
+        { "bucket": "2026-08", "totals": [
+            { "currency": "COP", "incoming": "0", "outgoing": "412000",
+              "net": "-412000", "movements": 11 }
+        ] },
+        { "bucket": "2026-09", "totals": [] }
+      ],
+      "totals": [ { "currency": "COP", "incoming": "0", "outgoing": "412000",
+                    "net": "-412000", "movements": 11 } ],
+      "movements": 11
+    }
+  ],
+  "others": null,
+  "folded": 0,
+  "totals": [ { "currency": "COP", "incoming": "4500000", "outgoing": "474300",
+                "net": "4025700", "movements": 8 } ]
+}
+```
+
+Las dos garantías por las que esto es un endpoint y no doce llamadas:
+
+- **Los buckets son densos y los puntos van alineados por índice.** Cada serie
+  trae exactamente un punto por bucket, en el mismo orden, incluidos los
+  vacíos. Un mes en el que no pasó nada es un cero (`totals: []`), no un hueco:
+  haz `zip(buckets, series[i].points)` y no rellenes nada nunca.
+- **Las bandas se ordenan una sola vez sobre todo el rango**, así que todos los
+  buckets apilan las mismas bandas en el mismo orden. Ese es el problema que
+  hace inservible pedir doce resúmenes sueltos.
+
+Reglas:
+
+- **`dimension=none` es una sola banda, y no sobra**: cada punto ya trae
+  `incoming` y `outgoing`, así que esa banda sola es la gráfica de flujo de
+  caja (entradas contra salidas por periodo).
+- **El rango** es `periods` intervalos hacia atrás desde ahora, o el `from`/`to`
+  que pidas **ensanchado a los intervalos que toca**. Medio agosto al lado de
+  septiembre entero reporta una caída que no ocurrió, así que el backend
+  redondea hacia afuera antes de contar.
+- **`partial: true` es el periodo que se está viviendo**, y su `ends_at` es
+  *ahora*, no el fin del mes. No lo pintes como un periodo cerrado: es la
+  comparación que siempre reporta una caída del 90% el día 3.
+- **`series=8` se queda con esas bandas y pliega el resto en `others`**, que
+  también viene denso. `key: null` en `others` y en la banda que la dimensión
+  no pudo colocar (`Unattributed`, `Unassigned`).
+- **Acepta los mismos filtros que `/transactions`**, así que cualquier banda se
+  abre como la lista que hay detrás repitiendo la consulta con su `key`. Las de
+  `key: null` no.
+- **`transfers` es `exclude` por defecto**, como en `/summary`.
+- **Un rango de más de 372 buckets responde `400`** en vez de contestar una
+  gráfica que nadie puede leer. Pide un intervalo más ancho.
 
 ---
 
@@ -1066,7 +1186,8 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento (retroactivo). |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
-| GET | `/financial/summary` | ✔ | Totales del periodo y desglose por mes, categoría, comercio o cuenta. Excluye traslados salvo que pidas otra cosa. |
+| GET | `/financial/summary` | ✔ | Totales del periodo y desglose por día, semana, mes, día de la semana, categoría, comercio o cuenta. `top`, `order=amount` y `compare`. Excluye traslados salvo que pidas otra cosa. |
+| GET | `/financial/trends` | ✔ | Serie temporal apilable: una banda por categoría, comercio o cuenta, con buckets densos. La gráfica de la pantalla de reportes. |
 | GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. Incluye las dos mitades de un traslado. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |

@@ -18,6 +18,7 @@ from personal_finance.contexts.financial.application.queries import (
     ListAccountsUseCase,
     ListTransactionsUseCase,
     ReadFinancialHistoryUseCase,
+    ReadSpendingTrendUseCase,
     SummarizeSpendingUseCase,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
@@ -34,6 +35,7 @@ from personal_finance.contexts.financial.presentation.http.router import (
     get_manage_transactions_use_case,
     get_merchant_directory,
     get_read_history_use_case,
+    get_read_trend_use_case,
     get_summarize_spending_use_case,
     get_transaction_use_case,
     router,
@@ -262,6 +264,13 @@ def _build() -> tuple[TestClient, InMemoryLedger]:
     )
     app.dependency_overrides[get_read_history_use_case] = lambda: (
         ReadFinancialHistoryUseCase(ledger=ledger, accounts=accounts)
+    )
+    app.dependency_overrides[get_read_trend_use_case] = lambda: (
+        ReadSpendingTrendUseCase(
+            ledger=ledger,
+            accounts=accounts,
+            merchants=directory,
+        )
     )
 
     return TestClient(app), ledger
@@ -955,8 +964,16 @@ def test_somebody_with_no_movements_gets_an_empty_but_valid_summary(
     assert summary == {
         "group_by": "month",
         "timezone": "America/Bogota",
+        "order": "movements",
         "totals": [],
         "groups": [],
+        # Nothing was folded and nothing was compared, which is not the same
+        # as either having been asked for and come back empty.
+        "others": None,
+        "folded": 0,
+        "previous_totals": None,
+        "previous_starts_at": None,
+        "previous_ends_at": None,
     }
 
 
@@ -1491,3 +1508,263 @@ def test_a_transfer_leg_can_still_be_moved_to_the_right_account(
 
     assert response.status_code == 200, response.text
     assert response.json()["account_id"] == account["id"]
+
+
+# ------------------------------------------------------------- reporting
+
+
+# WHEN is 2026-08-21 in Bogotá. These sit around it in the same local month.
+AUGUST_START = 1_785_560_400  # 2026-08-01 00:00 Bogotá
+SEPTEMBER_START = 1_788_238_800  # 2026-09-01 00:00 Bogotá
+JULY_MIDDAY = 1_784_900_000  # 2026-07-22
+
+
+def test_a_summary_can_be_bucketed_by_day_and_by_weekday(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="TIENDAS ARA", occurred_at=WHEN)
+
+    day = client.get("/financial/summary", params={"group_by": "day"}).json()
+    weekday = client.get("/financial/summary", params={"group_by": "weekday"}).json()
+
+    assert [group["key"] for group in day["groups"]] == ["2026-08-23"]
+    # 2026-08-23 is a Sunday, and the label is English for the client to
+    # translate, like every other label this API returns.
+    assert [(g["key"], g["label"]) for g in weekday["groups"]] == [("7", "Sunday")]
+
+
+def test_a_summary_can_be_ranked_by_amount_once_a_currency_is_pinned(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="UBER", amount="10000")
+    _enter(client, counterparty="UBER", amount="10000")
+    _enter(client, counterparty="TIENDAS ARA", amount="500000")
+
+    ranked = client.get(
+        "/financial/summary",
+        params={
+            "group_by": "merchant",
+            "currency": "COP",
+            "order": "amount",
+        },
+    ).json()
+
+    assert ranked["order"] == "amount"
+    # Ara is one movement against Uber's two, and still the larger bucket.
+    assert ranked["groups"][0]["label"] == "Ara"
+
+
+def test_ranking_by_amount_without_a_currency_is_refused(
+    client: TestClient,
+) -> None:
+    response = client.get("/financial/summary", params={"order": "amount"})
+
+    assert response.status_code == 400
+    assert "currency" in response.json()["detail"]
+
+
+def test_the_tail_of_a_breakdown_folds_into_a_keyless_remainder(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="500000")
+    _enter(client, counterparty="UBER", amount="10000")
+    _enter(client, counterparty="OTRO", amount="5000")
+
+    folded = client.get(
+        "/financial/summary",
+        params={
+            "group_by": "merchant",
+            "currency": "COP",
+            "order": "amount",
+            "top": 1,
+        },
+    ).json()
+
+    # Two buckets, not three: the directory owns `TIENDAS ARA` and the other
+    # two spellings share the one bucket nothing has been attributed to.
+    assert len(folded["groups"]) == 1
+    assert folded["folded"] == 1
+    # No key, because unlike a real bucket it cannot be reopened as a list.
+    assert folded["others"]["key"] is None
+    assert folded["others"]["totals"][0]["outgoing"] == "15000"
+
+
+def test_folding_a_stretch_of_time_is_refused(client: TestClient) -> None:
+    response = client.get(
+        "/financial/summary",
+        params={"group_by": "month", "top": 3},
+    )
+
+    assert response.status_code == 400
+    assert "does not apply" in response.json()["detail"]
+
+
+def test_a_summary_can_be_compared_against_the_window_before_it(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="80000", occurred_at=WHEN)
+    _enter(client, counterparty="TIENDAS ARA", amount="50000", occurred_at=JULY_MIDDAY)
+
+    compared = client.get(
+        "/financial/summary",
+        params={
+            "group_by": "category",
+            "from": AUGUST_START,
+            "to": SEPTEMBER_START,
+            "compare": "true",
+        },
+    ).json()
+
+    assert compared["totals"][0]["outgoing"] == "80000"
+    assert compared["previous_totals"][0]["outgoing"] == "50000"
+    assert compared["previous_starts_at"] == AUGUST_START - (
+        SEPTEMBER_START - AUGUST_START
+    )
+    assert compared["previous_ends_at"] == AUGUST_START
+    assert compared["groups"][0]["previous_totals"][0]["outgoing"] == "50000"
+
+
+def test_comparing_without_a_window_is_refused(client: TestClient) -> None:
+    response = client.get("/financial/summary", params={"compare": "true"})
+
+    assert response.status_code == 400
+    assert "since" in response.json()["detail"]
+
+
+def test_a_trend_answers_dense_buckets_with_one_point_each(
+    client: TestClient,
+) -> None:
+    """A client zips `series[].points` against `buckets` by index, so every
+    series has exactly one point per bucket including the empty ones.
+    """
+    _enter(client, counterparty="TIENDAS ARA", amount="80000", occurred_at=WHEN)
+
+    trend = client.get(
+        "/financial/trends",
+        params={"interval": "month", "dimension": "category", "periods": 6},
+    ).json()
+
+    assert len(trend["buckets"]) == 6
+    assert trend["dimension"] == "category"
+
+    for series in trend["series"]:
+        assert [point["bucket"] for point in series["points"]] == [
+            bucket["key"] for bucket in trend["buckets"]
+        ]
+
+    # Only the period being lived is partial.
+    assert [bucket["partial"] for bucket in trend["buckets"]].count(True) == 1
+
+
+def test_an_undivided_trend_carries_both_directions_in_one_band(
+    client: TestClient,
+) -> None:
+    _enter(client, counterparty="NOMINA", amount="3000000", direction="incoming")
+    _enter(client, counterparty="TIENDAS ARA", amount="80000")
+
+    trend = client.get(
+        "/financial/trends",
+        params={"dimension": "none", "periods": 2},
+    ).json()
+    moved = next(point for point in trend["series"][0]["points"] if point["totals"])
+
+    assert len(trend["series"]) == 1
+    assert trend["series"][0]["label"] == "Total"
+    assert moved["totals"][0]["incoming"] == "3000000"
+    assert moved["totals"][0]["outgoing"] == "80000"
+
+
+def test_a_trend_folds_the_bands_a_chart_cannot_stack(client: TestClient) -> None:
+    _enter(client, counterparty="TIENDAS ARA", amount="500000")
+    _enter(client, counterparty="UBER", amount="10000")
+
+    trend = client.get(
+        "/financial/trends",
+        params={
+            "dimension": "merchant",
+            "currency": "COP",
+            "order": "amount",
+            "series": 1,
+            "periods": 2,
+        },
+    ).json()
+
+    assert trend["folded"] == 1
+    assert trend["others"]["key"] is None
+    # Folded and all, the remainder is still one point per bucket.
+    assert len(trend["others"]["points"]) == len(trend["buckets"])
+
+
+def test_a_range_too_wide_to_chart_is_refused(client: TestClient) -> None:
+    response = client.get(
+        "/financial/trends",
+        params={
+            "interval": "day",
+            "from": AUGUST_START - 3 * 365 * 86_400,
+            "to": SEPTEMBER_START,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "shorter one" in response.json()["detail"]
+
+
+def test_movements_can_be_asked_for_largest_first(client: TestClient) -> None:
+    _enter(client, counterparty="PEQUENO", amount="1000")
+    _enter(client, counterparty="GRANDE", amount="900000")
+    _enter(client, counterparty="MEDIANO", amount="40000")
+
+    page = client.get(
+        "/financial/transactions",
+        params={"sort": "amount", "currency": "COP", "limit": 2},
+    ).json()
+
+    assert [row["counterparty"] for row in page["transactions"]] == [
+        "GRANDE",
+        "MEDIANO",
+    ]
+
+
+def test_ordering_movements_by_size_without_a_currency_is_refused(
+    client: TestClient,
+) -> None:
+    response = client.get("/financial/transactions", params={"sort": "amount"})
+
+    assert response.status_code == 400
+    assert "currency" in response.json()["detail"]
+
+
+def test_the_catalog_offers_every_new_reporting_vocabulary(
+    client: TestClient,
+) -> None:
+    """A form must not be able to offer what the API rejects."""
+    catalog = client.get("/financial/catalog").json()
+
+    assert {option["value"] for option in catalog["summary_groupings"]} == {
+        "day",
+        "week",
+        "month",
+        "weekday",
+        "category",
+        "merchant",
+        "account",
+    }
+    assert {option["value"] for option in catalog["summary_orders"]} == {
+        "movements",
+        "amount",
+    }
+    assert {option["value"] for option in catalog["trend_intervals"]} == {
+        "day",
+        "week",
+        "month",
+    }
+    assert {option["value"] for option in catalog["trend_dimensions"]} == {
+        "none",
+        "category",
+        "merchant",
+        "account",
+    }
+    assert {option["value"] for option in catalog["transaction_sorts"]} == {
+        "date",
+        "amount",
+    }
