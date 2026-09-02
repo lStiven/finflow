@@ -74,7 +74,7 @@ what lets both poll at once — one account behind two pollers is a race, not a
 second environment. Production carries a real user whose personal Gmail
 forwards to their alias.
 
-The frontend has started. `frontend/` holds a Vite + React + TypeScript SPA
+The frontend is in step with the API — its types are regenerated and `just web-check` is green. `frontend/` holds a Vite + React + TypeScript SPA
 whose types are generated from the API's own OpenAPI document, so a router
 change in Python fails the TypeScript build rather than a screen in a browser.
 Session, money and date handling, the door (login/register, on a moving neon
@@ -100,6 +100,16 @@ spending is what production still misses. See **Next steps**.
 
 ## Last completed
 
+- 2026-09-02 — **The frontend speaks the new contract**, so external transfer
+  legs are reachable and readable. `/transacciones/nueva` grew a third tab —
+  Traslado — with the two roles spelled out in what they do to a balance
+  rather than in the API's words, and the account required there. Reading:
+  `transferTitle` takes the movement's own counterparty and uses it when the
+  other side is not here (no more `···· null`), the detail links to the other
+  half only when there is one, shows the counterparty a lone leg carries, and
+  offers the amount/date/counterparty fields it now accepts while dropping
+  the "quitar de la cuenta" option the API answers 409. `just web-check`
+  passes: Biome, tsc, 218 tests. **This closes the session's work end to end.**
 - 2026-09-02 — **The hand-entered card payment is idempotent, and the filter
   that keeps it out of totals no longer has a default.** Both were found by
   auditing the change above rather than by anything failing. The leg's id now
@@ -131,16 +141,6 @@ spending is what production still misses. See **Next steps**.
   tested (213 frontend tests). Reviewed by hand: the pass caught the stacked
   chart labelling *unattributed* spending as the folded remainder, and an
   `aria-describedby` that would have read the whole table once per column.
-- 2026-09-02 — **The reports backend is done.** `/financial/summary` gained
-  `day`/`week`/`weekday` buckets, a `currency` pin, `order=amount`, `top` with
-  an `others` remainder, and `compare` against the preceding window of equal
-  length; `/financial/transactions` gained `sort=amount`; and
-  `GET /financial/trends` is new — a stacked time series, bands ranked once
-  over the whole range and buckets dense. Postman, the frontend contract and
-  Decisions updated. A `/code-review high` pass found three real bugs
-  (a bucket cut short by `to` not saying so, a period miscounted off an
-  exclusive `to`, and `compare` wrongly dropped for `weekday`); all three are
-  fixed with regression tests.
 - 2026-09-02 — **Development runs the verification/recovery release end to
   end**: the stack redeployed at 00:21 (so `Retry-After` is exposed and a
   wrong current password answers 403), and the bundle republished — its
@@ -149,29 +149,6 @@ spending is what production still misses. See **Next steps**.
   `password/reset`. `just smoke <dev-url>` passes 17/17 against it.
   Production is held back on purpose until this has run a few days.
 ## Next steps
-
-- [ ] **The frontend has not been updated for external transfer legs**, and
-      three concrete breakages are already known (found by the `/code-review`
-      pass over the backend change, not guessed at). Only the backend and its
-      docs were in scope on 2026-09-02; this is the other half.
-      1. `frontend/src/api/schema.d.ts` is stale — regenerate with
-         `just web-types`. It still types `counterpart_movement_id` as
-         `string`, has no `external`, no `transfer_roles` and no
-         `POST /financial/transactions/transfer`, which is precisely why
-         `tsc` does not catch the two below.
-      2. `routes/transacciones/$transactionId.tsx:384` links to
-         `transfer.counterpart_movement_id` unconditionally — null on an
-         external leg, so "ver la otra mitad" navigates to
-         `/transacciones/null`. Gate it on `transfer.external`.
-      3. `lib/transfers.ts:34` renders `Pago a otra cuenta tuya ···· null` on
-         the dashboard, the list and the detail, and the detail hides the
-         `Contraparte` row for any transfer — so "Nequi", the only thing
-         naming the other side, is never shown. Both need the `external`
-         branch.
-      Then the screen that makes the endpoint reachable: a "fue un pago de
-      tarjeta / traslado entre mis cuentas" option on the manual-entry form,
-      posting `role` + `account_id` instead of `direction`. `just seed` already
-      leaves two of these in the local data to look at.
 
 - [ ] **Production waits for development to prove itself.** Deliberate, and
       the reason the steps below are not being run today: the release is live
@@ -222,15 +199,17 @@ spending is what production still misses. See **Next steps**.
          cheapest of the three and the only one that costs money while it is
          missing.
       4. **The rest of the frontend.** The foundation is in (`just web`).
-         Done: the dashboard, the whole Transacciones surface, the
-         connect-your-bank guide, `/cuentas`, `/comercios`, `/reportes`, the
-         `/guias` section, the door's code step, `/recuperar`, `/restablecer`
-         and the password card on `/perfil`. What is left is **one** screen:
-         configuración, still the only entry disabled in the shell's nav.
+         Done: the dashboard, the whole Transacciones surface (including the
+         Traslado tab on `/transacciones/nueva`), the connect-your-bank guide,
+         `/cuentas`, `/comercios`, `/reportes`, the `/guias` section, the
+         door's code step, `/recuperar`, `/restablecer` and the password card
+         on `/perfil`. What is left is **one** screen: configuración, still
+         the only entry disabled in the shell's nav.
          Nothing has been looked at in a browser this session — there is no
-         headless browser in the DevContainer, so `/reportes` was verified by
-         its seven queries against the emulator, by unit tests over real
-         payload shapes, and by the build. It has never been *seen*.
+         headless browser in the DevContainer, so `/reportes` and the Traslado
+         tab were verified by their queries against the emulator, by unit
+         tests over real payload shapes, and by the build. Neither has been
+         *seen*.
 - [ ] **An instrument cannot be unlinked from an account.** Giving an
       account de baja is *not* the gap — `POST /financial/accounts/{id}/close`
       exists and `/cuentas` calls it, with a "Cerradas" tab to see what was

@@ -6,6 +6,7 @@ import {
   accountsQuery,
   financialCatalogQuery,
   useCreateTransaction,
+  useCreateTransferLeg,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/Button";
@@ -27,13 +28,27 @@ export const Route = createFileRoute("/transacciones/nueva")({
   component: NewTransactionScreen,
 });
 
+/**
+ * What the form is recording. The first two are one movement of money in or
+ * out; the third is a payment between two of the owner's own balances whose
+ * other side this app does not hold — a card paid from another bank, from a
+ * wallet, or in cash. It goes to a different endpoint and is neither spending
+ * nor income, which is the whole reason it is not just a direction.
+ */
+type Kind = "outgoing" | "incoming" | "transfer";
+
+/** Which side of the transfer the chosen account is. */
+type Role = "source" | "destination";
+
 function NewTransactionScreen() {
   const navigate = useNavigate();
   const { data: accounts } = useSuspenseQuery(accountsQuery("open"));
   const { data: catalog } = useSuspenseQuery(financialCatalogQuery);
   const create = useCreateTransaction();
+  const createTransfer = useCreateTransferLeg();
 
-  const [direction, setDirection] = useState<"outgoing" | "incoming">("outgoing");
+  const [kind, setKind] = useState<Kind>("outgoing");
+  const [role, setRole] = useState<Role>("destination");
   const [amount, setAmount] = useState("");
   const [counterparty, setCounterparty] = useState("");
   const [occurredAt, setOccurredAt] = useState(() => toLocalInput(nowInSeconds()));
@@ -54,19 +69,37 @@ function NewTransactionScreen() {
     }
 
     try {
-      const created = await create.mutateAsync({
-        direction,
-        amount,
-        occurred_at: occurred,
-        counterparty: counterparty.trim(),
-        currency: currency as "COP" | "USD",
-        // Omitted rather than sent empty: the backend treats an absent
-        // account as "unassigned", which is a real state, and an empty
-        // string is not a valid identifier.
-        account_id: accountId || null,
-        bank: bank.trim(),
-        note: note.trim() || null,
-      });
+      // Two endpoints, because the two facts are different. A transfer leg
+      // takes a `role` instead of a direction — the role fixes it, and a form
+      // free to pair `source` with an incoming movement is a form free to
+      // record a payment that *raises* what is owed.
+      const created =
+        kind === "transfer"
+          ? await createTransfer.mutateAsync({
+              role,
+              amount,
+              occurred_at: occurred,
+              counterparty: counterparty.trim(),
+              currency: currency as "COP" | "USD",
+              // Required here, unlike below: this says a balance moved, and a
+              // leg names no instrument, so nothing would ever adopt it later.
+              account_id: accountId,
+              bank: bank.trim(),
+              note: note.trim() || null,
+            })
+          : await create.mutateAsync({
+              direction: kind,
+              amount,
+              occurred_at: occurred,
+              counterparty: counterparty.trim(),
+              currency: currency as "COP" | "USD",
+              // Omitted rather than sent empty: the backend treats an absent
+              // account as "unassigned", which is a real state, and an empty
+              // string is not a valid identifier.
+              account_id: accountId || null,
+              bank: bank.trim(),
+              note: note.trim() || null,
+            });
       void navigate({
         to: "/transacciones/$transactionId",
         params: { transactionId: created.id },
@@ -76,6 +109,9 @@ function NewTransactionScreen() {
       setError(cause instanceof Error ? cause.message : "No se pudo guardar");
     }
   }
+
+  const isTransfer = kind === "transfer";
+  const saving = create.isPending || createTransfer.isPending;
 
   return (
     <AppShell>
@@ -102,26 +138,80 @@ function NewTransactionScreen() {
           <form onSubmit={onSubmit} className="flex flex-col gap-5">
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-2 text-muted text-sm">Tipo</legend>
-              <div className="grid grid-cols-2 gap-2">
-                <DirectionTab
+              <div className="grid grid-cols-3 gap-2">
+                <KindTab
                   label="Gasto"
-                  active={direction === "outgoing"}
-                  onClick={() => setDirection("outgoing")}
+                  active={kind === "outgoing"}
+                  onClick={() => setKind("outgoing")}
                 />
-                <DirectionTab
+                <KindTab
                   label="Ingreso"
-                  active={direction === "incoming"}
-                  onClick={() => setDirection("incoming")}
+                  active={kind === "incoming"}
+                  onClick={() => setKind("incoming")}
+                />
+                <KindTab
+                  label="Traslado"
+                  active={isTransfer}
+                  onClick={() => setKind("transfer")}
                 />
               </div>
             </fieldset>
 
+            {isTransfer ? (
+              <>
+                <p className="rounded-xl border border-violet/25 bg-violet/8 p-3.5 text-muted text-xs leading-relaxed">
+                  Para pagar una tarjeta o un crédito con plata que no salió de una
+                  cuenta que lleves aquí — otro banco, Nequi, efectivo. No cuenta como
+                  gasto ni como ingreso: solo mueve el saldo.
+                  <br />
+                  <span className="text-faint">
+                    Si pagas una tarjeta desde una cuenta del mismo banco, no registres
+                    nada: ese correo llega solo y Finflow escribe las dos mitades.
+                  </span>
+                </p>
+
+                <fieldset className="flex flex-col gap-2">
+                  <legend className="mb-2 text-muted text-sm">¿Qué hiciste?</legend>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <KindTab
+                      label="Abonar a una deuda"
+                      hint="Elige la tarjeta o el crédito que pagaste: su deuda baja."
+                      active={role === "destination"}
+                      onClick={() => setRole("destination")}
+                    />
+                    <KindTab
+                      label="Pagar desde una cuenta"
+                      hint="Elige la cuenta de donde salió la plata: su saldo baja."
+                      active={role === "source"}
+                      onClick={() => setRole("source")}
+                    />
+                  </div>
+                </fieldset>
+              </>
+            ) : null}
+
             <Field
-              label="Descripción"
+              label={
+                isTransfer
+                  ? role === "destination"
+                    ? "¿De dónde salió la plata?"
+                    : "¿Qué pagaste?"
+                  : "Descripción"
+              }
               required
               maxLength={512}
-              placeholder="Supermercado La Torre"
-              hint="Quién cobró o pagó. Es lo que se usa para reconocer el comercio."
+              placeholder={
+                isTransfer
+                  ? role === "destination"
+                    ? "Nequi"
+                    : "Tarjeta Nu"
+                  : "Supermercado La Torre"
+              }
+              hint={
+                isTransfer
+                  ? "El otro lado, como lo llames tú. No crea un comercio."
+                  : "Quién cobró o pagó. Es lo que se usa para reconocer el comercio."
+              }
               value={counterparty}
               onChange={(event) => setCounterparty(event.target.value)}
             />
@@ -155,8 +245,13 @@ function NewTransactionScreen() {
 
             <Select
               label="Cuenta"
-              placeholder="Sin asignar"
-              hint="Dejarla sin asignar es válido: se adopta sola cuando declares la cuenta."
+              required={isTransfer}
+              placeholder={isTransfer ? "Elige una cuenta" : "Sin asignar"}
+              hint={
+                isTransfer
+                  ? "Obligatoria: es el saldo que se mueve. Un traslado no puede quedar sin asignar."
+                  : "Dejarla sin asignar es válido: se adopta sola cuando declares la cuenta."
+              }
               value={accountId}
               onChange={(event) => setAccountId(event.target.value)}
               options={accounts.accounts.map((account) => ({
@@ -194,8 +289,8 @@ function NewTransactionScreen() {
               >
                 Cancelar
               </Button>
-              <Button type="submit" full disabled={create.isPending}>
-                {create.isPending ? "Guardando…" : "Guardar"}
+              <Button type="submit" full disabled={saving}>
+                {saving ? "Guardando…" : "Guardar"}
               </Button>
             </div>
           </form>
@@ -205,12 +300,14 @@ function NewTransactionScreen() {
   );
 }
 
-function DirectionTab({
+function KindTab({
   label,
+  hint,
   active,
   onClick,
 }: {
   label: string;
+  hint?: string;
   active: boolean;
   onClick: () => void;
 }) {
@@ -221,11 +318,12 @@ function DirectionTab({
       aria-pressed={active}
       className={
         active
-          ? "rounded-xl border border-accent bg-accent-soft py-2.5 font-medium text-sm text-text"
-          : "rounded-xl border border-line py-2.5 text-muted text-sm hover:text-text"
+          ? "rounded-xl border border-accent bg-accent-soft px-3 py-2.5 text-left font-medium text-sm text-text"
+          : "rounded-xl border border-line px-3 py-2.5 text-left text-muted text-sm hover:text-text"
       }
     >
-      {label}
+      <span className={hint ? "block" : "block text-center"}>{label}</span>
+      {hint ? <span className="mt-0.5 block text-faint text-xs">{hint}</span> : null}
     </button>
   );
 }

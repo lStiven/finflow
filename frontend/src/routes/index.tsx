@@ -514,7 +514,7 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">
                     {movement.transfer
-                      ? transferTitle(movement.transfer)
+                      ? transferTitle(movement.transfer, movement.counterparty)
                       : (movement.merchant?.display_name ?? movement.counterparty)}
                   </p>
                   <p className="truncate text-faint text-xs">

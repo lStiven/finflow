@@ -312,6 +312,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/transactions/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enter Transfer Leg
+         * @description Record paying a card, or moving money, from outside this app.
+         *
+         *     Paying a credit card from an account at the *same* bank needs nothing
+         *     here: that alert names both instruments and the pair is written from it.
+         *     This is for the other way round — paid from another bank, from a wallet,
+         *     in cash — where only one side is ever knowable, and recording it as an
+         *     ordinary movement would count a payment as an expense or as income.
+         *
+         *     The movement lands on the account named, moving its balance like any
+         *     other, and stays out of every total. On a credit card, `role=destination`
+         *     is its debt going down.
+         */
+        post: operations["enter_transfer_leg_financial_transactions_transfer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/transactions/{transaction_id}": {
         parameters: {
             query?: never;
@@ -1070,6 +1100,39 @@ export interface components {
             occurred_at: number;
         };
         /**
+         * EnterTransferLegPayload
+         * @description The owner's side of a payment between two of their own balances.
+         *
+         *     For the card paid from another bank, from a wallet or in cash — the case
+         *     where no single alert can name both instruments, so nothing can write the
+         *     pair. What this records is that the movement is *not* spending and *not*
+         *     income, which is the one thing a total has to know about it.
+         *
+         *     No `direction`: `role` fixes it. And `account_id` is required, unlike a
+         *     plain manual entry — this asserts that a balance moved, and there is no
+         *     balance to move without it.
+         */
+        EnterTransferLegPayload: {
+            /** Account Id */
+            account_id: string;
+            /** Amount */
+            amount: number | string;
+            /**
+             * Bank
+             * @default
+             */
+            bank: string;
+            /** Counterparty */
+            counterparty: string;
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /** Note */
+            note?: string | null;
+            /** Occurred At */
+            occurred_at: number;
+            role: components["schemas"]["TransferRole"];
+        };
+        /**
          * FinancialCatalogResponse
          * @description Every vocabulary this context's endpoints accept.
          *
@@ -1101,6 +1164,8 @@ export interface components {
             transaction_sorts: components["schemas"]["CatalogOption"][];
             /** Transaction Statuses */
             transaction_statuses: components["schemas"]["CatalogOption"][];
+            /** Transfer Roles */
+            transfer_roles: components["schemas"]["CatalogOption"][];
             /** Transfer Views */
             transfer_views: components["schemas"]["CatalogOption"][];
             /** Trend Dimensions */
@@ -1708,19 +1773,40 @@ export interface components {
          *     counterparty text — `role` says which way the money went and
          *     `counterpart_*` names the other side — and, more importantly, knows not to
          *     read the amount as an expense.
+         *
+         *     The other side is not always here. A card paid from another bank, from a
+         *     wallet or in cash has one knowable side, entered by hand through
+         *     `POST /financial/transactions/transfer`: `external` is true there and
+         *     every `counterpart_*` field is null. Read `external` rather than
+         *     null-checking the three — it is the question a client is actually asking,
+         *     and the movement's own `counterparty` already carries what the owner
+         *     called the other side ("Nequi", "efectivo").
          */
         TransferResponse: {
             /** Counterpart Instrument Kind */
-            counterpart_instrument_kind: string;
+            counterpart_instrument_kind: string | null;
             /** Counterpart Last Four */
-            counterpart_last_four: string;
+            counterpart_last_four: string | null;
             /** Counterpart Movement Id */
-            counterpart_movement_id: string;
+            counterpart_movement_id: string | null;
+            /** External */
+            external: boolean;
             /** Id */
             id: string;
             /** Role */
             role: string;
         };
+        /**
+         * TransferRole
+         * @description Which side of a transfer one movement is.
+         *
+         *     `SOURCE` is where the money left, `DESTINATION` where it arrived. On a
+         *     card payment the destination is the card, and money "arriving" on a
+         *     liability is its debt falling — the same rule `Account.apply` already
+         *     uses, unchanged.
+         * @enum {string}
+         */
+        TransferRole: "source" | "destination";
         /**
          * TransferView
          * @description Whether a set of movements includes the two sides of a transfer.
@@ -2332,6 +2418,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EnterTransactionPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransactionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enter_transfer_leg_financial_transactions_transfer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnterTransferLegPayload"];
             };
         };
         responses: {

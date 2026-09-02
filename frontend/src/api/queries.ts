@@ -454,6 +454,35 @@ export function useCreateTransaction(): UseMutationResult<
   });
 }
 
+type EnterTransferLegBody = components["schemas"]["EnterTransferLegPayload"];
+
+/**
+ * A payment between two of your own balances whose other side is not here:
+ * a card paid from another bank, from a wallet, or in cash.
+ *
+ * Unlike `useCreateTransaction` beside it, this one is **idempotent** — the
+ * movement id comes from the content, so the same payment sent twice answers
+ * with the same movement and moves the balance once. The mutation is still
+ * left un-retried like every other, because a retry that succeeded would look
+ * like a second payment to a caller reading only the response.
+ */
+export function useCreateTransferLeg(): UseMutationResult<
+  Transaction,
+  Error,
+  EnterTransferLegBody
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EnterTransferLegBody) =>
+      unwrap(api.POST("/financial/transactions/transfer", { body })),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
 type EditTransactionBody = components["schemas"]["EditTransactionPayload"];
 
 /**

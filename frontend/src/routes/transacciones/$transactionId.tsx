@@ -61,7 +61,7 @@ function TransactionScreen() {
         <header className="flex flex-col items-start gap-2">
           <p className="text-muted text-sm">
             {transfer
-              ? transferTitle(transfer)
+              ? transferTitle(transfer, movement.counterparty)
               : (movement.merchant?.display_name ?? movement.counterparty)}
           </p>
           <Money
@@ -80,7 +80,17 @@ function TransactionScreen() {
           <Row label="Tipo">
             {transfer ? "Traslado entre tus cuentas" : incoming ? "Ingreso" : "Gasto"}
           </Row>
-          {transfer ? null : <Row label="Contraparte">{movement.counterparty}</Row>}
+          {/*
+           * Hidden only on a pair, whose `counterparty` is machine text
+           * (`credit_card *1234`) that feeds the movement's identity. On a
+           * lone leg it is what its owner typed, and the only thing naming
+           * the other side.
+           */}
+          {transfer && !transfer.external ? null : (
+            <Row label={transfer ? "Otro lado" : "Contraparte"}>
+              {movement.counterparty}
+            </Row>
+          )}
           {movement.merchant ? (
             <Row label="Comercio">
               {movement.merchant.display_name}
@@ -239,20 +249,33 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
   }
 
   /*
-   * A transfer states one movement across two rows, and this screen holds one
-   * of them: correcting the amount or the date here would leave the pair
-   * describing two different movements on two balances. The API refuses it
-   * with a 409, so the fields are not offered rather than offered and
-   * rejected.
+   * A *pair* states one movement across two rows, and this screen holds one of
+   * them: correcting the amount or the date here would leave the two
+   * describing different movements on two balances. The API refuses that with
+   * a 409, so the fields are not offered rather than offered and rejected.
+   *
+   * A lone leg is not that case and the API knows it — there is no second row
+   * to fall out of step with, so it answers 200 and moves the one balance.
+   * Gating on `external` rather than on being a transfer at all is what keeps
+   * this screen from hiding fields the backend would have accepted.
    */
-  const isTransfer = movement.transfer !== null && movement.transfer !== undefined;
+  const leg = movement.transfer ?? null;
+  const pairedTransfer = leg !== null && !leg.external;
+
+  /*
+   * Detaching a lone leg is refused with a 409: it states that a balance
+   * moved, and it names no instrument, so nothing would ever adopt it back.
+   * Moving it to another account stays allowed, which is what a leg entered
+   * against the wrong card actually needs.
+   */
+  const canDetach = Boolean(movement.account_id) && leg?.external !== true;
 
   return (
     <Card lift={false}>
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <h2 className="font-medium">Corregir</h2>
 
-        {isTransfer ? (
+        {pairedTransfer ? (
           <p className="rounded-xl border border-line bg-ink p-3.5 text-faint text-xs leading-relaxed">
             Este movimiento es una mitad de un traslado entre tus cuentas, así que el
             monto y la fecha no se corrigen por separado: las dos mitades dicen lo
@@ -260,7 +283,7 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
           </p>
         ) : null}
 
-        {isTransfer ? null : (
+        {pairedTransfer ? null : (
           <>
             <Field
               label="Contraparte"
@@ -300,9 +323,11 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
         <Select
           label="Cuenta"
           hint={
-            movement.account_id
-              ? "Quitarla la deja sin asignar y ajusta el saldo de la cuenta actual."
-              : "Asignarla es retroactivo: mueve el saldo de esa cuenta."
+            leg?.external === true
+              ? "Cambiarla mueve el saldo de las dos. Un traslado no puede quedarse sin cuenta."
+              : movement.account_id
+                ? "Quitarla la deja sin asignar y ajusta el saldo de la cuenta actual."
+                : "Asignarla es retroactivo: mueve el saldo de esa cuenta."
           }
           value={account}
           onChange={(event) => setAccount(event.target.value)}
@@ -312,9 +337,7 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
               value: candidate.id,
               label: candidate.name,
             })),
-            ...(movement.account_id
-              ? [{ value: DETACH, label: "Quitar de la cuenta" }]
-              : []),
+            ...(canDetach ? [{ value: DETACH, label: "Quitar de la cuenta" }] : []),
           ]}
         />
 
@@ -374,19 +397,35 @@ function TransferPanel({ movement }: { movement: Transaction }) {
       </span>
 
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-sm">Traslado entre tus cuentas</p>
+        <p className="font-medium text-sm">
+          {transfer.external
+            ? "Traslado desde fuera de Finflow"
+            : "Traslado entre tus cuentas"}
+        </p>
         <p className="mt-1 text-muted text-sm leading-relaxed">
           {transferBlurb(transfer)} Tu patrimonio no cambió: la plata sigue siendo tuya,
           solo cambió de lado.
         </p>
-        <Link
-          to="/transacciones/$transactionId"
-          params={{ transactionId: transfer.counterpart_movement_id }}
-          className="mt-2 inline-flex items-center gap-1.5 text-sm text-violet transition-colors hover:text-text"
-        >
-          Ver la otra mitad
-          <ArrowLeftRight className="size-3.5" />
-        </Link>
+        {/*
+         * Only a pair has a row to step to. On a lone leg the other side is
+         * not a movement here at all, so the link would go nowhere — and
+         * `counterpart_movement_id` is null, which is what `external` is for.
+         */}
+        {transfer.counterpart_movement_id === null ? (
+          <p className="mt-2 text-faint text-xs leading-relaxed">
+            La otra mitad está en {movement.counterparty}, que no lleva Finflow. Por eso
+            solo ves este lado.
+          </p>
+        ) : (
+          <Link
+            to="/transacciones/$transactionId"
+            params={{ transactionId: transfer.counterpart_movement_id }}
+            className="mt-2 inline-flex items-center gap-1.5 text-sm text-violet transition-colors hover:text-text"
+          >
+            Ver la otra mitad
+            <ArrowLeftRight className="size-3.5" />
+          </Link>
+        )}
       </div>
     </Card>
   );

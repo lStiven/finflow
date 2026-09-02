@@ -571,7 +571,7 @@ function MovementRow({ movement }: { movement: Transaction }) {
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm">
           {transfer
-            ? transferTitle(transfer)
+            ? transferTitle(transfer, movement.counterparty)
             : (movement.merchant?.display_name ?? movement.counterparty)}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 truncate text-faint text-xs">
