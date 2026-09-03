@@ -366,8 +366,10 @@ _alerts-subscribe topic profile email:
     set -euo pipefail
 
     arn="arn:aws:sns:us-east-1:$(aws sts get-caller-identity --profile {{profile}} --query Account --output text):{{topic}}"
+    # `--notification-endpoint`, not `--endpoint`: the short one is a prefix of
+    # the CLI's global `--endpoint-url` and is silently resolved to it.
     aws sns subscribe --profile {{profile}} --topic-arn "$arn" \
-        --protocol email --endpoint '{{email}}' --output text
+        --protocol email --notification-endpoint '{{email}}' --output text
     echo "Confirmation sent to {{email}}. Click the link, then run \`just alerts-{{ if profile == "finflow-production" { "prod" } else { "dev" } }}\`."
 
 # Tail one function's logs, e.g. `just deploy-logs-prod FinancialFunction`.

@@ -20,7 +20,9 @@ Todo el backend de la versión 1 está terminado y probado:
   Lulo); el resto lo interpreta el modelo de lenguaje.
 - **Las cuentas las declara el dueño**, nunca se descubren solas. Sin ninguna
   cuenta declarada la aplicación ya sirve: registra todo y lo deja sin asignar.
-  Al declarar una cuenta, sus movimientos anteriores se le asocian.
+  Al declarar una cuenta, sus movimientos anteriores se le asocian. Una tarjeta
+  puesta donde no era se desenlaza y se enlaza en la correcta, y sus movimientos
+  se van con ella; una cuenta cerrada se puede volver a abrir.
 - **Se puede escribir a mano y corregir.** Un movimiento que nunca llegó por
   correo se agrega, y cualquiera se edita o se borra — al borrarlo, la cuenta
   recupera la plata.
@@ -46,10 +48,11 @@ Todo el backend de la versión 1 está terminado y probado:
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 50 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1394 pruebas de Python y 273 del frontend, todas en verde.
-El contrato de la API y los tipos del frontend están sincronizados. Árbol de
-trabajo limpio.
+**Estado técnico:** 52 operaciones de API en los cuatro contextos, cinco
+procesos en la nube, 1443 pruebas de Python y 281 del frontend, todas en verde.
+El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
+sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
+cola compartido).
 
 **Pantallas:** están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
@@ -72,9 +75,9 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 50 operaciones | 43 — le faltan préstamos, inversiones y borrar movimiento |
-| API desarrollo | 50 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación | ninguna de las tres |
+| API producción | 52 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta y reabrir cuenta |
+| API desarrollo | 52 operaciones | 43 — igual que producción |
+| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
 verificación de correo y la recuperación de contraseña. Las dos webs
@@ -100,38 +103,26 @@ AWS (ver Trabas).
    corra unos días sin sorpresas, lo mismo en producción con `just deploy-prod`,
    `just web-publish` y `just smoke-prod`.
 
-2. **Nadie recibe los avisos de producción.** Las tres alarmas de mensajes
-   fallidos publican en un tema de notificaciones que hoy **no tiene ni un
-   suscriptor**: si algo se cae, no llega correo a nadie. Desarrollo sí está
-   suscrito y confirmado. Ojo: CloudFormation cree que la suscripción existe, así
-   que volver a desplegar no la recrea — hay que suscribir el correo a mano y
-   confirmarlo desde el buzón. (La alarma de facturación de 5 USD sí funciona y
-   está en OK.)
-
-3. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
+2. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
    plantilla reconoce llama a Gemini, y no hay ningún límite. Es lo único de esta
    lista que cuesta plata mientras falta.
 
-4. **Nada agenda el cobro mensual de los créditos.** Hoy los intereses se
+3. **Nada agenda el cobro mensual de los créditos.** Hoy los intereses se
    registran cuando alguien abre la pantalla del crédito y pulsa *Actualizar*.
    Mientras tanto el saldo se queda atrás, y la propia pantalla lo dice ("Hay 4
    cortes sin registrar"). Ya existe una operación que barre todas las cuentas de
    un usuario de una vez; falta el disparador diario en la nube, que necesita algo
    que hoy no existe: una forma de recorrer todos los usuarios.
 
-5. **La pantalla de Configuración**, la última que falta.
+4. **La pantalla de Configuración**, la última que falta.
 
-6. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
+5. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
    olvidado en el computador mientras producción sigue vieja — que es exactamente
    lo que está pasando ahora mismo (punto 1).
 
 ## Huecos conocidos, sin urgencia
 
-- **Una tarjeta no se puede desvincular de una cuenta.** Solo se puede agregar,
-  así que una tarjeta puesta en la cuenta equivocada no se puede mover desde
-  ningún lado. Tampoco se puede reabrir una cuenta cerrada. Borrar una cuenta no
-  se va a hacer: una cuenta cerrada sigue explicando sus movimientos.
 - **Un movimiento escrito a mano nunca crea un comercio.** Encuentra el comercio
   si ese nombre ya llegó alguna vez por correo; si no, se queda sin comercio para
   siempre.
@@ -150,9 +141,14 @@ AWS (ver Trabas).
 - **Falta comprobar el filtro de autorizaciones con correos reales.** Una
   autorización y su cobro son dos correos distintos, y la regla que descarta la
   primera se escribió sin tener uno a la mano.
-- **El proceso que lee la cola está copiado tres veces** (ingesta, comercios,
-  finanzas). Es transporte, no reglas de negocio: debería ser uno solo. La copia
-  ya causó una diferencia de comportamiento entre las tres.
+- **Una inversión ya vencida sigue acumulando en la pantalla.** El cálculo de
+  «intereses pendientes» ignora la fecha de vencimiento, así que un CDT que
+  venció hace un año muestra un rendimiento que crece cada mes. El registro de
+  los cortes sí respeta el vencimiento; es solo lo proyectado lo que miente.
+- **Valorar un fondo dos veces el mismo día con la misma cifra no hace nada.**
+  Ir de 11 a 15, volver a 11 y subir otra vez a 15 en un mismo día deja el saldo
+  en 11: el segundo movimiento tiene la misma identidad que el primero y la
+  escritura condicional lo rechaza, mientras la respuesta dice 200.
 - **Falta decidir qué hacer con el saldo que reporta el banco** en algunas
   alertas: o corrige el saldo que la aplicación lleva, o se guarda solo como
   referencia. Los correos llegan desordenados, así que corregir exige distinguir
@@ -167,12 +163,32 @@ AWS (ver Trabas).
   un comando de ensayo a plata real. Los comentarios que dicen que están
   separadas exageran.
 - **Los permisos del usuario de producción no se conocen del todo.** Lee
-  secretos, pilas y tablas, pero hoy se confirmó que no puede consultar los
-  detalles de una suscripción de avisos. Se descubre el resto al desplegar, no
-  adivinando.
+  secretos, pilas y tablas, suscribe un correo al tema de avisos, lista los
+  suscriptores y las alarmas; lo que hoy se comprobó que **no** puede es leer los
+  atributos de una suscripción (`sns:GetSubscriptionAttributes`), que es por qué
+  `just alerts-prod` mira la lista del tema y no la suscripción. Se descubre el
+  resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
 
+- 2026-09-03 — **Las alarmas de producción ya le llegan a alguien.** El tema
+  estaba sin un solo suscriptor y CloudFormation lo daba por creado, así que
+  redesplegar no lo arreglaba. Suscrito y confirmado desde el buzón; comprobado
+  contra AWS que la suscripción es real y que las tres alarmas de mensajes
+  fallidos apuntan a ese tema y están en OK. `just alerts-prod` / `alerts-dev`
+  responden quién recibe, preguntándole al tema y no a CloudFormation, que es lo
+  que hacía invisible el problema.
+- 2026-09-03 — **Una tarjeta se puede sacar de la cuenta equivocada, y una
+  cuenta cerrada se puede volver a abrir.** Desenlazar suelta los movimientos que
+  entraron por esa tarjeta —vuelven a quedar sin asignar y el saldo se recalcula—
+  para que enlazarla en la cuenta correcta se los lleve. Dos operaciones nuevas,
+  sus botones en la pantalla de Cuentas y el aviso que decía que reabrir «no se
+  puede desde la app», que ya no es cierto.
+- 2026-09-03 — **Un solo lector de cola para los tres procesos.** Recibir, borrar
+  y contar vivía copiado en ingesta, comercios y finanzas, y una de las copias
+  dejaba escapar el error: un mensaje que fallaba tumbaba el proceso entero y
+  abandonaba a los que venían detrás en el mismo lote. Ahora el mensaje se queda
+  en la cola, como ya hacía el camino de Lambda.
 - 2026-09-03 — **Un correo reenviado a mano ya se lee con la plantilla del
   banco.** El banco se identificaba solo por el remitente del sobre, así que un
   reenvío hecho a mano —que sale de tu propia dirección— pasaba de largo por las
@@ -192,15 +208,3 @@ AWS (ver Trabas).
   hacia abajo—, la fecha de un movimiento no repite el año que ya dice el
   encabezado del mes, y una cuenta muestra su nombre completo en dos líneas en
   lugar de «Ahorros Bancolo…».
-- 2026-09-03 — Revisión de las dieciocho pantallas en un navegador, de teléfono
-  y de computador, con las cifras contrastadas contra la API. Cuatro arreglos,
-  tres de ellos por decir algo que no era cierto: los meses ya no se escriben
-  «Agosto De 2026»; un préstamo ya no dice «Debes» en el Resumen ni «resta de tu
-  patrimonio» al crearlo, cuando ningún total lo cuenta; y las guías ya no
-  meten préstamos, hipotecas, tarjetas e inversiones en la misma bolsa.
-- 2026-09-03 — Los créditos e inversiones cobran su propio mes: intereses,
-  seguros y retención quedan como movimientos legibles. Los de un préstamo o una
-  hipoteca no entran en ningún total; los de una inversión sí, como ingreso.
-  Siete operaciones nuevas, su pantalla y su guía.
-- 2026-09-03 — Borrar un movimiento devuelve la plata a la cuenta, con una
-  advertencia que dice qué va a pasar según el tipo de movimiento.
