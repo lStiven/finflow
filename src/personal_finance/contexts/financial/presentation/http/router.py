@@ -195,9 +195,15 @@ class AccountResponse(BaseModel):
     id: str
     name: str
     kind: str
-    # `asset` | `liability` — what decides whether this balance adds to net
-    # worth or subtracts from it.
+    # `asset` | `liability` — what decides which way this balance moves when
+    # a payment arrives.
     category: str
+    # Watched rather than counted: true for a loan and a mortgage, whose
+    # balance is deliberately outside net worth and whose movements are
+    # outside every total. Their owner already knows what they owe, and the
+    # cuota that services them is money leaving an account this app is
+    # watching anyway — counting both would report one payment twice.
+    informational: bool
     currency: str
     # Signed: an asset legitimately goes below zero when its opening balance
     # was never stated, and a liability's positive amount is what is owed.
@@ -233,7 +239,7 @@ class RateResponse(BaseModel):
     """
 
     value: str
-    basis: str
+    basis: RateBasis
     effective_annual: str
     monthly: str
 
@@ -242,7 +248,7 @@ class ChargeResponse(BaseModel):
     """One thing charged every period besides the interest."""
 
     name: str
-    basis: str
+    basis: ChargeBasis
     amount: str | None
     rate: str | None
     base: str | None
@@ -257,7 +263,7 @@ class LoanTermsResponse(BaseModel):
     term_months: int
     statement_day: int
     payment_day: int
-    style: str
+    style: AmortizationStyle
     principal: str | None
     installment: str | None
     installment_covers_charges: bool
@@ -364,6 +370,10 @@ class FinancingResponse(BaseModel):
     # carries no charges: insurance is charged whole on the cut day, so a
     # part-month owes none of it.
     pending_interest: str
+    # Closed statement periods whose charges are not in the ledger yet.
+    # Anything above zero means `payoff` is short by those months, and the
+    # answer is `POST .../accrue`. Zero whenever the accrual is up to date.
+    periods_due: int
     # What settling today would take: the balance plus that interest. Null on
     # an account holding nothing.
     payoff: str | None
@@ -663,14 +673,20 @@ class FinancialHistoryResponse(BaseModel):
 
 
 class AccountKindOption(CatalogOption):
-    """An account kind, and which side of net worth it lands on.
+    """An account kind, which side it lands on, and whether it is counted.
 
     `category` is derived from the kind and never chosen, so a client can
     group the dropdown — and say "money you owe" against a balance — without
     duplicating the rule that decides it.
+
+    `informational` is the other half of that: a loan and a mortgage keep a
+    balance and a schedule of their own and take part in no total, so a form
+    can say so while somebody is choosing rather than leaving them to notice
+    that their net worth did not move.
     """
 
     category: str
+    informational: bool
 
 
 class FinancialCatalogResponse(BaseModel):
@@ -1215,6 +1231,7 @@ def get_catalog() -> FinancialCatalogResponse:
                 value=kind.value,
                 label=label(kind.value),
                 category=kind.category.value,
+                informational=kind.informational,
             )
             for kind in AccountKind
         ],
@@ -2200,6 +2217,7 @@ def _account_response(account: Account) -> AccountResponse:
         name=account.name,
         kind=account.kind.value,
         category=account.category.value,
+        informational=account.informational,
         currency=account.currency.value,
         balance=str(account.balance.signed_amount),
         opening_balance=str(account.opening_balance.signed_amount),
@@ -2246,7 +2264,7 @@ def _charge(payload: ChargePayload) -> ChargeDraft:
 def _rate_response(rate: InterestRate) -> RateResponse:
     return RateResponse(
         value=str(rate.value),
-        basis=rate.basis.value,
+        basis=rate.basis,
         # Rounded where a screen would round anyway: these are the converted
         # figures, and thirty significant digits of `(1+i)^(1/12)` is noise a
         # client would have to trim itself.
@@ -2258,7 +2276,7 @@ def _rate_response(rate: InterestRate) -> RateResponse:
 def _charge_response(charge: RecurringCharge) -> ChargeResponse:
     return ChargeResponse(
         name=charge.name,
-        basis=charge.basis.value,
+        basis=charge.basis,
         amount=None if charge.amount is None else str(charge.amount.amount),
         rate=None if charge.rate is None else str(charge.rate),
         base=None if charge.base is None else str(charge.base.amount),
@@ -2273,7 +2291,7 @@ def _loan_terms_response(terms: LoanTerms) -> LoanTermsResponse:
         term_months=terms.term_months,
         statement_day=terms.statement_day,
         payment_day=terms.due_day,
-        style=terms.style.value,
+        style=terms.style,
         principal=None if terms.principal is None else str(terms.principal.amount),
         installment=(
             None if terms.installment is None else str(terms.installment.amount)
@@ -2371,6 +2389,7 @@ def _financing_response(view: FinancingView) -> FinancingResponse:
         account=_account_response(view.account),
         as_of=view.as_of.isoformat(),
         pending_interest=str(view.pending_interest.amount),
+        periods_due=view.periods_due,
         payoff=None if view.payoff is None else str(view.payoff.amount),
         next_statement_on=view.next_statement_on.isoformat(),
         next_due_on=(

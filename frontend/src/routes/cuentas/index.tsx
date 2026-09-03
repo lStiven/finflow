@@ -7,10 +7,12 @@ import {
   Check,
   ChevronDown,
   CreditCard,
+  Eye,
   Landmark,
   Loader2,
   Lock,
   Pencil,
+  Percent,
   Plus,
   Radio,
   Scale,
@@ -23,6 +25,7 @@ import {
 import type { ComponentType, ReactNode } from "react";
 import { type SubmitEvent, useState, useTransition } from "react";
 import { balanceIssue, creditLimitIssue, nameIssue } from "@/accounts/edits";
+import { isFinanceable, RATE_BASIS_COPY, toPercent } from "@/accounts/financing";
 import { describeInstrument } from "@/accounts/instruments";
 import { instrumentLabel, kindCopy } from "@/accounts/kinds";
 import {
@@ -478,11 +481,27 @@ function AccountCard({
             tone={tone}
             size="sm"
           />
-          <p className="mt-0.5 text-faint text-xs">{label}</p>
+          <p className="mt-0.5 text-faint text-xs">
+            {account.informational ? "Saldo del crédito" : label}
+          </p>
         </div>
       </div>
 
-      {owed ? <CreditBar account={account} /> : null}
+      {owed && !account.informational ? <CreditBar account={account} /> : null}
+
+      {/* On the card and not folded into a panel: right above this sits a
+          "Debes" tile that leaves this figure out, and the two read as a
+          contradiction until somebody is told which question each answers. */}
+      {account.informational ? (
+        <p className="flex items-start gap-2 rounded-xl border border-line bg-ink p-3 text-faint text-xs leading-relaxed">
+          <Eye aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          <span className="min-w-0">
+            Fuera de tu patrimonio y de tus gastos, a propósito. Ya sabes lo que debes
+            aquí, y la cuota se registra como gasto cuando sale de tu cuenta; esto es
+            para seguirle el rastro a la deuda.
+          </span>
+        </p>
+      ) : null}
 
       <p className="text-faint text-xs">
         {account.movements_applied === 0
@@ -498,6 +517,7 @@ function AccountCard({
       </p>
 
       <Instruments account={account} />
+      <Financing account={account} />
       <Settings account={account} onClosed={onClosed} />
 
       <Link
@@ -509,6 +529,66 @@ function AccountCard({
         <ArrowRight className="size-3.5" />
       </Link>
     </Card>
+  );
+}
+
+/**
+ * The panel a loan or an investment gets, and nothing else does.
+ *
+ * It exists because the gap it names is invisible: a mortgage declared with a
+ * balance and no terms looks complete, its number falls by exactly what is
+ * paid, and it is wrong every month by the interest nobody charged. So the
+ * summary line says what is missing rather than what is there — and once the
+ * terms exist it says the rate, which is the one figure worth checking
+ * against a contract at a glance.
+ */
+function Financing({ account }: { account: Account }) {
+  const shape = isFinanceable(account.kind);
+  if (shape === null) return null;
+
+  const terms = account.loan ?? account.investment ?? null;
+  const rate = account.loan?.rate ?? account.investment?.rate ?? null;
+
+  return (
+    <Panel
+      icon={Percent}
+      summary={
+        terms === null
+          ? shape === "loan"
+            ? "Falta decir qué intereses te cobran"
+            : "Falta decir cómo rinde"
+          : rate === null
+            ? `Su valor lo registras tú · corte el ${terms.statement_day}`
+            : `${toPercent(rate.value)} % ${
+                RATE_BASIS_COPY[rate.basis]?.label ?? rate.basis
+              } · corte el ${terms.statement_day}`
+      }
+    >
+      <p className="text-muted text-sm leading-relaxed">
+        {terms === null
+          ? shape === "loan"
+            ? "Sin la tasa y los seguros, este saldo baja exactamente lo que pagas — y una deuda no funciona así. Ninguna alerta del banco trae esos datos."
+            : "Con la tasa pactada Finflow abona los rendimientos cada corte. Si el valor se mueve solo, lo registras cuando quieras."
+          : "Los intereses y los seguros de cada corte quedan como movimientos, así el saldo sigue siendo la suma de cosas que puedes ver."}
+      </p>
+
+      {account.informational ? (
+        <p className="text-faint text-xs leading-relaxed">
+          Este saldo no entra en tu patrimonio ni en tus gastos. Ya sabes lo que debes,
+          y la cuota se registra como gasto cuando sale de tu cuenta — esto es solo para
+          seguirle el rastro a la deuda.
+        </p>
+      ) : null}
+
+      <Link
+        to="/cuentas/$accountId/financiacion"
+        params={{ accountId: account.id }}
+        className="-m-1 flex items-center gap-1.5 self-start rounded-lg p-1 text-cyan text-sm transition-colors hover:text-text"
+      >
+        {terms === null ? "Registrar las condiciones" : "Ver la tabla y actualizar"}
+        <ArrowRight className="size-3.5" />
+      </Link>
+    </Panel>
   );
 }
 

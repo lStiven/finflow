@@ -1008,11 +1008,18 @@ class DynamoDBTransactionLedger:
         write the balance back unchanged, with the row gone and nothing left
         to trigger a repair.
 
-        The deletes are unconditional, unlike `record`'s put: the caller has
-        already read the rows and decided they go, and a condition here would
-        only turn a second attempt at a half-finished erasure into a failure.
-        The balance updates keep theirs, for the same reason `record` does —
-        without it `ADD` would create the account it was meant to correct.
+        Every delete is conditional, exactly like `record`'s put, and for
+        the mirror-image reason. A delete on a key that is already gone
+        *succeeds* in DynamoDB, so without the condition a retried erasure
+        would delete nothing and unwind the balance a second time — money
+        appearing out of a row that was already taken back. There is no
+        half-finished erasure for the condition to get in the way of: this is
+        one `TransactWriteItems`, so either all of it happened or none of it
+        did, and a second attempt finding the rows gone means the first one
+        landed. That is reported as success, which is what the caller asked
+        for. The balance updates keep their own condition for the reason
+        `record` does — without it `ADD` would create the account it was
+        meant to correct.
         """
         if not transactions:
             return
@@ -1039,6 +1046,7 @@ class DynamoDBTransactionLedger:
                         owner,
                         f"{MOVEMENT_PREFIX}{transaction.id.value}",
                     ),
+                    "ConditionExpression": f"attribute_exists({SORT_KEY})",
                 },
             }
             for transaction in transactions
@@ -1065,7 +1073,24 @@ class DynamoDBTransactionLedger:
             for reversal in reversals
         )
 
-        self._client.transact_write_items(TransactItems=items)
+        try:
+            self._client.transact_write_items(TransactItems=items)
+        except self._client.exceptions.TransactionCanceledException as error:
+            # Only a *delete's* condition means "already gone", and the
+            # distinction is the same one `record` makes with `_LEDGER_ROW`.
+            # A row that is no longer there is the erasure this call asked
+            # for, already done, with its balance already unwound. A balance
+            # update refused — an account that is not there — is the write not
+            # happening at all, and it has to surface or a caller would report
+            # money returned that never moved.
+            erasures = range(len(transactions))
+            unwinds = range(len(transactions), len(items))
+
+            if any(refused_by_condition(error, index=at) for at in unwinds):
+                raise
+
+            if not any(refused_by_condition(error, index=at) for at in erasures):
+                raise
 
     def list_unassigned_matching(
         self,

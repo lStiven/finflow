@@ -243,12 +243,24 @@ function Stepper({ step }: { step: number }) {
   );
 }
 
-type KindOption = { value: string; label: string; category: string };
+type KindOption = {
+  value: string;
+  label: string;
+  category: string;
+  informational: boolean;
+};
+
+/** Which of the three shelves a kind belongs on. */
+function shelfOf(kind: KindOption): string {
+  return kind.informational ? "informational" : kind.category;
+}
 
 /**
- * One click, and it advances. The kinds are grouped by the side of net worth
- * they land on, because that is the only thing about them somebody has to
- * understand: one adds to what you have, the other to what you owe.
+ * One click, and it advances. The kinds are grouped by what they do to the
+ * figures, because that is the only thing about them somebody has to
+ * understand — and there are three answers, not two: one adds to what you
+ * have, one adds to what you owe, and a credit you are only following does
+ * neither.
  */
 function KindStep({
   kinds,
@@ -270,12 +282,18 @@ function KindStep({
       title: "Lo que debes",
       blurb: "Resta de tu patrimonio.",
     },
+    {
+      category: "informational",
+      title: "Créditos que solo quieres seguir",
+      blurb:
+        "No entran en tu patrimonio ni en tus gastos: ya sabes lo que debes, y la cuota se te registra cuando sale de tu cuenta.",
+    },
   ];
 
   return (
     <div className="flex flex-col gap-7">
       {groups.map(({ category, title, blurb }) => {
-        const options = kinds.filter((kind) => kind.category === category);
+        const options = kinds.filter((kind) => shelfOf(kind) === category);
         if (options.length === 0) return null;
 
         return (
@@ -301,7 +319,7 @@ function KindStep({
                     aria-pressed={active}
                     className={cn(
                       "surface rise flex items-start gap-3 rounded-card border bg-surface p-4 text-left",
-                      category === "liability" ? "glow-accent" : "glow-cyan",
+                      category === "asset" ? "glow-cyan" : "glow-accent",
                       active ? "border-accent/50" : "border-line",
                     )}
                     style={{ animationDelay: `${index * 45}ms` }}
@@ -310,9 +328,9 @@ function KindStep({
                       aria-hidden
                       className={cn(
                         "grid size-10 shrink-0 place-items-center rounded-xl ring-1 transition-transform duration-200",
-                        category === "liability"
-                          ? "bg-accent/12 text-accent ring-accent/25"
-                          : "bg-cyan/12 text-cyan ring-cyan/25",
+                        category === "asset"
+                          ? "bg-cyan/12 text-cyan ring-cyan/25"
+                          : "bg-accent/12 text-accent ring-accent/25",
                       )}
                     >
                       <Icon className="size-5" />

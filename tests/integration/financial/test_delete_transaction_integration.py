@@ -549,3 +549,31 @@ def test_rows_from_two_owners_cannot_be_erased_in_one_write(
 
     assert ledger.list_all(USER_ID) != []
     assert ledger.list_all(OTHER_USER) != []
+
+
+def test_erasing_twice_gives_the_money_back_once(
+    manage_accounts: ManageAccountsUseCase,
+    manage_transactions: ManageTransactionsUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """A delete on a key that is already gone succeeds in DynamoDB.
+
+    So without a condition on it, a retried erasure deletes nothing and unwinds
+    the balance a second time — money appearing out of a row that had already
+    been taken back. The condition is what makes the second attempt a no-op
+    rather than a gift.
+    """
+    account = _declare_savings(manage_accounts, holds="1000000")
+    movement = _spend(manage_transactions, account, amount="2000")
+    stored = ledger.find(user_id=USER_ID, transaction_id=movement)
+
+    assert stored is not None
+
+    reversal = [
+        BalanceReversal(account_id=account.id, delta=Decimal("2000"), movements=1),
+    ]
+    ledger.remove([stored], reversals=reversal)
+    ledger.remove([stored], reversals=reversal)
+
+    assert _balance_of(accounts, account) == Decimal("1000000")

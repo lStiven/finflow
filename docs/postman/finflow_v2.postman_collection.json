@@ -1318,6 +1318,286 @@
           "response": []
         },
         {
+          "name": "Financing",
+          "description": "Accounts whose balance moves without anybody spending anything: a loan charging interest and insurance every month, a CDT earning at an agreed rate, a fund whose value is stated rather than computed.\n\n**A loan and a mortgage are watched, never counted.** They carry `informational: true` and stay out of net worth, out of what the API reports as owed, and out of every total in `/summary`, `/trends` and `/history` — their owner already knows what they owe, and the cuota that services them is money leaving a real account, already recorded as it leaves. A credit card is not in that bucket: what it owes is this month's spending, unpaid.\n\nThe order is: declare the terms once, then post what each closed period charged (`/accrue`, safe to call as often as you like), then read the amortization table and the payoff (`GET .../financing`).",
+          "item": [
+            {
+              "name": "Set loan terms",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/loan",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "loan"
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"rate\": {\n    \"value\": \"0.1956\",\n    \"basis\": \"effective_annual\"\n  },\n  \"disbursed_on\": \"2026-01-15\",\n  \"term_months\": 60,\n  \"statement_day\": 15,\n  \"payment_day\": 20,\n  \"style\": \"french\",\n  \"principal\": \"60000000\",\n  \"installment\": \"2000000\",\n  \"installment_covers_charges\": true,\n  \"charges\": [\n    {\n      \"name\": \"Seguro de vida deudores\",\n      \"basis\": \"outstanding_balance\",\n      \"rate\": \"0.000345\"\n    },\n    {\n      \"name\": \"Seguro de incendio y terremoto\",\n      \"basis\": \"insured_value\",\n      \"rate\": \"0.00029\",\n      \"base\": \"350000000\",\n      \"charged_to_balance\": false\n    }\n  ],\n  \"accrue_from\": \"2026-01-15\"\n}"
+                },
+                "description": "What a loan costs, so what is owed can be more than what is unpaid. Loans and mortgages only — a credit card is deliberately excluded, since its interest is charged on whatever part of the statement went unpaid and nothing here knows that.\n\n`rate.value` is a fraction (0.1956, never 19.56) in the basis the bank quotes: `effective_annual` (% E.A.), `nominal_annual` (N.A. M.V.) or `monthly`. Amounts are bare figures in the account's own currency.\n\n`installment_covers_charges` says whether the number on the statement already includes the insurance; getting it backwards misstates the capital portion by exactly the insurance, every month.\n\n`accrue_from` left out means **today**: somebody declaring a mortgage they have paid for three years states the balance their bank shows, and that figure already contains those three years of interest. Send the disbursement date, with the amount disbursed as the opening balance, to rebuild the history instead."
+              },
+              "response": []
+            },
+            {
+              "name": "Set investment terms",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/investment",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "investment"
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"opened_on\": \"2026-01-10\",\n  \"statement_day\": 10,\n  \"rate\": {\n    \"value\": \"0.105\",\n    \"basis\": \"effective_annual\"\n  },\n  \"matures_on\": \"2027-01-10\",\n  \"charges\": [\n    {\n      \"name\": \"Retención en la fuente\",\n      \"basis\": \"earnings\",\n      \"rate\": \"0.04\"\n    }\n  ]\n}"
+                },
+                "description": "How an investment earns. Investment accounts only.\n\nLeave `rate` out for variable income — shares, a fund whose unit price moves: nothing about those can be computed, and their value is stated through `POST .../value` instead. *Retención en la fuente* is a charge quoted on `earnings`, not on the balance."
+              },
+              "response": []
+            },
+            {
+              "name": "Clear financing terms",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/financing",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "financing"
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "description": "Stop computing charges, keeping every period already posted. Those are movements like any other and the balance is their running total, so taking them back would be inventing a different history."
+              },
+              "response": []
+            },
+            {
+              "name": "Read schedule and payoff",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/financing?periods=12&timezone=America/Bogota",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "financing"
+                  ],
+                  "query": [
+                    {
+                      "key": "periods",
+                      "value": "12"
+                    },
+                    {
+                      "key": "timezone",
+                      "value": "America/Bogota"
+                    }
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "description": "La tabla de amortización, what settling today would take, and — for an investment — what it has actually made.\n\nEvery row splits the instalment into interest, charges and the part that reduces the debt, which is the only figure that moves it. `negatively_amortizing` is true when the instalment does not even cover the interest, so the debt grows however long it is paid. `pending_interest` is the days since the last cut that nobody has been charged for yet, and `payoff` is the balance plus that.\n\nWorked out from the balance the ledger holds now, never from the amount originally borrowed. Nothing is stored: the table assumes every instalment is paid on the day it is due."
+              },
+              "response": []
+            },
+            {
+              "name": "Post what the month charged",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/accrue",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "accrue"
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"through\": \"2026-02-20\",\n  \"timezone\": \"America/Bogota\"\n}"
+                },
+                "description": "Turn the closed periods into ledger rows: a month of interest, the insurance it carried, the withholding on what a CDT earned. Each becomes an ordinary movement with `origin: accrual`, so the balance stays the running total of things somebody can read and the credit's own screen can explain itself. Those rows do **not** count as spending: a loan is informational, and the expense is the cuota leaving a real account, which is already recorded there.\n\nSafe to call as often as you like: each charge is identified by its account and its period, so a second call is refused by the ledger's own key and `skipped` says how many.\n\n`through` left out means today, read in `timezone`."
+              },
+              "response": []
+            },
+            {
+              "name": "Post what the month charged (every account)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accrue",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accrue"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"timezone\": \"America/Bogota\"\n}"
+                },
+                "description": "The same sweep for every financed account this user holds — the shape a scheduled run wants, and the shape a screen wants when it opens. Accounts with nothing to charge answer with a `reason` rather than an error."
+              },
+              "response": []
+            },
+            {
+              "name": "State what an investment is worth",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "{{token}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/financial/accounts/:accountId/value",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "financial",
+                    "accounts",
+                    ":accountId",
+                    "value"
+                  ],
+                  "variable": [
+                    {
+                      "key": "accountId",
+                      "value": "{{account_id}}"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"market_value\": \"10450000\"\n}"
+                },
+                "description": "For everything a rate cannot describe: a share price, a fund's unit value.\n\nNot the same thing as `PUT .../balance`. A restatement solves the opening balance backwards, which is right for a savings account whose history is incomplete and wrong here — the gain would live in the opening balance and every report would answer that the position returned nothing. This records the difference **as a movement** instead. Stating the value it already has changes nothing and is not an error."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
           "name": "Net worth",
           "request": {
             "method": "GET",

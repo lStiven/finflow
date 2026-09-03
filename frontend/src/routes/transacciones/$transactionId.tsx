@@ -1,12 +1,22 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowLeftRight, Landmark, Pencil, Unlink } from "lucide-react";
-import { type SubmitEvent, useState } from "react";
 import {
+  ArrowLeft,
+  ArrowLeftRight,
+  Landmark,
+  Pencil,
+  Trash2,
+  TriangleAlert,
+  Unlink,
+} from "lucide-react";
+import { type SubmitEvent, useEffect, useRef, useState } from "react";
+import {
+  type Account,
   accountsQuery,
   financialCatalogQuery,
   type Transaction,
   transactionQuery,
+  useDeleteTransaction,
   useEditTransaction,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
@@ -18,6 +28,7 @@ import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
+import { describeDeletion } from "@/lib/deletion";
 import { transferBlurb, transferTitle } from "@/lib/transfers";
 import { categoryLabel } from "@/merchants/categories";
 
@@ -133,10 +144,13 @@ function TransactionScreen() {
         {editing ? (
           <EditForm movement={movement} onDone={() => setEditing(false)} />
         ) : (
-          <Button variant="ghost" full onClick={() => setEditing(true)}>
-            <Pencil className="size-4" />
-            Corregir
-          </Button>
+          <>
+            <Button variant="ghost" full onClick={() => setEditing(true)}>
+              <Pencil className="size-4" />
+              Corregir
+            </Button>
+            <DeleteSection movement={movement} />
+          </>
         )}
       </div>
     </AppShell>
@@ -372,6 +386,136 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
         </div>
       </form>
     </Card>
+  );
+}
+
+/**
+ * Erasing a movement, and saying what that does before it does it.
+ *
+ * Deleting is the only action on this screen that cannot be undone, and the
+ * only one whose effect is not visible from the button: what happens depends
+ * on where the movement sits and what kind of movement it is. So the
+ * confirmation is not a generic "¿seguro?" — it is the specific consequence,
+ * built by `describeDeletion` from this movement, and the button itself
+ * promises the right number of rows so nobody confirms one and loses two.
+ *
+ * Navigating away on success rather than reporting it here: the row is gone,
+ * so there is no screen left to report onto, and the list behind it has
+ * already been invalidated.
+ */
+function DeleteSection({ movement }: { movement: Transaction }) {
+  const navigate = useNavigate();
+  const { data: accounts } = useSuspenseQuery(accountsQuery("all"));
+  const remove = useDeleteTransaction(movement.id);
+  const [confirming, setConfirming] = useState(false);
+  const actions = useRef<HTMLDivElement>(null);
+
+  /*
+   * The confirmation opens below the button that opened it, and on a phone
+   * that puts its two buttons off the bottom of the screen — under a fixed
+   * nav bar, on a short movement. A destructive choice whose buttons cannot
+   * be seen reads as a screen that did nothing, so the actions are brought
+   * into view. Centred rather than aligned to the bottom, which the nav
+   * covers.
+   */
+  useEffect(() => {
+    if (confirming) {
+      actions.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [confirming]);
+
+  const account: Account | undefined = accounts.accounts.find(
+    (candidate) => candidate.id === movement.account_id,
+  );
+  const consequence = describeDeletion(movement, account);
+
+  async function onConfirm() {
+    if (remove.isPending) return;
+    try {
+      await remove.mutateAsync();
+      await navigate({ to: "/transacciones" });
+    } catch {
+      // `remove.error` carries it, and it is reported below. Staying put is
+      // the point: nothing was erased, so the movement is still here.
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <Button
+        variant="quiet"
+        full
+        className="text-outgoing text-xs hover:brightness-110"
+        onClick={() => setConfirming(true)}
+      >
+        <Trash2 className="size-3.5" />
+        Eliminar movimiento
+      </Button>
+    );
+  }
+
+  return (
+    <Card
+      lift={false}
+      className="flex flex-col gap-3 border-outgoing/30 bg-outgoing/[0.06]"
+    >
+      <h2 className="flex items-center gap-2 font-medium text-sm">
+        <TriangleAlert className="size-4 shrink-0 text-outgoing" aria-hidden />
+        {consequence.rows === 2
+          ? "Eliminar las dos mitades del traslado"
+          : "Eliminar este movimiento"}
+      </h2>
+
+      <ul className="flex flex-col gap-2 text-sm leading-relaxed">
+        <Consequence>{consequence.balance}</Consequence>
+        <Consequence>{consequence.totals}</Consequence>
+        {consequence.transfer ? (
+          <Consequence>{consequence.transfer}</Consequence>
+        ) : null}
+      </ul>
+
+      <p className="text-faint text-xs leading-relaxed">{consequence.instead}</p>
+
+      {remove.error ? (
+        <p role="alert" className="text-outgoing text-sm">
+          {remove.error.message}
+        </p>
+      ) : null}
+
+      <div ref={actions} className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          className="py-2 text-xs"
+          disabled={remove.isPending}
+          onClick={() => void onConfirm()}
+        >
+          <Trash2 className="size-3.5" />
+          {remove.isPending ? "Eliminando…" : consequence.confirm}
+        </Button>
+        <Button
+          variant="quiet"
+          className="py-2 text-xs"
+          disabled={remove.isPending}
+          onClick={() => {
+            // Cleared with the panel: reopening it later must not show the
+            // reason a previous attempt failed as though this one had.
+            remove.reset();
+            setConfirming(false);
+          }}
+        >
+          Mejor no
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+function Consequence({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2">
+      <span aria-hidden className="mt-2 size-1 shrink-0 rounded-full bg-outgoing" />
+      <span className="min-w-0">{children}</span>
+    </li>
   );
 }
 

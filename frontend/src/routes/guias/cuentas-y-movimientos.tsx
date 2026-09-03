@@ -210,7 +210,7 @@ function AccountsGuide() {
           icon={Search}
           glow="cyan"
           title="Cuando algo no cuadra"
-          lead="Los cuatro casos que se ven de verdad, y qué hacer en cada uno."
+          lead="Los casos que se ven de verdad, y qué hacer en cada uno."
           delay={315}
         >
           <Case title="No llega nada">
@@ -234,6 +234,17 @@ function AccountsGuide() {
             pertenece. Si venía de una alerta, Finflow guarda aparte{" "}
             <strong className="text-text">lo que dijo el banco</strong>, para que
             siempre se pueda comparar tu corrección con el original.
+          </Case>
+          <Case title="Registré algo que nunca pasó">
+            Ábrelo y usa <strong className="text-text">Eliminar movimiento</strong>: eso
+            lo borra y le devuelve al saldo lo que se llevó — un gasto de 2.000 borrado
+            son 2.000 que la cuenta vuelve a tener, y en una tarjeta de crédito es la
+            deuda la que baja. Antes de confirmar, Finflow te dice exactamente qué va a
+            pasar con tu saldo y con tus totales, porque depende del tipo de movimiento.
+            Si es un traslado con sus dos mitades aquí, se borran las dos: una sola
+            dejaría un pago apuntando a algo que ya no existe. No se puede deshacer, así
+            que si el movimiento sí ocurrió y solo está mal, corrígelo en vez de
+            borrarlo.
           </Case>
           <Case title="Pagué la tarjeta y el gasto se duplicó">
             No debería: un pago de tarjeta se registra como traslado y no cuenta como
@@ -274,7 +285,8 @@ function AccountsGuide() {
             </Never>
             <Never>
               No borra cuentas. Una cuenta cerrada conserva su historia: un crédito
-              pagado que cierra en cero es justo lo que hay que poder ver.
+              pagado que cierra en cero es justo lo que hay que poder ver. Un movimiento
+              suelto sí se puede eliminar — es la cuenta entera la que no.
             </Never>
           </ul>
         </Section>

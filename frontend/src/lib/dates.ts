@@ -34,6 +34,50 @@ export function formatDateTime(epochSeconds: number): string {
   }).format(toDate(epochSeconds));
 }
 
+/**
+ * "2026-02-15" — a calendar date the API states rather than an instant — as
+ * "15 feb 2026".
+ *
+ * Read as UTC on purpose, unlike `formatDate`: this is a day, not a moment.
+ * Parsed in Bogota it would be midnight UTC-5 the day before, and a statement
+ * cut on the 15th would render as the 14th.
+ */
+export function formatIsoDate(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  if (!year || !month || !date) return day;
+
+  return new Intl.DateTimeFormat(LOCALE, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, date)));
+}
+
+/** The same, without the year — for a table where every row is this one. */
+export function formatIsoDayMonth(day: string): string {
+  const [year, month, date] = day.split("-").map(Number);
+  if (!year || !month || !date) return day;
+
+  return new Intl.DateTimeFormat(LOCALE, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, date)));
+}
+
+/** Today in Bogota, as the `YYYY-MM-DD` the API's date fields take. */
+export function todayIso(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: DISPLAY_TIMEZONE,
+  }).format(new Date());
+
+  return parts;
+}
+
 /** "2026-08" — the `key` of a `group_by=month` bucket — as "agosto 2026". */
 export function formatMonthKey(key: string): string {
   const [year, month] = key.split("-");

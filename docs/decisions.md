@@ -361,6 +361,170 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   longer moved, and `erased` is a list rather than an id because a transfer
   takes two rows with it.
 
+- **The screen states the consequence before it happens, and the consequence
+  is computed, not written.** A generic "¿seguro?" would be worthless here:
+  what deleting does is genuinely different for four independent reasons —
+  whether the movement is on an account, whether that account is an asset or a
+  liability, whether it is a transfer, and whether its other half is here. The
+  liability case is the one nobody guesses: erasing a card purchase *lowers*
+  the debt and erasing a payment to the card *raises* it, so a screen reading
+  `direction` without `category` gets it backwards half the time. The words
+  therefore live in `frontend/src/lib/deletion.ts` and are tested shape by
+  shape, rather than in JSX where they cannot be.
+
+- **The alternative offered is type-dependent too, and that was a real bug
+  caught by looking at it.** The first version ended every confirmation with
+  "Corregir también permite sacarlo de la cuenta sin borrarlo" — untrue on a
+  movement that is on no account, and refused with a 409 on a leg paid from
+  outside the app, which names no instrument and so could never be adopted
+  back. The same screenshot pass caught the confirmation opening below the
+  fold on a phone: a destructive choice whose buttons cannot be seen reads as
+  a button that did nothing, so opening it scrolls its actions into view.
+
+- **The list does not offer it; the detail does.** Deleting is not a bulk
+  operation and its whole safety rests on reading what it will do first, which
+  is a paragraph — not something that fits on a swipe. The movement detail is
+  also where correcting already lives, which is the alternative most people
+  actually want.
+
+### Loans, mortgages and investments (2026-09-03)
+
+- **A loan and a mortgage are watched, never counted.** They are outside net
+  worth, outside what the app reports as owed, and outside every total. This
+  is the frame the rest of the entry sits in, and it came from the owner:
+  Finflow answers where the money somebody spends goes, and a mortgage is not
+  that question. Its owner already knows what they owe — their bank tells them
+  every month, at the figure the bank calls authoritative — and putting a
+  twenty-year commitment in front of what they spent this week answers
+  something nobody asked. So `AccountKind.informational` is true for `LOAN`
+  and `MORTGAGE`, `_net_worth` skips them, and `_countable` drops their
+  movements before any total is taken.
+
+  A **credit card is deliberately not informational**, and the difference is
+  what the account is for: a card is *how* money is spent, every purchase on
+  it is a purchase this app exists to show, and what it owes is that spending
+  unpaid.
+
+  `category` stays `LIABILITY` on a loan, because it answers a different
+  question — which way the balance moves when a payment arrives — and merging
+  the two would have made a debt shrink on the wrong side.
+
+  The one exception: a caller that names the loan by `account_id` gets its
+  figures. The same courtesy `TransferView.ONLY` extends, and for the same
+  reason — a screen looking straight at one credit would read a zero as a bug.
+
+- **The interest is not counted as spending, and that is not a contradiction.**
+  It is the same cuota seen from the other side. The payment that services the
+  loan leaves a real account and is recorded as it leaves; counting the month's
+  interest as well would report one payment twice. So the accrual rows exist,
+  move the loan's own balance and explain it — and reach no report. Which also
+  reverses the advice the guide used to give: **do not** record the payment
+  that left your savings account as a transfer, because that is the expense.
+  Record the leg on the *credit* instead, so its debt falls.
+
+- **A loan's balance moves without anybody spending anything, and a plain
+  ledger lies about it.** 60 000 000 owed at 19.56 % E.A., paid 2 000 000,
+  leaves 58 920 622.87 — not 58 000 000. The month charged 899 922.87 of
+  interest and the bank added 20 700 of *seguro de vida deudores*, and the
+  payment cleared both before it reduced anything. No alert carries that: an
+  alert says a payment was made, never what the payment was made of. Recorded
+  as the payment alone the debt falls too fast **every month, and by more each
+  time**, and nothing arriving later contradicts it.
+
+- **The charges are ledger rows, not an adjustment to a number.** Each closed
+  period writes one movement for the interest and one per insurance, with
+  `origin: accrual`. That keeps the balance the running total of things
+  somebody can read — `rebuild` reproduces it, which an integration test
+  asserts. The alternative, a computed balance sitting beside the ledger, is a
+  number nobody can retrace and nothing can repair. Those rows are then kept
+  out of every total by the rule above; being rows is what lets the credit's
+  own screen explain itself, not a claim on anybody's spending.
+
+- **Identity is (account, item, period), never the amount.** A month is
+  charged once whatever the arithmetic later says it came to, so re-running
+  the accrual writes a key the ledger already holds and the conditional insert
+  refuses it. Including the amount would let a balance corrected after the
+  fact post the same month twice at two figures. The cursor
+  (`Account.accrued_through`) is an optimisation and never the authority: rows
+  go out first and the mark moves last, so a crash between them costs a
+  repeated walk and nothing else.
+
+- **`accrue_from` defaults to today, and that is the whole trap.** Somebody
+  declaring a mortgage they have paid for three years types the balance their
+  bank shows them, and that figure already contains those three years of
+  interest. Charging them again would double the debt. Rebuilding from the
+  disbursement is offered, explicitly, for the case where the opening balance
+  *is* the original amount.
+
+- **Three rate bases, because a bank quotes three.** 19.56 % E.A. is 1.4999 %
+  a month; 19.56 % nominal anual is 1.63 %. Reading one as the other is a
+  tenth of the interest, so the basis is stored beside the value and the
+  account still shows the number the contract showed. Rates above 10 (as a
+  fraction) are refused: that is what a percentage typed unconverted looks
+  like, and the frontend converts in exactly one function so the two units
+  cannot disagree.
+
+- **Charges are four bases, not "an amount per month".** *Seguro de vida
+  deudores* is a rate on the outstanding balance and falls as the debt is
+  paid; *seguro de incendio y terremoto* is a rate on the property's insured
+  value and does not; an administration fee is flat; *retención en la fuente*
+  is a rate on what a period earned. Flattening them is what makes a
+  projection drift. `charged_to_balance` is false when the bank collects it
+  elsewhere — that debit arrives as its own alert, and posting it here as
+  well would charge one insurance twice. Two charges may not share a name:
+  each is posted once per period under it, so the second would never be
+  charged at all.
+
+- **A credit card is deliberately excluded.** It charges interest too, on
+  whatever part of the statement went unpaid — which nothing here knows. A
+  month of interest posted on the balance would invent a debt for everybody
+  who pays theirs in full. Also out: UVR-indexed mortgages (the index is not
+  in the app) and interés de mora.
+
+- **Half-open periods, and interest on the balance the period closes with.**
+  A period is `[cut, cut)`, so a payment on the cut day belongs to the next
+  one — the same convention every other window in this codebase keeps. Only
+  two periods are ever shorter than a month and both prorate 30/360: the stub
+  from disbursement to the first cut, and the part-month between the last cut
+  and today. A whole period always accrues the monthly rate exactly, so a
+  posted charge reconciles against a statement; the 30/360 split of the
+  *current* period between "pending" and the schedule's first row loses a day
+  or two, which only ever affects the projection.
+
+- **Pending interest is measured from the last cut, never from the cursor.**
+  Found by looking at the screen: an account six months behind reported
+  5.8M of "intereses corridos desde el último corte", which is both the wrong
+  label and an understatement, since those months compound. They are counted
+  instead (`periods_due`) and the answer to a non-zero count is to post them —
+  which is the button already on that screen.
+
+- **`closing = opening - principal`, always.** A charge added to the balance
+  is cleared by the same instalment that added it, so it cancels out of the
+  split; the capital portion is capped by the debt itself, and the last
+  instalment absorbs the cents that rounding every row to the cent leaves
+  behind (a thousandth of a payment, so the rule means the same in pesos and
+  dollars). Without that the table grows a final row owing one peso, which is
+  a row nobody can reconcile against a payoff quote.
+
+- **An investment is valued, not restated.** `PUT /accounts/{id}/balance`
+  solves the opening balance backwards so the movements still add up — right
+  for a savings account whose history is incomplete, and wrong here, because
+  the gain then lives in the opening balance and every report answers that the
+  position returned nothing. `POST /accounts/{id}/value` records the
+  difference as a movement instead, keyed by the value stated so a double
+  submit is refused and a correction still lands. Fixed income (a CDT, a
+  remunerated account) accrues like a loan in reverse; variable income carries
+  no rate, and saying so is the honest answer rather than projecting a share
+  price.
+
+- **Nothing schedules the accrual yet.** It happens when somebody presses
+  *Actualizar*, per account. `POST /financial/accrue` sweeps every financed
+  account in one call and exists for the scheduled run that has not been
+  built; wiring it to a screen load was rejected — a write that happens
+  because a page opened is a write nobody asked for. Until then a balance is
+  behind by however many cuts have closed unvisited, which is exactly what
+  `periods_due` says on the screen.
+
 ### Transfers between the owner's own accounts (2026-08-31)
 
 - **A card payment is two movements, and the type system says so.** The alert

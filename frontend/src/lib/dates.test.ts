@@ -3,11 +3,14 @@ import {
   currentMonthKey,
   formatDate,
   formatDateTime,
+  formatIsoDate,
+  formatIsoDayMonth,
   formatMonthKey,
   fromLocalInput,
   monthDayRange,
   monthRange,
   previousMonthKey,
+  todayIso,
   toLocalInput,
 } from "@/lib/dates";
 
@@ -118,5 +121,26 @@ describe("monthDayRange", () => {
   it("refuses a malformed key rather than inventing a month", () => {
     expect(monthDayRange("2026-13")).toBeNull();
     expect(monthDayRange("nope")).toBeNull();
+  });
+});
+
+describe("formatIsoDate", () => {
+  it("renders a calendar date as the day it says", () => {
+    // Read as UTC, not as Bogota: parsed there, midnight on the 15th is the
+    // 14th at seven in the evening, and a statement cut would render a day
+    // early every single time.
+    expect(formatIsoDate("2026-02-15")).toBe("15 de feb de 2026");
+    expect(formatIsoDayMonth("2026-02-15")).toBe("15 de feb");
+  });
+
+  it("hands back anything it cannot read", () => {
+    expect(formatIsoDate("")).toBe("");
+    expect(formatIsoDate("nunca")).toBe("nunca");
+  });
+});
+
+describe("todayIso", () => {
+  it("is a date the API's date fields accept", () => {
+    expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

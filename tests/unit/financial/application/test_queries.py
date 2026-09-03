@@ -12,8 +12,10 @@ from personal_finance.contexts.financial.application.ports import (
     MerchantAttribution,
 )
 from personal_finance.contexts.financial.application.queries import (
+    AccountScope,
     FinancialHistory,
     HistoryQuery,
+    ListAccountsUseCase,
     ListTransactionsUseCase,
     MovementFilter,
     ReadFinancialHistoryUseCase,
@@ -1707,3 +1709,116 @@ def test_a_filter_cannot_be_built_without_saying_what_to_do_with_transfers() -> 
     and wrong in the direction that reads a card payment as spending."""
     with pytest.raises(TypeError):
         MovementFilter(user_id=USER_ID)  # type: ignore[call-arg]
+
+
+# ------------------------------------------------- watched, never counted
+
+
+def _open(
+    accounts: InMemoryAccounts,
+    *,
+    kind: AccountKind,
+    holds: str,
+    name: str = "Cuenta",
+) -> Account:
+    account = Account.open(
+        user_id=USER_ID,
+        name=name,
+        kind=kind,
+        currency=Currency.COP,
+        opened_at=PosixTime.from_epoch_seconds(JULY_MIDDAY),
+        opening_balance=Money(amount=Decimal(holds), currency=Currency.COP),
+    )
+    accounts.save(account)
+
+    return account
+
+
+def test_a_mortgage_is_not_in_net_worth_and_not_in_what_is_owed(
+    accounts: InMemoryAccounts,
+) -> None:
+    """The rule the whole financing feature sits behind.
+
+    Finflow answers where the money somebody spends goes. A mortgage is not
+    that question: its owner already knows what they owe, at the figure their
+    bank calls authoritative, and a twenty-year commitment in front of what
+    they spent this month answers something nobody asked. So it keeps a
+    balance and a schedule of its own and reaches no total.
+    """
+    _open(accounts, kind=AccountKind.SAVINGS, holds="3000000", name="Ahorros")
+    _open(accounts, kind=AccountKind.CREDIT_CARD, holds="450000", name="Tarjeta")
+    _open(accounts, kind=AccountKind.MORTGAGE, holds="60000000", name="Hipoteca")
+
+    view = ListAccountsUseCase(accounts=accounts).execute(
+        user_id=USER_ID,
+        scope=AccountScope.ALL,
+    )
+    figure = view.net_worth[0]
+
+    # The card is in: its balance *is* this month's spending, unpaid.
+    assert figure.assets == Decimal("3000000")
+    assert figure.liabilities == Decimal("450000")
+    assert figure.total == Decimal("2550000")
+    # And the mortgage is still listed — watched, not hidden.
+    assert len(view.accounts) == 3
+
+
+def test_the_interest_a_mortgage_charged_is_not_this_months_spending(
+    accounts: InMemoryAccounts,
+    ledger: InMemoryLedger,
+) -> None:
+    """It is the same cuota, seen from the other side.
+
+    The payment that services the loan leaves a real account and is recorded
+    as it leaves. Counting the interest the month charged as well would report
+    that one payment twice.
+    """
+    mortgage = _open(accounts, kind=AccountKind.MORTGAGE, holds="60000000")
+    savings = _open(accounts, kind=AccountKind.SAVINGS, holds="3000000")
+    _spend(
+        ledger,
+        counterparty="Intereses",
+        amount="899922.87",
+        account_id=mortgage.id,
+    )
+    _spend(
+        ledger,
+        counterparty="Cuota hipoteca",
+        amount="2000000",
+        account_id=savings.id,
+    )
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(filter=_filter(transfers=TransferView.EXCLUDE)),
+    )
+
+    assert [str(figure.outgoing) for figure in summary.totals] == ["2000000"]
+
+
+def test_asking_about_the_mortgage_by_name_still_answers(
+    accounts: InMemoryAccounts,
+    ledger: InMemoryLedger,
+) -> None:
+    """The courtesy `TransferView.ONLY` already extends.
+
+    A screen looking straight at one loan wants its figures; answering zero
+    for the account somebody explicitly named would read as a bug.
+    """
+    mortgage = _open(accounts, kind=AccountKind.MORTGAGE, holds="60000000")
+    _spend(
+        ledger,
+        counterparty="Intereses",
+        amount="899922.87",
+        account_id=mortgage.id,
+    )
+
+    summary = SummarizeSpendingUseCase(ledger=ledger, accounts=accounts).execute(
+        SummaryQuery(
+            filter=_filter(
+                transfers=TransferView.EXCLUDE,
+                account_id=mortgage.id,
+            ),
+        ),
+    )
+
+    assert [str(figure.outgoing) for figure in summary.totals] == ["899922.87"]

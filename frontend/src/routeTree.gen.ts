@@ -21,10 +21,12 @@ import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
 import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
 import { Route as GuiasIndexRouteImport } from './routes/guias/index'
 import { Route as GuiasCuentasYMovimientosRouteImport } from './routes/guias/cuentas-y-movimientos'
+import { Route as GuiasPrestamosEInversionesRouteImport } from './routes/guias/prestamos-e-inversiones'
 import { Route as ReportesIndexRouteImport } from './routes/reportes/index'
 import { Route as TransaccionesIndexRouteImport } from './routes/transacciones/index'
 import { Route as TransaccionesTransactionIdRouteImport } from './routes/transacciones/$transactionId'
 import { Route as TransaccionesNuevaRouteImport } from './routes/transacciones/nueva'
+import { Route as CuentasAccountIdFinanciacionRouteImport } from './routes/cuentas/$accountId.financiacion'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -87,6 +89,12 @@ const GuiasCuentasYMovimientosRoute =
     path: '/guias/cuentas-y-movimientos',
     getParentRoute: () => rootRouteImport,
   } as any)
+const GuiasPrestamosEInversionesRoute =
+  GuiasPrestamosEInversionesRouteImport.update({
+    id: '/guias/prestamos-e-inversiones',
+    path: '/guias/prestamos-e-inversiones',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ReportesIndexRoute = ReportesIndexRouteImport.update({
   id: '/reportes/',
   path: '/reportes/',
@@ -108,6 +116,12 @@ const TransaccionesNuevaRoute = TransaccionesNuevaRouteImport.update({
   path: '/transacciones/nueva',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CuentasAccountIdFinanciacionRoute =
+  CuentasAccountIdFinanciacionRouteImport.update({
+    id: '/cuentas/$accountId/financiacion',
+    path: '/cuentas/$accountId/financiacion',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -119,6 +133,7 @@ export interface FileRoutesByFullPath {
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
   '/comercios/': typeof ComerciosIndexRoute
@@ -126,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/guias/': typeof GuiasIndexRoute
   '/reportes/': typeof ReportesIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
+  '/cuentas/$accountId/financiacion': typeof CuentasAccountIdFinanciacionRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -137,6 +153,7 @@ export interface FileRoutesByTo {
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
   '/comercios': typeof ComerciosIndexRoute
@@ -144,6 +161,7 @@ export interface FileRoutesByTo {
   '/guias': typeof GuiasIndexRoute
   '/reportes': typeof ReportesIndexRoute
   '/transacciones': typeof TransaccionesIndexRoute
+  '/cuentas/$accountId/financiacion': typeof CuentasAccountIdFinanciacionRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -156,6 +174,7 @@ export interface FileRoutesById {
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
   '/comercios/': typeof ComerciosIndexRoute
@@ -163,6 +182,7 @@ export interface FileRoutesById {
   '/guias/': typeof GuiasIndexRoute
   '/reportes/': typeof ReportesIndexRoute
   '/transacciones/': typeof TransaccionesIndexRoute
+  '/cuentas/$accountId/financiacion': typeof CuentasAccountIdFinanciacionRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -176,6 +196,7 @@ export interface FileRouteTypes {
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
     | '/comercios/'
@@ -183,6 +204,7 @@ export interface FileRouteTypes {
     | '/guias/'
     | '/reportes/'
     | '/transacciones/'
+    | '/cuentas/$accountId/financiacion'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -194,6 +216,7 @@ export interface FileRouteTypes {
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
     | '/comercios'
@@ -201,6 +224,7 @@ export interface FileRouteTypes {
     | '/guias'
     | '/reportes'
     | '/transacciones'
+    | '/cuentas/$accountId/financiacion'
   id:
     | '__root__'
     | '/'
@@ -212,6 +236,7 @@ export interface FileRouteTypes {
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
     | '/comercios/'
@@ -219,6 +244,7 @@ export interface FileRouteTypes {
     | '/guias/'
     | '/reportes/'
     | '/transacciones/'
+    | '/cuentas/$accountId/financiacion'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -231,6 +257,7 @@ export interface RootRouteChildren {
   ComerciosMerchantIdRoute: typeof ComerciosMerchantIdRoute
   CuentasNuevaRoute: typeof CuentasNuevaRoute
   GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
+  GuiasPrestamosEInversionesRoute: typeof GuiasPrestamosEInversionesRoute
   TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
   TransaccionesNuevaRoute: typeof TransaccionesNuevaRoute
   ComerciosIndexRoute: typeof ComerciosIndexRoute
@@ -238,6 +265,7 @@ export interface RootRouteChildren {
   GuiasIndexRoute: typeof GuiasIndexRoute
   ReportesIndexRoute: typeof ReportesIndexRoute
   TransaccionesIndexRoute: typeof TransaccionesIndexRoute
+  CuentasAccountIdFinanciacionRoute: typeof CuentasAccountIdFinanciacionRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -326,6 +354,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuiasCuentasYMovimientosRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/guias/prestamos-e-inversiones': {
+      id: '/guias/prestamos-e-inversiones'
+      path: '/guias/prestamos-e-inversiones'
+      fullPath: '/guias/prestamos-e-inversiones'
+      preLoaderRoute: typeof GuiasPrestamosEInversionesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/reportes/': {
       id: '/reportes/'
       path: '/reportes'
@@ -354,6 +389,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TransaccionesNuevaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cuentas/$accountId/financiacion': {
+      id: '/cuentas/$accountId/financiacion'
+      path: '/cuentas/$accountId/financiacion'
+      fullPath: '/cuentas/$accountId/financiacion'
+      preLoaderRoute: typeof CuentasAccountIdFinanciacionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -367,6 +409,7 @@ const rootRouteChildren: RootRouteChildren = {
   ComerciosMerchantIdRoute: ComerciosMerchantIdRoute,
   CuentasNuevaRoute: CuentasNuevaRoute,
   GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,
+  GuiasPrestamosEInversionesRoute: GuiasPrestamosEInversionesRoute,
   TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
   TransaccionesNuevaRoute: TransaccionesNuevaRoute,
   ComerciosIndexRoute: ComerciosIndexRoute,
@@ -374,6 +417,7 @@ const rootRouteChildren: RootRouteChildren = {
   GuiasIndexRoute: GuiasIndexRoute,
   ReportesIndexRoute: ReportesIndexRoute,
   TransaccionesIndexRoute: TransaccionesIndexRoute,
+  CuentasAccountIdFinanciacionRoute: CuentasAccountIdFinanciacionRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

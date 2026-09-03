@@ -44,11 +44,15 @@
         "type": "string"
       },
       "AccountKindOption": {
-        "description": "An account kind, and which side of net worth it lands on.\n\n`category` is derived from the kind and never chosen, so a client can\ngroup the dropdown — and say \"money you owe\" against a balance — without\nduplicating the rule that decides it.",
+        "description": "An account kind, which side it lands on, and whether it is counted.\n\n`category` is derived from the kind and never chosen, so a client can\ngroup the dropdown — and say \"money you owe\" against a balance — without\nduplicating the rule that decides it.\n\n`informational` is the other half of that: a loan and a mortgage keep a\nbalance and a schedule of their own and take part in no total, so a form\ncan say so while somebody is choosing rather than leaving them to notice\nthat their net worth did not move.",
         "properties": {
           "category": {
             "title": "Category",
             "type": "string"
+          },
+          "informational": {
+            "title": "Informational",
+            "type": "boolean"
           },
           "label": {
             "title": "Label",
@@ -62,7 +66,8 @@
         "required": [
           "value",
           "label",
-          "category"
+          "category",
+          "informational"
         ],
         "title": "AccountKindOption",
         "type": "object"
@@ -93,6 +98,17 @@
       },
       "AccountResponse": {
         "properties": {
+          "accrued_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Through"
+          },
           "available": {
             "anyOf": [
               {
@@ -153,6 +169,10 @@
             "title": "Id",
             "type": "string"
           },
+          "informational": {
+            "title": "Informational",
+            "type": "boolean"
+          },
           "instruments": {
             "items": {
               "type": "string"
@@ -160,9 +180,29 @@
             "title": "Instruments",
             "type": "array"
           },
+          "investment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestmentTermsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "kind": {
             "title": "Kind",
             "type": "string"
+          },
+          "loan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoanTermsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "movements_applied": {
             "title": "Movements Applied",
@@ -186,6 +226,7 @@
           "name",
           "kind",
           "category",
+          "informational",
           "currency",
           "balance",
           "opening_balance",
@@ -208,6 +249,81 @@
         ],
         "title": "AccountScope",
         "type": "string"
+      },
+      "AccrualResponse": {
+        "description": "What one account's accrual wrote.\n\n`skipped` counts the charges a previous run had already written. Running\nthis twice is meant to be safe, and seeing that it was is more use than\ninferring it from silence.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountResponse"
+          },
+          "accrued_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrued Through"
+          },
+          "posted": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionResponse"
+            },
+            "title": "Posted",
+            "type": "array"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account",
+          "posted",
+          "skipped",
+          "accrued_through",
+          "reason"
+        ],
+        "title": "AccrualResponse",
+        "type": "object"
+      },
+      "AccruePayload": {
+        "description": "Post whatever the closed periods charged, up to a day.\n\n`through` left out means today, read in `timezone`: a cut on the 15th is\nthe 15th where the owner lives, and a period closed in UTC would charge a\nBogotá mortgage five hours early on the last day of some months.",
+        "properties": {
+          "through": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Through"
+          },
+          "timezone": {
+            "default": "America/Bogota",
+            "maxLength": 64,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "title": "AccruePayload",
+        "type": "object"
       },
       "AliasResponse": {
         "description": "One child: a spelling that resolves to this merchant.",
@@ -252,6 +368,16 @@
         ],
         "title": "AliasResponse",
         "type": "object"
+      },
+      "AmortizationStyle": {
+        "description": "How a loan's instalment is put together.\n\nPersisted with the account, so the values are explicit.",
+        "enum": [
+          "french",
+          "constant_principal",
+          "interest_only"
+        ],
+        "title": "AmortizationStyle",
+        "type": "string"
       },
       "CatalogOption": {
         "description": "One admissible value, and something to put beside it in a dropdown.",
@@ -326,6 +452,177 @@
           "new_password"
         ],
         "title": "ChangePasswordPayload",
+        "type": "object"
+      },
+      "ChargeAmountResponse": {
+        "description": "One charge, priced for one period.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "charged_to_balance": {
+            "title": "Charged To Balance",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "charged_to_balance"
+        ],
+        "title": "ChargeAmountResponse",
+        "type": "object"
+      },
+      "ChargeBasis": {
+        "description": "What a recurring charge is a proportion of.\n\nFour bases because the four charges a Colombian loan or investment\nactually carries are each a proportion of something different, and\nflattening them into \"an amount per month\" is what makes a projection\ndrift: the life insurance falls with the debt, the fire insurance does\nnot, and the withholding exists only when something was earned.",
+        "enum": [
+          "fixed",
+          "outstanding_balance",
+          "original_principal",
+          "insured_value",
+          "earnings"
+        ],
+        "title": "ChargeBasis",
+        "type": "string"
+      },
+      "ChargePayload": {
+        "description": "One thing charged every period besides the interest.\n\nA *seguro de vida deudores* is a rate on what is owed; a *seguro de\nincendio y terremoto* is a rate on what the property is insured for, which\nis not a balance this app holds; an administration fee is a flat amount;\n*retención en la fuente* is a rate on what an investment earned. Which\n`basis` is chosen decides which of `amount`, `rate` and `base` is\nrequired, and the wrong pairing is refused rather than silently priced\nat zero.\n\n`charged_to_balance` is false when the bank collects it somewhere else —\nits own direct debit on a savings account. It is then part of what has to\nbe paid and never part of this balance, because that debit arrives as its\nown alert and posting it here as well would charge one insurance twice.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ChargeBasis"
+          },
+          "charged_to_balance": {
+            "default": true,
+            "title": "Charged To Balance",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          }
+        },
+        "required": [
+          "name",
+          "basis"
+        ],
+        "title": "ChargePayload",
+        "type": "object"
+      },
+      "ChargeResponse": {
+        "description": "One thing charged every period besides the interest.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ChargeBasis"
+          },
+          "charged_to_balance": {
+            "title": "Charged To Balance",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          }
+        },
+        "required": [
+          "name",
+          "basis",
+          "amount",
+          "rate",
+          "base",
+          "charged_to_balance"
+        ],
+        "title": "ChargeResponse",
         "type": "object"
       },
       "Currency": {
@@ -682,6 +979,20 @@
             "title": "Account Scopes",
             "type": "array"
           },
+          "amortization_styles": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Amortization Styles",
+            "type": "array"
+          },
+          "charge_bases": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Charge Bases",
+            "type": "array"
+          },
           "currencies": {
             "items": {
               "$ref": "#/components/schemas/CatalogOption"
@@ -701,6 +1012,13 @@
               "$ref": "#/components/schemas/CatalogOption"
             },
             "title": "Movement Directions",
+            "type": "array"
+          },
+          "rate_bases": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Rate Bases",
             "type": "array"
           },
           "summary_groupings": {
@@ -782,6 +1100,9 @@
           "trend_intervals",
           "trend_dimensions",
           "transfer_views",
+          "rate_bases",
+          "charge_bases",
+          "amortization_styles",
           "transfer_roles"
         ],
         "title": "FinancialCatalogResponse",
@@ -810,6 +1131,96 @@
           "comparison"
         ],
         "title": "FinancialHistoryResponse",
+        "type": "object"
+      },
+      "FinancingResponse": {
+        "description": "What an account that computes will do, worked out from today's balance.\n\nNever stored. A table assumes every instalment is paid on the day it is\ndue, so the moment a real payment lands the balance it starts from moves\nand the whole table with it.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountResponse"
+          },
+          "as_of": {
+            "title": "As Of",
+            "type": "string"
+          },
+          "next_due_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due On"
+          },
+          "next_statement_on": {
+            "title": "Next Statement On",
+            "type": "string"
+          },
+          "payoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payoff"
+          },
+          "pending_interest": {
+            "title": "Pending Interest",
+            "type": "string"
+          },
+          "performance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestmentPerformanceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "periods_due": {
+            "title": "Periods Due",
+            "type": "integer"
+          },
+          "projection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InvestmentProjectionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoanScheduleResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "account",
+          "as_of",
+          "pending_interest",
+          "periods_due",
+          "payoff",
+          "next_statement_on",
+          "next_due_on",
+          "schedule",
+          "projection",
+          "performance"
+        ],
+        "title": "FinancingResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -953,6 +1364,186 @@
         "title": "InstrumentKind",
         "type": "string"
       },
+      "InvestmentPerformanceResponse": {
+        "description": "What went in, what came out, and what the position actually made.\n\nRead off the ledger rather than from the balance, which is the only way\nthe gain is separable at all: a contribution and a return both raise the\nsame number, and only the row says which it was. `earned` is signed and\nnet of every charge the position carried.",
+        "properties": {
+          "contributed": {
+            "title": "Contributed",
+            "type": "string"
+          },
+          "earned": {
+            "title": "Earned",
+            "type": "string"
+          },
+          "withdrawn": {
+            "title": "Withdrawn",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contributed",
+          "withdrawn",
+          "earned"
+        ],
+        "title": "InvestmentPerformanceResponse",
+        "type": "object"
+      },
+      "InvestmentProjectionResponse": {
+        "properties": {
+          "matures_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matures On"
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedReturnResponse"
+            },
+            "title": "Periods",
+            "type": "array"
+          },
+          "total_charges": {
+            "title": "Total Charges",
+            "type": "string"
+          },
+          "total_earned": {
+            "title": "Total Earned",
+            "type": "string"
+          },
+          "value_at_end": {
+            "title": "Value At End",
+            "type": "string"
+          }
+        },
+        "required": [
+          "periods",
+          "total_earned",
+          "total_charges",
+          "value_at_end",
+          "matures_on"
+        ],
+        "title": "InvestmentProjectionResponse",
+        "type": "object"
+      },
+      "InvestmentTermsPayload": {
+        "description": "How an investment earns, when it earns at a rate at all.\n\nA CDT, a remunerated savings account or a fund with an agreed return has a\nrate and its value can be computed. Shares and a fund whose unit price\nmoves have none: send no `rate` and state what it is worth through\n`POST /accounts/{id}/value` instead, which records the difference as a\nmovement so the gain is visible rather than folded into a balance.",
+        "properties": {
+          "accrue_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrue From"
+          },
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargePayload"
+            },
+            "maxItems": 12,
+            "title": "Charges",
+            "type": "array"
+          },
+          "matures_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matures On"
+          },
+          "opened_on": {
+            "format": "date",
+            "title": "Opened On",
+            "type": "string"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RatePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "statement_day": {
+            "maximum": 31.0,
+            "minimum": 1.0,
+            "title": "Statement Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "opened_on",
+          "statement_day"
+        ],
+        "title": "InvestmentTermsPayload",
+        "type": "object"
+      },
+      "InvestmentTermsResponse": {
+        "properties": {
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeResponse"
+            },
+            "title": "Charges",
+            "type": "array"
+          },
+          "matures_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matures On"
+          },
+          "opened_on": {
+            "title": "Opened On",
+            "type": "string"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RateResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "statement_day": {
+            "title": "Statement Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "opened_on",
+          "statement_day",
+          "rate",
+          "matures_on",
+          "charges"
+        ],
+        "title": "InvestmentTermsResponse",
+        "type": "object"
+      },
       "LinkInstrumentPayload": {
         "description": "Teach an account another of the names its alerts arrive under.\n\nOne real account emails as a debit card for purchases and as an account\nnumber for transfers, under different last four digits. Both have to be\nlinked or half its movements wait forever.",
         "properties": {
@@ -977,6 +1568,241 @@
           "last_four"
         ],
         "title": "LinkInstrumentPayload",
+        "type": "object"
+      },
+      "LoanScheduleResponse": {
+        "properties": {
+          "negatively_amortizing": {
+            "title": "Negatively Amortizing",
+            "type": "boolean"
+          },
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduledPaymentResponse"
+            },
+            "title": "Payments",
+            "type": "array"
+          },
+          "settles_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settles On"
+          },
+          "total_charges": {
+            "title": "Total Charges",
+            "type": "string"
+          },
+          "total_due": {
+            "title": "Total Due",
+            "type": "string"
+          },
+          "total_interest": {
+            "title": "Total Interest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "payments",
+          "total_interest",
+          "total_charges",
+          "total_due",
+          "settles_on",
+          "negatively_amortizing"
+        ],
+        "title": "LoanScheduleResponse",
+        "type": "object"
+      },
+      "LoanTermsPayload": {
+        "description": "What a loan costs, so what is owed can be more than what is unpaid.\n\nNone of it can be read from a bank alert: an alert says a payment was\nmade, never what the payment was made of. Paying 2 000 000 against\n60 000 000 does not leave 58 000 000, because the month charged interest\nfirst and the insurance after it.\n\nAmounts are bare figures in the account's own currency, like the credit\nlimit and the restated balance — asking a caller to restate the currency\nonly creates a way to get it wrong.\n\n`accrue_from` is where the arithmetic starts. **Left out it means today**,\nwhich is right for the ordinary case: somebody declaring a mortgage they\nhave paid for three years states the balance their bank shows, and that\nfigure already contains those three years of interest. Send the\ndisbursement date instead — with the amount disbursed as the opening\nbalance — to have the history rebuilt from the beginning.",
+        "properties": {
+          "accrue_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accrue From"
+          },
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargePayload"
+            },
+            "maxItems": 12,
+            "title": "Charges",
+            "type": "array"
+          },
+          "disbursed_on": {
+            "format": "date",
+            "title": "Disbursed On",
+            "type": "string"
+          },
+          "installment": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installment"
+          },
+          "installment_covers_charges": {
+            "default": false,
+            "title": "Installment Covers Charges",
+            "type": "boolean"
+          },
+          "payment_day": {
+            "anyOf": [
+              {
+                "maximum": 31.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Day"
+          },
+          "principal": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/RatePayload"
+          },
+          "statement_day": {
+            "maximum": 31.0,
+            "minimum": 1.0,
+            "title": "Statement Day",
+            "type": "integer"
+          },
+          "style": {
+            "$ref": "#/components/schemas/AmortizationStyle",
+            "default": "french"
+          },
+          "term_months": {
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Term Months",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rate",
+          "disbursed_on",
+          "term_months",
+          "statement_day"
+        ],
+        "title": "LoanTermsPayload",
+        "type": "object"
+      },
+      "LoanTermsResponse": {
+        "properties": {
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeResponse"
+            },
+            "title": "Charges",
+            "type": "array"
+          },
+          "disbursed_on": {
+            "title": "Disbursed On",
+            "type": "string"
+          },
+          "installment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installment"
+          },
+          "installment_covers_charges": {
+            "title": "Installment Covers Charges",
+            "type": "boolean"
+          },
+          "matures_on": {
+            "title": "Matures On",
+            "type": "string"
+          },
+          "payment_day": {
+            "title": "Payment Day",
+            "type": "integer"
+          },
+          "principal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal"
+          },
+          "rate": {
+            "$ref": "#/components/schemas/RateResponse"
+          },
+          "statement_day": {
+            "title": "Statement Day",
+            "type": "integer"
+          },
+          "style": {
+            "$ref": "#/components/schemas/AmortizationStyle"
+          },
+          "term_months": {
+            "title": "Term Months",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rate",
+          "disbursed_on",
+          "term_months",
+          "statement_day",
+          "payment_day",
+          "style",
+          "principal",
+          "installment",
+          "installment_covers_charges",
+          "charges",
+          "matures_on"
+        ],
+        "title": "LoanTermsResponse",
         "type": "object"
       },
       "LoginPayload": {
@@ -1569,6 +2395,113 @@
         "title": "ProcessingStatus",
         "type": "string"
       },
+      "ProjectedReturnResponse": {
+        "properties": {
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeAmountResponse"
+            },
+            "title": "Charges",
+            "type": "array"
+          },
+          "closing_balance": {
+            "title": "Closing Balance",
+            "type": "string"
+          },
+          "earned": {
+            "title": "Earned",
+            "type": "string"
+          },
+          "ends_on": {
+            "title": "Ends On",
+            "type": "string"
+          },
+          "opening_balance": {
+            "title": "Opening Balance",
+            "type": "string"
+          },
+          "starts_on": {
+            "title": "Starts On",
+            "type": "string"
+          }
+        },
+        "required": [
+          "starts_on",
+          "ends_on",
+          "opening_balance",
+          "earned",
+          "charges",
+          "closing_balance"
+        ],
+        "title": "ProjectedReturnResponse",
+        "type": "object"
+      },
+      "RateBasis": {
+        "description": "How a rate is quoted, because the same product quotes it three ways.\n\nExplicit string values: the basis is persisted with the account, so\nreordering the members must not re-read anybody's loan at another rate.",
+        "enum": [
+          "effective_annual",
+          "nominal_annual",
+          "monthly"
+        ],
+        "title": "RateBasis",
+        "type": "string"
+      },
+      "RatePayload": {
+        "description": "La tasa de interés, as a fraction and in the basis the bank quotes it.\n\n`0.1956`, never `19.56`. The three bases are the three ways a rate is\nprinted here — `efectivo anual` (E.A.), `nominal anual` capitalizing\nmonthly (N.A. M.V.) and the monthly rate itself (M.V.) — and they are not\ninterchangeable: 19.56 % E.A. is 1.4999 % a month, while 19.56 % nominal\nis 1.63 %, and reading one as the other is a tenth of the interest.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/RateBasis"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "value",
+          "basis"
+        ],
+        "title": "RatePayload",
+        "type": "object"
+      },
+      "RateResponse": {
+        "description": "A rate as its owner typed it, plus the one figure that compares.\n\n`value` is a fraction — `0.1956`, not `19.56` — in whatever basis the bank\nquoted. `effective_annual` and `monthly` are the same rate converted, so a\nscreen can show \"19.56 % E.A. (1.4999 % mensual)\" without re-deriving a\nconversion that has to agree with the one the charges were computed from.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/RateBasis"
+          },
+          "effective_annual": {
+            "title": "Effective Annual",
+            "type": "string"
+          },
+          "monthly": {
+            "title": "Monthly",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "basis",
+          "effective_annual",
+          "monthly"
+        ],
+        "title": "RateResponse",
+        "type": "object"
+      },
       "RegisterPayload": {
         "description": "Registration, plus the same optional sender approval `PATCH\n/identity/inbox` accepts — set here to skip a second call, or leave\nempty and approve senders later. The forwarding address itself is\nassigned regardless of whether any sender is named here.",
         "properties": {
@@ -1714,6 +2647,100 @@
           "balance"
         ],
         "title": "RestateBalancePayload",
+        "type": "object"
+      },
+      "RevaluePayload": {
+        "description": "What this investment is worth now.\n\nThe difference against what the ledger says is recorded **as a movement**,\nnot folded into the opening balance the way `PUT /balance` does it. That\nis the whole point: a gain nobody can see as a row is a gain no report can\nattribute, and an investment whose return is invisible reads exactly like\na savings account.",
+        "properties": {
+          "market_value": {
+            "anyOf": [
+              {
+                "maximum": 1000000000000000.0,
+                "minimum": -1000000000000000.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Market Value"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "maximum": 253402300799.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          }
+        },
+        "required": [
+          "market_value"
+        ],
+        "title": "RevaluePayload",
+        "type": "object"
+      },
+      "ScheduledPaymentResponse": {
+        "description": "One row of la tabla de amortización.\n\n`principal` is the only figure that moves the debt, and the reason the\ntable is worth rendering: it is what the payment was worth once the month\ntook what it was owed.",
+        "properties": {
+          "charges": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeAmountResponse"
+            },
+            "title": "Charges",
+            "type": "array"
+          },
+          "closing_balance": {
+            "title": "Closing Balance",
+            "type": "string"
+          },
+          "due": {
+            "title": "Due",
+            "type": "string"
+          },
+          "due_on": {
+            "title": "Due On",
+            "type": "string"
+          },
+          "ends_on": {
+            "title": "Ends On",
+            "type": "string"
+          },
+          "interest": {
+            "title": "Interest",
+            "type": "string"
+          },
+          "opening_balance": {
+            "title": "Opening Balance",
+            "type": "string"
+          },
+          "principal": {
+            "title": "Principal",
+            "type": "string"
+          },
+          "starts_on": {
+            "title": "Starts On",
+            "type": "string"
+          }
+        },
+        "required": [
+          "starts_on",
+          "ends_on",
+          "due_on",
+          "opening_balance",
+          "interest",
+          "charges",
+          "principal",
+          "due",
+          "closing_balance"
+        ],
+        "title": "ScheduledPaymentResponse",
         "type": "object"
       },
       "SetCreditLimitPayload": {
@@ -2140,10 +3167,11 @@
         "type": "object"
       },
       "TransactionOrigin": {
-        "description": "Where a movement came from, which decides what may be trusted about it.\n\nA bank alert states a fact somebody else recorded; a manual entry is the\nuser's own claim. Automatic payments that never email are exactly why the\nsecond exists.",
+        "description": "Where a movement came from, which decides what may be trusted about it.\n\nA bank alert states a fact somebody else recorded; a manual entry is the\nuser's own claim. Automatic payments that never email are exactly why the\nsecond exists.\n\nAn **accrual** is neither: nobody typed it and no bank announced it. It is\nwhat this app computed from the terms the owner declared — a month of\ninterest on a mortgage, the insurance that month carried, what a CDT\nearned. Its own origin because it is the one a reader has to be able to\ntell apart: an interest charge is real money leaving somebody's net worth,\nbut it is the only movement in the ledger whose authority is an\narithmetic rather than a fact, so a wrong rate is corrected by restating\nthe terms rather than by arguing with the bank.",
         "enum": [
           "bank_alert",
-          "manual"
+          "manual",
+          "accrual"
         ],
         "title": "TransactionOrigin",
         "type": "string"
@@ -2873,6 +3901,64 @@
         ]
       }
     },
+    "/financial/accounts/{account_id}/accrue": {
+      "post": {
+        "description": "Post what the closed periods charged, as ordinary movements.\n\nA month of interest and the insurance it carried become ledger rows, so\nthe balance stays the running total of things somebody can read — and so\nthe interest shows in a month's spending, which is where it belongs: it is\nthe part of a loan that actually costs money, while the instalment itself\nis a transfer between two of the owner's own balances.\n\nSafe to call as often as you like. Each charge is identified by its\naccount and its period, so a second call writes a key the ledger already\nholds and is refused there; `skipped` says how many.",
+        "operationId": "accrue_account_financial_accounts__account_id__accrue_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccruePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccrualResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Accrue Account",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/accounts/{account_id}/balance": {
       "put": {
         "description": "Correct what this account holds, without touching a single movement.\n\nFor the ordinary case of declaring an account and not knowing what it\nheld before the alerts Finflow already has: open it at zero, then send\nthe figure the bank shows today. The opening balance is solved backwards\nso the ledger still adds up to it, every movement keeps counting exactly\nonce, and net worth follows from the corrected number.\n\nPUT because the body carries the whole fact. Allowed on a closed account:\ncorrecting what was already there is not new money moving.",
@@ -3037,6 +4123,140 @@
         ]
       }
     },
+    "/financial/accounts/{account_id}/financing": {
+      "delete": {
+        "description": "Stop computing charges, keeping every period already posted.\n\nThe rows stay: they are movements like any other and the balance is their\nrunning total, so taking them back would be inventing a different history.\nWhat stops is the future.",
+        "operationId": "clear_financing_financial_accounts__account_id__financing_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clear Financing",
+        "tags": [
+          "financial"
+        ]
+      },
+      "get": {
+        "description": "La tabla de amortización, and what settling today would take.\n\nWorked out from the balance the ledger holds right now, never from the\namount originally borrowed: a table built from the principal describes a\nloan nobody has. Nothing here is stored, because it assumes every\ninstalment is paid on the day it is due and the first real payment that\nlands early or late moves the whole table.",
+        "operationId": "read_financing_financial_accounts__account_id__financing_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "periods",
+            "required": false,
+            "schema": {
+              "default": 12,
+              "maximum": 600,
+              "minimum": 1,
+              "title": "Periods",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Financing",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/accounts/{account_id}/instruments": {
       "post": {
         "description": "Add another card or account number whose alerts belong here.\n\nOne real account emails as a debit card for purchases and as an account\nnumber for transfers. Linking is always the owner's call — inferring it\nwould be guessing about somebody's money — and it adopts the movements\nalready waiting under that key.",
@@ -3090,6 +4310,231 @@
           }
         ],
         "summary": "Link Instrument",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/investment": {
+      "put": {
+        "description": "State how this investment earns, when it earns at a rate at all.\n\nLeave `rate` out for variable income — shares, a fund whose unit price\nmoves. Nothing about those can be computed, and what they are worth is\nstated through `POST /accounts/{id}/value` instead.",
+        "operationId": "set_investment_terms_financial_accounts__account_id__investment_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestmentTermsPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Investment Terms",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/loan": {
+      "put": {
+        "description": "State what this loan costs: the rate, the term, the cut, the insurance.\n\nOnly a loan or a mortgage takes these. A credit card is deliberately left\nout even though it charges interest too: its interest is charged on\nwhatever part of the statement went unpaid, which nothing in this app\nknows, and posting a month of it would invent a debt for everybody who\npays their card in full.\n\nPUT because the body carries the whole fact — sending it again replaces\nthe terms rather than merging into them. Every period already posted stays\nexactly as it was: a rate corrected today did not change what last March\nactually charged.",
+        "operationId": "set_loan_terms_financial_accounts__account_id__loan_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoanTermsPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Loan Terms",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/value": {
+      "post": {
+        "description": "State what this investment is worth now, recording the difference.\n\nNot the same thing as `PUT /accounts/{id}/balance`, and the difference is\nthe whole reason this exists. A restatement solves the opening balance\nbackwards so the ledger still adds up, which is right for a savings\naccount whose history is incomplete — and wrong here, because the gain\nthen lives in the opening balance and every report answers that the\nposition returned nothing. This records it as a movement instead.\n\nStating the value it already has changes nothing and is not an error,\nwhich is what makes a double submit harmless.",
+        "operationId": "revalue_account_financial_accounts__account_id__value_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevaluePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccrualResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revalue Account",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accrue": {
+      "post": {
+        "description": "The same, for every financed account this user holds.\n\nThe shape a scheduled run wants, and the shape a client wants when a\nscreen opens: one call brings every loan and every fixed-income position\nup to date, and accounts with nothing to charge answer with a reason\nrather than an error.",
+        "operationId": "accrue_everything_financial_accrue_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccruePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccrualResponse"
+                  },
+                  "title": "Response Accrue Everything Financial Accrue Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Accrue Everything",
         "tags": [
           "financial"
         ]

@@ -60,10 +60,38 @@ class AccountKind(enum.Enum):
             else AccountCategory.ASSET
         )
 
+    @property
+    def informational(self) -> bool:
+        """Whether this account is **watched rather than counted**.
+
+        Finflow answers one question: where the money somebody spends goes. A
+        loan and a mortgage are outside it, and deliberately so. Their owner
+        already knows what they owe — the bank tells them every month, at the
+        figure the bank considers authoritative — and the payment that services
+        them is money leaving a real account, where it is already recorded as
+        it leaves. Counting the debt in net worth would put a number nobody is
+        managing here in front of every other figure; counting its interest as
+        spending would count the same cuota twice, once where it left and once
+        where it landed.
+
+        So these accounts keep a balance, a schedule and a history of their
+        own, and take part in no total. `category` is a separate question and
+        still answers `LIABILITY`: what decides which way a debt moves when a
+        payment arrives is not what decides whether the debt is summed.
+        """
+        return self in _INFORMATIONAL_KINDS
+
 
 _LIABILITY_KINDS = frozenset(
     {AccountKind.CREDIT_CARD, AccountKind.LOAN, AccountKind.MORTGAGE},
 )
+
+# A credit card is **not** here, and the difference is what the account is
+# for. A card is how money is spent — every purchase on it is a purchase
+# Finflow exists to show — and what it owes is that spending, unpaid. A
+# mortgage is a commitment somebody already has, serviced from an account this
+# app is watching anyway.
+_INFORMATIONAL_KINDS = frozenset({AccountKind.LOAN, AccountKind.MORTGAGE})
 
 
 class InstrumentKind(enum.Enum):

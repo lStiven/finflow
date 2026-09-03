@@ -31,7 +31,6 @@ from collections.abc import Sequence
 import dataclasses
 import datetime as dt
 from decimal import Decimal
-import logging
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from personal_finance.contexts.financial.application.commands import (
@@ -54,6 +53,8 @@ from personal_finance.contexts.financial.domain.exceptions import (
     FinancingTermsError,
 )
 from personal_finance.contexts.financial.domain.financing import (
+    MAX_DATE,
+    MIN_DATE,
     VALUATION_LABEL,
     AccruedPeriod,
     InvestmentProjection,
@@ -64,6 +65,7 @@ from personal_finance.contexts.financial.domain.financing import (
     StatementPeriod,
     accrue_period,
     first_cut_after,
+    last_cut_on_or_before,
     on_day,
     project_investment,
     project_loan,
@@ -80,8 +82,6 @@ from personal_finance.contexts.financial.domain.value_objects import (
 from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import Money, PosixTime, UserId
 
-
-_logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEZONE = "America/Bogota"
 
@@ -298,7 +298,12 @@ class AccrueFinancingUseCase:
 
     def execute(self, command: AccrueFinancingCommand) -> Sequence[AccrualResult]:
         zone = zone_of(command.timezone)
-        through = command.through or today_in(zone)
+        today = today_in(zone)
+        # Never past today, whatever was asked for. A future date would post
+        # interest for months that have not happened — and the cursor only
+        # ever moves forward, so nothing would charge them again once they
+        # did. `through` narrows the window; it cannot widen it.
+        through = today if command.through is None else min(command.through, today)
 
         if command.account_id is not None:
             account = self._accounts.find(
@@ -554,7 +559,10 @@ class RevalueAccountUseCase:
         transaction = Transaction.accrue(
             user_id=account.user_id,
             account_id=account.id,
-            item=valuation_item(command.market_value),
+            item=valuation_item(
+                held=account.balance.signed_amount,
+                stated=command.market_value,
+            ),
             label=VALUATION_LABEL,
             direction=(
                 MovementDirection.INCOMING if delta > 0 else MovementDirection.OUTGOING
@@ -607,17 +615,27 @@ class InvestmentPerformance:
 class FinancingView:
     """Everything an owner needs to see about an account that computes.
 
-    `pending` is the part nobody has been charged yet: the days between the
-    last cut and today, priced at the same rate. It carries no charges, and
-    that is not an omission — insurance is charged whole on the cut day, so a
-    part-month owes none of it, and adding it would overstate a payoff by the
-    one figure somebody is most likely to check.
+    `pending_interest` is the part nobody has been charged yet: the days
+    between **the last cut** and today, priced at the same rate. It carries no
+    charges, and that is not an omission — insurance is charged whole on the
+    cut day, so a part-month owes none of it, and adding it would overstate a
+    payoff by the one figure somebody is most likely to check.
+
+    `periods_due` is the other half of that sentence and the reason it is
+    measured from the cut rather than from the cursor. Months that closed and
+    were never posted are not "interest running": they are charges the ledger
+    is missing, and rolling them into one prorated figure would both mislabel
+    them and understate them, since they compound. So they are counted
+    instead, and the answer to a non-zero count is to post them.
     """
 
     account: Account
     as_of: dt.date
     # Interest accrued since the last cut and not yet posted.
     pending_interest: Money
+    # Closed statement periods whose charges are not in the ledger yet. Zero
+    # whenever the accrual is up to date, which is the ordinary state.
+    periods_due: int
     # What settling today would take: the balance plus what it has accrued
     # since the last statement. None on an account holding nothing.
     payoff: Money | None
@@ -669,8 +687,18 @@ class ReadFinancingUseCase:
             )
 
         day = as_of or today_in(zone_of(timezone))
+
+        if day < MIN_DATE or day > MAX_DATE:
+            # The walk that builds a schedule adds months to this, and a date
+            # at the edge of the calendar makes that raise from inside
+            # `datetime` rather than come back as a refusal.
+            raise FinancingTermsError(
+                f"A schedule cannot be projected from {day.isoformat()}",
+            )
+
         horizon = min(max(periods, 1), MAX_SCHEDULE_PERIODS)
         pending = self._pending(account, as_of=day)
+        due = self._periods_due(account, as_of=day)
         outstanding = account.outstanding
         payoff = (
             None
@@ -686,6 +714,7 @@ class ReadFinancingUseCase:
             account=account,
             as_of=day,
             pending_interest=pending.interest,
+            periods_due=due,
             payoff=payoff,
             next_statement_on=next_cut,
             next_due_on=(
@@ -718,12 +747,36 @@ class ReadFinancingUseCase:
             ),
         )
 
-    def _pending(self, account: Account, *, as_of: dt.date) -> AccruedPeriod:
-        """Interest for the days since the last cut, which nobody owes yet.
+    def _periods_due(self, account: Account, *, as_of: dt.date) -> int:
+        """How many closed periods the ledger is still missing."""
+        since = account.accrued_through or account.financing_started_on
+        terms = account.financing
 
-        Prorated 30/360 and charged on the balance as it stands. An estimate,
-        and said to be one: a payment landing tomorrow changes it, which is
-        exactly why it is not written anywhere.
+        if since is None or terms is None or not account.accrues:
+            return 0
+
+        return len(
+            statement_periods(
+                since=since,
+                through=min(as_of, _stops_on(account) or as_of),
+                statement_day=terms.statement_day,
+            ),
+        )
+
+    def _pending(self, account: Account, *, as_of: dt.date) -> AccruedPeriod:
+        """Interest for the days since **the last cut**, which nobody owes yet.
+
+        Measured from the cut and not from the posting cursor, however far
+        behind that has fallen. Interest between two cuts is charged whole on
+        the second of them, so a cursor six months back does not mean six
+        months of "running interest" — it means six charges the ledger never
+        got, which compound and which `periods_due` counts instead. Rolling
+        them in here would put a wrong number under a label that reads as a
+        few days.
+
+        Prorated 30/360 on the balance as it stands. An estimate, and said to
+        be one: a payment landing tomorrow changes it, which is exactly why it
+        is not written anywhere.
         """
         currency = account.currency
         nothing = AccruedPeriod(
@@ -740,9 +793,13 @@ class ReadFinancingUseCase:
         if outstanding is None or terms is None or not account.accrues:
             return nothing
 
-        since = account.accrued_through or account.financing_started_on
+        posted = account.accrued_through or account.financing_started_on
+        cut = last_cut_on_or_before(as_of, terms.statement_day)
+        # The later of the two: nothing before the cut is "running", and
+        # nothing before the cursor has been left uncharged.
+        since = cut if posted is None else max(posted, cut)
 
-        if since is None or since >= as_of:
+        if since >= as_of:
             return nothing
 
         return accrue_period(

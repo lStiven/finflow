@@ -40,6 +40,36 @@ export interface paths {
         patch: operations["rename_account_financial_accounts__account_id__patch"];
         trace?: never;
     };
+    "/financial/accounts/{account_id}/accrue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accrue Account
+         * @description Post what the closed periods charged, as ordinary movements.
+         *
+         *     A month of interest and the insurance it carried become ledger rows, so
+         *     the balance stays the running total of things somebody can read — and so
+         *     the interest shows in a month's spending, which is where it belongs: it is
+         *     the part of a loan that actually costs money, while the instalment itself
+         *     is a transfer between two of the owner's own balances.
+         *
+         *     Safe to call as often as you like. Each charge is identified by its
+         *     account and its period, so a second call writes a key the ledger already
+         *     holds and is refused there; `skipped` says how many.
+         */
+        post: operations["accrue_account_financial_accounts__account_id__accrue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/accounts/{account_id}/balance": {
         parameters: {
             query?: never;
@@ -115,6 +145,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/accounts/{account_id}/financing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Financing
+         * @description La tabla de amortización, and what settling today would take.
+         *
+         *     Worked out from the balance the ledger holds right now, never from the
+         *     amount originally borrowed: a table built from the principal describes a
+         *     loan nobody has. Nothing here is stored, because it assumes every
+         *     instalment is paid on the day it is due and the first real payment that
+         *     lands early or late moves the whole table.
+         */
+        get: operations["read_financing_financial_accounts__account_id__financing_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Clear Financing
+         * @description Stop computing charges, keeping every period already posted.
+         *
+         *     The rows stay: they are movements like any other and the balance is their
+         *     running total, so taking them back would be inventing a different history.
+         *     What stops is the future.
+         */
+        delete: operations["clear_financing_financial_accounts__account_id__financing_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/accounts/{account_id}/instruments": {
         parameters: {
             query?: never;
@@ -134,6 +198,116 @@ export interface paths {
          *     already waiting under that key.
          */
         post: operations["link_instrument_financial_accounts__account_id__instruments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/accounts/{account_id}/investment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Investment Terms
+         * @description State how this investment earns, when it earns at a rate at all.
+         *
+         *     Leave `rate` out for variable income — shares, a fund whose unit price
+         *     moves. Nothing about those can be computed, and what they are worth is
+         *     stated through `POST /accounts/{id}/value` instead.
+         */
+        put: operations["set_investment_terms_financial_accounts__account_id__investment_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/accounts/{account_id}/loan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Loan Terms
+         * @description State what this loan costs: the rate, the term, the cut, the insurance.
+         *
+         *     Only a loan or a mortgage takes these. A credit card is deliberately left
+         *     out even though it charges interest too: its interest is charged on
+         *     whatever part of the statement went unpaid, which nothing in this app
+         *     knows, and posting a month of it would invent a debt for everybody who
+         *     pays their card in full.
+         *
+         *     PUT because the body carries the whole fact — sending it again replaces
+         *     the terms rather than merging into them. Every period already posted stays
+         *     exactly as it was: a rate corrected today did not change what last March
+         *     actually charged.
+         */
+        put: operations["set_loan_terms_financial_accounts__account_id__loan_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/accounts/{account_id}/value": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revalue Account
+         * @description State what this investment is worth now, recording the difference.
+         *
+         *     Not the same thing as `PUT /accounts/{id}/balance`, and the difference is
+         *     the whole reason this exists. A restatement solves the opening balance
+         *     backwards so the ledger still adds up, which is right for a savings
+         *     account whose history is incomplete — and wrong here, because the gain
+         *     then lives in the opening balance and every report answers that the
+         *     position returned nothing. This records it as a movement instead.
+         *
+         *     Stating the value it already has changes nothing and is not an error,
+         *     which is what makes a double submit harmless.
+         */
+        post: operations["revalue_account_financial_accounts__account_id__value_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/accrue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accrue Everything
+         * @description The same, for every financed account this user holds.
+         *
+         *     The shape a scheduled run wants, and the shape a client wants when a
+         *     screen opens: one call brings every loan and every fixed-income position
+         *     up to date, and accounts with nothing to charge answer with a reason
+         *     rather than an error.
+         */
+        post: operations["accrue_everything_financial_accrue_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -936,15 +1110,22 @@ export interface components {
         AccountKind: "savings" | "checking" | "cash" | "investment" | "credit_card" | "loan" | "mortgage";
         /**
          * AccountKindOption
-         * @description An account kind, and which side of net worth it lands on.
+         * @description An account kind, which side it lands on, and whether it is counted.
          *
          *     `category` is derived from the kind and never chosen, so a client can
          *     group the dropdown — and say "money you owe" against a balance — without
          *     duplicating the rule that decides it.
+         *
+         *     `informational` is the other half of that: a loan and a mortgage keep a
+         *     balance and a schedule of their own and take part in no total, so a form
+         *     can say so while somebody is choosing rather than leaving them to notice
+         *     that their net worth did not move.
          */
         AccountKindOption: {
             /** Category */
             category: string;
+            /** Informational */
+            informational: boolean;
             /** Label */
             label: string;
             /** Value */
@@ -959,6 +1140,8 @@ export interface components {
         };
         /** AccountResponse */
         AccountResponse: {
+            /** Accrued Through */
+            accrued_through?: string | null;
             /** Available */
             available: string | null;
             /** Balance */
@@ -975,10 +1158,14 @@ export interface components {
             currency: string;
             /** Id */
             id: string;
+            /** Informational */
+            informational: boolean;
             /** Instruments */
             instruments: string[];
+            investment?: components["schemas"]["InvestmentTermsResponse"] | null;
             /** Kind */
             kind: string;
+            loan?: components["schemas"]["LoanTermsResponse"] | null;
             /** Movements Applied */
             movements_applied: number;
             /** Name */
@@ -993,6 +1180,42 @@ export interface components {
          * @enum {string}
          */
         AccountScope: "open" | "closed" | "all";
+        /**
+         * AccrualResponse
+         * @description What one account's accrual wrote.
+         *
+         *     `skipped` counts the charges a previous run had already written. Running
+         *     this twice is meant to be safe, and seeing that it was is more use than
+         *     inferring it from silence.
+         */
+        AccrualResponse: {
+            account: components["schemas"]["AccountResponse"];
+            /** Accrued Through */
+            accrued_through: string | null;
+            /** Posted */
+            posted: components["schemas"]["TransactionResponse"][];
+            /** Reason */
+            reason: string | null;
+            /** Skipped */
+            skipped: number;
+        };
+        /**
+         * AccruePayload
+         * @description Post whatever the closed periods charged, up to a day.
+         *
+         *     `through` left out means today, read in `timezone`: a cut on the 15th is
+         *     the 15th where the owner lives, and a period closed in UTC would charge a
+         *     Bogotá mortgage five hours early on the last day of some months.
+         */
+        AccruePayload: {
+            /** Through */
+            through?: string | null;
+            /**
+             * Timezone
+             * @default America/Bogota
+             */
+            timezone: string;
+        };
         /**
          * AliasResponse
          * @description One child: a spelling that resolves to this merchant.
@@ -1013,6 +1236,14 @@ export interface components {
             /** Times Seen */
             times_seen: number;
         };
+        /**
+         * AmortizationStyle
+         * @description How a loan's instalment is put together.
+         *
+         *     Persisted with the account, so the values are explicit.
+         * @enum {string}
+         */
+        AmortizationStyle: "french" | "constant_principal" | "interest_only";
         /**
          * CatalogOption
          * @description One admissible value, and something to put beside it in a dropdown.
@@ -1041,6 +1272,80 @@ export interface components {
             current_password: string;
             /** New Password */
             new_password: string;
+        };
+        /**
+         * ChargeAmountResponse
+         * @description One charge, priced for one period.
+         */
+        ChargeAmountResponse: {
+            /** Amount */
+            amount: string;
+            /** Charged To Balance */
+            charged_to_balance: boolean;
+            /** Name */
+            name: string;
+        };
+        /**
+         * ChargeBasis
+         * @description What a recurring charge is a proportion of.
+         *
+         *     Four bases because the four charges a Colombian loan or investment
+         *     actually carries are each a proportion of something different, and
+         *     flattening them into "an amount per month" is what makes a projection
+         *     drift: the life insurance falls with the debt, the fire insurance does
+         *     not, and the withholding exists only when something was earned.
+         * @enum {string}
+         */
+        ChargeBasis: "fixed" | "outstanding_balance" | "original_principal" | "insured_value" | "earnings";
+        /**
+         * ChargePayload
+         * @description One thing charged every period besides the interest.
+         *
+         *     A *seguro de vida deudores* is a rate on what is owed; a *seguro de
+         *     incendio y terremoto* is a rate on what the property is insured for, which
+         *     is not a balance this app holds; an administration fee is a flat amount;
+         *     *retención en la fuente* is a rate on what an investment earned. Which
+         *     `basis` is chosen decides which of `amount`, `rate` and `base` is
+         *     required, and the wrong pairing is refused rather than silently priced
+         *     at zero.
+         *
+         *     `charged_to_balance` is false when the bank collects it somewhere else —
+         *     its own direct debit on a savings account. It is then part of what has to
+         *     be paid and never part of this balance, because that debit arrives as its
+         *     own alert and posting it here as well would charge one insurance twice.
+         */
+        ChargePayload: {
+            /** Amount */
+            amount?: number | string | null;
+            /** Base */
+            base?: number | string | null;
+            basis: components["schemas"]["ChargeBasis"];
+            /**
+             * Charged To Balance
+             * @default true
+             */
+            charged_to_balance: boolean;
+            /** Name */
+            name: string;
+            /** Rate */
+            rate?: number | string | null;
+        };
+        /**
+         * ChargeResponse
+         * @description One thing charged every period besides the interest.
+         */
+        ChargeResponse: {
+            /** Amount */
+            amount: string | null;
+            /** Base */
+            base: string | null;
+            basis: components["schemas"]["ChargeBasis"];
+            /** Charged To Balance */
+            charged_to_balance: boolean;
+            /** Name */
+            name: string;
+            /** Rate */
+            rate: string | null;
         };
         /**
          * Currency
@@ -1189,12 +1494,18 @@ export interface components {
             account_kinds: components["schemas"]["AccountKindOption"][];
             /** Account Scopes */
             account_scopes: components["schemas"]["CatalogOption"][];
+            /** Amortization Styles */
+            amortization_styles: components["schemas"]["CatalogOption"][];
+            /** Charge Bases */
+            charge_bases: components["schemas"]["CatalogOption"][];
             /** Currencies */
             currencies: components["schemas"]["CatalogOption"][];
             /** Instrument Kinds */
             instrument_kinds: components["schemas"]["CatalogOption"][];
             /** Movement Directions */
             movement_directions: components["schemas"]["CatalogOption"][];
+            /** Rate Bases */
+            rate_bases: components["schemas"]["CatalogOption"][];
             /** Summary Groupings */
             summary_groupings: components["schemas"]["CatalogOption"][];
             /** Summary Orders */
@@ -1221,6 +1532,32 @@ export interface components {
             months: components["schemas"]["MonthlyPointResponse"][];
             /** Timezone */
             timezone: string;
+        };
+        /**
+         * FinancingResponse
+         * @description What an account that computes will do, worked out from today's balance.
+         *
+         *     Never stored. A table assumes every instalment is paid on the day it is
+         *     due, so the moment a real payment lands the balance it starts from moves
+         *     and the whole table with it.
+         */
+        FinancingResponse: {
+            account: components["schemas"]["AccountResponse"];
+            /** As Of */
+            as_of: string;
+            /** Next Due On */
+            next_due_on: string | null;
+            /** Next Statement On */
+            next_statement_on: string;
+            /** Payoff */
+            payoff: string | null;
+            /** Pending Interest */
+            pending_interest: string;
+            performance: components["schemas"]["InvestmentPerformanceResponse"] | null;
+            /** Periods Due */
+            periods_due: number;
+            projection: components["schemas"]["InvestmentProjectionResponse"] | null;
+            schedule: components["schemas"]["LoanScheduleResponse"] | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1297,6 +1634,74 @@ export interface components {
          */
         InstrumentKind: "credit_card" | "debit_card" | "savings_account" | "checking_account" | "account";
         /**
+         * InvestmentPerformanceResponse
+         * @description What went in, what came out, and what the position actually made.
+         *
+         *     Read off the ledger rather than from the balance, which is the only way
+         *     the gain is separable at all: a contribution and a return both raise the
+         *     same number, and only the row says which it was. `earned` is signed and
+         *     net of every charge the position carried.
+         */
+        InvestmentPerformanceResponse: {
+            /** Contributed */
+            contributed: string;
+            /** Earned */
+            earned: string;
+            /** Withdrawn */
+            withdrawn: string;
+        };
+        /** InvestmentProjectionResponse */
+        InvestmentProjectionResponse: {
+            /** Matures On */
+            matures_on: string | null;
+            /** Periods */
+            periods: components["schemas"]["ProjectedReturnResponse"][];
+            /** Total Charges */
+            total_charges: string;
+            /** Total Earned */
+            total_earned: string;
+            /** Value At End */
+            value_at_end: string;
+        };
+        /**
+         * InvestmentTermsPayload
+         * @description How an investment earns, when it earns at a rate at all.
+         *
+         *     A CDT, a remunerated savings account or a fund with an agreed return has a
+         *     rate and its value can be computed. Shares and a fund whose unit price
+         *     moves have none: send no `rate` and state what it is worth through
+         *     `POST /accounts/{id}/value` instead, which records the difference as a
+         *     movement so the gain is visible rather than folded into a balance.
+         */
+        InvestmentTermsPayload: {
+            /** Accrue From */
+            accrue_from?: string | null;
+            /** Charges */
+            charges?: components["schemas"]["ChargePayload"][];
+            /** Matures On */
+            matures_on?: string | null;
+            /**
+             * Opened On
+             * Format: date
+             */
+            opened_on: string;
+            rate?: components["schemas"]["RatePayload"] | null;
+            /** Statement Day */
+            statement_day: number;
+        };
+        /** InvestmentTermsResponse */
+        InvestmentTermsResponse: {
+            /** Charges */
+            charges: components["schemas"]["ChargeResponse"][];
+            /** Matures On */
+            matures_on: string | null;
+            /** Opened On */
+            opened_on: string;
+            rate: components["schemas"]["RateResponse"] | null;
+            /** Statement Day */
+            statement_day: number;
+        };
+        /**
          * LinkInstrumentPayload
          * @description Teach an account another of the names its alerts arrive under.
          *
@@ -1310,6 +1715,93 @@ export interface components {
             instrument_kind: components["schemas"]["InstrumentKind"];
             /** Last Four */
             last_four: string;
+        };
+        /** LoanScheduleResponse */
+        LoanScheduleResponse: {
+            /** Negatively Amortizing */
+            negatively_amortizing: boolean;
+            /** Payments */
+            payments: components["schemas"]["ScheduledPaymentResponse"][];
+            /** Settles On */
+            settles_on: string | null;
+            /** Total Charges */
+            total_charges: string;
+            /** Total Due */
+            total_due: string;
+            /** Total Interest */
+            total_interest: string;
+        };
+        /**
+         * LoanTermsPayload
+         * @description What a loan costs, so what is owed can be more than what is unpaid.
+         *
+         *     None of it can be read from a bank alert: an alert says a payment was
+         *     made, never what the payment was made of. Paying 2 000 000 against
+         *     60 000 000 does not leave 58 000 000, because the month charged interest
+         *     first and the insurance after it.
+         *
+         *     Amounts are bare figures in the account's own currency, like the credit
+         *     limit and the restated balance — asking a caller to restate the currency
+         *     only creates a way to get it wrong.
+         *
+         *     `accrue_from` is where the arithmetic starts. **Left out it means today**,
+         *     which is right for the ordinary case: somebody declaring a mortgage they
+         *     have paid for three years states the balance their bank shows, and that
+         *     figure already contains those three years of interest. Send the
+         *     disbursement date instead — with the amount disbursed as the opening
+         *     balance — to have the history rebuilt from the beginning.
+         */
+        LoanTermsPayload: {
+            /** Accrue From */
+            accrue_from?: string | null;
+            /** Charges */
+            charges?: components["schemas"]["ChargePayload"][];
+            /**
+             * Disbursed On
+             * Format: date
+             */
+            disbursed_on: string;
+            /** Installment */
+            installment?: number | string | null;
+            /**
+             * Installment Covers Charges
+             * @default false
+             */
+            installment_covers_charges: boolean;
+            /** Payment Day */
+            payment_day?: number | null;
+            /** Principal */
+            principal?: number | string | null;
+            rate: components["schemas"]["RatePayload"];
+            /** Statement Day */
+            statement_day: number;
+            /** @default french */
+            style: components["schemas"]["AmortizationStyle"];
+            /** Term Months */
+            term_months: number;
+        };
+        /** LoanTermsResponse */
+        LoanTermsResponse: {
+            /** Charges */
+            charges: components["schemas"]["ChargeResponse"][];
+            /** Disbursed On */
+            disbursed_on: string;
+            /** Installment */
+            installment: string | null;
+            /** Installment Covers Charges */
+            installment_covers_charges: boolean;
+            /** Matures On */
+            matures_on: string;
+            /** Payment Day */
+            payment_day: number;
+            /** Principal */
+            principal: string | null;
+            rate: components["schemas"]["RateResponse"];
+            /** Statement Day */
+            statement_day: number;
+            style: components["schemas"]["AmortizationStyle"];
+            /** Term Months */
+            term_months: number;
         };
         /** LoginPayload */
         LoginPayload: {
@@ -1541,6 +2033,63 @@ export interface components {
          * @enum {string}
          */
         ProcessingStatus: "received" | "queued" | "processing" | "processed" | "pending_fallback" | "failed" | "ignored";
+        /** ProjectedReturnResponse */
+        ProjectedReturnResponse: {
+            /** Charges */
+            charges: components["schemas"]["ChargeAmountResponse"][];
+            /** Closing Balance */
+            closing_balance: string;
+            /** Earned */
+            earned: string;
+            /** Ends On */
+            ends_on: string;
+            /** Opening Balance */
+            opening_balance: string;
+            /** Starts On */
+            starts_on: string;
+        };
+        /**
+         * RateBasis
+         * @description How a rate is quoted, because the same product quotes it three ways.
+         *
+         *     Explicit string values: the basis is persisted with the account, so
+         *     reordering the members must not re-read anybody's loan at another rate.
+         * @enum {string}
+         */
+        RateBasis: "effective_annual" | "nominal_annual" | "monthly";
+        /**
+         * RatePayload
+         * @description La tasa de interés, as a fraction and in the basis the bank quotes it.
+         *
+         *     `0.1956`, never `19.56`. The three bases are the three ways a rate is
+         *     printed here — `efectivo anual` (E.A.), `nominal anual` capitalizing
+         *     monthly (N.A. M.V.) and the monthly rate itself (M.V.) — and they are not
+         *     interchangeable: 19.56 % E.A. is 1.4999 % a month, while 19.56 % nominal
+         *     is 1.63 %, and reading one as the other is a tenth of the interest.
+         */
+        RatePayload: {
+            basis: components["schemas"]["RateBasis"];
+            /** Value */
+            value: number | string;
+        };
+        /**
+         * RateResponse
+         * @description A rate as its owner typed it, plus the one figure that compares.
+         *
+         *     `value` is a fraction — `0.1956`, not `19.56` — in whatever basis the bank
+         *     quoted. `effective_annual` and `monthly` are the same rate converted, so a
+         *     screen can show "19.56 % E.A. (1.4999 % mensual)" without re-deriving a
+         *     conversion that has to agree with the one the charges were computed from.
+         */
+        RateResponse: {
+            basis: components["schemas"]["RateBasis"];
+            /** Effective Annual */
+            effective_annual: string;
+            /** Monthly */
+            monthly: string;
+            /** Value */
+            value: string;
+        };
         /**
          * RegisterPayload
          * @description Registration, plus the same optional sender approval `PATCH
@@ -1594,6 +2143,50 @@ export interface components {
         RestateBalancePayload: {
             /** Balance */
             balance: number | string;
+        };
+        /**
+         * RevaluePayload
+         * @description What this investment is worth now.
+         *
+         *     The difference against what the ledger says is recorded **as a movement**,
+         *     not folded into the opening balance the way `PUT /balance` does it. That
+         *     is the whole point: a gain nobody can see as a row is a gain no report can
+         *     attribute, and an investment whose return is invisible reads exactly like
+         *     a savings account.
+         */
+        RevaluePayload: {
+            /** Market Value */
+            market_value: number | string;
+            /** Occurred At */
+            occurred_at?: number | null;
+        };
+        /**
+         * ScheduledPaymentResponse
+         * @description One row of la tabla de amortización.
+         *
+         *     `principal` is the only figure that moves the debt, and the reason the
+         *     table is worth rendering: it is what the payment was worth once the month
+         *     took what it was owed.
+         */
+        ScheduledPaymentResponse: {
+            /** Charges */
+            charges: components["schemas"]["ChargeAmountResponse"][];
+            /** Closing Balance */
+            closing_balance: string;
+            /** Due */
+            due: string;
+            /** Due On */
+            due_on: string;
+            /** Ends On */
+            ends_on: string;
+            /** Interest */
+            interest: string;
+            /** Opening Balance */
+            opening_balance: string;
+            /** Principal */
+            principal: string;
+            /** Starts On */
+            starts_on: string;
         };
         /**
          * SetCreditLimitPayload
@@ -1763,9 +2356,18 @@ export interface components {
          *     A bank alert states a fact somebody else recorded; a manual entry is the
          *     user's own claim. Automatic payments that never email are exactly why the
          *     second exists.
+         *
+         *     An **accrual** is neither: nobody typed it and no bank announced it. It is
+         *     what this app computed from the terms the owner declared — a month of
+         *     interest on a mortgage, the insurance that month carried, what a CDT
+         *     earned. Its own origin because it is the one a reader has to be able to
+         *     tell apart: an interest charge is real money leaving somebody's net worth,
+         *     but it is the only movement in the ledger whose authority is an
+         *     arithmetic rather than a fact, so a wrong rate is corrected by restating
+         *     the terms rather than by arguing with the bank.
          * @enum {string}
          */
-        TransactionOrigin: "bank_alert" | "manual";
+        TransactionOrigin: "bank_alert" | "manual" | "accrual";
         /** TransactionResponse */
         TransactionResponse: {
             /** Account Id */
@@ -2151,6 +2753,41 @@ export interface operations {
             };
         };
     };
+    accrue_account_financial_accounts__account_id__accrue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccruePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccrualResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     restate_balance_financial_accounts__account_id__balance_put: {
         parameters: {
             query?: never;
@@ -2252,6 +2889,72 @@ export interface operations {
             };
         };
     };
+    read_financing_financial_accounts__account_id__financing_get: {
+        parameters: {
+            query?: {
+                periods?: number;
+                as_of?: string | null;
+                timezone?: string;
+            };
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinancingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_financing_financial_accounts__account_id__financing_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     link_instrument_financial_accounts__account_id__instruments_post: {
         parameters: {
             query?: never;
@@ -2274,6 +2977,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_investment_terms_financial_accounts__account_id__investment_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestmentTermsPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_loan_terms_financial_accounts__account_id__loan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoanTermsPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revalue_account_financial_accounts__account_id__value_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevaluePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccrualResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accrue_everything_financial_accrue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccruePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccrualResponse"][];
                 };
             };
             /** @description Validation Error */

@@ -14,6 +14,7 @@ import {
 } from "@tanstack/react-query";
 import { api, unwrap } from "@/api/client";
 import type { components, paths } from "@/api/schema";
+import { DISPLAY_TIMEZONE } from "@/lib/dates";
 
 export type Account = components["schemas"]["AccountResponse"];
 export type NetWorth = components["schemas"]["NetWorthResponse"];
@@ -46,6 +47,20 @@ export type MerchantCategory = components["schemas"]["MerchantCategory"];
 export type MerchantSort = components["schemas"]["MerchantSort"];
 export type CategoryOption = components["schemas"]["CategoryResponse"];
 export type InstrumentKind = components["schemas"]["InstrumentKind"];
+/** What a loan costs or an investment earns, and what it will do next. */
+export type Financing = components["schemas"]["FinancingResponse"];
+export type LoanTerms = components["schemas"]["LoanTermsResponse"];
+export type InvestmentTerms = components["schemas"]["InvestmentTermsResponse"];
+export type ScheduledPayment = components["schemas"]["ScheduledPaymentResponse"];
+export type ProjectedReturn = components["schemas"]["ProjectedReturnResponse"];
+export type ChargeAmount = components["schemas"]["ChargeAmountResponse"];
+export type Accrual = components["schemas"]["AccrualResponse"];
+export type LoanTermsPayload = components["schemas"]["LoanTermsPayload"];
+export type InvestmentTermsPayload = components["schemas"]["InvestmentTermsPayload"];
+/** `effective_annual` (% E.A.) | `nominal_annual` (N.A. M.V.) | `monthly`. */
+export type RateBasis = components["schemas"]["RateBasis"];
+export type ChargeBasis = components["schemas"]["ChargeBasis"];
+export type AmortizationStyle = components["schemas"]["AmortizationStyle"];
 
 export const queryKeys = {
   accounts: ["accounts"] as const,
@@ -58,6 +73,7 @@ export const queryKeys = {
   profile: ["profile"] as const,
   setup: ["setup"] as const,
   catalog: ["catalog"] as const,
+  financing: ["financing"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -104,6 +120,29 @@ export const accountQuery = (accountId: string) =>
           params: { path: { account_id: accountId } },
         }),
       ),
+  });
+
+/**
+ * La tabla de amortización, the payoff, and what a position has made.
+ *
+ * Recomputed on the server every time it is asked and never stored, because
+ * it assumes every instalment lands on the day it is due — so this is not
+ * cached beyond a request either. Posting a month's interest changes it, and
+ * so does any movement on the account, which is why the whole family is
+ * invalidated by both.
+ */
+export const financingQuery = (accountId: string, periods = 12) =>
+  queryOptions({
+    queryKey: [...queryKeys.financing, accountId, periods],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/accounts/{account_id}/financing", {
+          params: { path: { account_id: accountId }, query: { periods } },
+        }),
+      ),
+    // An account with no terms answers 409, which is a question nobody has
+    // answered yet rather than a failure worth retrying.
+    retry: false,
   });
 
 /* ------------------------------------------------------------ transactions */
@@ -514,6 +553,52 @@ export function useEditTransaction(
   });
 }
 
+/** Every row an erasure took out, and the balances as they now stand. */
+export type ErasedTransactions = components["schemas"]["DeletedTransactionResponse"];
+
+/**
+ * Erase a movement and give the balance back what it took.
+ *
+ * Not `detach`, which only takes it off its account and leaves it counting in
+ * what came in and went out. This one leaves nothing: the row is gone and the
+ * account holds the money again.
+ *
+ * The response's `erased` is a **list** because a transfer between two of the
+ * owner's own accounts is two rows stating one movement, and the API removes
+ * both — so every one of them has to leave the cache, or the other half's
+ * detail screen keeps answering for a movement that no longer exists. The
+ * trend chart goes too: an erasure is the one write that takes a figure out
+ * of a series that is already drawn.
+ */
+export function useDeleteTransaction(
+  transactionId: string,
+): UseMutationResult<ErasedTransactions, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.DELETE("/financial/transactions/{transaction_id}", {
+          params: { path: { transaction_id: transactionId } },
+        }),
+      ),
+    onSuccess: (data) => {
+      for (const erased of data.erased) {
+        client.removeQueries({
+          queryKey: [...queryKeys.transactions, "detail", erased],
+        });
+      }
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+      client.invalidateQueries({ queryKey: queryKeys.trends });
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      // A schedule is built on the balance the erased row was part of, so a
+      // payment taken off a loan leaves its amortization describing a debt
+      // that is no longer there.
+      client.invalidateQueries({ queryKey: queryKeys.financing });
+    },
+  });
+}
+
 type RenameAccountBody = components["schemas"]["RenameAccountPayload"];
 
 /**
@@ -741,4 +826,136 @@ export function useMergeMerchants(
       }),
     ),
   );
+}
+
+/* -------------------------------------------------- mutations: financiación */
+
+/**
+ * Every financing write moves more than the account it names.
+ *
+ * Declaring terms changes what the next month will charge; posting a month
+ * writes ledger rows and moves a balance. So all of it invalidates the
+ * accounts, the movements and the totals — an interest charge is a real
+ * expense and belongs in the month's spending, and a screen still showing the
+ * old figure would be showing a debt that has since grown.
+ */
+function invalidateFinancing(client: ReturnType<typeof useQueryClient>): void {
+  client.invalidateQueries({ queryKey: queryKeys.accounts });
+  client.invalidateQueries({ queryKey: queryKeys.financing });
+  client.invalidateQueries({ queryKey: queryKeys.transactions });
+  client.invalidateQueries({ queryKey: queryKeys.summary });
+}
+
+/**
+ * What the loan costs. Loans and mortgages only.
+ *
+ * PUT, so the body carries the whole fact: sending it again replaces the
+ * terms rather than merging into them. Every period already posted stays as
+ * it was — a rate corrected today did not change what last March charged.
+ */
+export function useSetLoanTerms(
+  accountId: string,
+): UseMutationResult<Account, Error, LoanTermsPayload> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LoanTermsPayload) =>
+      unwrap(
+        api.PUT("/financial/accounts/{account_id}/loan", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidateFinancing(client),
+  });
+}
+
+/** How the investment earns. Investment accounts only. */
+export function useSetInvestmentTerms(
+  accountId: string,
+): UseMutationResult<Account, Error, InvestmentTermsPayload> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: InvestmentTermsPayload) =>
+      unwrap(
+        api.PUT("/financial/accounts/{account_id}/investment", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidateFinancing(client),
+  });
+}
+
+/** Stop computing. Every month already charged stays in the ledger. */
+export function useClearFinancing(
+  accountId: string,
+): UseMutationResult<Account, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.DELETE("/financial/accounts/{account_id}/financing", {
+          params: { path: { account_id: accountId } },
+        }),
+      ),
+    onSuccess: () => invalidateFinancing(client),
+  });
+}
+
+/**
+ * Post what the closed months charged, as movements.
+ *
+ * Safe to press twice, unlike every other mutation here: each charge is
+ * identified by its account and its period, so the second attempt lands on a
+ * key the ledger already holds and `skipped` says how many. That is why this
+ * one *can* be offered as a plain button rather than guarded behind a
+ * confirmation.
+ *
+ * Per account, deliberately, even though `POST /financial/accrue` sweeps them
+ * all. A write that happens because a screen loaded is a write nobody asked
+ * for; the sweep is the shape a scheduled run wants, not the shape a person
+ * does.
+ */
+export function useAccrue(accountId: string): UseMutationResult<Accrual, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/accrue", {
+          params: { path: { account_id: accountId } },
+          // Bogotá, not the browser's zone, and for the same reason every
+          // date on screen renders there: a cut on the 15th is the 15th where
+          // the account is held, and somebody reading this from another
+          // continent must not close a period a day early.
+          body: { timezone: DISPLAY_TIMEZONE },
+        }),
+      ),
+    onSuccess: () => invalidateFinancing(client),
+  });
+}
+
+type RevalueBody = components["schemas"]["RevaluePayload"];
+
+/**
+ * What an investment is worth today, with the difference kept as a movement.
+ *
+ * Deliberately not `useRestateBalance`, which is the right call for a savings
+ * account and the wrong one here: a restatement hides the gain inside the
+ * opening balance, and a position whose return is invisible reads exactly
+ * like a savings account.
+ */
+export function useRevalue(
+  accountId: string,
+): UseMutationResult<Accrual, Error, RevalueBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RevalueBody) =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/value", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => invalidateFinancing(client),
+  });
 }

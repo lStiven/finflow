@@ -221,6 +221,17 @@ class Account(AggregateRoot[AccountId]):
         return self.kind.category
 
     @property
+    def informational(self) -> bool:
+        """Watched rather than counted: outside net worth and every total.
+
+        True for a loan and a mortgage. See `AccountKind.informational` for
+        why, and note that it says nothing about the balance arithmetic —
+        `category` still answers `LIABILITY`, so a payment arriving still
+        lowers what is owed.
+        """
+        return self.kind.informational
+
+    @property
     def available(self) -> Decimal | None:
         """What is left of the limit: the limit minus what is owed.
 

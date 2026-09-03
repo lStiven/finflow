@@ -574,12 +574,21 @@ class SummarizeSpendingUseCase:
         # One read of the partition even when comparing: the two windows
         # differ only in their bounds, which are applied in memory anyway.
         loaded = _load(self._ledger, criteria)
-        current = _narrow(loaded, criteria)
+        # Read once, and it is the accounts this needs anyway for the labels
+        # of a breakdown by account.
+        held = list(self._accounts.list_by_user(criteria.user_id))
+        watched = _informational(held)
+        countable = _countable(
+            loaded,
+            informational=watched,
+            asked_for=criteria.account_id,
+        )
+        current = _narrow(countable, criteria)
         before = (
             # The bounds are the whole of the difference: `_narrow` reads them
             # off the criteria it is handed.
             _narrow(
-                loaded,
+                countable,
                 dataclasses.replace(criteria, since=window[0], until=window[1]),
             )
             if window is not None
@@ -602,9 +611,10 @@ class SummarizeSpendingUseCase:
         before = _matching_merchant(before, criteria, attributions)
 
         # Only a breakdown by account needs them, and it needs them to say
-        # `Tarjeta Bancolombia` where the row only holds a uuid.
+        # `Tarjeta Bancolombia` where the row only holds a uuid. Off the list
+        # already read above, rather than a second query for the same rows.
         names = (
-            self._account_names(criteria.user_id)
+            _account_names(held)
             if query.group_by is SummaryGrouping.ACCOUNT
             else dict[str, str]()
         )
@@ -672,12 +682,6 @@ class SummarizeSpendingUseCase:
             previous_until=window[1] if window is not None else None,
         )
 
-    def _account_names(self, user_id: UserId) -> Mapping[str, str]:
-        return {
-            str(account.id.value): account.name
-            for account in self._accounts.list_by_user(user_id)
-        }
-
 
 def _in_scope(account: Account, scope: AccountScope) -> bool:
     if scope is AccountScope.ALL:
@@ -691,11 +695,21 @@ def _net_worth(accounts: Sequence[Account]) -> Sequence[NetWorth]:
 
     A closed account still counts: a paid-off loan sitting at zero changes
     nothing, and one closed with a balance is money that is still somewhere.
+
+    An **informational** account does not, and that is the one exclusion here.
+    A loan and a mortgage are watched rather than counted: their owner already
+    knows what they owe, at the figure their bank calls authoritative, and
+    putting a twenty-year commitment in front of what somebody spent this
+    month answers a question they did not ask. Every other account is in,
+    including the credit card, whose balance *is* this month's spending.
     """
     assets: dict[Currency, Decimal] = {}
     liabilities: dict[Currency, Decimal] = {}
 
     for account in accounts:
+        if account.informational:
+            continue
+
         side = assets if account.category is AccountCategory.ASSET else liabilities
         side[account.currency] = (
             side.get(account.currency, Decimal(0)) + account.balance.signed_amount
@@ -712,6 +726,47 @@ def _net_worth(accounts: Sequence[Account]) -> Sequence[NetWorth]:
             key=lambda currency: currency.value,
         )
     ]
+
+
+def _countable(
+    movements: Sequence[Transaction],
+    *,
+    informational: frozenset[AccountId],
+    asked_for: AccountId | None,
+) -> list[Transaction]:
+    """Everything that belongs in a total, which is not everything recorded.
+
+    A movement on a loan or a mortgage is left out for the same reason those
+    accounts are left out of net worth: the cuota that services them is money
+    leaving a real account, already recorded as it leaves, and the interest
+    the month charged is that same cuota seen from the other side. Counting
+    both would report a payment twice — once where it went out and once where
+    it arrived.
+
+    The exception is a caller who asked about that account by name, which is
+    the same courtesy `TransferView.ONLY` extends: a screen looking straight
+    at one loan wants its figures, and answering zero would read as a bug.
+    """
+    if not informational:
+        return list(movements)
+
+    if asked_for is not None and asked_for in informational:
+        return list(movements)
+
+    return [
+        movement
+        for movement in movements
+        if movement.account_id is None or movement.account_id not in informational
+    ]
+
+
+def _informational(accounts: Sequence[Account]) -> frozenset[AccountId]:
+    return frozenset(account.id for account in accounts if account.informational)
+
+
+def _account_names(accounts: Sequence[Account]) -> Mapping[str, str]:
+    """What to call each account, where a movement only carries a uuid."""
+    return {str(account.id.value): account.name for account in accounts}
 
 
 def _load(
@@ -1152,8 +1207,19 @@ class ReadFinancialHistoryUseCase:
         # Two lists on purpose. Balances replay *every* movement, transfers
         # included: paying a card really does move both balances. Totals
         # replay only what was spent or earned, or a card payment would report
-        # as a month's largest expense and again as income on the card.
-        spending = [movement for movement in movements if not movement.is_transfer]
+        # as a month's largest expense and again as income on the card — and
+        # they leave out the loans and mortgages, which are watched rather
+        # than counted.
+        watched = _informational(held)
+        spending = _countable(
+            [movement for movement in movements if not movement.is_transfer],
+            informational=watched,
+            asked_for=None,
+        )
+        # The net-worth run is built from the same accounts, and `_net_worth`
+        # drops the informational ones on its own — so a mortgage still
+        # replays its own balance for its own screen and never reaches a
+        # figure this answers.
 
         keys = _month_keys(instant, span)
         bounds = {key: _month_bounds(zone, key) for key in keys}
@@ -1612,7 +1678,15 @@ class ReadSpendingTrendUseCase:
             until=PosixTime.from_epoch_seconds(int(until.timestamp())),
         )
 
-        found = _narrow(_load(self._ledger, bounded), bounded)
+        held = list(self._accounts.list_by_user(criteria.user_id))
+        found = _narrow(
+            _countable(
+                _load(self._ledger, bounded),
+                informational=_informational(held),
+                asked_for=criteria.account_id,
+            ),
+            bounded,
+        )
         attributions = _attribute(
             self._merchants,
             user_id=criteria.user_id,
@@ -1622,7 +1696,7 @@ class ReadSpendingTrendUseCase:
         )
         found = _matching_merchant(found, bounded, attributions)
         names = (
-            self._account_names(criteria.user_id)
+            _account_names(held)
             if query.dimension is TrendDimension.ACCOUNT
             else dict[str, str]()
         )
@@ -1731,12 +1805,6 @@ class ReadSpendingTrendUseCase:
             _period_bounds(zone, _period_key(since, query.interval), query.interval)[0],
             until,
         )
-
-    def _account_names(self, user_id: UserId) -> Mapping[str, str]:
-        return {
-            str(account.id.value): account.name
-            for account in self._accounts.list_by_user(user_id)
-        }
 
 
 def _band(

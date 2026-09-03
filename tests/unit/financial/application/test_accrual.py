@@ -775,3 +775,93 @@ def test_a_contribution_and_a_return_are_told_apart() -> None:
     assert view.performance.withdrawn.amount == Decimal("0")
     # 11 800 000 held against 10 000 000 opened and 1 000 000 put in.
     assert view.performance.earned.signed_amount == Decimal("800000")
+
+
+def test_months_nobody_posted_are_counted_rather_than_prorated() -> None:
+    """The figure that was wrong on screen, and why it is two figures now.
+
+    A cursor six months behind does not mean six months of interest "running
+    since the last cut". It means six charges the ledger never got, which
+    compound — so rolling them into the part-month estimate would put a wrong
+    number under a label that reads as a few days, and understate it besides.
+    """
+    accounts, ledger = FakeAccounts(), FakeLedger()
+    account = _mortgage(accounts)
+    _declare_loan(accounts, account)
+    _accrue(accounts, ledger, through=dt.date(2026, 2, 20))
+
+    view = ReadFinancingUseCase(accounts=accounts, ledger=ledger).execute(
+        user_id=USER,
+        account_id=account.id,
+        as_of=dt.date(2026, 8, 20),
+        periods=3,
+    )
+
+    # Five days past the August cut, not six months past the February one.
+    assert view.pending_interest.amount == Decimal("152236.76")
+    assert view.periods_due == 6
+
+
+def test_an_account_that_is_up_to_date_owes_no_periods() -> None:
+    accounts, ledger = FakeAccounts(), FakeLedger()
+    account = _mortgage(accounts)
+    _declare_loan(accounts, account)
+    _accrue(accounts, ledger, through=dt.date(2026, 2, 20))
+
+    view = ReadFinancingUseCase(accounts=accounts, ledger=ledger).execute(
+        user_id=USER,
+        account_id=account.id,
+        as_of=dt.date(2026, 2, 20),
+        periods=3,
+    )
+
+    assert view.periods_due == 0
+
+
+def test_stating_a_value_back_to_one_already_used_today_still_lands() -> None:
+    """The sequence that used to leave the value stuck at the middle figure.
+
+    11M, then 15M, then 11M again, all on one day. The third is a real
+    correction and has to be recorded; keyed by the target alone it wrote the
+    first one's key, was refused, and the answer reported success over a
+    balance that had never moved back.
+    """
+    accounts, ledger = FakeAccounts(), FakeLedger()
+    account = _cdt(accounts, balance="11000000")
+    use_case = RevalueAccountUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=RecordingPublisher(),
+    )
+
+    for value in ("15000000", "11000000"):
+        use_case.execute(
+            RevalueAccountCommand(
+                user_id=USER,
+                account_id=account.id,
+                market_value=Decimal(value),
+            ),
+        )
+
+    assert accounts.by_id[str(account.id.value)].balance.signed_amount == Decimal(
+        "11000000",
+    )
+
+
+def test_a_period_that_has_not_closed_cannot_be_charged_by_asking_nicely() -> None:
+    """`through` narrows the window; it cannot widen it.
+
+    A date in the future would post interest for months that have not
+    happened — and the cursor only moves forward, so nothing would ever charge
+    them again once they did.
+    """
+    accounts, ledger = FakeAccounts(), FakeLedger()
+    account = _mortgage(accounts)
+    _declare_loan(accounts, account, accrue_from=dt.date(2099, 1, 15))
+
+    result = _accrue(accounts, ledger, through=dt.date(2099, 6, 20))[0]
+
+    assert list(result.posted) == []
+    assert accounts.by_id[str(account.id.value)].balance.signed_amount == Decimal(
+        "60000000",
+    )

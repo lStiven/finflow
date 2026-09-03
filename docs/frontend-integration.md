@@ -694,6 +694,43 @@ POST  /financial/accounts/{id}/close
 GET   /financial/net-worth
 ```
 
+Un préstamo, una hipoteca y una inversión pueden además declarar **en qué
+condiciones** están, y ahí Finflow calcula lo que ninguna alerta trae:
+
+```http
+PUT    /financial/accounts/{id}/loan          condiciones del crédito
+PUT    /financial/accounts/{id}/investment    condiciones de la inversión
+DELETE /financial/accounts/{id}/financing     dejar de calcular
+GET    /financial/accounts/{id}/financing?periods=12   tabla + saldo real hoy
+POST   /financial/accounts/{id}/accrue        registrar lo que cobró el corte
+POST   /financial/accrue                      lo mismo, todas las cuentas
+POST   /financial/accounts/{id}/value         cuánto vale hoy (renta variable)
+```
+
+Lo que hay que entender antes de dibujarlo:
+
+* **`informational` es `true` en un préstamo y en una hipoteca**, y viene en
+  cada `AccountResponse` y en cada opción de `account_kinds` del catálogo. Esas
+  cuentas **no entran** en `net_worth`, ni en lo que la app reporta como
+  deuda, ni en ningún total de `/summary`, `/trends` o `/history`. Su saldo se
+  muestra en su propia tarjeta y en ningún agregado. La tarjeta de crédito
+  **sí** entra: lo que debe es el gasto del mes sin pagar.
+* Los cobros de cada corte (`POST .../accrue`) quedan como movimientos con
+  `origin: "accrual"`. Salen en `/transactions` como cualquier otro y no
+  suman en ningún total, por la regla de arriba.
+* `POST .../accrue` se puede llamar cuantas veces se quiera: cada cobro se
+  identifica por su cuenta y su periodo, así que el segundo intento lo rechaza
+  el propio ledger. `skipped` dice cuántos.
+* `GET .../financing` responde `409` cuando la cuenta no ha declarado
+  condiciones: no es un error, es el formulario que falta. `periods_due`
+  mayor que cero significa que hay cortes cerrados sin registrar y que
+  `payoff` está corto por ellos.
+* `POST .../value` **no es** `PUT .../balance`. El primero deja la diferencia
+  como movimiento (la ganancia se ve); el segundo la esconde dentro del saldo
+  inicial y el rendimiento sale siempre en cero.
+* Las tasas van como **fracción** (`0.1956`, no `19.56`) y con su base
+  (`effective_annual`, `nominal_annual`, `monthly`). No son intercambiables.
+
 Declarar una cuenta:
 
 ```json
@@ -757,8 +794,9 @@ números que no cuadran.
 ### 7. Registrar y corregir a mano
 
 ```http
-POST  /financial/transactions          { direction, amount, currency, occurred_at, counterparty, account_id?, bank?, note? }
-PATCH /financial/transactions/{id}     { amount?, currency?, occurred_at?, counterparty?, note?, account_id?, detach? }
+POST   /financial/transactions          { direction, amount, currency, occurred_at, counterparty, account_id?, bank?, note? }
+PATCH  /financial/transactions/{id}     { amount?, currency?, occurred_at?, counterparty?, note?, account_id?, detach? }
+DELETE /financial/transactions/{id}     -> { erased: [id], accounts: [AccountResponse] }
 ```
 
 Reglas:
@@ -788,7 +826,30 @@ Reglas:
 - **La identidad nunca cambia al corregir**, así que una alerta reentregada
   después de la corrección sigue siendo el mismo movimiento y no aparece dos
   veces.
-- **No hay borrado de movimientos.**
+- **Borrar un movimiento le devuelve al saldo lo que se llevó.** `DELETE`
+  borra la fila y deshace su efecto en el saldo, en la misma escritura: un
+  gasto de 2.000 borrado son 2.000 que la cuenta vuelve a tener. **No es lo
+  mismo que `detach`**, que solo lo saca de la cuenta y lo deja contando en
+  los totales.
+- **Lo que borrar hace depende del tipo de movimiento, y hay que decírselo al
+  usuario antes de confirmar.** Son cuatro casos y ninguno se deduce del botón:
+  sin cuenta no se mueve ningún saldo; en un activo vuelve la plata; en un
+  pasivo **baja la deuda** si era un gasto y **sube** si era un pago (leer
+  `direction` sin mirar `category` da la frase al revés); y un traslado no
+  tocaba los totales del mes, así que borrarlo tampoco. El frontend lo resuelve
+  en `frontend/src/lib/deletion.ts`, que está probado caso por caso.
+- **Un traslado se borra entero.** Borrar cualquiera de las dos mitades borra
+  la otra y ajusta los dos saldos — media dejaría una fila apuntando a un
+  movimiento que ya no existe. Por eso `erased` es una **lista**: quita del
+  caché todos los ids que trae, no solo el que pediste. Una pata pagada desde
+  fuera de la app (`transfer.external`) no tiene segunda fila y va sola.
+- **La respuesta trae las cuentas ya recalculadas** en `accounts`, para
+  redibujar un saldo sin una segunda llamada. Viene vacía cuando el movimiento
+  no estaba en ninguna cuenta, que es justo cuando ningún saldo cambió.
+- **Borrar dos veces es `404`.** No es idempotente en el sentido de HTTP: la
+  segunda vez no hay nada que borrar, y el saldo ya se movió una sola vez.
+- **Borrar libera la identidad.** Como el id sale del contenido, un pago
+  borrado por error se puede volver a registrar y cae en la misma fila.
 - **Un movimiento manual sí puede traer `merchant`**, si su `counterparty`
   coincide con una grafía que ya conoce algún comercio del usuario: la unión
   es una búsqueda por huella, no requiere un avistamiento nuevo. Lo que **no**
@@ -1095,6 +1156,13 @@ Resumen para revisar contra la interfaz cuando esté hecha:
     no se movió.
 14. Nunca mostrar la mitad de un traslado como si fuera un movimiento suelto:
     lleva `counterpart_movement_id` justo para poder llegar a la otra.
+15. Nunca sumar una cuenta con `informational: true` al patrimonio, a lo que
+    el usuario debe ni a los gastos del mes. El backend ya las deja fuera; la
+    interfaz tiene que decir *por qué*, o el saldo de la hipoteca en su
+    tarjeta se lee como una contradicción con el "Debes" de arriba.
+16. Nunca mandar una tasa como porcentaje (`19.56`). Va como fracción
+    (`0.1956`) y con su base; el backend rechaza cualquier valor sobre 10
+    justamente porque eso es lo que parece un porcentaje sin convertir.
 
 ---
 
@@ -1262,13 +1330,22 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | PUT | `/financial/accounts/{id}/credit-limit` | ✔ | Fijar, cambiar o borrar el cupo. Solo pasivos. |
 | POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento (retroactivo). |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
+| PUT | `/financial/accounts/{id}/loan` | ✔ | Condiciones del crédito: tasa, plazo, corte, cuota y seguros. Solo préstamo e hipoteca. |
+| PUT | `/financial/accounts/{id}/investment` | ✔ | Condiciones de la inversión. Sin tasa = renta variable. Solo inversión. |
+| DELETE | `/financial/accounts/{id}/financing` | ✔ | Dejar de calcular. Los cortes ya registrados se quedan. |
+| GET | `/financial/accounts/{id}/financing` | ✔ | Tabla de amortización, saldo real de hoy y cortes sin registrar. `409` si no hay condiciones. |
+| POST | `/financial/accounts/{id}/accrue` | ✔ | Registrar como movimientos lo que cobraron los cortes cerrados. Idempotente. |
+| POST | `/financial/accrue` | ✔ | Lo mismo para todas las cuentas financiadas del usuario. |
+| POST | `/financial/accounts/{id}/value` | ✔ | Cuánto vale hoy una inversión; la diferencia queda como movimiento. |
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
 | GET | `/financial/summary` | ✔ | Totales del periodo y desglose por día, semana, mes, día de la semana, categoría, comercio o cuenta. `top`, `order=amount` y `compare`. Excluye traslados salvo que pidas otra cosa. |
 | GET | `/financial/trends` | ✔ | Serie temporal apilable: una banda por categoría, comercio o cuenta, con buckets densos. La gráfica de la pantalla de reportes. |
 | GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. Incluye las dos mitades de un traslado. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |
+| POST | `/financial/transactions/transfer` | ✔ | Registrar a mano la mitad de un traslado cuya otra mitad no está en la app. |
 | PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. En una mitad de traslado, solo cuenta y nota. |
+| DELETE | `/financial/transactions/{id}` | ✔ | Borrarlo y devolverle al saldo lo que se llevó. Un traslado se borra entero. |
 | GET | `/ingestion/setup` | ✔ | En qué paso va conectando su banco, y si ya recibe gastos solo. |
 | GET | `/ingestion/notifications` | ✔ | Qué llegó al alias del usuario y en qué estado quedó. |
 | POST | `/ingestion/bank-notifications` | — | **Solo local.** Simular un correo. No es una ruta del producto. |
@@ -1315,7 +1392,7 @@ tocar el backend.
 |---|---|
 | **Tiempo real** | Sin websockets ni SSE. Polling o refresco manual. |
 | **Refresh token / logout** | Sesión = token guardado en el cliente; al vencer, login otra vez. |
-| **Borrado** | No hay `DELETE` de cuentas ni de movimientos. Cerrar y corregir es lo que hay. |
+| **Borrado de cuentas** | No hay `DELETE` de cuentas: cerrar es lo que hay, y es deliberado — una cuenta cerrada sigue explicando su historia. Un **movimiento** suelto sí se borra (`DELETE /financial/transactions/{id}`). |
 | **Paginación por cursor** | `limit`/`offset` solamente; `total` es el filtrado. |
 | **Instrumentos legibles** | `AccountResponse.instruments` viene como la clave que se guarda —`11:bancolombia\|10:debit_card\|4:0530\|`, con la longitud delante de cada parte—, no como campos. Para enseñarla hay que decodificarla en el cliente (`frontend/src/accounts/instruments.ts`); si algún día publica `bank`/`instrument_kind`/`last_four`, ese módulo sobra. |
 

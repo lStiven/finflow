@@ -82,6 +82,15 @@ MAX_PROJECTED_PERIODS = 600
 # rate and far below what that mistake produces.
 MAX_RATE = Decimal(10)
 
+# The window a date on these terms may sit in. Not a rule about products: a
+# term of fifty years is added to whatever is stated, and a `disbursed_on` in
+# the year 9999 makes `matures_on()` raise out of `datetime` — from inside the
+# account's own response, which is rendered outside the endpoint's error
+# translation, so one impossible date would answer 500 for the whole accounts
+# list until somebody cleared it.
+MIN_DATE = dt.date(1970, 1, 1)
+MAX_DATE = dt.date(2999, 12, 31)
+
 _CENTS = Decimal("0.01")
 _MONTHS_IN_YEAR = 12
 # The denominator of the 30/360 proration. Banks here count a month as thirty
@@ -427,6 +436,17 @@ def is_cut(day: dt.date, statement_day: int) -> bool:
     return day == on_day(day.year, day.month, statement_day)
 
 
+def last_cut_on_or_before(day: dt.date, statement_day: int) -> dt.date:
+    """The most recent statement date up to and including `day`.
+
+    Where a part-month begins. Interest between two cuts is charged whole on
+    the second of them, so the only interest that has genuinely accrued and
+    not been charged is the interest since this date — never since some older
+    cursor, however far behind the posting has fallen.
+    """
+    return add_months(first_cut_after(day, statement_day), -1, on=statement_day)
+
+
 def first_cut_after(day: dt.date, statement_day: int) -> dt.date:
     """The first statement date strictly after `day`.
 
@@ -571,6 +591,7 @@ class LoanTerms(ValueObject):
 
     def __post_init__(self) -> None:
         _check_day(self.statement_day, "statement day")
+        _check_date(self.disbursed_on, "disbursement date")
 
         if self.payment_day is not None:
             _check_day(self.payment_day, "payment day")
@@ -659,6 +680,10 @@ class InvestmentTerms(ValueObject):
 
     def __post_init__(self) -> None:
         _check_day(self.statement_day, "statement day")
+        _check_date(self.opened_on, "opening date")
+
+        if self.matures_on is not None:
+            _check_date(self.matures_on, "maturity date")
 
         if self.matures_on is not None and self.matures_on <= self.opened_on:
             raise FinancingTermsError("An investment matures after it is opened")
@@ -701,6 +726,14 @@ class InvestmentTerms(ValueObject):
 def _check_day(day: int, what: str) -> None:
     if day < 1 or day > 31:
         raise FinancingTermsError(f"A {what} is a day of the month: {day} is not")
+
+
+def _check_date(day: dt.date, what: str) -> None:
+    if day < MIN_DATE or day > MAX_DATE:
+        raise FinancingTermsError(
+            f"A {what} of {day.isoformat()} is not a date this can schedule "
+            f"from: it has to fall between {MIN_DATE.year} and {MAX_DATE.year}",
+        )
 
 
 def _check_distinct(charges: Sequence[RecurringCharge]) -> None:
@@ -834,14 +867,18 @@ def installment_for(
         )
 
     monthly = rate.monthly
+    # `1 - (1+i)^-n` is what the formula divides by, and for a rate small
+    # enough that `(1+i)^-n` rounds to one at this precision it is zero. A
+    # rate of 1e-30 is not a loan product; it is somebody's typo, and the
+    # honest answer for it is the same as for a rate of zero — the balance
+    # split evenly — rather than a `DivisionByZero` escaping as a 500.
+    divisor = Decimal(1) - (Decimal(1) + monthly) ** -periods
 
-    if monthly == 0:
+    if monthly == 0 or divisor == 0:
         return _quantized(outstanding.amount / periods, outstanding.currency)
 
-    factor = (Decimal(1) + monthly) ** -periods
-
     return _quantized(
-        outstanding.amount * monthly / (Decimal(1) - factor),
+        outstanding.amount * monthly / divisor,
         outstanding.currency,
     )
 
@@ -947,6 +984,10 @@ def project_loan(
             fixed_principal=fixed_principal,
             interest=accrued.interest,
             charges=charges,
+            charges_in_installment=_sum(
+                [charge.amount for charge in accrued.charged_to_balance],
+                currency,
+            ),
         )
         starves = starves or (
             terms.style is not AmortizationStyle.INTEREST_ONLY and principal.amount <= 0
@@ -1010,6 +1051,7 @@ def _split(
     fixed_principal: Money,
     interest: Money,
     charges: Money,
+    charges_in_installment: Money,
 ) -> tuple[Money, Money]:
     """How one instalment divides into capital, and what has to be paid.
 
@@ -1019,13 +1061,26 @@ def _split(
     which is reported rather than corrected — it is a fact about the loan, and
     inventing a bigger payment would hide it.
 
-    A charge added to the balance cancels out of this and is deliberately
-    absent: the month adds it to the debt and the instalment clears it in the
-    same breath, so what is left of the balance is `opening - principal`
-    whichever side of the payment the insurance is quoted on.
+    A charge added to the balance cancels out of the *closing balance* and is
+    deliberately absent from it: the month adds it to the debt and the
+    instalment clears it in the same breath, so what is left is
+    `opening - principal` whichever side of the payment the insurance is
+    quoted on.
+
+    It is not absent from the split, though, and the two charges are not the
+    same charge. `installment_covers_charges` says the number on the statement
+    already contains the insurance the *credit* carries — never one the bank
+    debits from another account, which is a separate payment on a separate
+    day and was never inside this instalment. Subtracting that one too would
+    take it out of the capital portion every month, understating what the
+    payment actually amortizes by exactly its amount.
     """
     currency = balance.currency
-    covered = charges.amount if terms.installment_covers_charges else Decimal(0)
+    covered = (
+        charges_in_installment.amount
+        if terms.installment_covers_charges
+        else Decimal(0)
+    )
 
     if terms.style is AmortizationStyle.INTEREST_ONLY:
         principal = Decimal(0)
@@ -1182,18 +1237,21 @@ EARNINGS_LABEL = "Rendimientos"
 VALUATION_LABEL = "Valoración"
 
 
-def valuation_item(value: Decimal) -> str:
-    """The key one revaluation is identified by.
+def valuation_item(*, held: Decimal, stated: Decimal) -> str:
+    """The key one revaluation is identified by: the move it makes.
 
-    The **value stated**, not the difference and not the day alone. Stating
-    the same figure twice on one day is one revaluation, so a double submit is
-    refused by the ledger's own key; stating a different figure is a
-    correction, and a correction has to be able to land. Keying on the day
-    alone would refuse the correction, and keying on nothing would let the
-    double submit through — and a double submit here records a gain that never
-    happened.
+    Both ends of it, not the target alone. Stating the same figure twice from
+    the same balance is one revaluation, so a double submit lands on a key the
+    ledger already holds and is refused — which is the protection this exists
+    for, because a doubled revaluation records a gain that never happened.
+
+    Keying on the target alone looked equivalent and is not: state 11 000 000,
+    then 15 000 000, then 11 000 000 again on one day, and the third writes
+    the first one's key. It would be refused, the balance would stay at 15
+    million, and the answer would report success. Two ends make every step of
+    that sequence its own row.
     """
-    return f"valuation:{value}"
+    return f"valuation:{held}->{stated}"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

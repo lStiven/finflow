@@ -41,6 +41,7 @@ from personal_finance.contexts.financial.domain.financing import (
     project_investment,
     project_loan,
     statement_periods,
+    valuation_item,
 )
 from personal_finance.shared.domain.value_objects import Currency, Money
 
@@ -575,3 +576,52 @@ def test_an_investment_cannot_withhold_from_a_return_nobody_computes() -> None:
                 ),
             ),
         )
+
+
+def test_a_charge_the_bank_debits_elsewhere_is_not_inside_the_instalment() -> None:
+    """The combination the form's own toggle invites, and got wrong.
+
+    `installment_covers_charges` says the number on the statement already
+    contains the insurance the *credit* carries. An insurance the bank debits
+    from another account is a separate payment on a separate day and was never
+    inside that number — subtracting it too would take it out of the capital
+    portion every single month.
+    """
+    apart = RecurringCharge(
+        name="Seguro de incendio",
+        basis=ChargeBasis.INSURED_VALUE,
+        rate=Decimal("0.00029"),
+        base=_cop("350000000"),
+        charged_to_balance=False,
+    )
+    schedule = project_loan(
+        terms=_mortgage(
+            installment=_cop("2000000"),
+            installment_covers_charges=True,
+            charges=(LIFE_INSURANCE, apart),
+        ),
+        outstanding=_cop("60000000"),
+        as_of=dt.date(2026, 1, 15),
+        periods=1,
+    )
+    first = schedule.payments[0]
+
+    # The instalment covers the interest and the life insurance; the fire
+    # insurance is paid on top of it, and none of it comes out of capital.
+    assert first.principal.amount == Decimal("1079377.13")
+    assert first.due.amount == Decimal("2101500.00")
+    assert first.closing_balance.amount == Decimal("58920622.87")
+
+
+def test_a_revaluation_is_keyed_by_the_move_it_makes() -> None:
+    # Keying on the target alone made the third step of 11M -> 15M -> 11M
+    # collide with the first, leaving the value stuck at 15 million while the
+    # answer reported success.
+    first = valuation_item(held=Decimal(0), stated=Decimal("11000000"))
+    second = valuation_item(held=Decimal("11000000"), stated=Decimal("15000000"))
+    third = valuation_item(held=Decimal("15000000"), stated=Decimal("11000000"))
+
+    assert len({first, second, third}) == 3
+    # And the same move twice is still the same move, which is what refuses a
+    # double submit.
+    assert third == valuation_item(held=Decimal("15000000"), stated=Decimal("11000000"))
