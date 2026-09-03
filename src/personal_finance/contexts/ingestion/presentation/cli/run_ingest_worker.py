@@ -9,9 +9,7 @@ has no equivalent — so this sleeps between passes instead.
 from __future__ import annotations
 
 import logging
-import signal
 import time
-from types import FrameType
 
 from personal_finance.contexts.ingestion.application.handlers import (
     ReceiveBankNotificationUseCase,
@@ -48,23 +46,10 @@ from personal_finance.shared.infrastructure.config.settings import (
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,
 )
+from personal_finance.shared.presentation.worker_loop import StopSignal
 
 
 _logger = logging.getLogger(__name__)
-
-
-class _Stopper:
-    """Finishes the poll in flight before exiting, so no message is lost to a
-    deploy or a Ctrl-C.
-    """
-
-    def __init__(self) -> None:
-        self.requested = False
-
-    def __call__(self, signum: int, frame: FrameType | None) -> None:
-        del frame
-        _logger.info("stop requested", extra={"signal": signum})
-        self.requested = True
 
 
 def build_use_case() -> PollIngestMailboxUseCase:
@@ -120,9 +105,7 @@ def main() -> None:
     configure_logging()
     use_case = build_use_case()
     interval = get_ingestion_settings().ingest_poll_interval_seconds
-    stopper = _Stopper()
-    signal.signal(signal.SIGINT, stopper)
-    signal.signal(signal.SIGTERM, stopper)
+    stopper = StopSignal().install()
 
     _logger.info("ingest worker started", extra={"poll_interval_seconds": interval})
 

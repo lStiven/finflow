@@ -15,8 +15,10 @@ from personal_finance.contexts.financial.domain.events import (
     AccountFinancingCleared,
     AccountFinancingSet,
     AccountFingerprintLinked,
+    AccountFingerprintUnlinked,
     AccountOpened,
     AccountRenamed,
+    AccountReopened,
     TransactionAssigned,
     TransactionEdited,
     TransactionErased,
@@ -520,6 +522,31 @@ class Account(AggregateRoot[AccountId]):
             ),
         )
 
+    def unlink_fingerprint(self, fingerprint: AccountFingerprint) -> None:
+        """Stop answering to one of its bank's names.
+
+        The correction for a card declared on the wrong account, which until
+        now could only be added. Idempotent for a key this account does not
+        hold: the caller's intent is that it stop matching, and it already
+        does not.
+
+        The movements that arrived under the key are the caller's to release,
+        and they are released *after* this — an account that still matched
+        while its rows were being let go would adopt the next alert onto a
+        balance nobody is going to replay.
+        """
+        if fingerprint not in self.fingerprints:
+            return
+
+        self.fingerprints.discard(fingerprint)
+        self.record_event(
+            AccountFingerprintUnlinked(
+                account_id=self.id,
+                user_id=self.user_id,
+                fingerprint=fingerprint,
+            ),
+        )
+
     def apply(self, movement: LedgerMovement) -> None:
         """Move the balance by one movement the ledger already accepted.
 
@@ -707,6 +734,22 @@ class Account(AggregateRoot[AccountId]):
         self.closed_at = closed_at
         self.record_event(
             AccountClosed(account_id=self.id, user_id=self.user_id),
+        )
+
+    def reopen(self) -> None:
+        """Take movements again, after a closure that turned out to be wrong.
+
+        Nothing about the history changes: the movements recorded while it was
+        closed — a correction, a replay — are still there, and the balance
+        still explains them. What comes back is only the ability to take new
+        ones, and to be adopted by an alert again.
+        """
+        if not self.is_closed:
+            return
+
+        self.closed_at = None
+        self.record_event(
+            AccountReopened(account_id=self.id, user_id=self.user_id),
         )
 
     def _moved(

@@ -1,7 +1,8 @@
-"""Drains Financial's integration-event queue.
+"""What Financial's integration-event queue carries, message by message.
 
-A message is deleted only after the use case returns. Anything that raises
-stays on the queue and eventually reaches the dead-letter queue, which is safe
+The draining itself is `shared.infrastructure.messaging.sqs_polling`. A
+message is deleted only after the use case returns; anything that raises stays
+on the queue and eventually reaches the dead-letter queue, which is safe
 because applying the same event twice is a no-op: the ledger's conditional
 write refuses a row whose movement is already there, and the movement's
 identity comes from its content rather than from the delivery.
@@ -9,8 +10,6 @@ identity comes from its content rather than from the delivery.
 
 from __future__ import annotations
 
-import dataclasses
-import enum
 import logging
 from typing import TYPE_CHECKING
 
@@ -30,6 +29,10 @@ from personal_finance.contexts.financial.infrastructure.messaging.inbound import
     TransferExtractedDetail,
     UnsupportedPayloadVersionError,
 )
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
+    SQSPollingWorker,
+)
 
 
 if TYPE_CHECKING:
@@ -38,33 +41,10 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-MAX_MESSAGES_PER_POLL = 10
-WAIT_TIME_SECONDS = 20
 
+class SQSFinancialWorker(SQSPollingWorker):
+    """What Financial's integration-event queue carries. Draining is inherited."""
 
-class MessageOutcome(enum.Enum):
-    """What a single message left behind, whoever delivered it.
-
-    Public because the polling loop is no longer the only caller: the Lambda
-    entry point reads the same three answers and turns them into the batch
-    response AWS expects.
-    """
-
-    HANDLED = "handled"
-    # Understood, but nothing to do with it. Deleted.
-    DISCARDED = "discarded"
-    # Left on the queue for somebody who understands it.
-    RETRY = "retry"
-
-
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class PollResult:
-    received: int = 0
-    handled: int = 0
-    rejected: int = 0
-
-
-class SQSFinancialWorker:
     def __init__(
         self,
         *,
@@ -73,45 +53,9 @@ class SQSFinancialWorker:
         use_case: RecordMovementUseCase,
         transfer_use_case: RecordTransferUseCase,
     ) -> None:
-        self._client = client
-        self._queue_url = queue_url
+        super().__init__(client=client, queue_url=queue_url)
         self._use_case = use_case
         self._transfer_use_case = transfer_use_case
-
-    def poll_once(self, *, wait_seconds: int = WAIT_TIME_SECONDS) -> PollResult:
-        response = self._client.receive_message(
-            QueueUrl=self._queue_url,
-            MaxNumberOfMessages=MAX_MESSAGES_PER_POLL,
-            WaitTimeSeconds=wait_seconds,
-        )
-        messages = response.get("Messages", [])
-        handled = 0
-        rejected = 0
-
-        for message in messages:
-            receipt = message.get("ReceiptHandle")
-
-            if receipt is None:
-                continue
-
-            outcome = self.handle(message.get("Body", ""))
-
-            if outcome is MessageOutcome.RETRY:
-                rejected += 1
-                continue
-
-            if outcome is MessageOutcome.HANDLED:
-                handled += 1
-            else:
-                rejected += 1
-
-            self._delete(receipt)
-
-        return PollResult(
-            received=len(messages),
-            handled=handled,
-            rejected=rejected,
-        )
 
     def handle(self, body: str) -> MessageOutcome:
         try:
@@ -267,9 +211,3 @@ class SQSFinancialWorker:
         )
 
         return MessageOutcome.HANDLED
-
-    def _delete(self, receipt: str) -> None:
-        self._client.delete_message(
-            QueueUrl=self._queue_url,
-            ReceiptHandle=receipt,
-        )

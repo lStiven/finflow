@@ -11,8 +11,6 @@ vocabulary rather than borrowing another context's enum.
 
 from __future__ import annotations
 
-import dataclasses
-import enum
 import logging
 from typing import TYPE_CHECKING
 import uuid
@@ -30,6 +28,10 @@ from personal_finance.contexts.merchant.domain.normalization import (
 )
 from personal_finance.contexts.merchant.domain.value_objects import CounterpartyKind
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
+    SQSPollingWorker,
+)
 
 
 if TYPE_CHECKING:
@@ -37,9 +39,6 @@ if TYPE_CHECKING:
 
 
 _logger = logging.getLogger(__name__)
-
-MAX_MESSAGES_PER_POLL = 10
-WAIT_TIME_SECONDS = 20
 
 INGESTION_SOURCE = "finflow.ingestion"
 TRANSACTION_EXTRACTED = "TransactionExtracted"
@@ -62,21 +61,6 @@ MAX_OCCURRED_AT = 253_402_300_799
 # payment — may well name a person, and people must never be grouped by a
 # shared first name, so they resolve without the sub-brand guess.
 _BUSINESS_KINDS = frozenset({"card_purchase", "qr_payment"})
-
-
-class MessageOutcome(enum.Enum):
-    """What a single message left behind, whoever delivered it.
-
-    Public because the polling loop is no longer the only caller: the Lambda
-    entry point reads the same three answers and turns them into the batch
-    response AWS expects.
-    """
-
-    HANDLED = "handled"
-    # Understood, but nothing to do with it. Deleted.
-    DISCARDED = "discarded"
-    # Left on the queue for somebody who understands it.
-    RETRY = "retry"
 
 
 class ExtractedTransactionBody(BaseModel):
@@ -137,20 +121,12 @@ class IntegrationEventEnvelope(BaseModel):
     detail: dict[str, object] = Field(default_factory=lambda: dict[str, object]())
 
 
-@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
-class PollResult:
-    received: int = 0
-    handled: int = 0
-    rejected: int = 0
+class SQSMerchantWorker(SQSPollingWorker):
+    """What merchant's integration-event queue carries. Draining is inherited.
 
-
-class SQSMerchantWorker:
-    """Drains merchant's integration-event queue, one batch at a time.
-
-    A message is deleted only after the use case returns. Anything that raises
-    stays on the queue and eventually reaches the dead-letter queue, which is
-    safe because applying the same event twice is a no-op: the use case claims
-    the event id before it does any work.
+    Anything that raises stays on the queue and eventually reaches the
+    dead-letter queue, which is safe because applying the same event twice is
+    a no-op: the use case claims the event id before it does any work.
     """
 
     def __init__(
@@ -160,44 +136,8 @@ class SQSMerchantWorker:
         queue_url: str,
         use_case: ResolveMerchantUseCase,
     ) -> None:
-        self._client = client
-        self._queue_url = queue_url
+        super().__init__(client=client, queue_url=queue_url)
         self._use_case = use_case
-
-    def poll_once(self, *, wait_seconds: int = WAIT_TIME_SECONDS) -> PollResult:
-        response = self._client.receive_message(
-            QueueUrl=self._queue_url,
-            MaxNumberOfMessages=MAX_MESSAGES_PER_POLL,
-            WaitTimeSeconds=wait_seconds,
-        )
-        messages = response.get("Messages", [])
-        handled = 0
-        rejected = 0
-
-        for message in messages:
-            receipt = message.get("ReceiptHandle")
-
-            if receipt is None:
-                continue
-
-            outcome = self.handle(message.get("Body", ""))
-
-            if outcome is MessageOutcome.RETRY:
-                rejected += 1
-                continue
-
-            if outcome is MessageOutcome.HANDLED:
-                handled += 1
-            else:
-                rejected += 1
-
-            self._delete(receipt)
-
-        return PollResult(
-            received=len(messages),
-            handled=handled,
-            rejected=rejected,
-        )
 
     def handle(self, body: str) -> MessageOutcome:
         try:
@@ -287,9 +227,3 @@ class SQSMerchantWorker:
         )
 
         return MessageOutcome.HANDLED
-
-    def _delete(self, receipt_handle: str) -> None:
-        self._client.delete_message(
-            QueueUrl=self._queue_url,
-            ReceiptHandle=receipt_handle,
-        )

@@ -9,7 +9,6 @@ from __future__ import annotations
 import functools
 
 from personal_finance.contexts.ingestion.infrastructure.messaging.sqs_worker import (
-    MessageOutcome,
     SQSParseWorker,
 )
 from personal_finance.contexts.ingestion.presentation.cli.run_parse_worker import (
@@ -19,6 +18,9 @@ from personal_finance.shared.infrastructure.messaging.lambda_batch import (
     BatchResponse,
     SQSEvent,
     drain,
+)
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
 )
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,

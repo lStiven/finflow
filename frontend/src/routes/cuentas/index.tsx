@@ -15,9 +15,11 @@ import {
   Percent,
   Plus,
   Radio,
+  RotateCcw,
   Scale,
   ShieldCheck,
   Sparkles,
+  Trash2,
   TrendingDown,
   TriangleAlert,
   Wallet,
@@ -26,7 +28,7 @@ import type { ComponentType, ReactNode } from "react";
 import { type SubmitEvent, useState, useTransition } from "react";
 import { balanceIssue, creditLimitIssue, nameIssue } from "@/accounts/edits";
 import { isFinanceable, RATE_BASIS_COPY, toPercent } from "@/accounts/financing";
-import { describeInstrument } from "@/accounts/instruments";
+import { describeInstrument, parseInstrument } from "@/accounts/instruments";
 import { instrumentLabel, kindCopy } from "@/accounts/kinds";
 import {
   type Account,
@@ -36,8 +38,10 @@ import {
   useCloseAccount,
   useLinkInstrument,
   useRenameAccount,
+  useReopenAccount,
   useRestateBalance,
   useSetCreditLimit,
+  useUnlinkInstrument,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
@@ -714,14 +718,9 @@ function Instruments({ account }: { account: Account }) {
       </p>
 
       {count > 0 ? (
-        <ul className="flex flex-wrap gap-2">
+        <ul className="flex flex-col gap-2">
           {account.instruments.map((instrument) => (
-            <li
-              key={instrument}
-              className="rounded-lg border border-line bg-surface px-2.5 py-1 text-xs"
-            >
-              {describeInstrument(instrument)}
-            </li>
+            <InstrumentRow key={instrument} account={account} instrument={instrument} />
           ))}
         </ul>
       ) : null}
@@ -735,6 +734,96 @@ function Instruments({ account }: { account: Account }) {
         </p>
       )}
     </Panel>
+  );
+}
+
+/**
+ * One linked card, and the way to take it back off this account.
+ *
+ * Unlinking is not a tidy-up: the movements that arrived under this card go
+ * back to unassigned, so the warning says so before anything happens. That is
+ * also what makes it useful — it is the first half of moving a card to the
+ * account it should have been on, and the second half is linking it there.
+ *
+ * The three parts are read back out of the stored key rather than kept
+ * separately, because that key is what the API published. One it cannot read
+ * is shown without the control instead of guessing at it.
+ */
+function InstrumentRow({
+  account,
+  instrument,
+}: {
+  account: Account;
+  instrument: string;
+}) {
+  const unlink = useUnlinkInstrument(account.id);
+  const [confirming, setConfirming] = useState(false);
+  const parts = parseInstrument(instrument);
+
+  return (
+    <li className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1">{describeInstrument(instrument)}</span>
+        {parts !== null && !confirming ? (
+          <button
+            type="button"
+            aria-label={`Desenlazar ${describeInstrument(instrument)}`}
+            className="shrink-0 rounded p-1 text-faint hover:text-outgoing"
+            onClick={() => setConfirming(true)}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+
+      {confirming && parts !== null ? (
+        <div className="mt-2 flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/10 p-2.5">
+          <p className="flex items-start gap-2 leading-relaxed">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warn" />
+            <span>
+              Sus movimientos vuelven a quedar sin asignar y el saldo de{" "}
+              <strong>{account.name}</strong> baja lo que ellos aportaban. Para moverlos
+              a otra cuenta, enlaza ahí la misma tarjeta.
+            </span>
+          </p>
+          <Failed error={unlink.error} />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              className="py-1.5 text-xs"
+              disabled={unlink.isPending}
+              onClick={() => {
+                unlink.mutate(
+                  {
+                    bank: parts.bank,
+                    instrument_kind: parts.kind as InstrumentKind,
+                    last_four: parts.lastFour,
+                  },
+                  { onSuccess: () => setConfirming(false) },
+                );
+              }}
+            >
+              {unlink.isPending ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Desenlazando…
+                </>
+              ) : (
+                "Sí, desenlazar"
+              )}
+            </Button>
+            <Button
+              variant="quiet"
+              className="py-1.5 text-xs"
+              disabled={unlink.isPending}
+              onClick={() => setConfirming(false)}
+            >
+              Mejor no
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -854,12 +943,7 @@ function Settings({ account, onClosed }: { account: Account; onClosed: () => voi
       {account.closed_at === null ? (
         <CloseForm account={account} onClosed={onClosed} />
       ) : (
-        <p className="flex items-start gap-2 border-line border-t pt-4 text-faint text-xs leading-relaxed">
-          <Lock className="mt-0.5 size-3.5 shrink-0" />
-          Esta cuenta está cerrada: no recibe movimientos nuevos, pero sigue explicando
-          los que ya tiene y su saldo sigue contando en tu patrimonio. Volver a abrirla
-          todavía no se puede desde la app.
-        </p>
+        <ReopenForm account={account} />
       )}
     </Panel>
   );
@@ -1145,8 +1229,8 @@ function CloseForm({ account, onClosed }: { account: Account; onClosed: () => vo
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-warn" />
             <span>
               Vas a cerrar <strong>{account.name}</strong>. Si su tarjeta sigue enviando
-              alertas, esos movimientos quedarán sin asignar.{" "}
-              <strong>Volver a abrirla no se puede desde la app.</strong>
+              alertas, esos movimientos quedarán sin asignar. Puedes volver a abrirla
+              cuando quieras.
             </span>
           </p>
           <Failed error={close.error} />
@@ -1186,6 +1270,43 @@ function CloseForm({ account, onClosed }: { account: Account; onClosed: () => vo
           Cerrar cuenta
         </Button>
       )}
+    </EditRow>
+  );
+}
+
+/** The way back from a closure that turned out to be wrong. */
+function ReopenForm({ account }: { account: Account }) {
+  const reopen = useReopenAccount(account.id);
+
+  return (
+    <EditRow
+      icon={Lock}
+      title="Cuenta cerrada"
+      hint="No recibe movimientos nuevos, pero sigue explicando los que ya tiene y su saldo sigue contando en tu patrimonio."
+    >
+      <p className="text-faint text-xs leading-relaxed">
+        Al reabrirla vuelve a la lista de cuentas abiertas y sus alertas caen otra vez
+        aquí. Nada de lo que ya tiene cambia: la historia nunca se fue.
+      </p>
+      <Failed error={reopen.error} />
+      <Button
+        variant="ghost"
+        className="self-start py-2 text-xs"
+        disabled={reopen.isPending}
+        onClick={() => reopen.mutate()}
+      >
+        {reopen.isPending ? (
+          <>
+            <Loader2 className="size-3.5 animate-spin" />
+            Reabriendo…
+          </>
+        ) : (
+          <>
+            <RotateCcw className="size-3.5" />
+            Volver a abrirla
+          </>
+        )}
+      </Button>
     </EditRow>
   );
 }

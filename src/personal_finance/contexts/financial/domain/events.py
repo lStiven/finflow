@@ -54,6 +54,20 @@ class AccountFingerprintLinked(AccountEvent):
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountFingerprintUnlinked(AccountEvent):
+    """That pair no longer resolves here.
+
+    The correction for a card declared on the wrong account. Recorded
+    separately from the assignments it releases because those name movements
+    and this names the key: without it, an account that silently stopped
+    matching a card would be indistinguishable from a bank that stopped
+    sending alerts.
+    """
+
+    fingerprint: AccountFingerprint
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountRenamed(AccountEvent):
     name: str
 
@@ -141,6 +155,17 @@ class AccountBalanceRestated(AccountEvent):
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountClosed(AccountEvent):
     pass
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountReopened(AccountEvent):
+    """Taking movements again, after a closure that turned out to be wrong.
+
+    Its own event rather than a closure with a null date: closing and
+    reopening are two facts about the account's life, and a reader that only
+    ever saw the current state could not tell an account that was never
+    closed from one closed and reopened twice.
+    """
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

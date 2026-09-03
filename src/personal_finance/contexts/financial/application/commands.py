@@ -115,6 +115,27 @@ class LinkInstrumentCommand:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class UnlinkInstrumentCommand:
+    """Stop an account from answering to one of the names it was given.
+
+    The correction for a card declared on the wrong account: linking is the
+    owner's decision and so is undoing it. Named by the same three parts the
+    linking took, not by the stored key — that key is a storage format, and a
+    caller that had to spell it would be one that breaks when it changes.
+
+    The movements that arrived under it go back to unassigned rather than
+    staying on an account that no longer claims them, which is what lets the
+    right account adopt them the moment it links the same card.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    bank: str
+    instrument_kind: InstrumentKind
+    last_four: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class RenameAccountCommand:
     user_id: UserId
     account_id: AccountId
@@ -155,6 +176,19 @@ class SetCreditLimitCommand:
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class CloseAccountCommand:
+    user_id: UserId
+    account_id: AccountId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ReopenAccountCommand:
+    """Take movements again on an account that was closed by mistake.
+
+    Closing is not a delete and this is not an undelete: the history stayed
+    where it was the whole time. What comes back is only what closing took
+    away — new movements, and being adopted by an alert again.
+    """
+
     user_id: UserId
     account_id: AccountId
 

@@ -6,8 +6,6 @@ just parse-worker
 from __future__ import annotations
 
 import logging
-import signal
-from types import FrameType
 
 from personal_finance.contexts.ingestion.application.parsing_handlers import (
     ParseNotificationUseCase,
@@ -35,23 +33,10 @@ from personal_finance.shared.infrastructure.config.settings import (
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,
 )
+from personal_finance.shared.presentation.worker_loop import drain_until_stopped
 
 
 _logger = logging.getLogger(__name__)
-
-
-class _Stopper:
-    """Finishes the batch in flight before exiting, so no message is lost to a
-    deploy or a Ctrl-C.
-    """
-
-    def __init__(self) -> None:
-        self.requested = False
-
-    def __call__(self, signum: int, frame: FrameType | None) -> None:
-        del frame
-        _logger.info("stop requested", extra={"signal": signum})
-        self.requested = True
 
 
 def build_worker() -> SQSParseWorker:
@@ -89,23 +74,7 @@ def build_worker() -> SQSParseWorker:
 
 def main() -> None:
     configure_logging()
-    worker = build_worker()
-    stopper = _Stopper()
-    signal.signal(signal.SIGINT, stopper)
-    signal.signal(signal.SIGTERM, stopper)
-
-    _logger.info("parse worker started")
-
-    while not stopper.requested:
-        result = worker.poll_once()
-
-        if result.received:
-            _logger.info(
-                "batch drained",
-                extra={"handled": result.handled, "rejected": result.rejected},
-            )
-
-    _logger.info("parse worker stopped")
+    drain_until_stopped(build_worker(), name="parse")
 
 
 if __name__ == "__main__":

@@ -106,6 +106,14 @@ class InMemoryAccounts:
 
         return True
 
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        self.pointers.pop((account.user_id, fingerprint.value), None)
+        self.save(account)
+
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 
@@ -916,6 +924,103 @@ def test_linking_a_second_instrument_adopts_what_was_waiting(
 
     assert linked.status_code == 200
     assert len(linked.json()["instruments"]) == 2
+
+
+def test_unlinking_an_instrument_takes_it_off_the_account(
+    client: TestClient,
+) -> None:
+    """A card declared on the wrong account can be taken back off it."""
+    account = _declare(client)
+
+    unlinked = client.post(
+        f"/financial/accounts/{account['id']}/instruments/unlink",
+        json={
+            "bank": "Bancolombia",
+            "instrument_kind": "credit_card",
+            "last_four": "7653",
+        },
+    )
+
+    assert unlinked.status_code == 200
+    assert unlinked.json()["instruments"] == []
+
+
+def test_a_card_can_be_moved_from_one_account_to_another(
+    client: TestClient,
+) -> None:
+    """Unlink then link: the movements travel with the card.
+
+    The reason the pair exists — until now a card put on the wrong account
+    could only be added to, so its movements stayed there for good.
+    """
+    wrong = _declare(client)
+    right = _declare(client, name="Tarjeta correcta", last_four="1111")
+    client.post(
+        f"/financial/accounts/{wrong['id']}/instruments/unlink",
+        json={
+            "bank": "Bancolombia",
+            "instrument_kind": "credit_card",
+            "last_four": "7653",
+        },
+    )
+    moved = client.post(
+        f"/financial/accounts/{right['id']}/instruments",
+        json={
+            "bank": "Bancolombia",
+            "instrument_kind": "credit_card",
+            "last_four": "7653",
+        },
+    )
+
+    assert moved.status_code == 200
+    assert len(moved.json()["instruments"]) == 2
+
+
+def test_unlinking_a_card_the_account_never_had_is_a_conflict(
+    client: TestClient,
+) -> None:
+    """Not silence: the card is presumably on another account, and reporting
+    "done" would send its owner looking somewhere else.
+    """
+    account = _declare(client)
+
+    refused = client.post(
+        f"/financial/accounts/{account['id']}/instruments/unlink",
+        json={
+            "bank": "Bancolombia",
+            "instrument_kind": "debit_card",
+            "last_four": "9999",
+        },
+    )
+
+    assert refused.status_code == 409
+
+
+def test_reopening_an_account_lets_it_take_movements_again(
+    client: TestClient,
+) -> None:
+    account = _declare(client)
+    client.post(f"/financial/accounts/{account['id']}/close")
+
+    reopened = client.post(f"/financial/accounts/{account['id']}/reopen")
+
+    assert reopened.status_code == 200
+    assert reopened.json()["closed_at"] is None
+    assert len(client.get("/financial/accounts").json()["accounts"]) == 1
+
+    entered = _enter(client, account_id=account["id"])
+    assert entered["status"] == "assigned"
+
+
+def test_reopening_an_account_that_was_never_closed_is_not_an_error(
+    client: TestClient,
+) -> None:
+    account = _declare(client)
+
+    reopened = client.post(f"/financial/accounts/{account['id']}/reopen")
+
+    assert reopened.status_code == 200
+    assert reopened.json()["closed_at"] is None
 
 
 def test_declaring_an_account_adopts_what_was_waiting(client: TestClient) -> None:

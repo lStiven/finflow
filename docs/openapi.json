@@ -4315,6 +4315,64 @@
         ]
       }
     },
+    "/financial/accounts/{account_id}/instruments/unlink": {
+      "post": {
+        "description": "Stop this account answering to one card, and let its movements go.\n\nThe correction for a card declared on the wrong account: the movements\nthat arrived under it go back to unassigned, where linking the same card\non the right account adopts them. A transfer leg stays where it is —\nunassigned it would claim a payment no balance shows.\n\nA POST rather than a DELETE with the key in the path: the stored key is a\nlength-prefixed triple that no URL should have to carry, and naming the\nsame three parts the linking took is what keeps the pair symmetric.",
+        "operationId": "unlink_instrument_financial_accounts__account_id__instruments_unlink_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkInstrumentPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unlink Instrument",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/accounts/{account_id}/investment": {
       "put": {
         "description": "State how this investment earns, when it earns at a rate at all.\n\nLeave `rate` out for variable income — shares, a fund whose unit price\nmoves. Nothing about those can be computed, and what they are worth is\nstated through `POST /accounts/{id}/value` instead.",
@@ -4426,6 +4484,54 @@
           }
         ],
         "summary": "Set Loan Terms",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/accounts/{account_id}/reopen": {
+      "post": {
+        "description": "Take movements again on an account closed by mistake.\n\nThe history never went anywhere, so nothing is restored: what comes back\nis only what closing took away — new movements, and being adopted by an\nalert again.",
+        "operationId": "reopen_account_financial_accounts__account_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reopen Account",
         "tags": [
           "financial"
         ]

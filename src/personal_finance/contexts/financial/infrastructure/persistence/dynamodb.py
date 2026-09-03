@@ -86,6 +86,9 @@ ACCOUNT_ID_ATTRIBUTE = "account_id"
 # Where the ledger row sits in `record`'s transaction. Its condition is the
 # only one that means "this movement is already recorded".
 _LEDGER_ROW = 0
+# Where the fingerprint entry sits in `unlink_fingerprint`'s transaction. Its
+# condition is the only one that means "another account holds this card now".
+_POINTER_ENTRY = 1
 BALANCE_ATTRIBUTE = "balance_amount"
 MOVEMENTS_APPLIED_ATTRIBUTE = "movements_applied"
 OPENING_BALANCE_ATTRIBUTE = "opening_balance"
@@ -786,6 +789,78 @@ class DynamoDBAccountRepository:
             ExpressionAttributeValues=values,
         )
         self._put_fingerprints(account)
+
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        """Drop the key's entry and the account's copy of it, together.
+
+        One transaction, because either half alone routes movements wrongly:
+        an entry without the account still points every new alert here, and
+        an account without the entry refuses movements the table still sends
+        it. The entry's delete is conditional on it pointing at *this*
+        account, so an entry another account has since claimed is left where
+        it is rather than deleted out from under it.
+
+        Only the `fingerprints` attribute is written, the same discipline
+        `overwrite_balance` keeps: a whole-item put here would carry a balance
+        read moments ago and discard whatever movement landed in between.
+        """
+        remaining = sorted(print_.value for print_ in account.fingerprints)
+        forget: TransactWriteItemTypeDef = {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": _key(account.user_id, f"{ACCOUNT_PREFIX}{account.id.value}"),
+                "UpdateExpression": "SET fingerprints = :fingerprints",
+                "ExpressionAttributeValues": {
+                    ":fingerprints": {"SS": remaining} if remaining else {"NULL": True},
+                },
+            },
+        }
+
+        try:
+            self._client.transact_write_items(
+                TransactItems=[
+                    forget,
+                    {
+                        "Delete": {
+                            "TableName": self._table_name,
+                            "Key": _key(
+                                account.user_id,
+                                f"{FINGERPRINT_PREFIX}{fingerprint.value}",
+                            ),
+                            "ConditionExpression": (
+                                f"attribute_not_exists({SORT_KEY}) "
+                                f"OR {ACCOUNT_ID_ATTRIBUTE} = :account_id"
+                            ),
+                            "ExpressionAttributeValues": {
+                                ":account_id": {"S": str(account.id.value)},
+                            },
+                        },
+                    },
+                ],
+            )
+        except self._client.exceptions.TransactionCanceledException as error:
+            if not refused_by_condition(error, index=_POINTER_ENTRY):
+                # A throttle or a conflict with another writer. Nothing was
+                # written, and raising is what gets the whole unlink retried.
+                raise
+
+            # The entry names another account: it linked the same card after
+            # this one did, and `save` writes that entry unconditionally.
+            # Deleting it would take the card away from the account that
+            # holds it now. Dropping only this account's own copy is still
+            # exactly what was asked — it stops claiming the card — and it
+            # leaves the table with one owner instead of two.
+            update = forget["Update"]
+            self._client.update_item(
+                TableName=update["TableName"],
+                Key=update["Key"],
+                UpdateExpression=update["UpdateExpression"],
+                ExpressionAttributeValues=update["ExpressionAttributeValues"],
+            )
 
     def overwrite_balance(self, account: Account) -> None:
         """Write a balance that was recomputed from the ledger.

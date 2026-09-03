@@ -204,6 +204,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/accounts/{account_id}/instruments/unlink": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unlink Instrument
+         * @description Stop this account answering to one card, and let its movements go.
+         *
+         *     The correction for a card declared on the wrong account: the movements
+         *     that arrived under it go back to unassigned, where linking the same card
+         *     on the right account adopts them. A transfer leg stays where it is —
+         *     unassigned it would claim a payment no balance shows.
+         *
+         *     A POST rather than a DELETE with the key in the path: the stored key is a
+         *     length-prefixed triple that no URL should have to carry, and naming the
+         *     same three parts the linking took is what keeps the pair symmetric.
+         */
+        post: operations["unlink_instrument_financial_accounts__account_id__instruments_unlink_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/accounts/{account_id}/investment": {
         parameters: {
             query?: never;
@@ -253,6 +282,30 @@ export interface paths {
          */
         put: operations["set_loan_terms_financial_accounts__account_id__loan_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/accounts/{account_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reopen Account
+         * @description Take movements again on an account closed by mistake.
+         *
+         *     The history never went anywhere, so nothing is restored: what comes back
+         *     is only what closing took away — new movements, and being adopted by an
+         *     alert again.
+         */
+        post: operations["reopen_account_financial_accounts__account_id__reopen_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2990,6 +3043,41 @@ export interface operations {
             };
         };
     };
+    unlink_instrument_financial_accounts__account_id__instruments_unlink_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkInstrumentPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_investment_terms_financial_accounts__account_id__investment_put: {
         parameters: {
             query?: never;
@@ -3039,6 +3127,37 @@ export interface operations {
                 "application/json": components["schemas"]["LoanTermsPayload"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_account_financial_accounts__account_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

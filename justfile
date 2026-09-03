@@ -325,6 +325,51 @@ deploy-outputs-prod:
         --profile finflow-production \
         --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
 
+# Who actually receives a dead-letter alarm.
+#
+# Asked of the topic, never of CloudFormation. An email subscription is
+# created `PendingConfirmation` and only becomes real when somebody clicks the
+# link; unconfirmed, AWS deletes it after three days — and the stack goes on
+# reporting `AlertEmailSubscription` as `CREATE_COMPLETE` either way. That is
+# why redeploying does not repair it and why this asks the other side.
+
+# Who receives a dead-letter alarm in development, and whether they confirmed.
+alerts-dev: (_alerts "finflow-dev-alerts" "finflow-dev")
+
+# Who receives a dead-letter alarm in production, and whether they confirmed.
+alerts-prod: (_alerts "finflow-alerts" "finflow-production")
+
+_alerts topic profile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    arn="arn:aws:sns:us-east-1:$(aws sts get-caller-identity --profile {{profile}} --query Account --output text):{{topic}}"
+    # `list-subscriptions-by-topic` reports a pending one too, with the ARN
+    # literally spelled `PendingConfirmation`, so the state is the column that
+    # matters and not the row's presence.
+    aws sns list-subscriptions-by-topic --profile {{profile}} --topic-arn "$arn" \
+        --query 'Subscriptions[].[Protocol,Endpoint,SubscriptionArn]' --output text \
+        | awk 'BEGIN { found = 0 } { found = 1; state = ($3 == "PendingConfirmation" ? "PENDING " : "confirmed") ; print state "  " $1 "  " $2 } END { if (!found) print "NOBODY is subscribed: an alarm on {{topic}} pages no one." }'
+
+# Send a confirmation request to an address, then go and click the link in it.
+# Nothing arrives until it is confirmed, and re-running for an address that is
+# already confirmed is a no-op.
+
+# Ask an address to receive development's alarms, e.g. `just alerts-subscribe-dev me@example.com`.
+alerts-subscribe-dev email: (_alerts-subscribe "finflow-dev-alerts" "finflow-dev" email)
+
+# Ask an address to receive production's alarms.
+alerts-subscribe-prod email: (_alerts-subscribe "finflow-alerts" "finflow-production" email)
+
+_alerts-subscribe topic profile email:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    arn="arn:aws:sns:us-east-1:$(aws sts get-caller-identity --profile {{profile}} --query Account --output text):{{topic}}"
+    aws sns subscribe --profile {{profile}} --topic-arn "$arn" \
+        --protocol email --endpoint '{{email}}' --output text
+    echo "Confirmation sent to {{email}}. Click the link, then run \`just alerts-{{ if profile == "finflow-production" { "prod" } else { "dev" } }}\`."
+
 # Tail one function's logs, e.g. `just deploy-logs-prod FinancialFunction`.
 deploy-logs-dev name="ApiFunction":
     sam logs --stack-name finflow-dev --name {{name}} \

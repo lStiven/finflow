@@ -17,8 +17,10 @@ from personal_finance.contexts.financial.application.commands import (
     RecordMovementCommand,
     RecordTransferCommand,
     RenameAccountCommand,
+    ReopenAccountCommand,
     RestateBalanceCommand,
     SetCreditLimitCommand,
+    UnlinkInstrumentCommand,
 )
 from personal_finance.contexts.financial.application.ports import (
     AccountRepository,
@@ -30,6 +32,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
     FinancialDomainError,
+    InstrumentNotLinkedError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
@@ -420,6 +423,70 @@ class ManageAccountsUseCase:
 
         return account
 
+    def unlink_instrument(self, command: UnlinkInstrumentCommand) -> Account:
+        """Stop this account answering to one card, and let its movements go.
+
+        The correction for a card declared on the wrong account. Unlinking
+        alone would not be one: the movements that already arrived under it
+        would stay on this balance forever, with nothing left to match them
+        and no way to reach them from the account that should have had them.
+        So they are released first — back to unassigned, exactly where an
+        alert that named no known account sits — and the balance is replayed
+        from what is left.
+
+        The key goes first and the movements after it, not the other way
+        round: while the account still answers to the card, an alert landing
+        mid-release is assigned to it and stays there, on a balance the
+        replay behind it has already passed. With the key gone, that same
+        alert waits unassigned, which is where the next link picks it up.
+
+        Not atomic, for the reason adoption is not: there may be hundreds of
+        rows. A crash in between leaves an account holding movements under a
+        card it no longer answers to, and running the same unlink again is
+        what finishes the job — which is why an account that no longer
+        matches is not an immediate refusal.
+
+        A transfer leg released this way is safe, unlike one detached by
+        hand: it arrived naming a card, so the account that links that card
+        adopts it back. The leg `detach` refuses is the one that names no
+        instrument, and no such movement is ever selected here.
+        """
+        account = self._load(command.user_id, command.account_id)
+        fingerprint = AccountFingerprint.from_parts(
+            bank=command.bank,
+            instrument_kind=command.instrument_kind,
+            last_four=command.last_four,
+        )
+        was_linked = account.matches(fingerprint)
+
+        if was_linked:
+            account.unlink_fingerprint(fingerprint)
+            self._accounts.unlink_fingerprint(account, fingerprint)
+
+        released = self._release_movements(account, fingerprint)
+
+        if not was_linked and not released:
+            # Nothing to drop and nothing left behind by a run that stopped
+            # half way: this account simply never answered to that card.
+            raise InstrumentNotLinkedError(
+                f"Account {account.id.value} does not answer to that card",
+            )
+
+        if released:
+            _resettle(account, self._accounts, self._ledger)
+
+        self._events.publish(account.pull_events())
+
+        return account
+
+    def reopen(self, command: ReopenAccountCommand) -> Account:
+        account = self._load(command.user_id, command.account_id)
+        account.reopen()
+        self._accounts.save(account)
+        self._events.publish(account.pull_events())
+
+        return account
+
     def restate_balance(self, command: RestateBalanceCommand) -> Account:
         """Correct what an account holds, keeping every movement it holds.
 
@@ -465,6 +532,36 @@ class ManageAccountsUseCase:
         self._events.publish(account.pull_events())
 
         return account
+
+    def _release_movements(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> int:
+        """Take this account's movements under one key back off it.
+
+        Only the ones that arrived under this exact key: a movement entered by
+        hand, or one that came under another of the account's cards, was never
+        matched by it and has no reason to move.
+        """
+        released = 0
+
+        for movement in self._ledger.list_movements(
+            user_id=account.user_id,
+            account_id=account.id,
+        ):
+            if movement.account_fingerprint != fingerprint:
+                continue
+
+            # Never refused here, including for a transfer leg: `detach`
+            # only refuses a movement no account could ever claim, and every
+            # movement selected above arrived under a key an account can.
+            movement.detach()
+            self._ledger.save(movement)
+            self._events.publish(movement.pull_events())
+            released += 1
+
+        return released
 
     def close(self, command: CloseAccountCommand) -> Account:
         account = self._load(command.user_id, command.account_id)

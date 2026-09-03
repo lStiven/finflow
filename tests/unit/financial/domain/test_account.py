@@ -147,6 +147,36 @@ def test_linking_a_pair_the_account_already_answers_to_changes_nothing() -> None
     assert account.pull_events() == []
 
 
+def test_a_card_can_be_taken_off_the_account_it_was_declared_on() -> None:
+    account = _declared()
+    card = next(iter(account.fingerprints))
+    account.pull_events()
+
+    account.unlink_fingerprint(card)
+
+    assert not account.matches(card)
+    assert account.fingerprints == set()
+    assert [type(event).__name__ for event in account.pull_events()] == [
+        "AccountFingerprintUnlinked",
+    ]
+
+
+def test_unlinking_a_card_the_account_never_answered_to_changes_nothing() -> None:
+    account = _declared()
+    account.pull_events()
+
+    account.unlink_fingerprint(
+        AccountFingerprint.from_parts(
+            bank="lulo",
+            instrument_kind=InstrumentKind.DEBIT_CARD,
+            last_four="9999",
+        ),
+    )
+
+    assert len(account.fingerprints) == 1
+    assert account.pull_events() == []
+
+
 def test_spending_lowers_an_asset_and_income_raises_it() -> None:
     account = _declared()
     account.apply(_movement("50000", MovementDirection.OUTGOING))
@@ -282,6 +312,45 @@ def test_closing_an_already_closed_account_announces_nothing() -> None:
 
     assert account.closed_at == NOW
     assert account.pull_events() == []
+
+
+def test_a_closed_account_can_be_reopened_and_takes_movements_again() -> None:
+    account = _declared()
+    account.close(LATER)
+    account.pull_events()
+
+    account.reopen()
+
+    assert not account.is_closed
+    assert account.closed_at is None
+    assert [type(event).__name__ for event in account.pull_events()] == [
+        "AccountReopened",
+    ]
+
+    account.apply(_movement("50000"))
+
+
+def test_reopening_an_account_that_was_never_closed_announces_nothing() -> None:
+    account = _declared()
+    account.pull_events()
+
+    account.reopen()
+
+    assert account.pull_events() == []
+
+
+def test_reopening_keeps_the_balance_the_closure_left_behind() -> None:
+    """Closing was never a delete, so reopening is not an undelete: the
+    movements recorded before it are still counted.
+    """
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING))
+    account.close(LATER)
+
+    account.reopen()
+
+    assert account.balance.signed_amount == Decimal("-50000")
+    assert account.movements_applied == 1
 
 
 def test_replaying_the_ledger_reproduces_the_running_total() -> None:

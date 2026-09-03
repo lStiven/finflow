@@ -8,11 +8,11 @@ both silently, because either way the invocation succeeds.
 
 import pytest
 
-from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
-    MessageOutcome,
-)
 from personal_finance.contexts.financial.presentation.awslambda import (
     financial_handler,
+)
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
 )
 
 

@@ -1286,6 +1286,52 @@
           "response": []
         },
         {
+          "name": "Unlink instrument",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bank\": \"Bancolombia\",\n  \"instrument_kind\": \"savings_account\",\n  \"last_four\": \"1234\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/instruments/unlink",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "instruments",
+                "unlink"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Stops this account answering to one card, and lets its movements go. THE FIX FOR A CARD ON THE WRONG ACCOUNT: the movements that arrived under it go back to unassigned, so linking the same card on the right account adopts them. Named by the same three parts Link instrument took, not by the stored key. 409 when this account never answered to it — presumably it is on another one."
+          },
+          "response": []
+        },
+        {
           "name": "Close account",
           "request": {
             "method": "POST",
@@ -1314,6 +1360,38 @@
               ]
             },
             "description": "Stops taking movements, keeping the history and the balance. Not a delete: a closed account still explains past spending, and a paid-off loan closing at zero is exactly what should stay visible. List it again with ?scope=closed or ?scope=all."
+          },
+          "response": []
+        },
+        {
+          "name": "Reopen account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/accounts/:accountId/reopen",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "accounts",
+                ":accountId",
+                "reopen"
+              ],
+              "variable": [
+                {
+                  "key": "accountId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Takes movements again on an account closed by mistake. The history never went anywhere, so nothing is restored: what comes back is only what closing took away — new movements, and being adopted by an alert again. Reopening one that was never closed is not an error."
           },
           "response": []
         },

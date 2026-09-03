@@ -38,11 +38,13 @@ from personal_finance.contexts.financial.application.commands import (
     LinkInstrumentCommand,
     OpenAccountCommand,
     RenameAccountCommand,
+    ReopenAccountCommand,
     RestateBalanceCommand,
     RevalueAccountCommand,
     SetCreditLimitCommand,
     SetInvestmentTermsCommand,
     SetLoanTermsCommand,
+    UnlinkInstrumentCommand,
 )
 from personal_finance.contexts.financial.application.financing import (
     DEFAULT_SCHEDULE_PERIODS,
@@ -109,6 +111,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
     FinancingTermsError,
+    InstrumentNotLinkedError,
     TransactionAlreadyAssignedError,
     TransferLegError,
 )
@@ -1429,6 +1432,41 @@ def link_instrument(
     return _account_response(account)
 
 
+@router.post(
+    "/accounts/{account_id}/instruments/unlink",
+    response_model=AccountResponse,
+)
+def unlink_instrument(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: LinkInstrumentPayload,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """Stop this account answering to one card, and let its movements go.
+
+    The correction for a card declared on the wrong account: the movements
+    that arrived under it go back to unassigned, where linking the same card
+    on the right account adopts them. A transfer leg stays where it is —
+    unassigned it would claim a payment no balance shows.
+
+    A POST rather than a DELETE with the key in the path: the stored key is a
+    length-prefixed triple that no URL should have to carry, and naming the
+    same three parts the linking took is what keeps the pair symmetric.
+    """
+    with _domain_errors():
+        account = use_case.unlink_instrument(
+            UnlinkInstrumentCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                bank=payload.bank,
+                instrument_kind=payload.instrument_kind,
+                last_four=payload.last_four,
+            ),
+        )
+
+    return _account_response(account)
+
+
 @router.post("/accounts/{account_id}/close", response_model=AccountResponse)
 def close_account(
     user_id: CurrentUser,
@@ -1443,6 +1481,26 @@ def close_account(
     with _domain_errors():
         account = use_case.close(
             CloseAccountCommand(user_id=user_id, account_id=_account_id(account_id)),
+        )
+
+    return _account_response(account)
+
+
+@router.post("/accounts/{account_id}/reopen", response_model=AccountResponse)
+def reopen_account(
+    user_id: CurrentUser,
+    account_id: str,
+    use_case: Annotated[ManageAccountsUseCase, Depends(get_manage_accounts_use_case)],
+) -> AccountResponse:
+    """Take movements again on an account closed by mistake.
+
+    The history never went anywhere, so nothing is restored: what comes back
+    is only what closing took away — new movements, and being adopted by an
+    alert again.
+    """
+    with _domain_errors():
+        account = use_case.reopen(
+            ReopenAccountCommand(user_id=user_id, account_id=_account_id(account_id)),
         )
 
     return _account_response(account)
@@ -2767,6 +2825,15 @@ def _domain_errors() -> Generator[None]:
         # The request is well formed and the account exists; what refuses it
         # is that nobody has said what it costs. 409, because no rewriting of
         # the query would answer it.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except InstrumentNotLinkedError as error:
+        # The card is well formed and the account exists; what refuses it is
+        # that this account never answered to it. 409, and not silence: the
+        # card is presumably on another account, and a 204 would report that
+        # as done.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(error),

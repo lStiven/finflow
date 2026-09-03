@@ -76,6 +76,14 @@ class FakeAccounts:
     def save(self, account: Account) -> None:
         self._store(account)
 
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        self.by_fingerprint.pop((str(account.user_id.value), fingerprint.value), None)
+        self.save(account)
+
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 

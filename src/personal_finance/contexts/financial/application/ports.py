@@ -134,6 +134,26 @@ class AccountRepository(Protocol):
         """
         ...
 
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        """Store an account that stopped answering to one of its keys.
+
+        Its own method rather than a `save`, because a fingerprint is stored
+        twice: on the account, and as the entry `find_by_fingerprint` reads.
+        `save` only ever adds the second one — it cannot know which key went
+        missing — so a plain save would leave the entry behind, still routing
+        every new alert to an account that no longer claims it.
+
+        Both halves have to land together for the same reason. Left with the
+        entry alone, the account would take movements it does not match; left
+        with the account alone, the key would be free for another account to
+        claim while this one still refuses it.
+        """
+        ...
+
     def overwrite_balance(self, account: Account) -> None:
         """Store a balance that was recomputed from the ledger.
 

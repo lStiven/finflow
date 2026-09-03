@@ -100,6 +100,14 @@ class FakeAccounts:
         for print_ in account.fingerprints:
             self.pointers[(account.user_id, print_.value)] = account.id
 
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        self.pointers.pop((account.user_id, fingerprint.value), None)
+        self.save(account)
+
     def overwrite_balance(self, account: Account) -> None:
         self.save(account)
 

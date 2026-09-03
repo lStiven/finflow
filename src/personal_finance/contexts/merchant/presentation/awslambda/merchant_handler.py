@@ -9,7 +9,6 @@ from __future__ import annotations
 import functools
 
 from personal_finance.contexts.merchant.infrastructure.messaging.sqs_worker import (
-    MessageOutcome,
     SQSMerchantWorker,
 )
 from personal_finance.contexts.merchant.presentation.cli.run_merchant_worker import (
@@ -19,6 +18,9 @@ from personal_finance.shared.infrastructure.messaging.lambda_batch import (
     BatchResponse,
     SQSEvent,
     drain,
+)
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
 )
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,

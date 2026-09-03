@@ -11,7 +11,6 @@ from __future__ import annotations
 import functools
 
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
-    MessageOutcome,
     SQSFinancialWorker,
 )
 from personal_finance.contexts.financial.presentation.cli.run_financial_worker import (
@@ -21,6 +20,9 @@ from personal_finance.shared.infrastructure.messaging.lambda_batch import (
     BatchResponse,
     SQSEvent,
     drain,
+)
+from personal_finance.shared.infrastructure.messaging.sqs_polling import (
+    MessageOutcome,
 )
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,

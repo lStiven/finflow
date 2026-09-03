@@ -6,8 +6,6 @@ just financial-worker
 from __future__ import annotations
 
 import logging
-import signal
-from types import FrameType
 
 from personal_finance.contexts.financial.application.handlers import (
     RecordMovementUseCase,
@@ -33,23 +31,10 @@ from personal_finance.shared.infrastructure.observability.logging_config import 
 from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
     LoggingEventPublisher,
 )
+from personal_finance.shared.presentation.worker_loop import drain_until_stopped
 
 
 _logger = logging.getLogger(__name__)
-
-
-class _Stopper:
-    """Finishes the batch in flight before exiting, so no message is lost to a
-    deploy or a Ctrl-C.
-    """
-
-    def __init__(self) -> None:
-        self.requested = False
-
-    def __call__(self, signum: int, frame: FrameType | None) -> None:
-        del frame
-        _logger.info("stop requested", extra={"signal": signum})
-        self.requested = True
 
 
 def build_worker() -> SQSFinancialWorker:
@@ -88,23 +73,7 @@ def build_worker() -> SQSFinancialWorker:
 
 def main() -> None:
     configure_logging()
-    worker = build_worker()
-    stopper = _Stopper()
-    signal.signal(signal.SIGINT, stopper)
-    signal.signal(signal.SIGTERM, stopper)
-
-    _logger.info("financial worker started")
-
-    while not stopper.requested:
-        result = worker.poll_once()
-
-        if result.received:
-            _logger.info(
-                "batch drained",
-                extra={"handled": result.handled, "rejected": result.rejected},
-            )
-
-    _logger.info("financial worker stopped")
+    drain_until_stopped(build_worker(), name="financial")
 
 
 if __name__ == "__main__":

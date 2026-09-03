@@ -466,6 +466,34 @@ export function useLinkInstrument(
   });
 }
 
+/**
+ * Stops an account answering to one of the cards it was given.
+ *
+ * The other half of linking, and the only way a card put on the wrong account
+ * ever moves: the movements that arrived under it go back to unassigned, so
+ * linking the same card on the right account adopts them there. Both accounts
+ * change, which is why this invalidates as widely as linking does.
+ */
+export function useUnlinkInstrument(
+  accountId: string,
+): UseMutationResult<Account, Error, LinkInstrumentBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LinkInstrumentBody) =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/instruments/unlink", {
+          params: { path: { account_id: accountId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
 type EnterTransactionBody = components["schemas"]["EnterTransactionPayload"];
 
 /**
@@ -691,6 +719,30 @@ export function useCloseAccount(
     mutationFn: () =>
       unwrap(
         api.POST("/financial/accounts/{account_id}/close", {
+          params: { path: { account_id: accountId } },
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.accounts });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+/**
+ * Takes movements again on an account that was closed by mistake.
+ *
+ * Nothing is restored — the history never went anywhere. What comes back is
+ * the account itself, into the `open` list every screen asks for.
+ */
+export function useReopenAccount(
+  accountId: string,
+): UseMutationResult<Account, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/financial/accounts/{account_id}/reopen", {
           params: { path: { account_id: accountId } },
         }),
       ),

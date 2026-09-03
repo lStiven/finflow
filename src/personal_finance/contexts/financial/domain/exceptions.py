@@ -28,6 +28,16 @@ class TransactionAlreadyAssignedError(FinancialDomainError):
     """
 
 
+class InstrumentNotLinkedError(FinancialDomainError):
+    """Raised when a card is unlinked from an account that never answered to it.
+
+    Silence would be the wrong answer even though the end state is what the
+    caller asked for: unlinking releases the movements that arrived under the
+    key, so "nothing to do" and "done" look identical from outside while one
+    of them means the card is still on some other account.
+    """
+
+
 class TransferLegError(FinancialDomainError):
     """Raised when one side of a transfer is edited as if it stood alone.
 
