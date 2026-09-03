@@ -8,6 +8,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from personal_finance.contexts.financial.application.financing import (
+    AccrueFinancingUseCase,
+    ManageFinancingUseCase,
+    ReadFinancingUseCase,
+    RevalueAccountUseCase,
+)
 from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
@@ -33,13 +39,17 @@ from personal_finance.contexts.financial.domain.value_objects import (
 )
 from personal_finance.contexts.financial.presentation.http.router import (
     get_account_use_case,
+    get_accrue_financing_use_case,
     get_list_accounts_use_case,
     get_list_transactions_use_case,
     get_manage_accounts_use_case,
+    get_manage_financing_use_case,
     get_manage_transactions_use_case,
     get_merchant_directory,
+    get_read_financing_use_case,
     get_read_history_use_case,
     get_read_trend_use_case,
+    get_revalue_account_use_case,
     get_summarize_spending_use_case,
     get_transaction_use_case,
     router,
@@ -287,6 +297,26 @@ def _build() -> tuple[TestClient, InMemoryLedger]:
             accounts=accounts,
             merchants=directory,
         )
+    )
+    app.dependency_overrides[get_manage_financing_use_case] = lambda: (
+        ManageFinancingUseCase(accounts=accounts, event_publisher=publisher)
+    )
+    app.dependency_overrides[get_accrue_financing_use_case] = lambda: (
+        AccrueFinancingUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=publisher,
+        )
+    )
+    app.dependency_overrides[get_revalue_account_use_case] = lambda: (
+        RevalueAccountUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=publisher,
+        )
+    )
+    app.dependency_overrides[get_read_financing_use_case] = lambda: (
+        ReadFinancingUseCase(accounts=accounts, ledger=ledger)
     )
 
     return TestClient(app), ledger
@@ -2258,4 +2288,351 @@ def test_the_catalog_offers_every_new_reporting_vocabulary(
     assert {option["value"] for option in catalog["transaction_sorts"]} == {
         "date",
         "amount",
+    }
+
+
+# ------------------------------------------------------------ financiación
+
+
+def _declare_mortgage(client: TestClient, *, balance: str = "60000000") -> str:
+    created = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Hipoteca",
+            "kind": "mortgage",
+            "currency": "COP",
+            "opening_balance": balance,
+            "bank": "Bancolombia",
+        },
+    )
+
+    assert created.status_code == 201
+
+    return str(created.json()["id"])
+
+
+def _loan_terms(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "rate": {"value": "0.1956", "basis": "effective_annual"},
+        "disbursed_on": "2026-01-15",
+        "term_months": 60,
+        "statement_day": 15,
+        "payment_day": 20,
+        "principal": "60000000",
+        "installment": "2000000",
+        "installment_covers_charges": True,
+        "charges": [
+            {
+                "name": "Seguro de vida deudores",
+                "basis": "outstanding_balance",
+                "rate": "0.000345",
+            },
+        ],
+        "accrue_from": "2026-01-15",
+    }
+    payload.update(overrides)
+
+    return payload
+
+
+def test_declaring_loan_terms_answers_with_the_rate_converted(
+    client: TestClient,
+) -> None:
+    account_id = _declare_mortgage(client)
+
+    response = client.put(
+        f"/financial/accounts/{account_id}/loan",
+        json=_loan_terms(),
+    )
+
+    assert response.status_code == 200
+    loan = response.json()["loan"]
+    assert loan["rate"]["basis"] == "effective_annual"
+    # The same rate a bank would print beside it, so a screen never converts.
+    assert loan["rate"]["monthly"].startswith("0.01499871")
+    assert loan["statement_day"] == 15
+    assert loan["payment_day"] == 20
+    assert loan["matures_on"] == "2031-01-15"
+    assert response.json()["accrued_through"] == "2026-01-15"
+
+
+def test_a_savings_account_is_refused_loan_terms(client: TestClient) -> None:
+    created = client.post(
+        "/financial/accounts",
+        json={"name": "Ahorros", "kind": "savings", "currency": "COP"},
+    )
+    account_id = created.json()["id"]
+
+    response = client.put(
+        f"/financial/accounts/{account_id}/loan",
+        json=_loan_terms(),
+    )
+
+    assert response.status_code == 400
+    assert "loan terms" in response.json()["detail"]
+
+
+def test_a_rate_typed_as_a_percentage_is_refused(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+
+    response = client.put(
+        f"/financial/accounts/{account_id}/loan",
+        json=_loan_terms(rate={"value": "19.56", "basis": "effective_annual"}),
+    )
+
+    assert response.status_code == 422
+
+
+def test_accruing_posts_the_month_and_moves_the_balance(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(f"/financial/accounts/{account_id}/loan", json=_loan_terms())
+
+    response = client.post(
+        f"/financial/accounts/{account_id}/accrue",
+        json={"through": "2026-02-20", "timezone": "America/Bogota"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["counterparty"] for row in body["posted"]] == [
+        "Intereses",
+        "Seguro de vida deudores",
+    ]
+    assert body["account"]["balance"] == "60920622.87"
+    assert body["accrued_through"] == "2026-02-15"
+    # And each one reads as what it is, so a movements list can say so.
+    assert {row["origin"] for row in body["posted"]} == {"accrual"}
+
+
+def test_accruing_twice_charges_the_month_once(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(f"/financial/accounts/{account_id}/loan", json=_loan_terms())
+    client.post(
+        f"/financial/accounts/{account_id}/accrue",
+        json={"through": "2026-02-20"},
+    )
+
+    again = client.post(
+        f"/financial/accounts/{account_id}/accrue",
+        json={"through": "2026-02-20"},
+    )
+
+    assert again.status_code == 200
+    assert again.json()["posted"] == []
+    assert again.json()["account"]["balance"] == "60920622.87"
+
+
+def test_the_sweep_brings_every_financed_account_up_to_date(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(f"/financial/accounts/{account_id}/loan", json=_loan_terms())
+    client.post(
+        "/financial/accounts",
+        json={"name": "Ahorros", "kind": "savings", "currency": "COP"},
+    )
+
+    response = client.post("/financial/accrue", json={"through": "2026-02-20"})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["account"]["id"] == account_id
+
+
+def test_the_schedule_shows_what_the_instalment_is_actually_made_of(
+    client: TestClient,
+) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(f"/financial/accounts/{account_id}/loan", json=_loan_terms())
+
+    response = client.get(
+        f"/financial/accounts/{account_id}/financing",
+        params={"periods": 3, "as_of": "2026-01-15"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    first = body["schedule"]["payments"][0]
+    assert first["interest"] == "899922.87"
+    assert first["charges"][0]["amount"] == "20700.00"
+    assert first["principal"] == "1079377.13"
+    assert first["due"] == "2000000.00"
+    assert first["closing_balance"] == "58920622.87"
+    assert first["due_on"] == "2026-02-20"
+    assert body["schedule"]["negatively_amortizing"] is False
+
+
+def test_a_schedule_warns_when_the_instalment_does_not_cover_the_interest(
+    client: TestClient,
+) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(
+        f"/financial/accounts/{account_id}/loan",
+        json=_loan_terms(installment="500000"),
+    )
+
+    response = client.get(
+        f"/financial/accounts/{account_id}/financing",
+        params={"periods": 3, "as_of": "2026-01-15"},
+    )
+
+    assert response.json()["schedule"]["negatively_amortizing"] is True
+
+
+def test_an_account_stating_no_terms_answers_409(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+
+    response = client.get(f"/financial/accounts/{account_id}/financing")
+
+    assert response.status_code == 409
+
+
+def test_clearing_the_terms_stops_the_future_and_keeps_the_past(
+    client: TestClient,
+) -> None:
+    account_id = _declare_mortgage(client)
+    client.put(f"/financial/accounts/{account_id}/loan", json=_loan_terms())
+    client.post(
+        f"/financial/accounts/{account_id}/accrue",
+        json={"through": "2026-02-20"},
+    )
+
+    cleared = client.delete(f"/financial/accounts/{account_id}/financing")
+
+    assert cleared.status_code == 200
+    assert cleared.json()["loan"] is None
+    # The rows the month charged are still there, and so is the balance.
+    assert cleared.json()["balance"] == "60920622.87"
+
+
+def test_stating_what_a_fund_is_worth_records_the_difference(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Fondo de inversión",
+            "kind": "investment",
+            "currency": "COP",
+            "opening_balance": "10000000",
+        },
+    )
+    account_id = created.json()["id"]
+
+    response = client.post(
+        f"/financial/accounts/{account_id}/value",
+        json={"market_value": "10450000"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account"]["balance"] == "10450000"
+    assert body["posted"][0]["counterparty"] == "Valoración"
+    assert body["posted"][0]["amount"] == "450000"
+    assert body["posted"][0]["direction"] == "incoming"
+
+
+def test_stating_the_value_it_already_has_records_nothing(client: TestClient) -> None:
+    created = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Fondo de inversión",
+            "kind": "investment",
+            "currency": "COP",
+            "opening_balance": "10000000",
+        },
+    )
+    account_id = created.json()["id"]
+
+    response = client.post(
+        f"/financial/accounts/{account_id}/value",
+        json={"market_value": "10000000"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["posted"] == []
+    assert response.json()["reason"] == "the value has not changed"
+
+
+def test_a_debt_cannot_be_revalued(client: TestClient) -> None:
+    account_id = _declare_mortgage(client)
+
+    response = client.post(
+        f"/financial/accounts/{account_id}/value",
+        json={"market_value": "100"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_a_cdt_projects_what_it_will_be_worth_net_of_the_withholding(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/financial/accounts",
+        json={
+            "name": "CDT",
+            "kind": "investment",
+            "currency": "COP",
+            "opening_balance": "20000000",
+        },
+    )
+    account_id = created.json()["id"]
+    client.put(
+        f"/financial/accounts/{account_id}/investment",
+        json={
+            "opened_on": "2026-01-10",
+            "statement_day": 10,
+            "rate": {"value": "0.105", "basis": "effective_annual"},
+            "matures_on": "2026-04-10",
+            "charges": [
+                {
+                    "name": "Retención en la fuente",
+                    "basis": "earnings",
+                    "rate": "0.04",
+                },
+            ],
+            "accrue_from": "2026-01-10",
+        },
+    )
+
+    response = client.get(
+        f"/financial/accounts/{account_id}/financing",
+        params={"periods": 12, "as_of": "2026-01-10"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schedule"] is None
+    # Nothing past the vencimiento: the money stopped being invested.
+    assert len(body["projection"]["periods"]) == 3
+    assert body["projection"]["periods"][0]["earned"] == "167103.11"
+    assert body["projection"]["periods"][0]["charges"][0]["amount"] == "6684.12"
+    assert body["performance"]["contributed"] == "0"
+
+
+def test_the_catalog_publishes_the_vocabularies_a_loan_form_needs(
+    client: TestClient,
+) -> None:
+    catalog = client.get("/financial/catalog").json()
+
+    assert {option["value"] for option in catalog["rate_bases"]} == {
+        "effective_annual",
+        "nominal_annual",
+        "monthly",
+    }
+    assert {option["value"] for option in catalog["charge_bases"]} == {
+        "fixed",
+        "outstanding_balance",
+        "original_principal",
+        "insured_value",
+        "earnings",
+    }
+    assert {option["value"] for option in catalog["amortization_styles"]} == {
+        "french",
+        "constant_principal",
+        "interest_only",
+    }
+    assert {option["value"] for option in catalog["transaction_origins"]} == {
+        "bank_alert",
+        "manual",
+        "accrual",
     }

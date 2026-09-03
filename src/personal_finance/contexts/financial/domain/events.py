@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
+from decimal import Decimal
 
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -54,6 +56,28 @@ class AccountFingerprintLinked(AccountEvent):
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class AccountRenamed(AccountEvent):
     name: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountFinancingSet(AccountEvent):
+    """This account now charges or earns on its own, on these terms.
+
+    Carries the effective annual rate and nothing else about the arithmetic:
+    the terms are the owner's own data — what their mortgage costs, what their
+    property is insured for — and an event is the wrong place for any of it.
+    What a reader needs is that the account started computing, from when, and
+    at what headline rate.
+    """
+
+    kind: AccountKind
+    rate: Decimal | None
+    statement_day: int | None
+    accrued_through: dt.date | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccountFinancingCleared(AccountEvent):
+    """This account stops computing. Every period already posted stays."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

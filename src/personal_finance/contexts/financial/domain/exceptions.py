@@ -38,3 +38,15 @@ class TransferLegError(FinancialDomainError):
     is right. What can still be corrected is where each side belongs — the
     account it sits on — and the note beside it.
     """
+
+
+class FinancingTermsError(FinancialDomainError):
+    """Raised when the terms of a loan or an investment cannot describe one.
+
+    Its own error rather than a bare `ValueError` because these arrive from a
+    form somebody filled in: a rate typed as `19.56` instead of `0.1956`, a
+    cut on the 45th of the month, a charge quoted on an original principal
+    nobody stated. Every one of them is a sentence the owner has to read and
+    act on, so they surface as a refusal with a reason rather than as a
+    balance that quietly grows twenty times a month.
+    """

@@ -26,6 +26,7 @@ balance can never move without a row behind it.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import datetime as dt
 from decimal import Decimal
 import enum
 from typing import TYPE_CHECKING
@@ -34,6 +35,15 @@ from personal_finance.contexts.financial.application.ports import (
     BalanceReversal,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.financing import (
+    AmortizationStyle,
+    ChargeBasis,
+    InterestRate,
+    InvestmentTerms,
+    LoanTerms,
+    RateBasis,
+    RecurringCharge,
+)
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -141,7 +151,9 @@ def _enum[T: enum.Enum](kind: type[T], value: str, what: str) -> T:
 
 # Written only when the account carries them, so `save` has to clear whatever
 # is now absent rather than leave a stale value behind.
-OPTIONAL_ACCOUNT_ATTRIBUTES = frozenset({"closed_at", "credit_limit"})
+OPTIONAL_ACCOUNT_ATTRIBUTES = frozenset(
+    {"closed_at", "credit_limit", "loan", "investment", "accrued_through"},
+)
 
 
 def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
@@ -176,6 +188,87 @@ def account_to_item(account: Account) -> dict[str, AttributeValueTypeDef]:
             if account.credit_limit is not None
             else {}
         ),
+        # The terms the balance moves under, absent on everything that has
+        # none — which is every account stored before this existed, and every
+        # savings account after it.
+        **(
+            {"loan": {"M": _loan_to_item(account.loan)}}
+            if account.loan is not None
+            else {}
+        ),
+        **(
+            {"investment": {"M": _investment_to_item(account.investment)}}
+            if account.investment is not None
+            else {}
+        ),
+        **(
+            {"accrued_through": {"S": account.accrued_through.isoformat()}}
+            if account.accrued_through is not None
+            else {}
+        ),
+    }
+
+
+# Money on the terms is stored as a string for the same reason a movement's
+# amount is: a DynamoDB number round-trips through a float in some clients,
+# and a cent lost inside an insurance rate is a cent every future period
+# repeats. The currency is never stored beside it — it is the account's, and a
+# second copy is a second thing that can disagree.
+def _loan_to_item(terms: LoanTerms) -> dict[str, AttributeValueTypeDef]:
+    return {
+        "rate": {"M": _rate_to_item(terms.rate)},
+        "disbursed_on": {"S": terms.disbursed_on.isoformat()},
+        "term_months": {"N": str(terms.term_months)},
+        "statement_day": {"N": str(terms.statement_day)},
+        "style": {"S": terms.style.value},
+        "installment_covers_charges": {"BOOL": terms.installment_covers_charges},
+        "charges": {"L": [{"M": _charge_to_item(c)} for c in terms.charges]},
+        **(
+            {"payment_day": {"N": str(terms.payment_day)}}
+            if terms.payment_day is not None
+            else {}
+        ),
+        **(
+            {"principal": {"S": str(terms.principal.amount)}}
+            if terms.principal is not None
+            else {}
+        ),
+        **(
+            {"installment": {"S": str(terms.installment.amount)}}
+            if terms.installment is not None
+            else {}
+        ),
+    }
+
+
+def _investment_to_item(terms: InvestmentTerms) -> dict[str, AttributeValueTypeDef]:
+    return {
+        "opened_on": {"S": terms.opened_on.isoformat()},
+        "statement_day": {"N": str(terms.statement_day)},
+        "charges": {"L": [{"M": _charge_to_item(c)} for c in terms.charges]},
+        **(
+            {"rate": {"M": _rate_to_item(terms.rate)}} if terms.rate is not None else {}
+        ),
+        **(
+            {"matures_on": {"S": terms.matures_on.isoformat()}}
+            if terms.matures_on is not None
+            else {}
+        ),
+    }
+
+
+def _rate_to_item(rate: InterestRate) -> dict[str, AttributeValueTypeDef]:
+    return {"value": {"S": str(rate.value)}, "basis": {"S": rate.basis.value}}
+
+
+def _charge_to_item(charge: RecurringCharge) -> dict[str, AttributeValueTypeDef]:
+    return {
+        "name": {"S": charge.name},
+        "basis": {"S": charge.basis.value},
+        "charged_to_balance": {"BOOL": charge.charged_to_balance},
+        **({"amount": {"S": str(charge.amount.amount)}} if charge.amount else {}),
+        **({"rate": {"S": str(charge.rate)}} if charge.rate is not None else {}),
+        **({"base": {"S": str(charge.base.amount)}} if charge.base else {}),
     }
 
 
@@ -227,7 +320,143 @@ def account_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Account:
             if credit_limit is not None
             else None
         ),
+        loan=_loan_to_entity(item.get("loan", {}).get("M"), money),
+        investment=_investment_to_entity(item.get("investment", {}).get("M"), money),
+        accrued_through=_date(_string(item, "accrued_through")),
     )
+
+
+def _date(value: str | None) -> dt.date | None:
+    if value is None:
+        return None
+
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as error:
+        raise CorruptFinancialItemError(
+            f"Stored date is unreadable: {value!r}"
+        ) from error
+
+
+def _loan_to_entity(
+    item: Mapping[str, AttributeValueTypeDef] | None,
+    currency: Currency,
+) -> LoanTerms | None:
+    """Read a loan's terms back, or refuse the account.
+
+    Refused rather than dropped, unlike an optional field that reads back as
+    absent. Terms that came back half-read would leave a mortgage quietly
+    accruing at no rate, and the owner would find out by noticing months later
+    that their debt had stopped growing.
+    """
+    if item is None:
+        return None
+
+    disbursed_on = _date(_string(item, "disbursed_on"))
+    rate = _rate_to_entity(item.get("rate", {}).get("M"))
+
+    if disbursed_on is None or rate is None:
+        raise CorruptFinancialItemError("Stored loan terms are missing required fields")
+
+    payment_day = item.get("payment_day", {}).get("N")
+
+    return LoanTerms(
+        rate=rate,
+        disbursed_on=disbursed_on,
+        term_months=int(_number(item, "term_months")),
+        statement_day=int(_number(item, "statement_day")),
+        payment_day=int(payment_day) if payment_day is not None else None,
+        style=_enum(
+            AmortizationStyle,
+            _string(item, "style") or AmortizationStyle.FRENCH.value,
+            "amortization style",
+        ),
+        principal=_amount(_string(item, "principal"), currency),
+        installment=_amount(_string(item, "installment"), currency),
+        installment_covers_charges=bool(
+            item.get("installment_covers_charges", {}).get("BOOL", False),
+        ),
+        charges=_charges_to_entity(item, currency),
+    )
+
+
+def _investment_to_entity(
+    item: Mapping[str, AttributeValueTypeDef] | None,
+    currency: Currency,
+) -> InvestmentTerms | None:
+    if item is None:
+        return None
+
+    opened_on = _date(_string(item, "opened_on"))
+
+    if opened_on is None:
+        raise CorruptFinancialItemError(
+            "Stored investment terms are missing required fields",
+        )
+
+    return InvestmentTerms(
+        opened_on=opened_on,
+        statement_day=int(_number(item, "statement_day")),
+        rate=_rate_to_entity(item.get("rate", {}).get("M")),
+        matures_on=_date(_string(item, "matures_on")),
+        charges=_charges_to_entity(item, currency),
+    )
+
+
+def _rate_to_entity(
+    item: Mapping[str, AttributeValueTypeDef] | None,
+) -> InterestRate | None:
+    if item is None:
+        return None
+
+    value = _string(item, "value")
+    basis = _string(item, "basis")
+
+    if value is None or basis is None:
+        raise CorruptFinancialItemError("Stored interest rate is incomplete")
+
+    return InterestRate(
+        value=Decimal(value), basis=_enum(RateBasis, basis, "rate basis")
+    )
+
+
+def _charges_to_entity(
+    item: Mapping[str, AttributeValueTypeDef],
+    currency: Currency,
+) -> tuple[RecurringCharge, ...]:
+    charges: list[RecurringCharge] = []
+
+    for entry in item.get("charges", {}).get("L", []):
+        stored = entry.get("M")
+
+        if stored is None:
+            raise CorruptFinancialItemError("Stored recurring charge is unreadable")
+
+        name = _string(stored, "name")
+        basis = _string(stored, "basis")
+
+        if name is None or basis is None:
+            raise CorruptFinancialItemError("Stored recurring charge is incomplete")
+
+        rate = _string(stored, "rate")
+        charges.append(
+            RecurringCharge(
+                name=name,
+                basis=_enum(ChargeBasis, basis, "charge basis"),
+                amount=_amount(_string(stored, "amount"), currency),
+                rate=Decimal(rate) if rate is not None else None,
+                base=_amount(_string(stored, "base"), currency),
+                charged_to_balance=bool(
+                    stored.get("charged_to_balance", {}).get("BOOL", True),
+                ),
+            ),
+        )
+
+    return tuple(charges)
+
+
+def _amount(value: str | None, currency: Currency) -> Money | None:
+    return None if value is None else Money(amount=Decimal(value), currency=currency)
 
 
 def movement_to_item(transaction: Transaction) -> dict[str, AttributeValueTypeDef]:
@@ -788,19 +1017,32 @@ class DynamoDBTransactionLedger:
         if not transactions:
             return
 
+        owners = {transaction.user_id for transaction in transactions}
+
+        if len(owners) > 1:
+            # The balance half of this write is keyed by one partition, so a
+            # batch spanning two people would move one owner's balance for
+            # rows deleted from another's. Nothing here builds such a batch —
+            # both sides of a transfer are one person's — and this is what
+            # keeps it that way rather than trusting that it stays true.
+            raise ValueError(
+                "An erasure belongs to one owner: rows from two partitions "
+                "cannot be removed in the same write",
+            )
+
+        owner = owners.pop()
         items: list[TransactWriteItemTypeDef] = [
             {
                 "Delete": {
                     "TableName": self._table_name,
                     "Key": _key(
-                        transaction.user_id,
+                        owner,
                         f"{MOVEMENT_PREFIX}{transaction.id.value}",
                     ),
                 },
             }
             for transaction in transactions
         ]
-        owner = transactions[0].user_id
         items.extend(
             {
                 "Update": {

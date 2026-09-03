@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 import dataclasses
+import datetime as dt
 from decimal import Decimal
 import enum
 import hashlib
@@ -312,10 +313,20 @@ class TransactionOrigin(enum.Enum):
     A bank alert states a fact somebody else recorded; a manual entry is the
     user's own claim. Automatic payments that never email are exactly why the
     second exists.
+
+    An **accrual** is neither: nobody typed it and no bank announced it. It is
+    what this app computed from the terms the owner declared — a month of
+    interest on a mortgage, the insurance that month carried, what a CDT
+    earned. Its own origin because it is the one a reader has to be able to
+    tell apart: an interest charge is real money leaving somebody's net worth,
+    but it is the only movement in the ledger whose authority is an
+    arithmetic rather than a fact, so a wrong rate is corrected by restating
+    the terms rather than by arguing with the bank.
     """
 
     BANK_ALERT = "bank_alert"
     MANUAL = "manual"
+    ACCRUAL = "accrual"
 
 
 class TransactionStatus(enum.Enum):
@@ -576,6 +587,44 @@ class MovementFingerprint(ValueObject):
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
     @classmethod
+    def from_accrual(
+        cls,
+        *,
+        user_id: UserId,
+        account_id: AccountId,
+        item: str,
+        period_end: dt.date,
+    ) -> Self:
+        """What makes two computed charges the same charge.
+
+        The account, what was charged, and the period it closed — and
+        deliberately **not the amount**. A month of interest is charged once
+        per account per period whatever the arithmetic later says it came to,
+        so a second run over a period already posted writes the same key and
+        the ledger's conditional insert refuses it. Including the amount would
+        mean a balance corrected after the fact posting the same month's
+        interest twice, at two figures, with the debt carrying both.
+
+        `item` is a stable key, not the words a reader sees: `interest`, or a
+        charge's name folded. Renaming a charge on the terms therefore leaves
+        every period already posted alone and only changes what the next one
+        is filed under — which is why the terms refuse two charges sharing a
+        name, since those would be one key and the second would never be
+        written at all.
+        """
+        canonical = _canonical(
+            (
+                _ACCRUAL_TAG,
+                str(user_id.value),
+                str(account_id.value),
+                item.strip().casefold(),
+                period_end.isoformat(),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    @classmethod
     def from_transfer_leg(
         cls,
         *,
@@ -630,6 +679,10 @@ class MovementFingerprint(ValueObject):
 # alike. Changing it re-identifies every leg entered after it, and the same
 # payment would then be enterable a second time.
 _TRANSFER_LEG_TAG = "transfer-leg"
+
+# The same contract for a computed charge: changing this re-identifies every
+# accrual, and every period already posted would be posted a second time.
+_ACCRUAL_TAG = "accrual"
 
 
 class TransferRole(enum.Enum):

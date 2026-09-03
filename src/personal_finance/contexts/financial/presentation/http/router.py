@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import contextlib
+import datetime as dt
 from decimal import Decimal
 import functools
 from typing import Annotated
@@ -26,6 +27,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
 from personal_finance.contexts.financial.application.commands import (
+    AccrueFinancingCommand,
+    ChargeDraft,
+    ClearFinancingCommand,
     CloseAccountCommand,
     DeleteTransactionCommand,
     EditTransactionCommand,
@@ -35,7 +39,22 @@ from personal_finance.contexts.financial.application.commands import (
     OpenAccountCommand,
     RenameAccountCommand,
     RestateBalanceCommand,
+    RevalueAccountCommand,
     SetCreditLimitCommand,
+    SetInvestmentTermsCommand,
+    SetLoanTermsCommand,
+)
+from personal_finance.contexts.financial.application.financing import (
+    DEFAULT_SCHEDULE_PERIODS,
+    MAX_SCHEDULE_PERIODS,
+    AccrualResult,
+    AccrueFinancingUseCase,
+    FinancingView,
+    InvestmentPerformance,
+    ManageFinancingUseCase,
+    NotFinancedError,
+    ReadFinancingUseCase,
+    RevalueAccountUseCase,
 )
 from personal_finance.contexts.financial.application.handlers import (
     AccountAlreadyExistsError,
@@ -89,8 +108,26 @@ from personal_finance.contexts.financial.domain.entities import Account, Transac
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
+    FinancingTermsError,
     TransactionAlreadyAssignedError,
     TransferLegError,
+)
+from personal_finance.contexts.financial.domain.financing import (
+    MAX_CHARGE_NAME_LENGTH,
+    MAX_RATE,
+    MAX_TERM_MONTHS,
+    AmortizationStyle,
+    ChargeAmount,
+    ChargeBasis,
+    InterestRate,
+    InvestmentProjection,
+    InvestmentTerms,
+    LoanSchedule,
+    LoanTerms,
+    ProjectedReturn,
+    RateBasis,
+    RecurringCharge,
+    ScheduledPayment,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -177,6 +214,180 @@ class AccountResponse(BaseModel):
     bank: str | None
     # The bank/instrument keys whose alerts land here.
     instruments: list[str]
+    # What this account charges or earns on its own. Both null on everything
+    # that computes nothing, which is every savings account and every card.
+    loan: LoanTermsResponse | None = None
+    investment: InvestmentTermsResponse | None = None
+    # The last statement date whose charges are already in the ledger. Null
+    # while nothing has ever accrued.
+    accrued_through: str | None = None
+
+
+class RateResponse(BaseModel):
+    """A rate as its owner typed it, plus the one figure that compares.
+
+    `value` is a fraction — `0.1956`, not `19.56` — in whatever basis the bank
+    quoted. `effective_annual` and `monthly` are the same rate converted, so a
+    screen can show "19.56 % E.A. (1.4999 % mensual)" without re-deriving a
+    conversion that has to agree with the one the charges were computed from.
+    """
+
+    value: str
+    basis: str
+    effective_annual: str
+    monthly: str
+
+
+class ChargeResponse(BaseModel):
+    """One thing charged every period besides the interest."""
+
+    name: str
+    basis: str
+    amount: str | None
+    rate: str | None
+    base: str | None
+    # False when the bank collects it somewhere else, in which case it is part
+    # of what has to be paid and never part of this balance.
+    charged_to_balance: bool
+
+
+class LoanTermsResponse(BaseModel):
+    rate: RateResponse
+    disbursed_on: str
+    term_months: int
+    statement_day: int
+    payment_day: int
+    style: str
+    principal: str | None
+    installment: str | None
+    installment_covers_charges: bool
+    charges: list[ChargeResponse]
+    # The last cut of the term as agreed at disbursement. Derived, so a client
+    # never recomputes a calendar.
+    matures_on: str
+
+
+class InvestmentTermsResponse(BaseModel):
+    opened_on: str
+    statement_day: int
+    # Null for variable income — shares, a fund whose unit price moves. Its
+    # value is stated through `POST /accounts/{id}/value`, not computed.
+    rate: RateResponse | None
+    matures_on: str | None
+    charges: list[ChargeResponse]
+
+
+class ChargeAmountResponse(BaseModel):
+    """One charge, priced for one period."""
+
+    name: str
+    amount: str
+    charged_to_balance: bool
+
+
+class ScheduledPaymentResponse(BaseModel):
+    """One row of la tabla de amortización.
+
+    `principal` is the only figure that moves the debt, and the reason the
+    table is worth rendering: it is what the payment was worth once the month
+    took what it was owed.
+    """
+
+    starts_on: str
+    ends_on: str
+    due_on: str
+    opening_balance: str
+    interest: str
+    charges: list[ChargeAmountResponse]
+    principal: str
+    # Capital, interest and every charge: what actually has to be paid.
+    due: str
+    closing_balance: str
+
+
+class LoanScheduleResponse(BaseModel):
+    payments: list[ScheduledPaymentResponse]
+    total_interest: str
+    total_charges: str
+    total_due: str
+    # When the balance reaches zero, or null when it does not inside the rows
+    # asked for.
+    settles_on: str | None
+    # The instalment does not cover the interest, so the debt grows every
+    # month however long it is paid. The one figure worth interrupting
+    # somebody for.
+    negatively_amortizing: bool
+
+
+class ProjectedReturnResponse(BaseModel):
+    starts_on: str
+    ends_on: str
+    opening_balance: str
+    earned: str
+    charges: list[ChargeAmountResponse]
+    closing_balance: str
+
+
+class InvestmentProjectionResponse(BaseModel):
+    periods: list[ProjectedReturnResponse]
+    total_earned: str
+    total_charges: str
+    value_at_end: str
+    matures_on: str | None
+
+
+class InvestmentPerformanceResponse(BaseModel):
+    """What went in, what came out, and what the position actually made.
+
+    Read off the ledger rather than from the balance, which is the only way
+    the gain is separable at all: a contribution and a return both raise the
+    same number, and only the row says which it was. `earned` is signed and
+    net of every charge the position carried.
+    """
+
+    contributed: str
+    withdrawn: str
+    earned: str
+
+
+class FinancingResponse(BaseModel):
+    """What an account that computes will do, worked out from today's balance.
+
+    Never stored. A table assumes every instalment is paid on the day it is
+    due, so the moment a real payment lands the balance it starts from moves
+    and the whole table with it.
+    """
+
+    account: AccountResponse
+    as_of: str
+    # Interest for the days since the last cut, which nobody owes yet. It
+    # carries no charges: insurance is charged whole on the cut day, so a
+    # part-month owes none of it.
+    pending_interest: str
+    # What settling today would take: the balance plus that interest. Null on
+    # an account holding nothing.
+    payoff: str | None
+    next_statement_on: str
+    next_due_on: str | None
+    schedule: LoanScheduleResponse | None
+    projection: InvestmentProjectionResponse | None
+    performance: InvestmentPerformanceResponse | None
+
+
+class AccrualResponse(BaseModel):
+    """What one account's accrual wrote.
+
+    `skipped` counts the charges a previous run had already written. Running
+    this twice is meant to be safe, and seeing that it was is more use than
+    inferring it from silence.
+    """
+
+    account: AccountResponse
+    posted: list[TransactionResponse]
+    skipped: int
+    accrued_through: str | None
+    # Why nothing was written, when nothing was.
+    reason: str | None
 
 
 class NetWorthResponse(BaseModel):
@@ -493,6 +704,15 @@ class FinancialCatalogResponse(BaseModel):
     # own accounts. `/transactions` defaults to `include`, every total to
     # `exclude`.
     transfer_views: list[CatalogOption]
+    # How a rate is quoted. Not interchangeable: 19.56 % E.A. is 1.4999 % a
+    # month, 19.56 % nominal anual is 1.63 %, and offering this as a free
+    # field is how a loan ends up projected at a tenth of its interest.
+    rate_bases: list[CatalogOption]
+    # What a recurring charge is a proportion of — the insurance on the debt,
+    # the insurance on the property, the flat fee, the withholding.
+    charge_bases: list[CatalogOption]
+    # How a loan's instalment is put together.
+    amortization_styles: list[CatalogOption]
     # Which side of a transfer a hand-entered leg is. `source` is money
     # leaving the named account, `destination` money arriving on it — and on a
     # credit card, arriving is the debt going down.
@@ -583,6 +803,144 @@ class RestateBalancePayload(BaseModel):
     """
 
     balance: Decimal = Field(ge=-MAX_MONEY, le=MAX_MONEY)
+
+
+class RatePayload(BaseModel):
+    """La tasa de interés, as a fraction and in the basis the bank quotes it.
+
+    `0.1956`, never `19.56`. The three bases are the three ways a rate is
+    printed here — `efectivo anual` (E.A.), `nominal anual` capitalizing
+    monthly (N.A. M.V.) and the monthly rate itself (M.V.) — and they are not
+    interchangeable: 19.56 % E.A. is 1.4999 % a month, while 19.56 % nominal
+    is 1.63 %, and reading one as the other is a tenth of the interest.
+    """
+
+    value: Decimal = Field(ge=0, le=MAX_RATE)
+    basis: RateBasis
+
+
+class ChargePayload(BaseModel):
+    """One thing charged every period besides the interest.
+
+    A *seguro de vida deudores* is a rate on what is owed; a *seguro de
+    incendio y terremoto* is a rate on what the property is insured for, which
+    is not a balance this app holds; an administration fee is a flat amount;
+    *retención en la fuente* is a rate on what an investment earned. Which
+    `basis` is chosen decides which of `amount`, `rate` and `base` is
+    required, and the wrong pairing is refused rather than silently priced
+    at zero.
+
+    `charged_to_balance` is false when the bank collects it somewhere else —
+    its own direct debit on a savings account. It is then part of what has to
+    be paid and never part of this balance, because that debit arrives as its
+    own alert and posting it here as well would charge one insurance twice.
+    """
+
+    name: str = Field(min_length=1, max_length=MAX_CHARGE_NAME_LENGTH)
+    basis: ChargeBasis
+    amount: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    rate: Decimal | None = Field(default=None, ge=0, le=MAX_RATE)
+    base: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    charged_to_balance: bool = True
+
+
+class LoanTermsPayload(BaseModel):
+    """What a loan costs, so what is owed can be more than what is unpaid.
+
+    None of it can be read from a bank alert: an alert says a payment was
+    made, never what the payment was made of. Paying 2 000 000 against
+    60 000 000 does not leave 58 000 000, because the month charged interest
+    first and the insurance after it.
+
+    Amounts are bare figures in the account's own currency, like the credit
+    limit and the restated balance — asking a caller to restate the currency
+    only creates a way to get it wrong.
+
+    `accrue_from` is where the arithmetic starts. **Left out it means today**,
+    which is right for the ordinary case: somebody declaring a mortgage they
+    have paid for three years states the balance their bank shows, and that
+    figure already contains those three years of interest. Send the
+    disbursement date instead — with the amount disbursed as the opening
+    balance — to have the history rebuilt from the beginning.
+    """
+
+    rate: RatePayload
+    disbursed_on: dt.date
+    term_months: int = Field(ge=1, le=MAX_TERM_MONTHS)
+    # La fecha de corte: the day interest is charged and the statement closes.
+    statement_day: int = Field(ge=1, le=31)
+    # When the instalment is due, usually a few days after the cut. Defaults
+    # to the cut itself.
+    payment_day: int | None = Field(default=None, ge=1, le=31)
+    style: AmortizationStyle = AmortizationStyle.FRENCH
+    # What was disbursed. Optional: somebody declaring a loan halfway through
+    # its life knows what they owe and not always what they borrowed.
+    principal: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    # La cuota, when the bank fixed one. Left out, it is computed from the
+    # balance, the rate and what is left of the term.
+    installment: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    # Whether the number on the statement already includes the insurance.
+    # Getting this backwards misstates the capital portion by exactly the
+    # insurance, every month.
+    installment_covers_charges: bool = False
+    charges: list[ChargePayload] = Field(
+        default_factory=lambda: list[ChargePayload](),
+        max_length=12,
+    )
+    accrue_from: dt.date | None = None
+
+
+class InvestmentTermsPayload(BaseModel):
+    """How an investment earns, when it earns at a rate at all.
+
+    A CDT, a remunerated savings account or a fund with an agreed return has a
+    rate and its value can be computed. Shares and a fund whose unit price
+    moves have none: send no `rate` and state what it is worth through
+    `POST /accounts/{id}/value` instead, which records the difference as a
+    movement so the gain is visible rather than folded into a balance.
+    """
+
+    opened_on: dt.date
+    statement_day: int = Field(ge=1, le=31)
+    rate: RatePayload | None = None
+    # El vencimiento of a CDT. Nothing accrues past it: the money stopped
+    # being invested.
+    matures_on: dt.date | None = None
+    charges: list[ChargePayload] = Field(
+        default_factory=lambda: list[ChargePayload](),
+        max_length=12,
+    )
+    accrue_from: dt.date | None = None
+
+
+class AccruePayload(BaseModel):
+    """Post whatever the closed periods charged, up to a day.
+
+    `through` left out means today, read in `timezone`: a cut on the 15th is
+    the 15th where the owner lives, and a period closed in UTC would charge a
+    Bogotá mortgage five hours early on the last day of some months.
+    """
+
+    through: dt.date | None = None
+    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=64)
+
+
+class RevaluePayload(BaseModel):
+    """What this investment is worth now.
+
+    The difference against what the ledger says is recorded **as a movement**,
+    not folded into the opening balance the way `PUT /balance` does it. That
+    is the whole point: a gain nobody can see as a row is a gain no report can
+    attribute, and an investment whose return is invisible reads exactly like
+    a savings account.
+    """
+
+    market_value: Decimal = Field(ge=-MAX_MONEY, le=MAX_MONEY)
+    occurred_at: int | None = Field(
+        default=None,
+        ge=MIN_EPOCH_SECONDS,
+        le=MAX_EPOCH_SECONDS,
+    )
 
 
 class EnterTransactionPayload(BaseModel):
@@ -707,6 +1065,37 @@ def _build_manage_transactions() -> ManageTransactionsUseCase:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_manage_financing() -> ManageFinancingUseCase:
+    return ManageFinancingUseCase(
+        accounts=build_accounts(),
+        event_publisher=LoggingEventPublisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_accrue_financing() -> AccrueFinancingUseCase:
+    return AccrueFinancingUseCase(
+        accounts=build_accounts(),
+        ledger=build_ledger(),
+        event_publisher=LoggingEventPublisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_revalue_account() -> RevalueAccountUseCase:
+    return RevalueAccountUseCase(
+        accounts=build_accounts(),
+        ledger=build_ledger(),
+        event_publisher=LoggingEventPublisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_read_financing() -> ReadFinancingUseCase:
+    return ReadFinancingUseCase(accounts=build_accounts(), ledger=build_ledger())
+
+
+@functools.lru_cache(maxsize=1)
 def _build_list_accounts() -> ListAccountsUseCase:
     return ListAccountsUseCase(accounts=build_accounts())
 
@@ -756,6 +1145,22 @@ def get_manage_accounts_use_case() -> ManageAccountsUseCase:
 
 def get_manage_transactions_use_case() -> ManageTransactionsUseCase:
     return _build_manage_transactions()
+
+
+def get_manage_financing_use_case() -> ManageFinancingUseCase:
+    return _build_manage_financing()
+
+
+def get_accrue_financing_use_case() -> AccrueFinancingUseCase:
+    return _build_accrue_financing()
+
+
+def get_revalue_account_use_case() -> RevalueAccountUseCase:
+    return _build_revalue_account()
+
+
+def get_read_financing_use_case() -> ReadFinancingUseCase:
+    return _build_read_financing()
 
 
 def get_list_accounts_use_case() -> ListAccountsUseCase:
@@ -827,6 +1232,9 @@ def get_catalog() -> FinancialCatalogResponse:
         trend_dimensions=options(TrendDimension),
         transfer_views=options(TransferView),
         transfer_roles=options(TransferRole),
+        rate_bases=options(RateBasis),
+        charge_bases=options(ChargeBasis),
+        amortization_styles=options(AmortizationStyle),
     )
 
 
@@ -1021,6 +1429,255 @@ def close_account(
         )
 
     return _account_response(account)
+
+
+@router.put("/accounts/{account_id}/loan", response_model=AccountResponse)
+def set_loan_terms(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: LoanTermsPayload,
+    use_case: Annotated[
+        ManageFinancingUseCase,
+        Depends(get_manage_financing_use_case),
+    ],
+) -> AccountResponse:
+    """State what this loan costs: the rate, the term, the cut, the insurance.
+
+    Only a loan or a mortgage takes these. A credit card is deliberately left
+    out even though it charges interest too: its interest is charged on
+    whatever part of the statement went unpaid, which nothing in this app
+    knows, and posting a month of it would invent a debt for everybody who
+    pays their card in full.
+
+    PUT because the body carries the whole fact — sending it again replaces
+    the terms rather than merging into them. Every period already posted stays
+    exactly as it was: a rate corrected today did not change what last March
+    actually charged.
+    """
+    with _domain_errors():
+        account = use_case.set_loan(
+            SetLoanTermsCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                rate=_rate(payload.rate),
+                disbursed_on=payload.disbursed_on,
+                term_months=payload.term_months,
+                statement_day=payload.statement_day,
+                payment_day=payload.payment_day,
+                style=payload.style,
+                principal=payload.principal,
+                installment=payload.installment,
+                installment_covers_charges=payload.installment_covers_charges,
+                charges=[_charge(charge) for charge in payload.charges],
+                accrue_from=payload.accrue_from,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.put("/accounts/{account_id}/investment", response_model=AccountResponse)
+def set_investment_terms(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: InvestmentTermsPayload,
+    use_case: Annotated[
+        ManageFinancingUseCase,
+        Depends(get_manage_financing_use_case),
+    ],
+) -> AccountResponse:
+    """State how this investment earns, when it earns at a rate at all.
+
+    Leave `rate` out for variable income — shares, a fund whose unit price
+    moves. Nothing about those can be computed, and what they are worth is
+    stated through `POST /accounts/{id}/value` instead.
+    """
+    with _domain_errors():
+        account = use_case.set_investment(
+            SetInvestmentTermsCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                opened_on=payload.opened_on,
+                statement_day=payload.statement_day,
+                rate=None if payload.rate is None else _rate(payload.rate),
+                matures_on=payload.matures_on,
+                charges=[_charge(charge) for charge in payload.charges],
+                accrue_from=payload.accrue_from,
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.delete("/accounts/{account_id}/financing", response_model=AccountResponse)
+def clear_financing(
+    user_id: CurrentUser,
+    account_id: str,
+    use_case: Annotated[
+        ManageFinancingUseCase,
+        Depends(get_manage_financing_use_case),
+    ],
+) -> AccountResponse:
+    """Stop computing charges, keeping every period already posted.
+
+    The rows stay: they are movements like any other and the balance is their
+    running total, so taking them back would be inventing a different history.
+    What stops is the future.
+    """
+    with _domain_errors():
+        account = use_case.clear(
+            ClearFinancingCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+            ),
+        )
+
+    return _account_response(account)
+
+
+@router.get("/accounts/{account_id}/financing", response_model=FinancingResponse)
+def read_financing(
+    user_id: CurrentUser,
+    account_id: str,
+    use_case: Annotated[ReadFinancingUseCase, Depends(get_read_financing_use_case)],
+    periods: Annotated[int, Query(ge=1, le=MAX_SCHEDULE_PERIODS)] = (
+        DEFAULT_SCHEDULE_PERIODS
+    ),
+    as_of: Annotated[dt.date | None, Query()] = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> FinancingResponse:
+    """La tabla de amortización, and what settling today would take.
+
+    Worked out from the balance the ledger holds right now, never from the
+    amount originally borrowed: a table built from the principal describes a
+    loan nobody has. Nothing here is stored, because it assumes every
+    instalment is paid on the day it is due and the first real payment that
+    lands early or late moves the whole table.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            user_id=user_id,
+            account_id=_account_id(account_id),
+            periods=periods,
+            as_of=as_of,
+            timezone=_known_timezone(timezone),
+        )
+
+    return _financing_response(view)
+
+
+@router.post("/accounts/{account_id}/accrue", response_model=AccrualResponse)
+def accrue_account(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: AccruePayload,
+    use_case: Annotated[
+        AccrueFinancingUseCase,
+        Depends(get_accrue_financing_use_case),
+    ],
+) -> AccrualResponse:
+    """Post what the closed periods charged, as ordinary movements.
+
+    A month of interest and the insurance it carried become ledger rows, so
+    the balance stays the running total of things somebody can read — and so
+    the interest shows in a month's spending, which is where it belongs: it is
+    the part of a loan that actually costs money, while the instalment itself
+    is a transfer between two of the owner's own balances.
+
+    Safe to call as often as you like. Each charge is identified by its
+    account and its period, so a second call writes a key the ledger already
+    holds and is refused there; `skipped` says how many.
+    """
+    with _domain_errors():
+        results = use_case.execute(
+            AccrueFinancingCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                through=payload.through,
+                timezone=_known_timezone(payload.timezone),
+            ),
+        )
+
+    return _accrual_response(results[0])
+
+
+@router.post("/accrue", response_model=list[AccrualResponse])
+def accrue_everything(
+    user_id: CurrentUser,
+    payload: AccruePayload,
+    use_case: Annotated[
+        AccrueFinancingUseCase,
+        Depends(get_accrue_financing_use_case),
+    ],
+) -> list[AccrualResponse]:
+    """The same, for every financed account this user holds.
+
+    The shape a scheduled run wants, and the shape a client wants when a
+    screen opens: one call brings every loan and every fixed-income position
+    up to date, and accounts with nothing to charge answer with a reason
+    rather than an error.
+    """
+    with _domain_errors():
+        results = use_case.execute(
+            AccrueFinancingCommand(
+                user_id=user_id,
+                through=payload.through,
+                timezone=_known_timezone(payload.timezone),
+            ),
+        )
+
+    return [_accrual_response(result) for result in results]
+
+
+@router.post("/accounts/{account_id}/value", response_model=AccrualResponse)
+def revalue_account(
+    user_id: CurrentUser,
+    account_id: str,
+    payload: RevaluePayload,
+    use_case: Annotated[
+        RevalueAccountUseCase,
+        Depends(get_revalue_account_use_case),
+    ],
+) -> AccrualResponse:
+    """State what this investment is worth now, recording the difference.
+
+    Not the same thing as `PUT /accounts/{id}/balance`, and the difference is
+    the whole reason this exists. A restatement solves the opening balance
+    backwards so the ledger still adds up, which is right for a savings
+    account whose history is incomplete — and wrong here, because the gain
+    then lives in the opening balance and every report answers that the
+    position returned nothing. This records it as a movement instead.
+
+    Stating the value it already has changes nothing and is not an error,
+    which is what makes a double submit harmless.
+    """
+    with _domain_errors():
+        account, transaction = use_case.execute(
+            RevalueAccountCommand(
+                user_id=user_id,
+                account_id=_account_id(account_id),
+                market_value=payload.market_value,
+                occurred_at=(
+                    None
+                    if payload.occurred_at is None
+                    else PosixTime.from_epoch_seconds(payload.occurred_at)
+                ),
+            ),
+        )
+
+    return AccrualResponse(
+        account=_account_response(account),
+        posted=[_transaction_response(AttributedTransaction(transaction=transaction))]
+        if transaction is not None
+        else [],
+        skipped=0,
+        accrued_through=(
+            None
+            if account.accrued_through is None
+            else account.accrued_through.isoformat()
+        ),
+        reason=None if transaction is not None else "the value has not changed",
+    )
 
 
 @router.get("/history", response_model=FinancialHistoryResponse)
@@ -1557,6 +2214,194 @@ def _account_response(account: Account) -> AccountResponse:
         ),
         bank=account.bank,
         instruments=sorted(print_.value for print_ in account.fingerprints),
+        loan=None if account.loan is None else _loan_terms_response(account.loan),
+        investment=(
+            None
+            if account.investment is None
+            else _investment_terms_response(account.investment)
+        ),
+        accrued_through=(
+            None
+            if account.accrued_through is None
+            else account.accrued_through.isoformat()
+        ),
+    )
+
+
+def _rate(payload: RatePayload) -> InterestRate:
+    return InterestRate(value=payload.value, basis=payload.basis)
+
+
+def _charge(payload: ChargePayload) -> ChargeDraft:
+    return ChargeDraft(
+        name=payload.name,
+        basis=payload.basis,
+        amount=payload.amount,
+        rate=payload.rate,
+        base=payload.base,
+        charged_to_balance=payload.charged_to_balance,
+    )
+
+
+def _rate_response(rate: InterestRate) -> RateResponse:
+    return RateResponse(
+        value=str(rate.value),
+        basis=rate.basis.value,
+        # Rounded where a screen would round anyway: these are the converted
+        # figures, and thirty significant digits of `(1+i)^(1/12)` is noise a
+        # client would have to trim itself.
+        effective_annual=str(round(rate.effective_annual, 8)),
+        monthly=str(round(rate.monthly, 8)),
+    )
+
+
+def _charge_response(charge: RecurringCharge) -> ChargeResponse:
+    return ChargeResponse(
+        name=charge.name,
+        basis=charge.basis.value,
+        amount=None if charge.amount is None else str(charge.amount.amount),
+        rate=None if charge.rate is None else str(charge.rate),
+        base=None if charge.base is None else str(charge.base.amount),
+        charged_to_balance=charge.charged_to_balance,
+    )
+
+
+def _loan_terms_response(terms: LoanTerms) -> LoanTermsResponse:
+    return LoanTermsResponse(
+        rate=_rate_response(terms.rate),
+        disbursed_on=terms.disbursed_on.isoformat(),
+        term_months=terms.term_months,
+        statement_day=terms.statement_day,
+        payment_day=terms.due_day,
+        style=terms.style.value,
+        principal=None if terms.principal is None else str(terms.principal.amount),
+        installment=(
+            None if terms.installment is None else str(terms.installment.amount)
+        ),
+        installment_covers_charges=terms.installment_covers_charges,
+        charges=[_charge_response(charge) for charge in terms.charges],
+        matures_on=terms.matures_on().isoformat(),
+    )
+
+
+def _investment_terms_response(terms: InvestmentTerms) -> InvestmentTermsResponse:
+    return InvestmentTermsResponse(
+        opened_on=terms.opened_on.isoformat(),
+        statement_day=terms.statement_day,
+        rate=None if terms.rate is None else _rate_response(terms.rate),
+        matures_on=None if terms.matures_on is None else terms.matures_on.isoformat(),
+        charges=[_charge_response(charge) for charge in terms.charges],
+    )
+
+
+def _charge_amount_response(charge: ChargeAmount) -> ChargeAmountResponse:
+    return ChargeAmountResponse(
+        name=charge.name,
+        amount=str(charge.amount.amount),
+        charged_to_balance=charge.charged_to_balance,
+    )
+
+
+def _payment_response(payment: ScheduledPayment) -> ScheduledPaymentResponse:
+    return ScheduledPaymentResponse(
+        starts_on=payment.period.starts_on.isoformat(),
+        ends_on=payment.period.ends_on.isoformat(),
+        due_on=payment.due_on.isoformat(),
+        opening_balance=str(payment.opening_balance.amount),
+        interest=str(payment.interest.amount),
+        charges=[_charge_amount_response(charge) for charge in payment.charges],
+        principal=str(payment.principal.amount),
+        due=str(payment.due.amount),
+        closing_balance=str(payment.closing_balance.amount),
+    )
+
+
+def _schedule_response(schedule: LoanSchedule) -> LoanScheduleResponse:
+    return LoanScheduleResponse(
+        payments=[_payment_response(payment) for payment in schedule.payments],
+        total_interest=str(schedule.total_interest.amount),
+        total_charges=str(schedule.total_charges.amount),
+        total_due=str(schedule.total_due.amount),
+        settles_on=(
+            None if schedule.settles_on is None else schedule.settles_on.isoformat()
+        ),
+        negatively_amortizing=schedule.negatively_amortizing,
+    )
+
+
+def _return_response(period: ProjectedReturn) -> ProjectedReturnResponse:
+    return ProjectedReturnResponse(
+        starts_on=period.period.starts_on.isoformat(),
+        ends_on=period.period.ends_on.isoformat(),
+        opening_balance=str(period.opening_balance.amount),
+        earned=str(period.earned.amount),
+        charges=[_charge_amount_response(charge) for charge in period.charges],
+        closing_balance=str(period.closing_balance.amount),
+    )
+
+
+def _projection_response(
+    projection: InvestmentProjection,
+) -> InvestmentProjectionResponse:
+    return InvestmentProjectionResponse(
+        periods=[_return_response(period) for period in projection.periods],
+        total_earned=str(projection.total_earned.amount),
+        total_charges=str(projection.total_charges.amount),
+        value_at_end=str(projection.value_at_end.amount),
+        matures_on=(
+            None if projection.matures_on is None else projection.matures_on.isoformat()
+        ),
+    )
+
+
+def _performance_response(
+    performance: InvestmentPerformance,
+) -> InvestmentPerformanceResponse:
+    return InvestmentPerformanceResponse(
+        contributed=str(performance.contributed.amount),
+        withdrawn=str(performance.withdrawn.amount),
+        # Signed: a position that lost money reported as a gain is worse than
+        # no figure at all.
+        earned=str(performance.earned.signed_amount),
+    )
+
+
+def _financing_response(view: FinancingView) -> FinancingResponse:
+    return FinancingResponse(
+        account=_account_response(view.account),
+        as_of=view.as_of.isoformat(),
+        pending_interest=str(view.pending_interest.amount),
+        payoff=None if view.payoff is None else str(view.payoff.amount),
+        next_statement_on=view.next_statement_on.isoformat(),
+        next_due_on=(
+            None if view.next_due_on is None else view.next_due_on.isoformat()
+        ),
+        schedule=None if view.schedule is None else _schedule_response(view.schedule),
+        projection=(
+            None if view.projection is None else _projection_response(view.projection)
+        ),
+        performance=(
+            None
+            if view.performance is None
+            else _performance_response(view.performance)
+        ),
+    )
+
+
+def _accrual_response(result: AccrualResult) -> AccrualResponse:
+    return AccrualResponse(
+        account=_account_response(result.account),
+        posted=[
+            _transaction_response(AttributedTransaction(transaction=transaction))
+            for transaction in result.posted
+        ],
+        skipped=result.skipped,
+        accrued_through=(
+            None
+            if result.accrued_through is None
+            else result.accrued_through.isoformat()
+        ),
+        reason=result.reason,
     )
 
 
@@ -1887,6 +2732,24 @@ def _domain_errors() -> Generator[None]:
         # recorded here.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except FinancingTermsError as error:
+        # The terms cannot describe a loan or an investment: a rate typed as a
+        # percentage, a cut on the 45th, an insurance quoted on a principal
+        # nobody stated. A sentence the owner has to read and act on, so it
+        # goes back with its reason rather than as a balance that quietly
+        # grows twenty times a month.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except NotFinancedError as error:
+        # The request is well formed and the account exists; what refuses it
+        # is that nobody has said what it costs. 409, because no rewriting of
+        # the query would answer it.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(error),
         ) from error
     except TransferLegError as error:

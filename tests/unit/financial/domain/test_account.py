@@ -8,6 +8,7 @@ from personal_finance.contexts.financial.domain.entities import (
 )
 from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
+    AccountBalanceReversed,
 )
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
@@ -608,3 +609,91 @@ def test_a_closed_account_can_still_be_restated() -> None:
     account.restate_balance(_balance("1200000"), [])
 
     assert account.balance.signed_amount == Decimal("1200000")
+
+
+# --------------------------------------------- taking a movement back off
+
+
+def test_reversing_a_movement_puts_the_balance_exactly_back() -> None:
+    """The inverse of `apply`, to the cent: a purchase erased is money the
+    account holds again, and nothing else moved.
+    """
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING))
+    account.apply(_movement("80000", MovementDirection.INCOMING, movement_id="m2"))
+
+    account.reverse(_movement("50000", MovementDirection.OUTGOING))
+
+    assert account.balance.signed_amount == Decimal("80000")
+    assert account.movements_applied == 1
+
+
+def test_reversing_a_card_purchase_lowers_what_it_owes() -> None:
+    """Direction alone never says which way a balance goes, in either
+    direction: spending raises a card's debt, so erasing it has to lower it.
+    """
+    card = _declared(AccountKind.CREDIT_CARD)
+    card.apply(_movement("1200000", MovementDirection.OUTGOING))
+
+    card.reverse(_movement("1200000", MovementDirection.OUTGOING))
+
+    assert card.balance.signed_amount == Decimal("0")
+
+
+def test_reversing_a_payment_to_a_card_raises_the_debt_again() -> None:
+    card = _declared(AccountKind.CREDIT_CARD)
+    card.apply(_movement("1200000", MovementDirection.OUTGOING))
+    card.apply(_movement("500000", MovementDirection.INCOMING, movement_id="m2"))
+
+    card.reverse(_movement("500000", MovementDirection.INCOMING, movement_id="m2"))
+
+    assert card.balance.signed_amount == Decimal("1200000")
+
+
+def test_reversing_announces_where_the_balance_landed() -> None:
+    """Its own fact rather than a balance change with the direction flipped: a
+    reader following `direction` back would be chasing a row that is gone.
+    """
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING))
+    account.pull_events()
+
+    account.reverse(_movement("50000", MovementDirection.OUTGOING))
+    events = account.pull_events()
+
+    assert len(events) == 1
+    reversed_ = events[0]
+    assert isinstance(reversed_, AccountBalanceReversed)
+    assert reversed_.movement_id == MovementId(value="movement-1")
+    assert reversed_.direction is MovementDirection.OUTGOING
+    assert reversed_.amount == _cop("50000")
+    assert reversed_.balance.signed_amount == Decimal("0")
+
+
+def test_a_closed_account_can_still_have_a_movement_taken_off_it() -> None:
+    """Closed stops it taking *new* movements. Removing one that should never
+    have been on it is a correction of what is already there — the same reason
+    `rebuild` and `restate_balance` are allowed on a closed account. Refusing
+    would leave a wrong row with nothing that could ever take it off.
+    """
+    account = _declared()
+    account.apply(_movement("50000", MovementDirection.OUTGOING))
+    account.close(LATER)
+
+    account.reverse(_movement("50000", MovementDirection.OUTGOING))
+
+    assert account.balance.signed_amount == Decimal("0")
+
+    with pytest.raises(AccountClosedError):
+        account.apply(_movement("1000", MovementDirection.OUTGOING))
+
+
+def test_the_tally_of_applied_movements_never_goes_below_zero() -> None:
+    """A negative count would be reported to the owner as a fact about their
+    account instead of as the bug it is.
+    """
+    account = _declared()
+
+    account.reverse(_movement("50000", MovementDirection.OUTGOING))
+
+    assert account.movements_applied == 0

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+import datetime as dt
 from decimal import Decimal
 from typing import Self
 
@@ -11,6 +12,8 @@ from personal_finance.contexts.financial.domain.events import (
     AccountBalanceRestated,
     AccountBalanceReversed,
     AccountClosed,
+    AccountFinancingCleared,
+    AccountFinancingSet,
     AccountFingerprintLinked,
     AccountOpened,
     AccountRenamed,
@@ -23,8 +26,20 @@ from personal_finance.contexts.financial.domain.events import (
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
+    FinancingTermsError,
     TransactionAlreadyAssignedError,
     TransferLegError,
+)
+from personal_finance.contexts.financial.domain.financing import (
+    AccruedPeriod,
+    InterestRate,
+    InvestmentTerms,
+    LoanTerms,
+    PostedAccrual,
+    RecurringCharge,
+    StatementPeriod,
+    accrue_period,
+    postings,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -55,6 +70,17 @@ from personal_finance.shared.domain.value_objects import (
 
 
 MAX_ACCOUNT_NAME_LENGTH = 120
+
+# The kinds whose balance moves on its own. A loan and a mortgage charge
+# interest on what is owed and carry insurance the borrower did not choose,
+# so what they owe next month is not what they owe now minus what they paid.
+#
+# A credit card is deliberately **not** here even though it charges interest
+# too. Its interest is charged on whatever part of the statement was not paid
+# in full, which nothing in this app knows: a card paid off every month costs
+# nothing, and posting a month of interest on the balance would invent a debt
+# for the people who owe none.
+FINANCED_KINDS = frozenset({AccountKind.LOAN, AccountKind.MORTGAGE})
 
 
 @dataclass(slots=True)
@@ -94,10 +120,24 @@ class Account(AggregateRoot[AccountId]):
     movements_applied: int = 0
     closed_at: PosixTime | None = None
     credit_limit: Money | None = None
+    # What this account charges or earns on its own, and when. A loan or a
+    # mortgage carries `loan`; an investment carries `investment`; everything
+    # else carries neither, because nothing about a savings account's balance
+    # can be computed — it is whatever the alerts say it is.
+    loan: LoanTerms | None = None
+    investment: InvestmentTerms | None = None
+    # The last statement date whose charges are already in the ledger. A
+    # cursor, not the authority: the authority is the row itself, whose
+    # identity comes from the account and the period, so a run that crashed
+    # after writing and before advancing this simply writes nothing the second
+    # time. It only exists so a monthly job does not walk twenty years of
+    # periods to discover it has nothing to do.
+    accrued_through: dt.date | None = None
 
     def __post_init__(self) -> None:
         self.name = _valid_name(self.name)
         self._check_credit_limit(self.credit_limit)
+        self._check_financing()
 
     @classmethod
     def open(
@@ -219,6 +259,234 @@ class Account(AggregateRoot[AccountId]):
                 f"A {limit.currency.value} credit limit cannot sit on a "
                 f"{self.currency.value} account",
             )
+
+    # ------------------------------------------------------------ financing
+
+    @property
+    def financing(self) -> LoanTerms | InvestmentTerms | None:
+        """The terms this account's balance moves under, whichever kind."""
+        return self.loan if self.loan is not None else self.investment
+
+    @property
+    def accrues(self) -> bool:
+        """Whether a closed period can be priced at all.
+
+        False for an investment declared without a rate, which is not an
+        omission: what a share is worth cannot be computed from anything, so
+        its value is restated and the difference recorded instead.
+        """
+        terms = self.financing
+
+        if terms is None:
+            return False
+
+        return True if isinstance(terms, LoanTerms) else terms.accrues
+
+    @property
+    def statement_day(self) -> int | None:
+        """La fecha de corte: the day of the month a period closes on."""
+        terms = self.financing
+
+        return None if terms is None else terms.statement_day
+
+    @property
+    def financing_started_on(self) -> dt.date | None:
+        """When this account began charging or earning: disbursement, or opening."""
+        if self.loan is not None:
+            return self.loan.disbursed_on
+
+        return None if self.investment is None else self.investment.opened_on
+
+    @property
+    def rate(self) -> InterestRate | None:
+        terms = self.financing
+
+        if terms is None:
+            return None
+
+        return terms.rate
+
+    @property
+    def charges(self) -> tuple[RecurringCharge, ...]:
+        terms = self.financing
+
+        return () if terms is None else terms.charges
+
+    @property
+    def outstanding(self) -> Money | None:
+        """What a period is charged against, or None when nothing is.
+
+        The magnitude of the balance, but only while it is on the side its
+        category expects — a debt that is owed, a holding that is held. A loan
+        overpaid past zero and an investment in the red both accrue nothing:
+        the arithmetic has no meaning there, and continuing it would grow a
+        balance that should have stopped.
+        """
+        if self.balance.signed_amount <= 0:
+            return None
+
+        return self.balance.amount
+
+    def set_loan_terms(self, terms: LoanTerms, *, accrue_from: dt.date) -> None:
+        """State what this loan costs, so what is owed can be more than what
+        is unpaid.
+
+        `accrue_from` is where the charges start being computed, and it is
+        asked for rather than assumed because the two sensible answers are far
+        apart. Somebody declaring a mortgage they have paid for three years
+        states today's balance and starts from today: the interest of those
+        three years is already inside the figure their bank shows them, and
+        posting it again would double a debt. Somebody entering a loan from
+        its disbursement, with the original amount as the opening balance,
+        starts there and gets the history rebuilt.
+        """
+        if self.kind not in FINANCED_KINDS:
+            raise FinancingTermsError(
+                f"A {self.kind.value} account has no loan terms: interest and "
+                "an instalment describe money that was lent",
+            )
+
+        self._check_terms_currency(
+            terms.charges,
+            (terms.principal, terms.installment),
+        )
+        self.loan = terms
+        self.investment = None
+        self.accrued_through = accrue_from
+        self._announce_financing()
+
+    def set_investment_terms(
+        self,
+        terms: InvestmentTerms,
+        *,
+        accrue_from: dt.date,
+    ) -> None:
+        """State how this investment earns, when it earns by a rate at all."""
+        if self.kind is not AccountKind.INVESTMENT:
+            raise FinancingTermsError(
+                f"A {self.kind.value} account has no investment terms",
+            )
+
+        self._check_terms_currency(terms.charges, ())
+        self.investment = terms
+        self.loan = None
+        self.accrued_through = accrue_from
+        self._announce_financing()
+
+    def clear_financing(self) -> None:
+        """Stop computing anything, keeping every period already posted.
+
+        The rows stay: they are movements like any other and the balance is
+        their running total, so taking them back would be inventing a
+        different history. What stops is the future.
+        """
+        if self.financing is None:
+            return
+
+        self.loan = None
+        self.investment = None
+        self.accrued_through = None
+        self.record_event(
+            AccountFinancingCleared(account_id=self.id, user_id=self.user_id),
+        )
+
+    def mark_accrued_through(self, day: dt.date) -> None:
+        """Move the cursor forward, never back.
+
+        Backwards would re-walk periods already in the ledger. Every one of
+        them would be refused by its own key, so the damage is wasted writes
+        rather than a doubled charge — but only while the cut day is
+        unchanged, and it is exactly the sort of guarantee that stops being
+        true the day somebody edits their terms.
+        """
+        if self.accrued_through is None or day > self.accrued_through:
+            self.accrued_through = day
+
+    def price_period(self, period: StatementPeriod, *, opening: Money) -> AccruedPeriod:
+        """What one closed period charged this account, on a stated balance.
+
+        The balance is handed in rather than read off the account: pricing a
+        run of periods means replaying the ledger to each cut, and an
+        aggregate that answered from its current total would charge every
+        month of a year the same interest.
+        """
+        terms = self.financing
+
+        if terms is None:
+            raise FinancingTermsError(
+                f"Account {self.id.value} has no terms to price a period with",
+            )
+
+        if opening.currency is not self.currency:
+            raise CurrencyMismatchError(
+                f"A {opening.currency.value} balance cannot be priced on a "
+                f"{self.currency.value} account",
+            )
+
+        return accrue_period(
+            period=period,
+            opening=opening,
+            rate=terms.rate,
+            charges=terms.charges,
+            original_principal=(self.loan.principal if self.loan is not None else None),
+        )
+
+    def postings_for(self, accrued: AccruedPeriod) -> tuple[PostedAccrual, ...]:
+        """The ledger rows that period becomes, each already pointed the right
+        way for this side of net worth."""
+        return postings(accrued, category=self.category)
+
+    def _check_financing(self) -> None:
+        if self.loan is not None and self.investment is not None:
+            raise FinancingTermsError(
+                "An account is a loan or an investment, never both",
+            )
+
+        if self.loan is not None and self.kind not in FINANCED_KINDS:
+            raise FinancingTermsError(
+                f"A {self.kind.value} account has no loan terms",
+            )
+
+        if self.investment is not None and self.kind is not AccountKind.INVESTMENT:
+            raise FinancingTermsError(
+                f"A {self.kind.value} account has no investment terms",
+            )
+
+    def _check_terms_currency(
+        self,
+        charges: Sequence[RecurringCharge],
+        amounts: Sequence[Money | None],
+    ) -> None:
+        """Every figure on the terms is in the account's own currency.
+
+        Refused rather than converted, like everywhere else money meets money
+        here: an exchange rate is a fact about a moment nobody recorded, and a
+        mortgage priced in the wrong unit is a debt off by four thousand.
+        """
+        stated = [amount for amount in amounts if amount is not None]
+        stated.extend(charge.amount for charge in charges if charge.amount is not None)
+        stated.extend(charge.base for charge in charges if charge.base is not None)
+
+        for amount in stated:
+            if amount.currency is not self.currency:
+                raise CurrencyMismatchError(
+                    f"A figure in {amount.currency.value} cannot describe a "
+                    f"{self.currency.value} account",
+                )
+
+    def _announce_financing(self) -> None:
+        terms = self.financing
+        rate = self.rate
+        self.record_event(
+            AccountFinancingSet(
+                account_id=self.id,
+                user_id=self.user_id,
+                kind=self.kind,
+                rate=None if rate is None else rate.effective_annual,
+                statement_day=None if terms is None else terms.statement_day,
+                accrued_through=self.accrued_through,
+            ),
+        )
 
     @property
     def is_closed(self) -> bool:
@@ -821,6 +1089,63 @@ class Transaction(AggregateRoot[MovementId]):
                 transfer_id=TransferId.from_lone_leg(fingerprint),
                 role=role,
             ),
+        )
+        transaction._announce()
+
+        return transaction
+
+    @classmethod
+    def accrue(
+        cls,
+        *,
+        user_id: UserId,
+        account_id: AccountId,
+        item: str,
+        label: str,
+        direction: MovementDirection,
+        amount: Money,
+        occurred_at: PosixTime,
+        period_end: dt.date,
+        bank: str = "",
+        note: str | None = None,
+    ) -> Self:
+        """One charge this app computed, as a row somebody can read.
+
+        A month of interest on a mortgage, the insurance that month carried,
+        what a CDT earned, the gap between what a fund was worth and what it
+        is worth now. None of it was announced by anybody and none of it was
+        typed — but all of it moved a balance, and a balance is the running
+        total of its rows. A charge that moved money without leaving a row is
+        the one thing that makes a balance unexplainable, so this exists
+        rather than a quiet adjustment to the number.
+
+        Its identity comes from the account and the period, never the amount.
+        A period is charged once whatever the arithmetic later says it came
+        to, so a second run writes the key the ledger already holds and is
+        refused there — which is what makes running the accrual on a schedule,
+        twice, or after a crash, all the same thing.
+
+        The account is required. Everything here is a fact about one balance;
+        without one there is nothing for the charge to be a charge on.
+        """
+        transaction = cls(
+            id=MovementId.from_fingerprint(
+                MovementFingerprint.from_accrual(
+                    user_id=user_id,
+                    account_id=account_id,
+                    item=item,
+                    period_end=period_end,
+                ),
+            ),
+            user_id=user_id,
+            direction=direction,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(label),
+            bank=bank.strip().lower(),
+            origin=TransactionOrigin.ACCRUAL,
+            account_id=account_id,
+            note=note,
         )
         transaction._announce()
 

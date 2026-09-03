@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
+import datetime as dt
 from decimal import Decimal
 
+from personal_finance.contexts.financial.domain.financing import (
+    AmortizationStyle,
+    ChargeBasis,
+    InterestRate,
+)
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     AccountKind,
@@ -226,3 +233,133 @@ class DeleteTransactionCommand:
 
     user_id: UserId
     transaction_id: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ChargeDraft:
+    """One recurring charge, before it knows what currency it is in.
+
+    Bare amounts, like `RestateBalanceCommand.balance` and
+    `SetCreditLimitCommand.credit_limit`: the account carries the currency,
+    and asking a caller to restate it only creates a way to get it wrong. The
+    use case pairs each figure with the account's own currency, which is the
+    only place both are known at once.
+    """
+
+    name: str
+    basis: ChargeBasis
+    amount: Decimal | None = None
+    rate: Decimal | None = None
+    base: Decimal | None = None
+    charged_to_balance: bool = True
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SetLoanTermsCommand:
+    """What a loan costs, so what is owed can be more than what is unpaid.
+
+    None of this can be read from a bank alert. An alert says a payment was
+    made; it never says what the payment was made of, and the difference is
+    the whole reason this command exists — 2 000 000 paid against 60 000 000
+    owed does not leave 58 000 000, because the month charged interest first
+    and the insurance after it.
+
+    `accrue_from` is where the arithmetic starts, and the two right answers
+    are far apart. Left out, it starts **today**: somebody declaring a
+    mortgage they have paid for three years states the balance their bank
+    shows, and that figure already contains those three years of interest —
+    charging them again would double the debt. Set to the disbursement date,
+    with the original amount as the opening balance, the history is rebuilt
+    from the beginning instead.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    rate: InterestRate
+    disbursed_on: dt.date
+    term_months: int
+    # La fecha de corte: the day interest is charged and the statement closes.
+    statement_day: int
+    # When the instalment is due. None means the cut itself.
+    payment_day: int | None = None
+    style: AmortizationStyle = AmortizationStyle.FRENCH
+    principal: Decimal | None = None
+    installment: Decimal | None = None
+    installment_covers_charges: bool = False
+    charges: Sequence[ChargeDraft] = ()
+    accrue_from: dt.date | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SetInvestmentTermsCommand:
+    """How an investment earns, when it earns by a rate at all.
+
+    A CDT and a remunerated savings account have a rate and their value can be
+    computed. Shares and a fund whose unit price moves have none, and their
+    terms carry none: what they are worth is what the market says, which is
+    what `RevalueAccountCommand` is for.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    opened_on: dt.date
+    statement_day: int
+    rate: InterestRate | None = None
+    # El vencimiento of a CDT. Nothing accrues past it.
+    matures_on: dt.date | None = None
+    charges: Sequence[ChargeDraft] = ()
+    accrue_from: dt.date | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ClearFinancingCommand:
+    """Stop computing charges, keeping every period already posted.
+
+    The rows stay because they are movements like any other and the balance is
+    their running total. What stops is the future.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class AccrueFinancingCommand:
+    """Post whatever the closed periods charged, up to a day.
+
+    `account_id` left out sweeps every financed account this user holds, which
+    is the shape a scheduled run wants. `through` left out means today, read in
+    `timezone` — a cut on the 15th is the 15th where the owner lives, and a
+    period closed in UTC would charge a Bogotá mortgage five hours early on
+    the last day of some months.
+
+    Running it twice changes nothing: each charge is identified by its account
+    and its period, so the second attempt writes a key the ledger already
+    holds and is refused there rather than here.
+    """
+
+    user_id: UserId
+    account_id: AccountId | None = None
+    through: dt.date | None = None
+    timezone: str = "America/Bogota"
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RevalueAccountCommand:
+    """State what an investment is worth now, and record the difference.
+
+    The counterpart of a rate, for everything a rate cannot describe: a share
+    price, a fund's unit value, a property. The gap between what the ledger
+    says and what the owner says is recorded **as a movement**, not folded
+    into the opening balance the way a plain restatement is — and that is the
+    entire point. A gain nobody can see as a row is a gain nobody can
+    attribute, and an investment whose return is invisible is indistinguishable
+    from a savings account.
+    """
+
+    user_id: UserId
+    account_id: AccountId
+    # Signed: an investment can be worth less than nothing only in theory, but
+    # the movement recording the fall is an ordinary one.
+    market_value: Decimal
+    occurred_at: PosixTime | None = None

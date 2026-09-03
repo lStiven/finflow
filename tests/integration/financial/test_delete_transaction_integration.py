@@ -519,3 +519,33 @@ def test_the_row_and_its_balance_move_together_or_not_at_all(
 
     assert ledger.find(user_id=USER_ID, transaction_id=movement) is not None
     assert _balance_of(accounts, account) == Decimal("998000")
+
+
+def test_rows_from_two_owners_cannot_be_erased_in_one_write(
+    manage_accounts: ManageAccountsUseCase,
+    manage_transactions: ManageTransactionsUseCase,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """The balance half of the write is keyed by one partition, so a batch
+    spanning two people would move one owner's balance for rows deleted from
+    another's. Nothing builds such a batch today; this is what keeps it so.
+    """
+    mine = _declare_savings(manage_accounts)
+    theirs = _declare_savings(manage_accounts, owner=OTHER_USER)
+    my_row = ledger.find(
+        user_id=USER_ID,
+        transaction_id=_spend(manage_transactions, mine, amount="2000"),
+    )
+    their_row = ledger.find(
+        user_id=OTHER_USER,
+        transaction_id=_spend(manage_transactions, theirs, amount="3000"),
+    )
+
+    assert my_row is not None
+    assert their_row is not None
+
+    with pytest.raises(ValueError, match="one owner"):
+        ledger.remove([my_row, their_row], reversals=[])
+
+    assert ledger.list_all(USER_ID) != []
+    assert ledger.list_all(OTHER_USER) != []
