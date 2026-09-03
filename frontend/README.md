@@ -4,7 +4,7 @@ The web app. A static SPA — Vite, React, TypeScript — served from a CDN and
 talking to the API over HTTPS with a bearer token.
 
 Why it lives here and not in its own repository, and why it is not Next.js:
-see **Decisions → Frontend** in [`PROGRESS.md`](../PROGRESS.md).
+see **Frontend** in [`docs/decisions.md`](../docs/decisions.md).
 
 ## Running it
 
@@ -125,12 +125,19 @@ counts only when we import it from the package that deprecates it, and
 deprecation that prompted the script (`FormEvent`) was hiding. Read the
 comment at the top of that file before extending it.
 
-The tests cover `lib/money.ts` and `lib/dates.ts` — the rules from the
-integration guide that a screen cannot be trusted to get right on its own:
-that a liability's positive balance reads as money owed, that a paid-off card
-is not captioned "Debes", that no amount ever passes through a float, and that
-months are grouped in Bogota rather than in the browser's timezone. Add to
-them before changing either file.
+The tests cover the rules a screen cannot be trusted to get right on its own,
+not the screens themselves. `lib/money.ts` and `lib/dates.ts` are the core of
+it — that a liability's positive balance reads as money owed, that a paid-off
+card is not captioned "Debes", that no amount ever passes through a float, and
+that months are grouped in Bogota rather than in the browser's timezone — and
+the same applies to what an account's forms accept (`accounts/`), what a
+merchant correction may not take away (`merchants/`), what deleting a movement
+says will happen (`lib/deletion.ts`), and the two transfer roles
+(`lib/transfers.ts`). Add to them before changing any of those files.
+
+A screen itself is checked by looking at it: `just shot` drives a headless
+Chromium over the running app (`just up` in one terminal, `just web` in
+another) and writes PNGs to `.screenshots/`, which git ignores.
 
 ## Layout
 

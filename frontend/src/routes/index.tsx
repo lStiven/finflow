@@ -154,7 +154,7 @@ function Dashboard() {
               Aquí tienes un resumen de tus finanzas.
             </p>
           </div>
-          <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs capitalize">
+          <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs first-letter:uppercase">
             {formatMonthKey(month)}
           </p>
         </header>
@@ -608,7 +608,12 @@ function AccountList({
               />
               <div className="min-w-0">
                 <p className="truncate font-medium">{account.name}</p>
-                <p className="mt-0.5 text-faint text-xs">{label}</p>
+                {/* A watched credit is not in the Deuda tile above it, so it
+                    must not read "Debes" either — `/cuentas` names it the
+                    same way. */}
+                <p className="mt-0.5 text-faint text-xs">
+                  {account.informational ? "Saldo del crédito" : label}
+                </p>
               </div>
               <Money amount={account.balance} currency={account.currency} tone={tone} />
             </Card>

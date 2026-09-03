@@ -518,7 +518,9 @@ function MovementList({ transactions }: { transactions: Transaction[] }) {
     <div className="flex flex-col gap-6">
       {[...months].map(([key, movements]) => (
         <section key={key} className="flex flex-col gap-2">
-          <h2 className="text-muted text-sm capitalize">{formatMonthKey(key)}</h2>
+          <h2 className="text-muted text-sm first-letter:uppercase">
+            {formatMonthKey(key)}
+          </h2>
           <Card lift={false} className="p-0">
             <ul>
               {movements.map((movement) => (

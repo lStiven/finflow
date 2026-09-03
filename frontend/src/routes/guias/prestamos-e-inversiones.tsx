@@ -60,11 +60,13 @@ function FinancingGuide() {
               <Sparkles aria-hidden className="mt-0.5 size-4 shrink-0 text-cyan" />
               <span className="min-w-0">
                 <strong className="text-text">
-                  Un crédito no entra en tu patrimonio ni en tus gastos.
+                  Un préstamo o una hipoteca no entran en tu patrimonio ni en tus
+                  gastos.
                 </strong>{" "}
                 Es un seguimiento aparte, y a propósito: ya sabes lo que debes, y la
                 cuota se registra como gasto cuando sale de tu cuenta. Lo que hace esta
-                herramienta es mostrarte cómo va la deuda por dentro.
+                herramienta es mostrarte cómo va la deuda por dentro. Una tarjeta de
+                crédito es otra cosa y sí cuenta: lo que debe es el gasto del mes.
               </span>
             </p>
           </div>
@@ -256,6 +258,13 @@ function FinancingGuide() {
           lead="Dos casos, y solo uno se puede calcular."
           delay={350}
         >
+          <p>
+            Una inversión <strong className="text-text">sí cuenta</strong>, a diferencia
+            de un crédito: suma a tu patrimonio como cualquier cuenta de ahorros, y lo
+            que rinde entra como un ingreso más. La regla de «se sigue pero no se suma»
+            es solo de los préstamos y las hipotecas.
+          </p>
+
           <Case title="Con tasa pactada — un CDT, una cuenta remunerada">
             Se registra igual que un crédito, pero al revés: cada corte abona el
             rendimiento y descuenta lo que retengan. La{" "}
@@ -301,10 +310,12 @@ function FinancingGuide() {
               a calcular desde el saldo nuevo.
             </Never>
             <Never>
-              Nada de esto entra en tu <strong className="text-text">patrimonio</strong>
-              , en lo que <strong className="text-text">debes</strong> ni en tus{" "}
+              Un <strong className="text-text">préstamo</strong> y una{" "}
+              <strong className="text-text">hipoteca</strong> no entran en tu{" "}
+              <strong className="text-text">patrimonio</strong>, en lo que{" "}
+              <strong className="text-text">debes</strong> ni en tus{" "}
               <strong className="text-text">reportes</strong>. Es deliberado: Finflow
-              está para mostrarte en qué se te va la plata, y un crédito es un
+              está para mostrarte en qué se te va la plata, y un crédito así es un
               compromiso que ya tenías.
             </Never>
           </ul>

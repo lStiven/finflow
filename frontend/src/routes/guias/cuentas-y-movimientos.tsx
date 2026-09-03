@@ -97,16 +97,20 @@ function AccountsGuide() {
             sería adivinar sobre la plata de alguien.
           </p>
           <p>
-            Hay dos familias, y no se eligen: salen del tipo que escojas.{" "}
+            Hay tres familias, y no se eligen: salen del tipo que escojas.{" "}
             <strong className="text-text">Lo que tienes</strong> —ahorros, corriente,
             efectivo, inversión— suma a tu patrimonio.{" "}
-            <strong className="text-text">Lo que debes</strong> —tarjeta de crédito,
-            préstamo, hipoteca— resta.
+            <strong className="text-text">Lo que debes</strong> —la tarjeta de crédito—
+            resta.{" "}
+            <strong className="text-text">Los créditos que solo quieres seguir</strong>{" "}
+            —préstamo, hipoteca— no entran en ningún total: ya sabes lo que debes, y la
+            cuota se registra sola cuando sale de tu cuenta.
           </p>
           <p>
             En lo que debes, <strong className="text-text">el saldo es la deuda</strong>
             : en una tarjeta, $158.800 quiere decir que debes eso, no que lo tienes.
-            Gastar sube ese número y pagar lo baja.
+            Gastar sube ese número y pagar lo baja. En un préstamo el saldo se lee
+            igual, con la diferencia de que se queda ahí, mirándose, sin sumarse a nada.
           </p>
           <Note>
             El <strong className="text-text">saldo de hoy</strong> que pides al crearla

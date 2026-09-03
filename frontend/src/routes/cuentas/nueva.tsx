@@ -71,9 +71,13 @@ function NewAccountScreen() {
   const shown = checked ? issues : [];
   /* What the catalogue calls the chosen kind — the last resort for one this
      build has no Spanish copy for, and better than the raw enum value. */
-  const kindLabel =
-    catalog.account_kinds.find((option) => option.value === draft.kind)?.label ??
-    draft.kind;
+  const kindOption = catalog.account_kinds.find(
+    (option) => option.value === draft.kind,
+  );
+  const kindLabel = kindOption?.label ?? draft.kind;
+  /* Watched rather than counted, straight from the catalogue: which kinds are
+     outside every total is the backend's rule, never a list repeated here. */
+  const watched = kindOption?.informational ?? false;
 
   function edit(patch: Partial<AccountDraft>) {
     setDraft((current) => ({ ...current, ...patch }));
@@ -198,6 +202,7 @@ function NewAccountScreen() {
             <ConfirmStep
               draft={draft}
               kindLabel={kindLabel}
+              watched={watched}
               pending={create.isPending}
               error={create.error}
               onBack={() => setStep(1)}
@@ -510,6 +515,7 @@ function Issue({ message }: { message?: string }) {
 function ConfirmStep({
   draft,
   kindLabel,
+  watched,
   pending,
   error,
   onBack,
@@ -517,6 +523,8 @@ function ConfirmStep({
 }: {
   draft: AccountDraft;
   kindLabel: string;
+  /** A loan or a mortgage: kept, and left out of every total. */
+  watched: boolean;
   pending: boolean;
   error: Error | null;
   onBack: () => void;
@@ -604,10 +612,15 @@ function ConfirmStep({
               ? "En cuanto exista, adopta los movimientos que estaban esperando por ese banco y esos cuatro dígitos, y recalcula su saldo con ellos."
               : "Cuando la enlaces con las alertas de tu banco, adoptará también los movimientos que ya habían llegado. Nada se pierde mientras tanto."}
           </Point>
-          <Point icon={TrendingDown} title="Entra en tu patrimonio">
-            {owed
-              ? "Lo que debes en ella resta de tu patrimonio, y su saldo es la deuda: gastar lo sube."
-              : "Lo que tiene suma a tu patrimonio, junto con las demás cuentas de la misma moneda."}
+          <Point
+            icon={TrendingDown}
+            title={watched ? "No entra en ningún total" : "Entra en tu patrimonio"}
+          >
+            {watched
+              ? "Su saldo se queda aquí: no resta de tu patrimonio ni cuenta como gasto. La cuota sí se registra, cuando sale de la cuenta que la paga."
+              : owed
+                ? "Lo que debes en ella resta de tu patrimonio, y su saldo es la deuda: gastar lo sube."
+                : "Lo que tiene suma a tu patrimonio, junto con las demás cuentas de la misma moneda."}
           </Point>
           <Point icon={ShieldCheck} title="No toca tu banco">
             No pedimos claves ni entramos a ningún lado. Es una etiqueta tuya para
