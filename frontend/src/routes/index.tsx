@@ -272,7 +272,11 @@ function Dashboard() {
           </p>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* `[&>*]:min-w-0` is load-bearing, not tidiness: a grid track is at
+            least its item's min-content, and a movement's title never wraps
+            (`truncate`), so the recent-movements card demanded ~440px and the
+            whole dashboard scrolled sideways on any phone. */}
+        <div className="grid gap-4 [&>*]:min-w-0 lg:grid-cols-2">
           <CategoryCard
             groups={byCategory.groups}
             currency={currency}

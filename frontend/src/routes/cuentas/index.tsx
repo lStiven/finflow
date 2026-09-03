@@ -461,14 +461,17 @@ function AccountCard({
 
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2 font-medium">
-            <span className="truncate">{account.name}</span>
+            {/* Two lines before it gives up: this is the card's title, and
+                "Ahorros Bancolo…" on a phone is the one truncation nobody
+                should have to accept. */}
+            <span className="line-clamp-2 break-words">{account.name}</span>
             {closed ? (
               <span className="rounded-full border border-line px-2 py-0.5 text-[0.625rem] text-faint uppercase tracking-wider">
                 Cerrada
               </span>
             ) : null}
           </p>
-          <p className="mt-0.5 truncate text-faint text-xs">
+          <p className="mt-0.5 line-clamp-2 text-faint text-xs">
             {copy.label}
             {account.bank ? ` · ${account.bank}` : ""}
           </p>

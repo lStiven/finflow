@@ -3,28 +3,22 @@
  *
  * One route tree, two presentations of the same navigation: a rail on the
  * left from `lg` up, a bar along the bottom below it. They are not two
- * layouts sharing a name — the bar is thumb-reachable and shows five
- * destinations at most, the rail has room for all of them plus labels, so
- * each lists what it can actually fit rather than hiding the overflow.
+ * layouts sharing a name — the bar is thumb-reachable and fits three
+ * destinations beside the action, the rail fits every one of them with room
+ * for a label.
+ *
+ * What the bar cannot fit is not dropped, it is one tap away in `MoreSheet`.
+ * The difference matters: dropping it is what this file used to do, and
+ * Reportes and Comercios were then reachable on a phone only by typing the
+ * address. `navigation/destinations.ts` holds the split, and a test holds the
+ * rule that nothing may fall out of both lists.
  */
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  ArrowLeftRight,
-  BarChart3,
-  BookOpen,
-  ChevronRight,
-  LayoutGrid,
-  LogOut,
-  Plug,
-  Plus,
-  Settings,
-  Store,
-  User,
-  Wallet,
-} from "lucide-react";
+import { BookOpen, ChevronRight, LogOut, Menu, Plug, Plus, X } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
 import { BetaMark } from "@/components/BetaMark";
@@ -34,41 +28,9 @@ import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { cn } from "@/lib/cn";
+import type { Destination } from "@/navigation/destinations";
+import { BAR, DESTINATIONS, OVERFLOW } from "@/navigation/destinations";
 import { useOnboarding } from "@/onboarding/useOnboarding";
-
-type Destination = {
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-  /** Absent until the screen exists — rendered as pending, never as a dead link. */
-  to?:
-    | "/"
-    | "/transacciones"
-    | "/cuentas"
-    | "/comercios"
-    | "/reportes"
-    | "/perfil"
-    | "/conectar"
-    | "/guias";
-};
-
-const DESTINATIONS: Destination[] = [
-  { label: "Resumen", icon: LayoutGrid, to: "/" },
-  { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
-  { label: "Cuentas", icon: Wallet, to: "/cuentas" },
-  { label: "Reportes", icon: BarChart3, to: "/reportes" },
-  { label: "Comercios", icon: Store, to: "/comercios" },
-  { label: "Configuración", icon: Settings },
-];
-
-/**
- * What the bottom bar shows, in thumb order, with the action in the middle.
- * The account closes it: the rail says who is signed in in its footer, and a
- * phone has no footer to say it in.
- */
-const BAR: Destination[] = [
-  ...DESTINATIONS.slice(0, 3),
-  { label: "Perfil", icon: User, to: "/perfil" },
-];
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -97,30 +59,17 @@ export function AppShell({ children }: { children: ReactNode }) {
  * connection walkthrough among them, one click further in. Two entries would
  * be one asking for something nobody has left to do.
  */
-function ConnectLink({ compact = false }: { compact?: boolean }) {
+function ConnectLink({ onNavigate }: { onNavigate?: () => void }) {
   const { state } = useOnboarding();
   const pending = state !== null && !state.complete;
   const label = pending ? "Conectar" : "Guías";
   const Icon = pending ? Plug : BookOpen;
   const to = pending ? "/conectar" : "/guias";
 
-  if (compact) {
-    return (
-      <Link
-        to={to}
-        className="relative flex flex-1 flex-col items-center gap-1 py-2 text-[0.6875rem] text-muted transition-colors"
-        activeProps={{ className: "text-accent", "aria-current": "page" }}
-      >
-        <Icon className="size-5" />
-        {label}
-        {pending ? <Dot className="top-1.5 right-1/2 mr-2" /> : null}
-      </Link>
-    );
-  }
-
   return (
     <Link
       to={to}
+      onClick={onNavigate}
       className="relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-muted text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
       activeProps={{
         className:
@@ -301,33 +250,49 @@ function Pending({
 }
 
 function Bar() {
+  const [open, setOpen] = useState(false);
+
   return (
-    <nav
-      aria-label="Secciones"
-      className="fixed inset-x-0 bottom-0 z-20 flex items-stretch border-line border-t bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
-    >
-      {BAR.slice(0, 2).map((item) => (
-        <BarItem key={item.label} item={item} />
-      ))}
+    <>
+      <nav
+        aria-label="Secciones"
+        className="fixed inset-x-0 bottom-0 z-20 flex items-stretch border-line border-t bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+      >
+        {BAR.slice(0, 2).map((item) => (
+          <BarItem key={item.label} item={item} />
+        ))}
 
-      {/* The action the design anchors the bar on. */}
-      <div className="relative w-16 shrink-0">
-        <Link
-          to="/transacciones/nueva"
-          className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent text-accent-ink"
-        >
-          <Plus className="size-6" />
-          <span className="sr-only">Registrar un movimiento</span>
-        </Link>
-      </div>
+        {/* The action the design anchors the bar on. */}
+        <div className="relative w-16 shrink-0">
+          <Link
+            to="/transacciones/nueva"
+            className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent text-accent-ink"
+          >
+            <Plus className="size-6" />
+            <span className="sr-only">Registrar un movimiento</span>
+          </Link>
+        </div>
 
-      {BAR.slice(2).map((item) => (
-        <BarItem key={item.label} item={item} />
-      ))}
-      <ConnectLink compact />
-    </nav>
+        {BAR.slice(2).map((item) => (
+          <BarItem key={item.label} item={item} />
+        ))}
+        <MoreButton open={open} onOpen={() => setOpen(true)} />
+      </nav>
+
+      {open ? <MoreSheet onClose={() => setOpen(false)} /> : null}
+    </>
   );
 }
+
+/**
+ * The one shape every bar entry takes, link or button.
+ *
+ * The label steps down a size below 360px because that is where
+ * "Transacciones" stops fitting in its fifth of the bar — measured, not
+ * guessed. Above it, nothing changes.
+ */
+const BAR_ITEM =
+  "flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-[0.5625rem] transition-colors min-[360px]:px-0.5 min-[360px]:text-[0.625rem]";
 
 function BarItem({ item }: { item: Destination }) {
   const { label, icon: Icon, to } = item;
@@ -337,11 +302,155 @@ function BarItem({ item }: { item: Destination }) {
     <Link
       to={to}
       activeOptions={{ exact: to === "/" }}
-      className="flex flex-1 flex-col items-center gap-1 py-2 text-[0.6875rem] text-muted transition-colors"
+      className={cn(BAR_ITEM, "text-muted")}
       activeProps={{ className: "text-accent", "aria-current": "page" }}
     >
-      <Icon className="size-5" />
-      {label}
+      <Icon className="size-5 shrink-0" />
+      <span className="max-w-full truncate">{label}</span>
     </Link>
+  );
+}
+
+/**
+ * The way into everything the bar cannot fit.
+ *
+ * It carries the unfinished-setup dot on behalf of the entry inside it: the
+ * mark exists so nobody loses the thread of connecting their bank, and a mark
+ * hidden behind a sheet marks nothing.
+ */
+function MoreButton({ open, onOpen }: { open: boolean; onOpen: () => void }) {
+  const { state } = useOnboarding();
+  const pending = state !== null && !state.complete;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      className={cn(BAR_ITEM, "relative text-muted")}
+    >
+      <Menu className="size-5 shrink-0" />
+      <span className="max-w-full truncate">Más</span>
+      {pending ? <Dot className="top-1.5 right-1/2 mr-2" /> : null}
+    </button>
+  );
+}
+
+/**
+ * Everything the rail shows and the bar has no room for: the rest of the
+ * destinations, who is signed in, and the way out.
+ *
+ * A sheet rather than a second row of icons — a row that grows with each
+ * release is how a phone ends up with eight five-pixel labels — and it closes
+ * on the backdrop, on Escape and on going anywhere, because a navigation menu
+ * that stays open over the screen it just opened is a bug people report as
+ * "the app froze".
+ */
+function MoreSheet({ onClose }: { onClose: () => void }) {
+  const { data: profile } = useQuery(profileQuery);
+  const { logout } = useAuth();
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal
+      aria-label="Más secciones"
+      className="fixed inset-0 z-30 flex flex-col justify-end bg-ink/70 backdrop-blur-sm lg:hidden"
+    >
+      {/* The backdrop closes it. A button rather than a click handler on the
+          overlay so it is reachable without a pointer. */}
+      <button
+        type="button"
+        aria-label="Cerrar"
+        onClick={onClose}
+        className="flex-1 cursor-default"
+      />
+
+      {/* `max-h`/`overflow-y` for the phone held sideways, where the whole
+          sheet is taller than the screen it opens on. */}
+      <div className="rise relative flex max-h-[85dvh] flex-col gap-1 overflow-y-auto rounded-t-card border-line border-t bg-surface px-3 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+        {/* The sheet covers the bar it opened from, so the way back has to be
+            on the sheet itself — the backdrop and Escape are not affordances
+            anybody can see. */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute top-2.5 right-2.5 grid size-9 place-items-center rounded-xl text-faint transition-colors hover:bg-surface-raised hover:text-text"
+        >
+          <X className="size-4" />
+          <span className="sr-only">Cerrar</span>
+        </button>
+
+        <span
+          aria-hidden
+          className="mx-auto mb-2 h-1 w-10 shrink-0 rounded-full bg-line"
+        />
+
+        <Link
+          to="/perfil"
+          onClick={onClose}
+          className="flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-surface-raised"
+        >
+          <span
+            aria-hidden
+            className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent/15 font-semibold text-accent text-sm ring-1 ring-accent/25"
+          >
+            {profile ? initialOf(profile.name, profile.email) : "·"}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium text-sm">
+              {profile?.name ?? "Tu cuenta"}
+            </span>
+            <span className="block truncate text-faint text-xs">
+              {profile?.email ?? "Ver y editar"}
+            </span>
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-faint" />
+        </Link>
+
+        <span aria-hidden className="my-1 h-px bg-line" />
+
+        {OVERFLOW.map(({ label, icon: Icon, to }) =>
+          to ? (
+            <Link
+              key={label}
+              to={to}
+              onClick={onClose}
+              className="flex items-center gap-3 rounded-xl px-3 py-3 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text"
+              activeProps={{
+                className: "bg-surface-raised font-medium text-text",
+                "aria-current": "page",
+              }}
+            >
+              <Icon className="size-4 shrink-0" />
+              {label}
+            </Link>
+          ) : (
+            <Pending key={label} label={label} icon={Icon} />
+          ),
+        )}
+        <ConnectLink onNavigate={onClose} />
+
+        <span aria-hidden className="my-1 h-px bg-line" />
+
+        <button
+          type="button"
+          onClick={logout}
+          className="flex items-center gap-3 rounded-xl px-3 py-3 text-left text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text"
+        >
+          <LogOut className="size-4 shrink-0" />
+          Cerrar sesión
+        </button>
+      </div>
+    </div>
   );
 }

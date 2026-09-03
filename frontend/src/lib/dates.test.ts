@@ -3,6 +3,7 @@ import {
   currentMonthKey,
   formatDate,
   formatDateTime,
+  formatDayMonth,
   formatIsoDate,
   formatIsoDayMonth,
   formatMonthKey,
@@ -142,5 +143,12 @@ describe("formatIsoDate", () => {
 describe("todayIso", () => {
   it("is a date the API's date fields accept", () => {
     expect(todayIso()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("formatDayMonth", () => {
+  it("deja fuera el año, que ya está en el encabezado del mes", () => {
+    // 2026-08-29 12:00 UTC, que en Bogotá son las 07:00 del mismo día.
+    expect(formatDayMonth(1788004800)).toBe("29 de ago");
   });
 });

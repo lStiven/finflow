@@ -156,9 +156,13 @@ export function Columns({
 
           <div className="mt-2 flex gap-[2px]">
             {buckets.map((bucket, index) => (
+              // One slot wide but allowed to spill into the blank slots
+              // beside it: truncating here clipped "15" to "1" on a phone,
+              // where a slot is eight pixels and the axis then read as a row
+              // of loose digits. `min-w-0` keeps the row itself from growing.
               <span
                 key={bucket.key}
-                className="min-w-0 flex-1 truncate text-center text-[10px] text-faint"
+                className="min-w-0 flex-1 overflow-visible whitespace-nowrap text-center text-[10px] text-faint"
               >
                 {index % step === 0 ? bucket.label : " "}
               </span>

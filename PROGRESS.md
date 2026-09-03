@@ -55,8 +55,15 @@ trabajo limpio.
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
 tres guías. Falta **Configuración**, la única entrada del menú sin pantalla.
-Las quince se revisaron una por una en un navegador el 2026-09-03, en pantalla
-de teléfono y de computador, y las cifras se comprobaron contra la API.
+Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
+cifras se comprobaron contra la API.
+
+**En cualquier pantalla, del teléfono más pequeño al monitor.** Comprobado a
+320, 360, 390, 430, 768, 1024 y 1440 px, y con el teléfono acostado: ninguna
+pantalla se va de lado, y a todas las secciones se llega sin escribir la
+dirección. Abajo de 1024 px la barra inferior lleva Resumen, Transacciones,
+Cuentas y **Más**, que abre el resto —Reportes, Comercios, Guías, la cuenta y
+cerrar sesión—; de 1024 para arriba, la columna de la izquierda de siempre.
 
 ## Lo publicado va atrasado respecto al repositorio
 
@@ -112,16 +119,9 @@ AWS (ver Trabas).
    un usuario de una vez; falta el disparador diario en la nube, que necesita algo
    que hoy no existe: una forma de recorrer todos los usuarios.
 
-5. **En el teléfono no se puede llegar a Reportes ni a Comercios.** La barra de
-   abajo solo lleva a Resumen, Transacciones, Cuentas, Perfil y Guías, y ninguna
-   otra pantalla enlaza a esas dos: existen, funcionan, y en un celular solo se
-   alcanzan escribiendo la dirección. En pantalla ancha sí están, en la columna
-   de la izquierda. La barra ya va llena, así que hay que decidir qué cede el
-   puesto o por dónde se entra — no es un arreglo de una línea.
+5. **La pantalla de Configuración**, la última que falta.
 
-6. **La pantalla de Configuración**, la última que falta.
-
-7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
+6. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
    olvidado en el computador mientras producción sigue vieja — que es exactamente
    lo que está pasando ahora mismo (punto 1).
@@ -173,6 +173,16 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-03 — **La app se adapta a cualquier teléfono.** El Resumen se iba de
+  lado en todos ellos (una tarjeta pedía 440 px), Reportes y Comercios no se
+  alcanzaban por debajo de 1024 px, y el eje de las gráficas se leía «1 5 6 1 1»
+  porque los días se recortaban a un carácter. Barra inferior de tres secciones
+  más **Más**, y una prueba que impide que una sección vuelva a quedar sin
+  puerta. Verificado en siete anchos. Y una pasada estética encima: las listas
+  ya no parten el renglón —una línea que se corta al final en vez de crecer
+  hacia abajo—, la fecha de un movimiento no repite el año que ya dice el
+  encabezado del mes, y una cuenta muestra su nombre completo en dos líneas en
+  lugar de «Ahorros Bancolo…».
 - 2026-09-03 — Revisión de las dieciocho pantallas en un navegador, de teléfono
   y de computador, con las cifras contrastadas contra la API. Cuatro arreglos,
   tres de ellos por decir algo que no era cierto: los meses ya no se escriben
@@ -187,6 +197,3 @@ AWS (ver Trabas).
   advertencia que dice qué va a pasar según el tipo de movimiento.
 - 2026-09-02 — Aprobar Bancolombia ahora aprueba también su tercer dominio, así
   que un traslado entre cuentas propias deja de perderse en el filtro.
-- 2026-09-02 — El contenedor tiene navegador: `just shot` fotografía la
-  aplicación corriendo, así que una pantalla ya no se entrega solo revisada por
-  el compilador.

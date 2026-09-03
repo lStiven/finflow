@@ -24,6 +24,22 @@ export function formatDate(epochSeconds: number): string {
   }).format(toDate(epochSeconds));
 }
 
+/**
+ * The same, without the year — for a list whose rows are already grouped
+ * under the month they belong to.
+ *
+ * The year on every row of such a list is text that says what the heading
+ * above it already said, and on a phone it is what pushes the rest of the
+ * line off the edge. Same reasoning as `formatIsoDayMonth`.
+ */
+export function formatDayMonth(epochSeconds: number): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    day: "numeric",
+    month: "short",
+    timeZone: DISPLAY_TIMEZONE,
+  }).format(toDate(epochSeconds));
+}
+
 export function formatDateTime(epochSeconds: number): string {
   return new Intl.DateTimeFormat(LOCALE, {
     day: "numeric",

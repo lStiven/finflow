@@ -16,6 +16,20 @@
 
 import type { SummaryGroup } from "@/api/queries";
 
+/**
+ * The category a merchant has when nobody has chosen one.
+ *
+ * Worth naming because a list can then leave it out: on a screen where almost
+ * nothing is categorised yet, "Sin categoría" beside every single row is the
+ * chip that pushes the useful ones off the edge of a phone.
+ */
+export const UNCATEGORIZED = "uncategorized";
+
+/** Whether this category is the default rather than somebody's decision. */
+export function isUncategorized(category: string | null | undefined): boolean {
+  return category === null || category === undefined || category === UNCATEGORIZED;
+}
+
 const CATEGORY_COPY: Record<string, string> = {
   uncategorized: "Sin categoría",
   groceries: "Mercado",

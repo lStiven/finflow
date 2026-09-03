@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SummaryGroup } from "@/api/queries";
-import { categoryGroupLabel, categoryLabel } from "@/merchants/categories";
+import {
+  categoryGroupLabel,
+  categoryLabel,
+  isUncategorized,
+} from "@/merchants/categories";
 
 function group(key: string | null, label: string): SummaryGroup {
   return { key, label, movements: 1, totals: [] };
@@ -39,5 +43,21 @@ describe("categoryGroupLabel", () => {
     expect(categoryGroupLabel(group("restaurants", "restaurants"))).toBe(
       "Restaurantes",
     );
+  });
+});
+
+describe("isUncategorized", () => {
+  it("reconoce la categoría por defecto", () => {
+    expect(isUncategorized("uncategorized")).toBe(true);
+  });
+
+  it("trata la ausencia de categoría igual que la categoría por defecto", () => {
+    expect(isUncategorized(null)).toBe(true);
+    expect(isUncategorized(undefined)).toBe(true);
+  });
+
+  it("no se lleva por delante una categoría de verdad", () => {
+    expect(isUncategorized("groceries")).toBe(false);
+    expect(isUncategorized("other")).toBe(false);
   });
 });

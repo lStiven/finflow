@@ -26,7 +26,6 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
-import { formatDate } from "@/lib/dates";
 import { aliasCountLabel, sortLabel, timesSeenLabel } from "@/merchants/aliases";
 import { categoryLabel } from "@/merchants/categories";
 
@@ -416,7 +415,7 @@ function SearchBar({
         onChange={(event) => setDraft(event.target.value)}
         // The backend matches the name *and* every spelling under it, which
         // is the useful half and the one nobody would guess.
-        placeholder="Busca por el nombre, o por lo que escribe tu banco…"
+        placeholder="Busca un comercio…"
         aria-label="Buscar comercios"
         className="w-full rounded-xl border border-line bg-surface py-3 pr-4 pl-11 text-base text-text placeholder:text-faint focus:border-accent focus:outline-none"
       />
@@ -460,16 +459,19 @@ function Row({ merchant, index }: { merchant: Merchant; index: number }) {
               </span>
             ) : null}
           </span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-faint text-xs">
-            <span className="inline-flex items-center gap-1">
+          {/* One line, and short enough to finish it: the category is what
+              this queue is about. The last-seen date used to be here and was
+              the half that got clipped on a phone — it is on the merchant's
+              own screen, and the list is sorted by recency anyway. */}
+          <span className="mt-0.5 block truncate text-faint text-xs">
+            <span className="inline-flex items-center gap-1 align-middle">
               <Tag className="size-3" aria-hidden />
               {categoryLabel(merchant.category)}
             </span>
-            <span>· {timesSeenLabel(merchant.times_seen)}</span>
+            <span> · {timesSeenLabel(merchant.times_seen)}</span>
             {merchant.alias_count > 1 ? (
-              <span>· {aliasCountLabel(merchant.alias_count)}</span>
+              <span> · {aliasCountLabel(merchant.alias_count)}</span>
             ) : null}
-            <span>· {formatDate(merchant.last_seen)}</span>
           </span>
         </span>
 

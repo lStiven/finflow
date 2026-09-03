@@ -27,9 +27,14 @@ import { Money } from "@/components/Money";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { type Option, Select } from "@/components/ui/Select";
-import { formatDate, formatMonthKey, fromLocalInput, monthKeyOf } from "@/lib/dates";
+import {
+  formatDayMonth,
+  formatMonthKey,
+  fromLocalInput,
+  monthKeyOf,
+} from "@/lib/dates";
 import { transferTitle } from "@/lib/transfers";
-import { categoryLabel } from "@/merchants/categories";
+import { categoryLabel, isUncategorized } from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -576,15 +581,19 @@ function MovementRow({ movement }: { movement: Transaction }) {
             ? transferTitle(transfer, movement.counterparty)
             : (movement.merchant?.display_name ?? movement.counterparty)}
         </p>
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 truncate text-faint text-xs">
-          <span>{formatDate(movement.occurred_at)}</span>
-          {transfer ? <span className="text-violet">· traslado</span> : null}
-          {movement.merchant?.category ? (
-            <span>· {categoryLabel(movement.merchant.category)}</span>
+        {/* One line, cut at the end rather than wrapped: these read
+            most-important-first, and wrapping made every third row two lines
+            taller than its neighbours on a phone. */}
+        <p className="mt-0.5 truncate text-faint text-xs">
+          <span>{formatDayMonth(movement.occurred_at)}</span>
+          {transfer ? <span className="text-violet"> · traslado</span> : null}
+          {movement.merchant?.category &&
+          !isUncategorized(movement.merchant.category) ? (
+            <span> · {categoryLabel(movement.merchant.category)}</span>
           ) : null}
-          {movement.origin === "manual" ? <span>· a mano</span> : null}
+          {movement.origin === "manual" ? <span> · a mano</span> : null}
           {movement.account_id ? null : (
-            <span className="text-warn">· sin asignar</span>
+            <span className="text-warn"> · sin asignar</span>
           )}
         </p>
       </div>
