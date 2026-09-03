@@ -173,6 +173,15 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-03 — **Un correo reenviado a mano ya se lee con la plantilla del
+  banco.** El banco se identificaba solo por el remitente del sobre, así que un
+  reenvío hecho a mano —que sale de tu propia dirección— pasaba de largo por las
+  plantillas y caía en la LLM, que rechaza un pago de tarjeta a propósito porque
+  nombra dos instrumentos propios. Ahora, y solo cuando el remitente no nombra
+  ningún banco, se lee el encabezado del reenvío. Los tres correos así en
+  desarrollo quedaron en `pending_fallback` sin registrar nada; reenviarlos otra
+  vez ya entra. 23 pruebas nuevas, incluidas las del camino automático para que
+  no se mueva.
 - 2026-09-03 — **La app se adapta a cualquier teléfono.** El Resumen se iba de
   lado en todos ellos (una tarjeta pedía 440 px), Reportes y Comercios no se
   alcanzaban por debajo de 1024 px, y el eje de las gráficas se leía «1 5 6 1 1»
@@ -195,5 +204,3 @@ AWS (ver Trabas).
   Siete operaciones nuevas, su pantalla y su guía.
 - 2026-09-03 — Borrar un movimiento devuelve la plata a la cuenta, con una
   advertencia que dice qué va a pasar según el tipo de movimiento.
-- 2026-09-02 — Aprobar Bancolombia ahora aprueba también su tercer dominio, así
-  que un traslado entre cuentas propias deja de perderse en el filtro.

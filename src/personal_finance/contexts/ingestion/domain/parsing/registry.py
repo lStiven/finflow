@@ -7,6 +7,9 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BANK_NAME as BANCOLOMBIA,
     BancolombiaParser,
 )
+from personal_finance.contexts.ingestion.domain.parsing.forwarded_email import (
+    forwarded_sender,
+)
 from personal_finance.contexts.ingestion.domain.parsing.lulobank import (
     BANK_NAME as LULO_BANK,
     LuloBankParser,
@@ -61,6 +64,26 @@ class ParserRegistry:
         bank = self._bank_domains.get(sender.domain)
 
         return self._parsers.get(bank) if bank else None
+
+    def for_forwarded_message(self, raw: str) -> DeterministicParser | None:
+        """The parser for the bank a forwarded email came from, if any.
+
+        The second question, asked only when `for_sender` has already answered
+        None: the intake model is that people forward their bank's mail, and a
+        forward made by hand arrives from the person, not the bank. The bank
+        is then named only in the header block the mail client wrote into the
+        body, which is what this reads.
+
+        Takes the raw body, not the text a template reads: normalising strips
+        the very header this depends on. See `forwarded_sender`.
+
+        Returns None for anything that is not a forward, or that was forwarded
+        from an address no parser knows — the caller is then exactly where it
+        was, on its way to the fallback.
+        """
+        original = forwarded_sender(raw)
+
+        return self.for_sender(original) if original is not None else None
 
 
 def default_parsers() -> Mapping[str, DeterministicParser]:

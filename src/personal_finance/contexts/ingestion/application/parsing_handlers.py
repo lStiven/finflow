@@ -91,6 +91,15 @@ class ParseNotificationUseCase:
         parser = self._registry.for_sender(notification.sender)
 
         if parser is None:
+            # The sender does not name a bank. Before giving up on the
+            # templates, ask whether this is a forward: the whole intake model
+            # is that people forward their bank's mail, and a forward made by
+            # hand arrives from the person rather than from the bank, which
+            # used to send every one of them straight past the parser that
+            # could read them.
+            parser = self._registry.for_forwarded_message(notification.raw_content)
+
+        if parser is None:
             # Nobody knows this bank's templates yet. Not a failure: the
             # fallback can still read it.
             return self._fall_back(notification)
