@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 from typing import Protocol
 
@@ -75,18 +75,71 @@ class NotificationSummary:
     received_at: PosixTime
 
 
-class NotificationReader(Protocol):
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class NotificationPageRequest:
+    """One window of a user's mail: which user, how far in, how many."""
+
+    user_id: UserId
+    limit: int
+    offset: int = 0
+    status: ProcessingStatus | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class NotificationPage:
+    """What the window holds, and whether anything is behind it.
+
+    `has_more` rather than a total on purpose: a total is a statement about
+    every notification the account ever received, and answering it on a list
+    that polls is what made the window cost the same as the whole history.
+    Somebody who wants the totals asks for the counts.
+    """
+
+    notifications: Sequence[NotificationSummary]
+    has_more: bool
+
+
+class NotificationHistoryReader(Protocol):
+    """The whole of what one user ever received.
+
+    Apart from the list below because it is a different question with a
+    different cost: onboarding asks when mail first got through and which
+    senders were turned away, and neither can be answered from a page. A
+    screen that polls must not depend on this.
+    """
+
+    def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
+        """Every notification belonging to `user_id`, in no particular order."""
+        ...
+
+
+class NotificationReader(NotificationHistoryReader, Protocol):
     """Read side: what arrived for one user.
 
     Separate from `BankNotificationRepository` because it answers with
     summaries rather than aggregates. Nothing here writes, nothing here can
     reach another user's mail, and an implementation must not scan the whole
-    table to answer it — the cost of listing one person's notifications must
-    not grow with everybody else's.
+    table to answer any of it — the cost of listing one person's
+    notifications must not grow with everybody else's.
     """
 
-    def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
-        """Every notification belonging to `user_id`, in no particular order."""
+    def page_by_user(self, request: NotificationPageRequest) -> NotificationPage:
+        """One window of `request.user_id`'s notifications, newest first.
+
+        The window is the read: an implementation must not fetch the user's
+        whole history and slice it, which is the difference between a page
+        that costs a page and one that costs an account's entire past on
+        every poll.
+        """
+        ...
+
+    def count_by_status(self, user_id: UserId) -> Mapping[ProcessingStatus, int]:
+        """How many notifications `user_id` has in each status, over their
+        whole history. Statuses with none of them may be absent.
+
+        The one answer here that cannot be windowed, and therefore the one a
+        caller has to ask for.
+        """
         ...
 
 

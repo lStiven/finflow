@@ -17,14 +17,41 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   (2026-08-24). `GET /ingestion/notifications` exists so a client can tell
   three failures apart that otherwise look identical — nothing arrived, it
   arrived from a sender nobody approved, it arrived and nothing could be read
-  out of it. It reads a `by_user` index whose projection lists the attributes
-  a screen shows and excludes `raw_content`: an index is a full copy of what
-  it projects, and duplicating every untrusted message to answer a question
-  that never involves one is not a trade worth making. The counts beside the
-  list cover every status the user has regardless of the filter, so the
-  summary does not move when somebody narrows the list. The cost of the index
-  is what eventually moved the whole account off provisioned capacity — see
-  **Billing** below.
+  out of it. It reads a `by_user_received_at` index whose projection lists the
+  attributes a screen shows and excludes `raw_content`: an index is a full
+  copy of what it projects, and duplicating every untrusted message to answer
+  a question that never involves one is not a trade worth making. The counts
+  beside the list cover every status the user has regardless of the filter, so
+  the summary does not move when somebody narrows the list. The cost of the
+  index is what eventually moved the whole account off provisioned capacity —
+  see **Billing** below.
+
+- **The notification list pages in DynamoDB, and the counts are opted into**
+  (2026-09-04). The index used to be hash-only (`by_user`), so "newest first"
+  had to be produced by reading everything the account ever received and
+  sorting in memory: paging shrank the answer and not the read, on the one
+  screen that polls. The sort key is `received_at`, the query runs backwards
+  with a `Limit` of the window plus one, and that extra row is what answers
+  `has_more` — a `total` cannot be windowed, so the list stopped returning
+  one. `counts` and `total` still exist behind `with_counts=true`, which is
+  the honest shape: they are a statement about the whole history and they cost
+  a walk, so a caller asks for them once instead of paying on every refresh.
+  Paging stayed on `offset`, matching every other list here, so the read is
+  `offset + limit + 1` rows: bounded by the window rather than by the account,
+  which is the fix, though a deep offset still pays for what it skipped. A
+  status filter stays a DynamoDB `FilterExpression` — applied after the read —
+  so a filtered page can take several rounds, and each asks for the whole
+  window again rather than for the rows still missing: `Limit` bounds rows
+  evaluated, not rows returned, and a shrinking window turns the tail of a
+  nearly-full page into one blocking call per row scanned. A second index
+  keyed by status would be a full extra copy of the table to narrow a list
+  nobody narrows often. A global secondary index cannot grow a sort key, so
+  this is a new index rather than an altered one; `deploy-dev`/`deploy-prod`
+  now depend on provisioning, because code that queries an index its table
+  does not have yet answers 500 to every user — the list *and* the onboarding
+  screen, which reads the same index. The superseded `by_user` is deleted by
+  hand after that deploy: provisioning does not drop it, because a delete
+  landing before the new code breaks the list for whoever is looking at it.
 
 - **Onboarding progress is derived, never stored** (2026-08-29).
   `GET /ingestion/setup` recomputes four steps from the inbox record on every

@@ -537,7 +537,7 @@
               }
             ],
             "url": {
-              "raw": "{{base_url}}/ingestion/notifications?limit=20&offset=0",
+              "raw": "{{base_url}}/ingestion/notifications?limit=20&offset=0&with_counts=false",
               "host": [
                 "{{base_url}}"
               ],
@@ -559,10 +559,15 @@
                 {
                   "key": "offset",
                   "value": "0"
+                },
+                {
+                  "key": "with_counts",
+                  "value": "false",
+                  "description": "true also returns `counts` and `total`. Off by default: the page is read as a page, while the counts read everything the account ever received."
                 }
               ]
             },
-            "description": "What arrived for the authenticated caller, newest first — the only read surface ingestion has, and the one that tells the three failures apart: nothing arrived, it arrived from a sender nobody approved (status `ignored`, and its sender is shown so it can be approved), or it arrived and nothing could be read out of it (`pending_fallback`, with `deferred_reason` saying whether a model declined it or none was configured). Never returns the email body. `counts` is every status this user has, filter or no filter, so a summary line does not move when the list is narrowed. The index behind it is eventually consistent: a message received a moment ago can take an instant to appear."
+            "description": "What arrived for the authenticated caller, newest first — the only read surface ingestion has, and the one that tells the three failures apart: nothing arrived, it arrived from a sender nobody approved (status `ignored`, and its sender is shown so it can be approved), or it arrived and nothing could be read out of it (`pending_fallback`, with `deferred_reason` saying whether a model declined it or none was configured). Never returns the email body. `has_more` says whether another page is behind this one; `counts` and `total` are null unless `with_counts=true` asks for them, and then `counts` is every status this user has, filter or no filter, so a summary line does not move when the list is narrowed. The index behind it is eventually consistent: a message received a moment ago can take an instant to appear."
           },
           "response": []
         },

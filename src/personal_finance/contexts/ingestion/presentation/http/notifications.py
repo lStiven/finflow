@@ -8,8 +8,8 @@ nothing could be read out of it. Without this the same three failures look
 identical from a client: no new movement.
 
 Scoped to the token like every other read here. There is no endpoint that
-takes a user id, and the reader queries one partition of the `by_user` index,
-so one person's mail is not reachable from another's session.
+takes a user id, and the reader queries one partition of the `by_user_received_at`
+index, so one person's mail is not reachable from another's session.
 """
 
 from __future__ import annotations
@@ -91,13 +91,17 @@ class NotificationResponse(BaseModel):
 
 class NotificationListResponse(BaseModel):
     notifications: list[NotificationResponse]
-    # How many matched the filter.
-    total: int
-    # Every status this user has, filter or no filter — keyed by status, so a
-    # summary line does not move when the list is narrowed to one of them.
-    counts: dict[str, int]
+    # Whether another page is behind this one. This rather than a total,
+    # because a total is a statement about every email the account ever
+    # received and this list polls.
+    has_more: bool
     limit: int
     offset: int
+    # Both only when `with_counts` asked for them, and null otherwise: they
+    # are the one answer here that reads the account's whole history.
+    counts: dict[str, int] | None = None
+    # How many matched the filter.
+    total: int | None = None
 
 
 @functools.lru_cache(maxsize=1)
@@ -141,11 +145,17 @@ def list_notifications(
     status: Annotated[ProcessingStatus | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
+    with_counts: Annotated[bool, Query()] = False,
 ) -> NotificationListResponse:
     """The caller's bank mail, newest first.
 
     An empty list is an ordinary answer: it means nothing has been forwarded
     yet, or the forwarding rule is not doing what its owner thinks it is.
+
+    `with_counts` adds the per-status summary and the total. It is off by
+    default because it is the one part of this answer that reads everything
+    the account ever received, while the page itself reads a page — a screen
+    that polls asks for it once, not on every refresh.
     """
     page = use_case.execute(
         NotificationQuery(
@@ -153,6 +163,7 @@ def list_notifications(
             status=status,
             limit=limit,
             offset=offset,
+            with_counts=with_counts,
         ),
     )
 
@@ -160,10 +171,15 @@ def list_notifications(
         notifications=[
             _notification_response(notification) for notification in page.notifications
         ],
-        total=page.total,
-        counts={status.value: count for status, count in page.counts.items()},
+        has_more=page.has_more,
         limit=limit,
         offset=offset,
+        counts=(
+            None
+            if page.counts is None
+            else {found.value: count for found, count in page.counts.items()}
+        ),
+        total=page.total,
     )
 
 

@@ -4,7 +4,7 @@ from collections.abc import Sequence
 import dataclasses
 
 from personal_finance.contexts.ingestion.application.ports import (
-    NotificationReader,
+    NotificationHistoryReader,
     NotificationSummary,
     UserInboxRepository,
 )
@@ -122,7 +122,7 @@ class GetInboxSetupUseCase:
         self,
         *,
         inbox_repository: UserInboxRepository,
-        notification_reader: NotificationReader,
+        notification_reader: NotificationHistoryReader,
         base_address: EmailAddress,
     ) -> None:
         self._inbox_repository = inbox_repository

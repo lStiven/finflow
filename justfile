@@ -297,14 +297,19 @@ sam-validate:
 infra-check:
     PYTHONPATH=src uv run python scripts/check_template.py
 
+# Provisioning runs first, and is a dependency rather than a step somebody
+# remembers: it owns the tables, and a deploy whose code queries an index the
+# table does not have yet answers 500 to every user until it catches up. It is
+# idempotent, so paying for it on every deploy costs a few describes.
+
 # Build the image and deploy. Authenticate first, e.g. `aws sso login`.
-deploy-dev: (_require-env ".env.development")
+deploy-dev: provision-dev
     sam build --config-env development \
         --config-file {{sam_config}} \
         --template {{sam_dir}}/template.yaml
     sam deploy --config-env development --config-file {{sam_config}}
 
-deploy-prod: (_require-env ".env.production")
+deploy-prod: provision-prod
     sam build --config-env production \
         --config-file {{sam_config}} \
         --template {{sam_dir}}/template.yaml

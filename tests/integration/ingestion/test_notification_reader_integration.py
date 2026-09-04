@@ -1,14 +1,19 @@
-"""Reading one user's notifications off the `by_user` index, against DynamoDB.
+"""Reading one user's notifications off `by_user_received_at`, against DynamoDB.
 
 The index is what keeps the cost of this list independent of everybody else's
-mail, and what makes the scoping structural rather than a filter somebody has
-to remember to apply. Both are only true if the table is actually provisioned
-with it, which is why this test provisions the real thing.
+mail *and* of the reader's own history — sorted by arrival, so a page is read
+as a page rather than sliced out of everything the account ever received. It
+is also what makes the scoping structural rather than a filter somebody has to
+remember to apply. None of that is true unless the table is actually
+provisioned with it, which is why this test provisions the real thing.
 """
 
 from mypy_boto3_dynamodb.client import DynamoDBClient
 import pytest
 
+from personal_finance.contexts.ingestion.application.ports import (
+    NotificationPageRequest,
+)
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -19,6 +24,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     NOTIFICATIONS_BY_USER_INDEX,
+    RECEIVED_AT_ATTRIBUTE,
     SUMMARY_ATTRIBUTES,
     USER_ID_ATTRIBUTE,
     DynamoDBBankNotificationRepository,
@@ -46,6 +52,7 @@ def table(dynamodb_client: DynamoDBClient) -> DynamoDBClient:
             SecondaryIndex(
                 name=NOTIFICATIONS_BY_USER_INDEX,
                 partition_key=USER_ID_ATTRIBUTE,
+                sort_key=RECEIVED_AT_ATTRIBUTE,
                 projected_attributes=SUMMARY_ATTRIBUTES,
             ),
         ),
@@ -174,3 +181,214 @@ def test_the_index_does_not_carry_the_email_body(
     )["Items"]
 
     assert "raw_content" not in items[0]
+
+
+def test_a_page_comes_back_newest_first(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+) -> None:
+    """The order is the index's, not a sort in memory — which is what lets the
+    query stop at the end of the page.
+    """
+    for offset in range(4):
+        repository.add_if_new(
+            _notification(
+                message_id=f"<{offset}@bank.com>",
+                received_at=1_787_000_000 + offset,
+            ),
+        )
+
+    page = reader.page_by_user(NotificationPageRequest(user_id=USER, limit=2))
+
+    assert [summary.message_id.value for summary in page.notifications] == [
+        "<3@bank.com>",
+        "<2@bank.com>",
+    ]
+    assert page.has_more is True
+
+
+def test_a_page_reads_only_its_own_window(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+    table: DynamoDBClient,
+) -> None:
+    """The gap this closes: the list used to read the account's whole history
+    on every refresh and throw away everything past the window.
+    """
+    for offset in range(30):
+        repository.add_if_new(
+            _notification(
+                message_id=f"<{offset}@bank.com>",
+                received_at=1_787_000_000 + offset,
+            ),
+        )
+
+    scanned: list[int] = []
+    queried = table.query
+
+    def counting_query(**kwargs: object) -> object:
+        answer = queried(**kwargs)  # type: ignore[arg-type]
+        scanned.append(answer["ScannedCount"])
+
+        return answer
+
+    table.query = counting_query  # type: ignore[assignment]
+    page = reader.page_by_user(NotificationPageRequest(user_id=USER, limit=5))
+
+    assert len(page.notifications) == 5
+    # The five shown plus the one that answers "is there another page".
+    assert sum(scanned) == 6
+
+
+def test_a_later_page_does_not_repeat_the_first(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+) -> None:
+    for offset in range(5):
+        repository.add_if_new(
+            _notification(
+                message_id=f"<{offset}@bank.com>",
+                received_at=1_787_000_000 + offset,
+            ),
+        )
+
+    first = reader.page_by_user(NotificationPageRequest(user_id=USER, limit=2))
+    second = reader.page_by_user(
+        NotificationPageRequest(user_id=USER, limit=2, offset=2),
+    )
+    last = reader.page_by_user(
+        NotificationPageRequest(user_id=USER, limit=2, offset=4),
+    )
+    seen = [
+        summary.message_id.value
+        for page in (first, second, last)
+        for summary in page.notifications
+    ]
+
+    assert len(seen) == len(set(seen)) == 5
+    assert last.has_more is False
+
+
+def test_a_status_filter_is_applied_by_dynamodb(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+) -> None:
+    ignored = _notification(message_id="<ignored@bank.com>")
+    ignored.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+    repository.add_if_new(ignored)
+    repository.add_if_new(
+        _notification(message_id="<received@bank.com>", received_at=1_787_000_100),
+    )
+
+    page = reader.page_by_user(
+        NotificationPageRequest(
+            user_id=USER,
+            limit=10,
+            status=ProcessingStatus.IGNORED,
+        ),
+    )
+
+    assert [summary.message_id.value for summary in page.notifications] == [
+        "<ignored@bank.com>",
+    ]
+    assert page.has_more is False
+
+
+def test_a_page_never_reaches_another_users_mail(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+) -> None:
+    repository.add_if_new(_notification(message_id="<mine@bank.com>"))
+    repository.add_if_new(
+        _notification(
+            user_id=OTHER_USER,
+            message_id="<theirs@bank.com>",
+            received_at=1_787_000_100,
+        ),
+    )
+
+    page = reader.page_by_user(NotificationPageRequest(user_id=USER, limit=10))
+
+    assert [summary.message_id.value for summary in page.notifications] == [
+        "<mine@bank.com>",
+    ]
+
+
+def test_the_counts_cover_every_status_the_user_has(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+) -> None:
+    ignored = _notification(message_id="<ignored@bank.com>")
+    ignored.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+    repository.add_if_new(ignored)
+    repository.add_if_new(
+        _notification(message_id="<received@bank.com>", received_at=1_787_000_100),
+    )
+    repository.add_if_new(
+        _notification(user_id=OTHER_USER, message_id="<theirs@bank.com>"),
+    )
+
+    assert reader.count_by_status(USER) == {
+        ProcessingStatus.IGNORED: 1,
+        ProcessingStatus.RECEIVED: 1,
+    }
+
+
+def test_the_counts_of_a_user_with_no_mail_are_empty(
+    reader: DynamoDBNotificationReader,
+) -> None:
+    assert reader.count_by_status(USER) == {}
+
+
+def test_a_nearly_full_page_does_not_finish_one_round_trip_per_row(
+    repository: DynamoDBBankNotificationRepository,
+    reader: DynamoDBNotificationReader,
+    table: DynamoDBClient,
+) -> None:
+    """A filter is applied after the read, so `Limit` has to stay the whole
+    window on every round.
+
+    Asking only for the rows still missing looks thriftier and is the
+    opposite: as matches accumulate the window shrinks towards one, so a page
+    that fills up and then keeps looking costs a blocking call per row scanned
+    — on a list that polls. Here twenty matches are followed by a hundred rows
+    that never match.
+    """
+    for offset in range(100):
+        repository.add_if_new(
+            _notification(
+                message_id=f"<{offset}@bank.com>",
+                received_at=1_787_000_000 + offset,
+            ),
+        )
+
+    for offset in range(20):
+        ignored = _notification(
+            message_id=f"<ignored-{offset}@bank.com>",
+            received_at=1_787_000_100 + offset,
+        )
+        ignored.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+        repository.add_if_new(ignored)
+
+    rounds = 0
+    queried = table.query
+
+    def counting_query(**kwargs: object) -> object:
+        nonlocal rounds
+        rounds += 1
+
+        return queried(**kwargs)  # type: ignore[arg-type]
+
+    table.query = counting_query  # type: ignore[assignment]
+    page = reader.page_by_user(
+        NotificationPageRequest(
+            user_id=USER,
+            limit=20,
+            status=ProcessingStatus.IGNORED,
+        ),
+    )
+
+    assert len(page.notifications) == 20
+    assert page.has_more is False
+    # 120 rows, 21 evaluated per round.
+    assert rounds <= 6

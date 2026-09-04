@@ -29,6 +29,7 @@ from personal_finance.contexts.identity.infrastructure.persistence.dynamodb impo
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     NOTIFICATIONS_BY_USER_INDEX,
     PARTITION_KEY,
+    RECEIVED_AT_ATTRIBUTE,
     SUMMARY_ATTRIBUTES,
     USER_ID_ATTRIBUTE as NOTIFICATION_USER_ID_ATTRIBUTE,
 )
@@ -137,8 +138,34 @@ class SecondaryIndex:
 
     name: str
     partition_key: str
+    # Orders the partition, and lets a query trim inside DynamoDB instead of
+    # reading everything and slicing in Python.
+    sort_key: str | None = None
+    sort_key_type: ScalarAttributeTypeType = "N"
     # Empty projects every attribute.
     projected_attributes: tuple[str, ...] = ()
+
+    def key_schema(self) -> list[KeySchemaElementTypeDef]:
+        schema: list[KeySchemaElementTypeDef] = [
+            {"AttributeName": self.partition_key, "KeyType": "HASH"},
+        ]
+
+        if self.sort_key is not None:
+            schema.append({"AttributeName": self.sort_key, "KeyType": "RANGE"})
+
+        return schema
+
+    def attribute_definitions(self) -> list[AttributeDefinitionTypeDef]:
+        definitions: list[AttributeDefinitionTypeDef] = [
+            {"AttributeName": self.partition_key, "AttributeType": "S"},
+        ]
+
+        if self.sort_key is not None:
+            definitions.append(
+                {"AttributeName": self.sort_key, "AttributeType": self.sort_key_type},
+            )
+
+        return definitions
 
     def projection(self) -> ProjectionTypeDef:
         if not self.projected_attributes:
@@ -415,7 +442,7 @@ def _add_missing_indexes(
 
         action: CreateGlobalSecondaryIndexActionTypeDef = {
             "IndexName": index.name,
-            "KeySchema": [{"AttributeName": index.partition_key, "KeyType": "HASH"}],
+            "KeySchema": index.key_schema(),
             "Projection": index.projection(),
         }
 
@@ -427,9 +454,7 @@ def _add_missing_indexes(
 
         client.update_table(
             TableName=table_name,
-            AttributeDefinitions=[
-                {"AttributeName": index.partition_key, "AttributeType": "S"},
-            ],
+            AttributeDefinitions=index.attribute_definitions(),
             GlobalSecondaryIndexUpdates=[{"Create": action}],
         )
         # One index at a time: each is its own `UpdateTable`, and DynamoDB
@@ -779,6 +804,12 @@ def provision() -> ProvisionedResources:
             SecondaryIndex(
                 name=NOTIFICATIONS_BY_USER_INDEX,
                 partition_key=NOTIFICATION_USER_ID_ATTRIBUTE,
+                # Sorted by arrival, so a list reads its page instead of the
+                # account's whole history. It supersedes the hash-only
+                # `by_user`, which is left in place here because a global
+                # secondary index cannot grow a sort key: delete that one by
+                # hand once the deploy using this is live.
+                sort_key=RECEIVED_AT_ATTRIBUTE,
                 # Everything a list screen shows, and nothing else. An index is
                 # a full copy of what it projects, and duplicating every
                 # untrusted email body to answer a question that never involves

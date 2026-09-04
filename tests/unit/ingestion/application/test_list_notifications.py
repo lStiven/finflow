@@ -5,9 +5,14 @@ to it" — so the states that produced nothing (ignored, pending fallback) are
 as much a part of the answer as the ones that produced a transaction.
 """
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 
-from personal_finance.contexts.ingestion.application.ports import NotificationSummary
+from personal_finance.contexts.ingestion.application.ports import (
+    NotificationPage,
+    NotificationPageRequest,
+    NotificationSummary,
+)
 from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
     NotificationQuery,
@@ -31,11 +36,17 @@ class InMemoryReader:
 
     Scoping lives in the real adapter's index query; a fake that ignored it
     would let a test pass while the endpoint leaked somebody else's mail.
+
+    Ordering and windowing live there too, so this stands in for them: it
+    counts what each answer had to look at, which is what the paging tests
+    below are actually about.
     """
 
     def __init__(self, *summaries: NotificationSummary) -> None:
         self.summaries = summaries
         self.owners: dict[NotificationId, UserId] = {}
+        self.counted: list[UserId] = []
+        self.rows_read = 0
 
     def owned_by(
         self,
@@ -49,12 +60,42 @@ class InMemoryReader:
 
         return self
 
+    def page_by_user(self, request: NotificationPageRequest) -> NotificationPage:
+        found = [
+            summary
+            for summary in self._newest_first(request.user_id)
+            if request.status is None or summary.status is request.status
+        ]
+        wanted = request.offset + request.limit
+        self.rows_read += len(found[: wanted + 1])
+
+        return NotificationPage(
+            notifications=found[request.offset : wanted],
+            has_more=len(found) > wanted,
+        )
+
+    def count_by_status(self, user_id: UserId) -> Mapping[ProcessingStatus, int]:
+        self.counted.append(user_id)
+        self.rows_read += len(self._owned(user_id))
+
+        return Counter(summary.status for summary in self._owned(user_id))
+
     def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
+        return self._owned(user_id)
+
+    def _owned(self, user_id: UserId) -> list[NotificationSummary]:
         return [
             summary
             for summary in self.summaries
             if self.owners.get(summary.id) == user_id
         ]
+
+    def _newest_first(self, user_id: UserId) -> list[NotificationSummary]:
+        return sorted(
+            self._owned(user_id),
+            key=lambda summary: summary.received_at.as_epoch_seconds(),
+            reverse=True,
+        )
 
 
 def _summary(
@@ -104,7 +145,7 @@ def test_only_the_asking_users_mail_is_listed() -> None:
     page = _use_case(reader).execute(NotificationQuery(user_id=USER))
 
     assert [summary.message_id for summary in page.notifications] == [mine.message_id]
-    assert page.total == 1
+    assert page.has_more is False
 
 
 def test_a_status_filter_narrows_the_list() -> None:
@@ -123,7 +164,7 @@ def test_a_status_filter_narrows_the_list() -> None:
     assert [summary.message_id for summary in page.notifications] == [
         ignored.message_id,
     ]
-    assert page.total == 1
+    assert page.has_more is False
 
 
 def test_the_counts_cover_everything_the_filter_hides() -> None:
@@ -143,7 +184,11 @@ def test_the_counts_cover_everything_the_filter_hides() -> None:
     )
 
     page = _use_case(reader).execute(
-        NotificationQuery(user_id=USER, status=ProcessingStatus.IGNORED),
+        NotificationQuery(
+            user_id=USER,
+            status=ProcessingStatus.IGNORED,
+            with_counts=True,
+        ),
     )
 
     assert page.total == 1
@@ -174,7 +219,7 @@ def test_paging_walks_the_whole_list_without_repeating() -> None:
     ]
 
     assert len(seen) == len(set(seen)) == 5
-    assert first.total == 5
+    assert (first.has_more, second.has_more, third.has_more) == (True, True, False)
 
 
 def test_an_offset_past_the_end_is_an_empty_page_not_an_error() -> None:
@@ -186,11 +231,13 @@ def test_an_offset_past_the_end_is_an_empty_page_not_an_error() -> None:
     page = _use_case(reader).execute(NotificationQuery(user_id=USER, offset=50))
 
     assert page.notifications == []
-    assert page.total == 1
+    assert page.has_more is False
 
 
 def test_a_user_with_no_mail_gets_an_empty_answer() -> None:
-    page = _use_case(InMemoryReader()).execute(NotificationQuery(user_id=USER))
+    page = _use_case(InMemoryReader()).execute(
+        NotificationQuery(user_id=USER, with_counts=True),
+    )
 
     assert page.notifications == []
     assert page.total == 0
@@ -214,3 +261,42 @@ def test_a_deferred_notification_says_why_it_was_deferred() -> None:
     assert page.notifications[0].deferred_reason is (
         NotificationDeferredReason.FALLBACK_FOUND_NOTHING
     )
+
+
+def test_a_page_reads_the_page_and_not_the_whole_history() -> None:
+    """The whole point of the sorted index.
+
+    A list that polls every thirty seconds used to read everything the account
+    ever received in order to show twenty rows, and the paging only ever
+    shrank the answer. Here forty notifications must not cost forty reads.
+    """
+    reader = InMemoryReader().owned_by(
+        USER,
+        *(
+            _summary(message_id=f"<{index}@bank.com>", received_at=1_000 + index)
+            for index in range(40)
+        ),
+    )
+
+    page = _use_case(reader).execute(NotificationQuery(user_id=USER, limit=5))
+
+    assert len(page.notifications) == 5
+    assert page.has_more is True
+    # The five shown plus the one that answers "is there more".
+    assert reader.rows_read == 6
+
+
+def test_nothing_counts_the_whole_history_unless_it_is_asked_to() -> None:
+    """Counting is the one answer that has to look at everything, so it is
+    the one a caller opts into.
+    """
+    reader = InMemoryReader().owned_by(
+        USER,
+        _summary(message_id="<1@bank.com>", received_at=1_000),
+    )
+
+    page = _use_case(reader).execute(NotificationQuery(user_id=USER))
+
+    assert reader.counted == []
+    assert page.counts is None
+    assert page.total is None

@@ -940,6 +940,11 @@ export interface paths {
          *
          *     An empty list is an ordinary answer: it means nothing has been forwarded
          *     yet, or the forwarding rule is not doing what its owner thinks it is.
+         *
+         *     `with_counts` adds the per-status summary and the total. It is off by
+         *     default because it is the one part of this answer that reads everything
+         *     the account ever received, while the page itself reads a page — a screen
+         *     that polls asks for it once, not on every refresh.
          */
         get: operations["list_notifications_ingestion_notifications_get"];
         put?: never;
@@ -1990,9 +1995,11 @@ export interface components {
         /** NotificationListResponse */
         NotificationListResponse: {
             /** Counts */
-            counts: {
+            counts?: {
                 [key: string]: number;
-            };
+            } | null;
+            /** Has More */
+            has_more: boolean;
             /** Limit */
             limit: number;
             /** Notifications */
@@ -2000,7 +2007,7 @@ export interface components {
             /** Offset */
             offset: number;
             /** Total */
-            total: number;
+            total?: number | null;
         };
         /**
          * NotificationResponse
@@ -4002,6 +4009,7 @@ export interface operations {
                 status?: components["schemas"]["ProcessingStatus"] | null;
                 limit?: number;
                 offset?: number;
+                with_counts?: boolean;
             };
             header?: never;
             path?: never;

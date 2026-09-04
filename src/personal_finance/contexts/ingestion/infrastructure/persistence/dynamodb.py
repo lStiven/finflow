@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 import uuid
 
-from personal_finance.contexts.ingestion.application.ports import NotificationSummary
+from personal_finance.contexts.ingestion.application.ports import (
+    NotificationPage,
+    NotificationPageRequest,
+    NotificationSummary,
+)
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
@@ -26,24 +31,33 @@ _SECONDS_PER_DAY = 86_400
 
 PARTITION_KEY = "pk"
 USER_ID_ATTRIBUTE = "user_id"
+RECEIVED_AT_ATTRIBUTE = "received_at"
+STATUS_ATTRIBUTE = "status"
 
 # The table is keyed by idempotency key because that is what deduplicates an
 # arriving email. Listing one person's mail is the reverse question, and a scan
 # would answer it at a cost that grows with everybody else's data — on a path a
 # screen refreshes.
-NOTIFICATIONS_BY_USER_INDEX = "by_user"
+#
+# Sorted by arrival, because "newest first" is the only order this list is ever
+# asked for and a hash-only index has none: answering it meant reading
+# everything the account ever received and sorting in memory, so a page of
+# twenty cost the same as a page of all of them. The name carries the sort key
+# because a global secondary index cannot grow one after the fact — the old
+# `by_user` is superseded rather than altered.
+NOTIFICATIONS_BY_USER_INDEX = "by_user_received_at"
 
-# What the index carries beyond the keys, and therefore everything a summary
-# can be built from. `raw_content` is deliberately absent: a list never shows a
-# body, and projecting one would copy every untrusted email into a second place
-# to answer a question that never involves it.
+# What the index carries beyond its keys, and — together with `user_id` and
+# `received_at`, which are the keys — everything a summary is built from.
+# `raw_content` is deliberately absent: a list never shows a body, and
+# projecting one would copy every untrusted email into a second place to answer
+# a question that never involves it.
 SUMMARY_ATTRIBUTES = (
     "notification_id",
     "message_id",
     "sender",
     "subject",
-    "received_at",
-    "status",
+    STATUS_ATTRIBUTE,
     "deferred_reason",
 )
 
@@ -218,7 +232,7 @@ def to_summary(item: dict[str, AttributeValueTypeDef]) -> NotificationSummary:
 
 
 class DynamoDBNotificationReader:
-    """`NotificationReader` over the `by_user` index.
+    """`NotificationReader` over the `by_user_received_at` index.
 
     Reads only, and only ever within one partition of that index, so a user's
     query cannot reach another user's mail even by accident. The index is
@@ -231,24 +245,123 @@ class DynamoDBNotificationReader:
         self._client = client
         self._table_name = table_name
 
-    def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
-        """Paginated: a query returns at most 1 MB, and a silently truncated
-        list would hide somebody's own mail from them.
+    def page_by_user(self, request: NotificationPageRequest) -> NotificationPage:
+        """One window of a user's mail, newest first, read as one window.
+
+        The sort key is what makes this cheap: DynamoDB walks the partition
+        backwards and stops, so the rows a screen shows cost those rows rather
+        than everything the account ever received.
+
+        A status filter is applied by DynamoDB after the read, so a page of
+        matches can take several rounds and each asks for the whole window
+        again: `Limit` bounds rows *evaluated*, not rows returned, and asking
+        only for what is still missing would shrink to one round trip per row
+        scanned exactly where the matches are sparse.
         """
-        request: QueryInputTypeDef = {
-            "TableName": self._table_name,
-            "IndexName": NOTIFICATIONS_BY_USER_INDEX,
-            "KeyConditionExpression": f"{USER_ID_ATTRIBUTE} = :user_id",
-            "ExpressionAttributeValues": {":user_id": {"S": str(user_id.value)}},
+        wanted = request.offset + request.limit
+        # One past the window, so "is there another page" is answered without
+        # counting the whole partition.
+        probe = wanted + 1
+        query = self._query(request)
+        query["Limit"] = probe
+        found: list[NotificationSummary] = []
+
+        while True:
+            response = self._client.query(**query)
+            found.extend(to_summary(item) for item in response.get("Items", []))
+            start_key = response.get("LastEvaluatedKey")
+
+            if len(found) >= probe or not start_key:
+                break
+
+            query["ExclusiveStartKey"] = start_key
+
+        return NotificationPage(
+            notifications=found[request.offset : wanted],
+            has_more=len(found) > wanted,
+        )
+
+    def count_by_status(self, user_id: UserId) -> Mapping[ProcessingStatus, int]:
+        """How many of each status this user has, over their whole history.
+
+        The one answer here that cannot be windowed — a total is a statement
+        about everything — so it reads the partition through, projecting the
+        single attribute it counts. It is not on the list path: a caller asks
+        for it, and the list itself no longer pays for it.
+        """
+        query: QueryInputTypeDef = {
+            **self._partition(user_id),
+            "ProjectionExpression": "#status",
+            "ExpressionAttributeNames": {"#status": STATUS_ATTRIBUTE},
         }
+        counts: Counter[ProcessingStatus] = Counter()
+
+        while True:
+            response = self._client.query(**query)
+            counts.update(
+                ProcessingStatus(_read_string(item, STATUS_ATTRIBUTE))
+                for item in response.get("Items", [])
+            )
+            start_key = response.get("LastEvaluatedKey")
+
+            if not start_key:
+                return dict(counts)
+
+            query["ExclusiveStartKey"] = start_key
+
+    def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
+        """Everything one user owns, oldest first.
+
+        The whole walk, for the two questions that are about the history
+        rather than about a page of it — when mail first got through, and
+        which senders were turned away. Paginated because a query returns at
+        most 1 MB, and a silently truncated list would hide somebody's own
+        mail from them.
+        """
+        query: QueryInputTypeDef = self._partition(user_id)
         summaries: list[NotificationSummary] = []
 
         while True:
-            response = self._client.query(**request)
+            response = self._client.query(**query)
             summaries.extend(to_summary(item) for item in response.get("Items", []))
             start_key = response.get("LastEvaluatedKey")
 
             if not start_key:
                 return summaries
 
-            request["ExclusiveStartKey"] = start_key
+            query["ExclusiveStartKey"] = start_key
+
+    def _partition(
+        self,
+        user_id: UserId,
+        *,
+        values: dict[str, AttributeValueTypeDef] | None = None,
+    ) -> QueryInputTypeDef:
+        return {
+            "TableName": self._table_name,
+            "IndexName": NOTIFICATIONS_BY_USER_INDEX,
+            "KeyConditionExpression": f"{USER_ID_ATTRIBUTE} = :user_id",
+            "ExpressionAttributeValues": {
+                ":user_id": {"S": str(user_id.value)},
+                **(values or {}),
+            },
+        }
+
+    def _query(self, request: NotificationPageRequest) -> QueryInputTypeDef:
+        if request.status is None:
+            return {
+                **self._partition(request.user_id),
+                # Newest first: somebody opening this screen is asking whether
+                # the email they just forwarded arrived.
+                "ScanIndexForward": False,
+            }
+
+        return {
+            **self._partition(
+                request.user_id,
+                values={":status": {"S": request.status.value}},
+            ),
+            "ScanIndexForward": False,
+            "FilterExpression": "#status = :status",
+            "ExpressionAttributeNames": {"#status": STATUS_ATTRIBUTE},
+        }

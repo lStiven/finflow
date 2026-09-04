@@ -49,10 +49,10 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 52 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1443 pruebas de Python y 281 del frontend, todas en verde.
+procesos en la nube, 1455 pruebas de Python y 281 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
-cola compartido).
+cola compartido, la paginación de notificaciones).
 
 **Pantallas:** están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
@@ -101,7 +101,11 @@ AWS (ver Trabas).
    misma sentada**, `just web-publish-dev` — si la web queda vieja frente a una
    API nueva, la pantalla se rompe (ya pasó el 2026-09-01). Cuando desarrollo
    corra unos días sin sorpresas, lo mismo en producción con `just deploy-prod`,
-   `just web-publish` y `just smoke-prod`.
+   `just web-publish` y `just smoke-prod`. Desplegar ya aprovisiona primero,
+   así que el índice nuevo de las notificaciones queda antes que el código que
+   lo consulta. Cuando el despliegue esté arriba, borrar a mano el índice viejo
+   `by_user` de la tabla de notificaciones: ya no lo consulta nadie y se sigue
+   pagando.
 
 2. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
    plantilla reconoce llama a Gemini, y no hay ningún límite. Es lo único de esta
@@ -134,8 +138,6 @@ AWS (ver Trabas).
   formulario lo ofrece porque el backend lo acepta para cualquier deuda, pero la
   barra de «disponible» solo se dibuja en una tarjeta. Es un dato que se pide y
   no se usa.
-- **La lista de notificaciones lee todo antes de recortar.** Paginar achica la
-  respuesta, no la lectura.
 - **Lulo tiene plantilla a medias**: se construyó con cuatro alertas, así que una
   compra con tarjeta, un retiro o una comisión en Lulo todavía van al modelo.
 - **Falta comprobar el filtro de autorizaciones con correos reales.** Una
@@ -171,6 +173,13 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-04 — **La lista de notificaciones ya no lee toda la historia para
+  mostrar una página.** El índice no tenía orden, así que «lo más reciente
+  primero» salía de leerlo todo y ordenar en memoria: veinte correos costaban
+  lo mismo que dos mil. Ahora el índice está ordenado por fecha de llegada,
+  DynamoDB entrega la ventana y una fila de más responde si hay otra página.
+  Los totales por estado, que sí exigen mirar todo, quedan detrás de
+  `with_counts=true`. Falta borrar a mano el índice viejo tras desplegar.
 - 2026-09-03 — **Las alarmas de producción ya le llegan a alguien.** El tema
   estaba sin un solo suscriptor y CloudFormation lo daba por creado, así que
   redesplegar no lo arreglaba. Suscrito y confirmado desde el buzón; comprobado
@@ -198,13 +207,3 @@ AWS (ver Trabas).
   desarrollo quedaron en `pending_fallback` sin registrar nada; reenviarlos otra
   vez ya entra. 23 pruebas nuevas, incluidas las del camino automático para que
   no se mueva.
-- 2026-09-03 — **La app se adapta a cualquier teléfono.** El Resumen se iba de
-  lado en todos ellos (una tarjeta pedía 440 px), Reportes y Comercios no se
-  alcanzaban por debajo de 1024 px, y el eje de las gráficas se leía «1 5 6 1 1»
-  porque los días se recortaban a un carácter. Barra inferior de tres secciones
-  más **Más**, y una prueba que impide que una sección vuelva a quedar sin
-  puerta. Verificado en siete anchos. Y una pasada estética encima: las listas
-  ya no parten el renglón —una línea que se corta al final en vez de crecer
-  hacia abajo—, la fecha de un movimiento no repite el año que ya dice el
-  encabezado del mes, y una cuenta muestra su nombre completo en dos líneas en
-  lugar de «Ahorros Bancolo…».

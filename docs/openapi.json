@@ -2128,11 +2128,22 @@
       "NotificationListResponse": {
         "properties": {
           "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Counts",
-            "type": "object"
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counts"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
           },
           "limit": {
             "title": "Limit",
@@ -2150,14 +2161,20 @@
             "type": "integer"
           },
           "total": {
-            "title": "Total",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
           }
         },
         "required": [
           "notifications",
-          "total",
-          "counts",
+          "has_more",
           "limit",
           "offset"
         ],
@@ -6286,7 +6303,7 @@
     },
     "/ingestion/notifications": {
       "get": {
-        "description": "The caller's bank mail, newest first.\n\nAn empty list is an ordinary answer: it means nothing has been forwarded\nyet, or the forwarding rule is not doing what its owner thinks it is.",
+        "description": "The caller's bank mail, newest first.\n\nAn empty list is an ordinary answer: it means nothing has been forwarded\nyet, or the forwarding rule is not doing what its owner thinks it is.\n\n`with_counts` adds the per-status summary and the total. It is off by\ndefault because it is the one part of this answer that reads everything\nthe account ever received, while the page itself reads a page — a screen\nthat polls asks for it once, not on every refresh.",
         "operationId": "list_notifications_ingestion_notifications_get",
         "parameters": [
           {
@@ -6326,6 +6343,16 @@
               "minimum": 0,
               "title": "Offset",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "with_counts",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "With Counts",
+              "type": "boolean"
             }
           }
         ],

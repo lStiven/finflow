@@ -1,6 +1,7 @@
 """The read surface a client uses to answer "did my email arrive?"."""
 
-from collections.abc import Iterator, Sequence
+from collections import Counter
+from collections.abc import Iterator, Mapping, Sequence
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -9,7 +10,11 @@ import pytest
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
 )
-from personal_finance.contexts.ingestion.application.ports import NotificationSummary
+from personal_finance.contexts.ingestion.application.ports import (
+    NotificationPage,
+    NotificationPageRequest,
+    NotificationSummary,
+)
 from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
 )
@@ -32,14 +37,43 @@ PATH = "/ingestion/notifications"
 
 
 class InMemoryReader:
+    """Stands in for the index: newest first, filtered, windowed."""
+
     def __init__(self, *summaries: NotificationSummary) -> None:
         self._summaries = summaries
         self.asked_for: list[UserId] = []
+        self.counted: list[UserId] = []
+
+    def page_by_user(self, request: NotificationPageRequest) -> NotificationPage:
+        self.asked_for.append(request.user_id)
+        found = [
+            summary
+            for summary in self._newest_first()
+            if request.status is None or summary.status is request.status
+        ]
+        wanted = request.offset + request.limit
+
+        return NotificationPage(
+            notifications=found[request.offset : wanted],
+            has_more=len(found) > wanted,
+        )
+
+    def count_by_status(self, user_id: UserId) -> Mapping[ProcessingStatus, int]:
+        self.counted.append(user_id)
+
+        return Counter(summary.status for summary in self._summaries)
 
     def list_by_user(self, user_id: UserId) -> Sequence[NotificationSummary]:
         self.asked_for.append(user_id)
 
         return self._summaries
+
+    def _newest_first(self) -> list[NotificationSummary]:
+        return sorted(
+            self._summaries,
+            key=lambda summary: summary.received_at.as_epoch_seconds(),
+            reverse=True,
+        )
 
 
 def _summary(
@@ -105,7 +139,7 @@ def test_it_lists_what_arrived_newest_first(client: TestClient) -> None:
         "<ignored@bank.com>",
         "<deferred@bank.com>",
     ]
-    assert body["total"] == 3
+    assert body["has_more"] is False
 
 
 def test_it_never_returns_the_email_body(client: TestClient) -> None:
@@ -130,7 +164,10 @@ def test_an_ignored_email_is_visible_so_its_sender_can_be_approved(
 def test_the_counts_are_keyed_by_status_and_survive_a_filter(
     client: TestClient,
 ) -> None:
-    body = client.get(PATH, params={"status": "ignored"}).json()
+    body = client.get(
+        PATH,
+        params={"status": "ignored", "with_counts": "true"},
+    ).json()
 
     assert body["total"] == 1
     assert body["counts"] == {
@@ -138,6 +175,27 @@ def test_the_counts_are_keyed_by_status_and_survive_a_filter(
         "ignored": 1,
         "pending_fallback": 1,
     }
+
+
+def test_a_list_does_not_count_the_whole_history_unless_asked(
+    client: TestClient,
+    reader: InMemoryReader,
+) -> None:
+    """The counts are the only part of this answer that reads everything the
+    account ever received, and this list polls.
+    """
+    body = client.get(PATH).json()
+
+    assert reader.counted == []
+    assert body["counts"] is None
+    assert body["total"] is None
+
+
+def test_a_further_page_is_announced_without_a_total(client: TestClient) -> None:
+    body = client.get(PATH, params={"limit": 1}).json()
+
+    assert body["has_more"] is True
+    assert len(body["notifications"]) == 1
 
 
 def test_a_deferred_notification_carries_its_reason(client: TestClient) -> None:
@@ -178,6 +236,7 @@ def test_paging_is_echoed_back(client: TestClient) -> None:
 
     assert body["limit"] == 1
     assert body["offset"] == 1
+    assert body["has_more"] is True
     assert [item["message_id"] for item in body["notifications"]] == [
         "<ignored@bank.com>",
     ]
