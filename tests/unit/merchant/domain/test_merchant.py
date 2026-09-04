@@ -9,7 +9,7 @@ from personal_finance.contexts.merchant.domain.exceptions import (
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
     AliasOrigin,
-    MerchantCategory,
+    CategoryKey,
     MerchantRootKey,
     MerchantStatus,
 )
@@ -43,7 +43,7 @@ def test_a_seeded_merchant_is_named_after_what_the_bank_wrote() -> None:
     )
 
     assert merchant.display_name == "Tiendas Ara"
-    assert merchant.category is MerchantCategory.UNCATEGORIZED
+    assert merchant.category == CategoryKey.uncategorized()
     assert merchant.needs_review
     assert [type(event).__name__ for event in merchant.pull_events()] == [
         "MerchantIdentified",

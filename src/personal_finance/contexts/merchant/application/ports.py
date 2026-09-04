@@ -5,11 +5,12 @@ import dataclasses
 from typing import Protocol
 import uuid
 
+from personal_finance.contexts.merchant.domain.categories import Category
 from personal_finance.contexts.merchant.domain.entities import Merchant
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
+    CategoryKey,
     CounterpartyKind,
-    MerchantCategory,
     MerchantId,
     MerchantRootKey,
 )
@@ -62,6 +63,72 @@ class MerchantRepository(Protocol):
         ...
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class CategoryChoice:
+    """One category a given user may file a merchant under.
+
+    Both vocabularies arrive in this shape — the shipped ones and the user's
+    own — so everything downstream of the catalogue, the endpoint and the
+    prompt included, works from one list and cannot treat the halves
+    differently.
+    """
+
+    key: CategoryKey
+    label: str
+    # False for the ones this user wrote. A screen tells them apart to say
+    # which are theirs; nothing else in the system cares.
+    shipped: bool
+
+
+class CategoryRepository(Protocol):
+    """Persistence port for the categories one user wrote for themselves.
+
+    Per-user like everything else in this context. The shipped vocabulary is
+    not stored at all — it is code, the same on every deployment — so an
+    implementation only ever holds what somebody added.
+    """
+
+    def list_by_user(self, user_id: UserId) -> Sequence[Category]:
+        """Every category this user created, in no particular order."""
+        ...
+
+    def find(self, *, user_id: UserId, key: CategoryKey) -> Category | None:
+        """One of this user's own categories, or None.
+
+        None for a key the app ships too: those are not stored, and asking
+        for one here is asking whether this person owns it.
+        """
+        ...
+
+    def add(self, category: Category) -> None:
+        """Store a category whose name must not already be taken.
+
+        Raises `DuplicateCategoryError` when it is. The check belongs here
+        rather than in a use case that read the list first: two taps on the
+        same button are two requests, and a read-then-write would let both
+        through and leave this person with two categories reading the same.
+        """
+        ...
+
+    def rename(self, category: Category, *, previous_label: str) -> None:
+        """Save a category whose name changed, holding the same rule.
+
+        Raises `DuplicateCategoryError` when the new name is already one of
+        this user's. Nothing filed under the category moves — the key did not
+        change, which is the entire reason it is not derived from the name.
+        """
+        ...
+
+    def delete(self, category: Category) -> None:
+        """Remove a category and free the name it was holding.
+
+        The caller is responsible for what pointed at it: a merchant left
+        naming a category that no longer exists reads as a bucket its owner
+        never made.
+        """
+        ...
+
+
 class ProcessedEventStore(Protocol):
     """Remembers which integration events have already been applied.
 
@@ -102,7 +169,7 @@ class MerchantAdvice:
     """
 
     parent: MerchantId | None
-    category: MerchantCategory
+    category: CategoryKey
 
 
 class MerchantAdvisor(Protocol):
@@ -126,13 +193,14 @@ class MerchantAdvisor(Protocol):
         counterparty: str,
         kind: CounterpartyKind,
         candidates: Sequence[MerchantCandidate],
+        categories: Sequence[CategoryChoice],
     ) -> MerchantAdvice | None:
         """Return an opinion, or None when there is nothing useful to say.
 
         An implementation must verify that any `parent` it returns is one of
-        the candidates it was given: the answer comes from outside the system
-        and naming a merchant that was never offered is not a grouping, it is
-        a fabrication.
+        the candidates, and any `category` one of the categories, it was
+        given: the answer comes from outside the system, and naming a merchant
+        that was never offered is not a grouping, it is a fabrication.
 
         It must not raise when the model is unreachable — None is the answer
         for that too. By the time this is consulted the sighting has already

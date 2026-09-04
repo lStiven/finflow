@@ -2,9 +2,9 @@
 
 Two guarantees live here rather than in the prompt, because a prompt is a
 request and this is a rule: the parent must be one of the candidates that were
-offered, and the category must be a member of the enum. A model that answers
-with anything else is answering about a merchant that does not exist, and its
-whole opinion is dropped.
+offered, and the category one of the categories that were. A model that
+answers with anything else is answering about a merchant, or a bucket, that
+does not exist, and that half of its opinion is dropped.
 """
 
 from __future__ import annotations
@@ -15,12 +15,13 @@ import logging
 from pydantic import BaseModel, Field
 
 from personal_finance.contexts.merchant.application.ports import (
+    CategoryChoice,
     MerchantAdvice,
     MerchantCandidate,
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
+    CategoryKey,
     CounterpartyKind,
-    MerchantCategory,
     MerchantId,
 )
 from personal_finance.contexts.merchant.infrastructure.llm.prompt import (
@@ -50,7 +51,7 @@ class MerchantAdviceSchema(BaseModel):
     reason: str = Field(default="", max_length=400)
     # Empty means "none of them", which is the common and entirely good answer.
     parent_merchant_id: str = Field(default="", max_length=64)
-    category: str = Field(default="", max_length=32)
+    category: str = Field(default="", max_length=64)
 
 
 class GeminiMerchantAdvisor:
@@ -65,10 +66,11 @@ class GeminiMerchantAdvisor:
         counterparty: str,
         kind: CounterpartyKind,
         candidates: Sequence[MerchantCandidate],
+        categories: Sequence[CategoryChoice],
     ) -> MerchantAdvice | None:
         try:
             answer = self._model.complete(
-                system_instruction=build_system_instruction(),
+                system_instruction=build_system_instruction(categories),
                 prompt=build_prompt(
                     counterparty=counterparty,
                     kind=kind,
@@ -97,7 +99,7 @@ class GeminiMerchantAdvisor:
 
         return MerchantAdvice(
             parent=_verified_parent(answer.parent_merchant_id, candidates),
-            category=_verified_category(answer.category),
+            category=_verified_category(answer.category, categories),
         )
 
 
@@ -124,13 +126,24 @@ def _verified_parent(
     return None
 
 
-def _verified_category(raw: str) -> MerchantCategory:
-    try:
-        return MerchantCategory(raw.strip())
-    except ValueError:
-        # An unknown category is the same as no opinion: the field stays
-        # empty and the user picks.
-        return MerchantCategory.UNCATEGORIZED
+def _verified_category(
+    raw: str,
+    categories: Sequence[CategoryChoice],
+) -> CategoryKey:
+    """Accept a category only if it is one we offered.
+
+    An unknown one is the same as no opinion: the field stays empty and the
+    user picks. Checked against what was actually sent rather than against the
+    shipped enum, so a category this user wrote is a valid answer and one
+    another user wrote is not.
+    """
+    value = raw.strip()
+
+    for choice in categories:
+        if choice.key.value == value:
+            return choice.key
+
+    return CategoryKey.uncategorized()
 
 
 def build_merchant_advisor() -> GeminiMerchantAdvisor | None:

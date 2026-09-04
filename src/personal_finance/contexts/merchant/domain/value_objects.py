@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import re
 from typing import Self
 import uuid
 
@@ -39,6 +40,71 @@ class MerchantCategory(enum.Enum):
     TRANSFERS = "transfers"
     INCOME = "income"
     OTHER = "other"
+
+
+# What a category a user wrote for themselves is keyed by. The prefix is the
+# whole point: a merchant stores only the key, so a default shipped later
+# under a slug somebody had already chosen would silently relabel their
+# spending. Two vocabularies, one field, and no way for them to collide.
+CUSTOM_CATEGORY_PREFIX = "custom:"
+
+_CATEGORY_KEY = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)*")
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class CategoryKey(ValueObject):
+    """The category a merchant is filed under, shipped or homemade.
+
+    Shape is all that is checked here. Which keys a given user may actually
+    choose from is the application layer's answer — it depends on what that
+    user has created — and a key read back from storage is shown as it stands
+    rather than rejected, so one unrecognised value cannot take a whole
+    merchant list down with it.
+    """
+
+    value: str
+
+    def __post_init__(self) -> None:
+        body = self.value.removeprefix(CUSTOM_CATEGORY_PREFIX)
+
+        if not _CATEGORY_KEY.fullmatch(body):
+            raise ValueError(f"Invalid category key: {self.value!r}")
+
+    @classmethod
+    def default(cls, category: MerchantCategory) -> Self:
+        return cls(value=category.value)
+
+    @classmethod
+    def new_custom(cls) -> Self:
+        """A fresh identity for a category somebody is about to name.
+
+        Random rather than derived from that name. A name is a thing people
+        get wrong and fix — the whole reason renaming exists — and a key built
+        out of one would make every correction a rewrite of every merchant
+        filed under it, which is a multi-write that can fail halfway and leave
+        somebody's spending split across a bucket that no longer exists.
+        """
+        return cls(value=f"{CUSTOM_CATEGORY_PREFIX}{uuid.uuid4().hex}")
+
+    @classmethod
+    def custom(cls, key: str) -> Self:
+        """An existing custom key, read back from storage or from a request."""
+        return cls(value=f"{CUSTOM_CATEGORY_PREFIX}{key}")
+
+    @classmethod
+    def uncategorized(cls) -> Self:
+        return cls(value=MerchantCategory.UNCATEGORIZED.value)
+
+    @property
+    def is_custom(self) -> bool:
+        return self.value.startswith(CUSTOM_CATEGORY_PREFIX)
+
+    @property
+    def is_uncategorized(self) -> bool:
+        return self.value == MerchantCategory.UNCATEGORIZED.value
+
+    def to_dict(self) -> JsonValue:
+        return self.value
 
 
 class MerchantStatus(enum.Enum):

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import type { Summary, Trend } from "@/api/queries";
 import { bandPalette, REMAINDER_FILL } from "@/components/charts/palette";
+import { labelFrom } from "@/merchants/categories";
 import {
   bandsOf,
   bucketsOf,
@@ -139,6 +140,26 @@ describe("bandsOf", () => {
     );
 
     expect(bands[0]?.tone).toBe(hues.get("groceries"));
+  });
+
+  it("names each band the way the rest of the screen names a category", () => {
+    /*
+     * A category band's label arrives as its own value — `groceries`, or
+     * `custom:mascotas` for one this person wrote — and neither is a word
+     * anybody reads. The legend and the ranked list beside it must agree.
+     */
+    const bands = bandsOf(
+      trend({
+        series: [
+          band("groceries", "groceries", ["1"]),
+          band("custom:mascotas", "custom:mascotas", ["1"]),
+        ],
+      }),
+      bandPalette(["groceries", "custom:mascotas"]),
+      (value) => labelFrom({ "custom:mascotas": "Mascotas" }, value),
+    );
+
+    expect(bands.map((entry) => entry.label)).toEqual(["Mercado", "Mascotas"]);
   });
 
   it("holds one point per bucket, including the empty ones", () => {

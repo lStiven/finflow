@@ -5,15 +5,28 @@ import functools
 
 from personal_finance.contexts.financial.application.ports import (
     MerchantAttribution,
+    UnknownMerchantCategoryError,
+)
+from personal_finance.contexts.merchant.application.categories import CategoryCatalog
+from personal_finance.contexts.merchant.application.commands import (
+    ClassifyCounterpartyCommand,
+)
+from personal_finance.contexts.merchant.application.handlers import (
+    ClassifyCounterpartyUseCase,
 )
 from personal_finance.contexts.merchant.application.queries import (
     AttributeCounterpartiesUseCase,
 )
-from personal_finance.contexts.merchant.domain.value_objects import MerchantCategory
+from personal_finance.contexts.merchant.domain.exceptions import UnknownCategoryError
+from personal_finance.contexts.merchant.domain.value_objects import CategoryKey
+from personal_finance.contexts.merchant.infrastructure.events import (
+    build_merchant_event_publisher,
+)
 from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb import (
+    DynamoDBCategoryRepository,
     DynamoDBMerchantRepository,
 )
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
 from personal_finance.shared.infrastructure.config.settings import get_merchant_settings
 
@@ -27,13 +40,21 @@ class MerchantContextDirectory:
     touches a use case or a test.
 
     Translating here is the point: merchant's `MerchantId` and its
-    `MerchantCategory` stop at this line, and plain strings continue outwards.
+    `CategoryKey` stop at this line, and plain strings continue outwards.
     Financial groups movements by a category it never interprets, which is
     exactly the amount it should know about somebody else's vocabulary.
     """
 
-    def __init__(self, *, use_case: AttributeCounterpartiesUseCase) -> None:
+    def __init__(
+        self,
+        *,
+        use_case: AttributeCounterpartiesUseCase,
+        catalog: CategoryCatalog,
+        classify: ClassifyCounterpartyUseCase,
+    ) -> None:
         self._use_case = use_case
+        self._catalog = catalog
+        self._classify = classify
 
     def attribute(
         self,
@@ -56,8 +77,49 @@ class MerchantContextDirectory:
             for counterparty, attribution in attributed.items()
         }
 
-    def categories(self) -> frozenset[str]:
-        return frozenset(category.value for category in MerchantCategory)
+    def categories(self, *, user_id: UserId) -> frozenset[str]:
+        return frozenset(choice.key.value for choice in self._catalog.list(user_id))
+
+    def classify(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+        category: str,
+        occurred_at: PosixTime,
+    ) -> MerchantAttribution | None:
+        try:
+            key = CategoryKey(value=category)
+        except ValueError:
+            # Shape alone is wrong, so no vocabulary could contain it. Same
+            # answer as a category nobody has.
+            raise UnknownMerchantCategoryError(f"No category {category!r}") from None
+
+        try:
+            merchant = self._classify.execute(
+                ClassifyCounterpartyCommand(
+                    user_id=user_id,
+                    counterparty=counterparty,
+                    category=key,
+                    occurred_at=occurred_at,
+                ),
+            )
+        except UnknownCategoryError as error:
+            # Translated at the boundary: Merchant's exceptions stop here, the
+            # same way its ids and its enums do.
+            raise UnknownMerchantCategoryError(str(error)) from error
+        except ValueError:
+            # Text no fingerprint can be built from — punctuation, a bare
+            # symbol. There is no merchant to make of it, and the movement
+            # behind this call is still a perfectly good movement.
+            return None
+
+        return MerchantAttribution(
+            merchant_id=str(merchant.id.value),
+            display_name=merchant.display_name,
+            category=merchant.category.value,
+            needs_review=merchant.needs_review,
+        )
 
 
 @functools.lru_cache(maxsize=1)
@@ -69,11 +131,24 @@ def build_merchant_directory() -> MerchantContextDirectory:
     Financial's presentation layer, where a change to merchant's storage would
     reach an endpoint.
     """
+    table_name = get_merchant_settings().merchants_table
+    repository = DynamoDBMerchantRepository(
+        client=get_dynamodb_client(),
+        table_name=table_name,
+    )
+    catalog = CategoryCatalog(
+        repository=DynamoDBCategoryRepository(
+            client=get_dynamodb_client(),
+            table_name=table_name,
+        ),
+    )
+
     return MerchantContextDirectory(
-        use_case=AttributeCounterpartiesUseCase(
-            repository=DynamoDBMerchantRepository(
-                client=get_dynamodb_client(),
-                table_name=get_merchant_settings().merchants_table,
-            ),
+        use_case=AttributeCounterpartiesUseCase(repository=repository),
+        catalog=catalog,
+        classify=ClassifyCounterpartyUseCase(
+            repository=repository,
+            event_publisher=build_merchant_event_publisher(),
+            categories=catalog,
         ),
     )

@@ -5,16 +5,26 @@ from collections.abc import Mapping, Sequence
 from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
     MerchantContextDirectory,
 )
+from personal_finance.contexts.merchant.application.categories import CategoryCatalog
+from personal_finance.contexts.merchant.application.handlers import (
+    ClassifyCounterpartyUseCase,
+)
 from personal_finance.contexts.merchant.application.queries import (
     AttributeCounterpartiesUseCase,
 )
+from personal_finance.contexts.merchant.domain.categories import Category
 from personal_finance.contexts.merchant.domain.entities import Merchant
+from personal_finance.contexts.merchant.domain.exceptions import (
+    DuplicateCategoryError,
+)
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
+    CategoryKey,
     MerchantCategory,
     MerchantId,
     MerchantRootKey,
 )
+from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
@@ -69,11 +79,60 @@ class InMemoryMerchantRepository:
         self.merchants.pop(merchant_id, None)
 
 
+class InMemoryCategoryRepository:
+    """Only what this adapter asks of it: nothing here creates a category."""
+
+    def __init__(self) -> None:
+        self.categories: dict[CategoryKey, Category] = {}
+
+    def list_by_user(self, user_id: UserId) -> Sequence[Category]:
+        return [
+            category
+            for category in self.categories.values()
+            if category.user_id == user_id
+        ]
+
+    def find(self, *, user_id: UserId, key: CategoryKey) -> Category | None:
+        category = self.categories.get(key)
+
+        return category if category and category.user_id == user_id else None
+
+    def add(self, category: Category) -> None:
+        if category.id in self.categories:
+            raise DuplicateCategoryError(f"{category.label!r} already exists")
+
+        self.categories[category.id] = category
+
+    def rename(self, category: Category, *, previous_label: str) -> None:
+        del previous_label
+        self.categories[category.id] = category
+
+    def delete(self, category: Category) -> None:
+        self.categories.pop(category.id, None)
+
+
+class NullEventPublisher:
+    def publish(self, events: Sequence[Event]) -> None:
+        del events
+
+
 def _directory(
     repository: InMemoryMerchantRepository,
+    *,
+    categories: InMemoryCategoryRepository | None = None,
 ) -> MerchantContextDirectory:
+    catalog = CategoryCatalog(
+        repository=categories or InMemoryCategoryRepository(),
+    )
+
     return MerchantContextDirectory(
         use_case=AttributeCounterpartiesUseCase(repository=repository),
+        catalog=catalog,
+        classify=ClassifyCounterpartyUseCase(
+            repository=repository,
+            event_publisher=NullEventPublisher(),
+            categories=catalog,
+        ),
     )
 
 
@@ -88,7 +147,7 @@ def test_merchants_vocabulary_stops_at_the_adapter() -> None:
         raw_text="TIENDAS ARA 123",
         seen_at=NOW,
         display_name="Ara",
-        category=MerchantCategory.GROCERIES,
+        category=CategoryKey.default(MerchantCategory.GROCERIES),
     )
     repository.save(merchant)
 

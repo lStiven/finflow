@@ -5,8 +5,8 @@ import uuid
 
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
+    CategoryKey,
     CounterpartyKind,
-    MerchantCategory,
     MerchantId,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
@@ -36,7 +36,7 @@ class EditMerchantCommand:
     user_id: UserId
     merchant_id: MerchantId
     display_name: str | None = None
-    category: MerchantCategory | None = None
+    category: CategoryKey | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -63,7 +63,7 @@ class SplitAliasCommand:
     merchant_id: MerchantId
     fingerprint: AliasFingerprint
     display_name: str | None = None
-    category: MerchantCategory | None = None
+    category: CategoryKey | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -73,3 +73,18 @@ class MergeMerchantsCommand:
     user_id: UserId
     merchant_id: MerchantId
     absorbed_merchant_id: MerchantId
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ClassifyCounterpartyCommand:
+    """A user saying, while writing a movement down, what this name is.
+
+    The one write another context is allowed to ask for. Everything else here
+    starts on a merchant screen with a merchant already in hand; this starts
+    with text somebody typed into a form that has never been seen before.
+    """
+
+    user_id: UserId
+    counterparty: str
+    category: CategoryKey
+    occurred_at: PosixTime

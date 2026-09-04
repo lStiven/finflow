@@ -187,6 +187,7 @@ class FakeDirectory:
     def __init__(self, known: Mapping[str, MerchantAttribution]) -> None:
         self._known = known
         self.calls = 0
+        self.classified: list[tuple[str, str, PosixTime]] = []
 
     def attribute(
         self,
@@ -203,8 +204,41 @@ class FakeDirectory:
             if counterparty in self._known
         }
 
-    def categories(self) -> frozenset[str]:
-        return frozenset({"groceries", "transport", "subscriptions", "uncategorized"})
+    def categories(self, *, user_id: UserId) -> frozenset[str]:
+        del user_id
+
+        return frozenset(
+            {
+                "groceries",
+                "transport",
+                "subscriptions",
+                "uncategorized",
+                "custom:gatos",
+            },
+        )
+
+    def classify(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+        category: str,
+        occurred_at: PosixTime,
+    ) -> MerchantAttribution | None:
+        del user_id
+        self.classified.append((counterparty, category, occurred_at))
+
+        if not counterparty.strip(" -"):
+            # Text no fingerprint can be built from: there is no merchant to
+            # make of it, and the movement is a movement either way.
+            return None
+
+        return MerchantAttribution(
+            merchant_id="aaaaaaaa-0000-0000-0000-00000000000c",
+            display_name=counterparty.title(),
+            category=category,
+            needs_review=False,
+        )
 
 
 ARA = MerchantAttribution(

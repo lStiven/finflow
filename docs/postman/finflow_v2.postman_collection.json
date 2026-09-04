@@ -673,6 +673,50 @@
               }
             ],
             "url": {
+              "raw": "{{base_url}}/merchants/categories?with_usage=false",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                "categories"
+              ],
+              "query": [
+                {
+                  "key": "with_usage",
+                  "value": "false",
+                  "description": "true adds how many merchants sit in each category — the number a \"this will move N comercios\" confirmation needs. Costs a read of the caller's merchants, so every dropdown leaves it off"
+                }
+              ]
+            },
+            "description": "Everything the caller may file a merchant under, in dropdown order: the categories the app ships, then the ones they wrote for themselves. Authenticated because half of the answer is theirs, which is also why the catalog above cannot publish it.\n\ncustom says which half a value came from. label is English for the shipped ones (value is the stable part; a client showing another language builds its own words from it) and the user's own text for theirs.\n\nusage is null unless with_usage asked for it."
+          },
+          "response": []
+        },
+        {
+          "name": "Create category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Mascotas\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
               "raw": "{{base_url}}/merchants/categories",
               "host": [
                 "{{base_url}}"
@@ -682,7 +726,84 @@
                 "categories"
               ]
             },
-            "description": "The fixed category vocabulary, for a dropdown that cannot drift from it."
+            "description": "A category of one's own, for spending the shipped list does not describe.\n\nThe name is the whole request: the key its merchants are stored under is derived from it (`Mascotas` -> `custom:mascotas`) and is neither chosen by the client nor changeable later. At most 24 characters — it is read in a dropdown, in a chip beside a movement and in a chart legend on a phone.\n\n409 when that name is already taken, accents and case folded away."
+          },
+          "response": []
+        },
+        {
+          "name": "Rename category",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Mascotas\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/merchants/categories/:categoryKey",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                "categories",
+                ":categoryKey"
+              ],
+              "variable": [
+                {
+                  "key": "categoryKey",
+                  "value": "",
+                  "description": "e.g. custom:8f3a…"
+                }
+              ]
+            },
+            "description": "Fix the name of a category of one's own — a typo, a better word.\n\nNothing filed under it moves: the value merchants are stored under is opaque and permanent, and was never the name. The new name shows up everywhere at once, past movements included, because a movement's category is its merchant's and that is joined when an answer is read.\n\n409 when that name is already one of theirs, or when the key names a category the app ships — those are code, the same for everybody."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete category",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/merchants/categories/:categoryKey",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "merchants",
+                "categories",
+                ":categoryKey"
+              ],
+              "variable": [
+                {
+                  "key": "categoryKey",
+                  "value": "",
+                  "description": "e.g. custom:8f3a…"
+                }
+              ]
+            },
+            "description": "Remove a category of one's own, and say what moved.\n\nEvery merchant filed under it goes back to `uncategorized`, and their movements follow. Nothing else is deleted, and those merchants keep whatever review status they had: removing a bucket is not reviewing what was in it. The response says how many moved.\n\n409 for a category the app ships; 422 for one that is not this caller's."
           },
           "response": []
         },
@@ -713,7 +834,7 @@
                 {
                   "key": "category",
                   "value": "",
-                  "description": "One of the Categories values, e.g. groceries",
+                  "description": "One of the Categories values, e.g. groceries or custom:mascotas. One this caller does not have is a 422, not an empty page.",
                   "disabled": true
                 },
                 {
@@ -810,7 +931,7 @@
                 }
               ]
             },
-            "description": "Rename, recategorize, or both — at least one of the two fields is required. Either counts as reviewing it, so it leaves the review queue."
+            "description": "Rename, recategorize, or both — at least one of the two fields is required. Either counts as reviewing it, so it leaves the review queue. category is any value GET /merchants/categories lists for this caller — one the app ships, or one they wrote."
           },
           "response": []
         },
@@ -1780,7 +1901,7 @@
                 {
                   "key": "category",
                   "value": "",
-                  "description": "Merchant category, from GET /merchants/categories",
+                  "description": "Merchant category: any value GET /merchants/categories lists for this caller, e.g. groceries or custom:mascotas",
                   "disabled": true
                 },
                 {
@@ -1928,7 +2049,7 @@
                 {
                   "key": "category",
                   "value": "",
-                  "description": "Merchant category, from GET /merchants/categories",
+                  "description": "Merchant category: any value GET /merchants/categories lists for this caller, e.g. groceries or custom:mascotas",
                   "disabled": true
                 },
                 {
@@ -2041,7 +2162,7 @@
                 {
                   "key": "category",
                   "value": "",
-                  "description": "Merchant category, from GET /merchants/categories",
+                  "description": "Merchant category: any value GET /merchants/categories lists for this caller, e.g. groceries or custom:mascotas",
                   "disabled": true
                 },
                 {
@@ -2104,7 +2225,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"direction\": \"outgoing\",\n  \"amount\": \"89900\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1787500000,\n  \"counterparty\": \"NETFLIX\",\n  \"account_id\": null,\n  \"bank\": \"\",\n  \"note\": \"cobro automático\"\n}",
+              "raw": "{\n  \"direction\": \"outgoing\",\n  \"amount\": \"89900\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1787500000,\n  \"counterparty\": \"NETFLIX\",\n  \"category\": \"subscriptions\",\n  \"account_id\": null,\n  \"bank\": \"\",\n  \"note\": \"cobro automático\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2121,7 +2242,7 @@
                 "transactions"
               ]
             },
-            "description": "Money that moved without an alert to announce it: an automatic payment the bank stays quiet about, cash, a transfer that produced no email.\n\ndirection: outgoing | incoming. amount is a string, never a JSON number — a float loses cents. occurred_at is epoch seconds. account_id is optional: somebody watching only what comes in and goes out has no accounts."
+            "description": "Money that moved without an alert to announce it: an automatic payment the bank stays quiet about, cash, a transfer that produced no email.\n\ndirection: outgoing | incoming. amount is a string, never a JSON number — a float loses cents. occurred_at is epoch seconds. account_id is optional: somebody watching only what comes in and goes out has no accounts.\n\ncategory is optional and is about the counterparty, not this one movement: sending it files that name under that category for good, which is what keeps a hand-written movement out of the \"no merchant\" bucket every breakdown by category leaves out. It applies to past movements with the same counterparty too, because the attribution is joined when an answer is read. Any value GET /merchants/categories lists for this caller; anything else is a 422 and nothing is written."
           },
           "response": []
         },

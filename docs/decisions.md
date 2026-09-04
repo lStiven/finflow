@@ -801,7 +801,137 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   answer an empty page, and on a money screen zero is a credible number — so
   Financial asks the directory for the vocabulary and returns 422. An unknown
   merchant id stays an empty page on purpose: saying it does not exist would
-  tell a stranger whether it is somebody else's.
+  tell a stranger whether it is somebody else's. The vocabulary is asked for
+  *per user* since 2026-09-04: half of it is whatever that person wrote, so
+  what names a real bucket for one names nothing for another.
+
+### Categories a user writes (2026-09-04)
+
+- **Two vocabularies in one field, told apart by a `custom:` prefix.**
+  The categories the app ships stay code — `MerchantCategory`, the same on
+  every deployment, in no table, nobody's to edit or delete — because a
+  dropdown that starts empty classifies nothing on a first run. What a person
+  adds is a row in their own partition of the merchants table
+  (`CATEGORY#<key>`). A merchant stores only the key, so the two namespaces
+  must never be able to collide: a default shipped later under a value
+  somebody had already taken would silently relabel their spending, and no
+  check at creation time can prevent a collision with a category that does
+  not exist yet. The prefix costs an uglier value in a query string and buys
+  that away permanently.
+  Rejected: a bare slug plus a "does it clash with a shipped one" check —
+  it only defends against today's list.
+
+- **The key is opaque and permanent; the name is a label over it.** Revised
+  2026-09-04, having first been the other way round. Deriving the key from
+  the name made renaming impossible — and renaming is not a luxury, it is
+  what a person does thirty seconds after mistyping "Mascotss". Rewriting
+  every merchant pointing at an old key is a multi-write that can fail
+  halfway and leave somebody's spending split between a bucket that exists
+  and one that does not. With a random key, a correction is one write, no
+  merchant moves, and it shows up on every past movement at once — the
+  attribution is joined on read, so nothing is re-processed. The cost is that
+  `?category=custom:8f3a…` is unreadable to a human, which is a debugging
+  nicety traded for a correction that cannot corrupt anything.
+
+- **Uniqueness is on the *name*, held by a claim item, not by the record's
+  own key.** `CATNAME#<slug>` points at the category that owns that name, and
+  the conditional write on it is the rule — two taps on the same button are
+  two requests, and reading the list first would let both through and leave
+  somebody with two categories reading alike. The claim moves when the name
+  does, which is what keeps the rule identical before and after a rename.
+  A claim can outlive what it points at (a crash between moving one and
+  dropping the other), so it is verified when it blocks somebody and taken
+  over if stale — the same "pointers are verified on read, never swept"
+  arrangement the merchant aliases already use, and for the same reason:
+  cleanup would have to run in the right order or it would drop a claim that
+  had just been rewritten.
+
+- **Deleting a category moves what was in it back to `uncategorized`, and
+  moves it first.** A merchant naming a category that no longer exists reads
+  as a bucket its owner never made, and every screen that groups by category
+  would draw it under a raw key. Moving before deleting closes that window on
+  the safe side: a crash in between leaves an empty category, which is a
+  category the user can delete again. Their review status is deliberately
+  untouched — `Merchant.uncategorize` exists next to `recategorize` for
+  exactly this — because removing a bucket is not reviewing what was in it,
+  and marking them confirmed would empty somebody's review queue on their
+  behalf. Nothing about the movements themselves changes; their category was
+  never stored on them.
+  Rejected: refusing to delete a category still in use, and offering to move
+  its merchants somewhere else first. The first makes the app argue with
+  somebody about their own vocabulary; the second is a second decision at the
+  moment they have already made the one they came for, and "Sin categoría" is
+  where an unfiled merchant belongs anyway.
+
+- **How many merchants sit in a category is asked for, not always answered.**
+  `with_usage=true`, because counting means reading the caller's merchants and
+  the six screens that only want names must not pay for it. The number exists
+  for one sentence — "3 comercios vuelven a «Sin categoría»" — which is what
+  makes deleting a category a decision somebody can actually make.
+
+- **A name is at most 24 characters.** It is read in a dropdown, in a chip
+  beside a movement and in a chart legend on a phone. A long one makes all
+  three unreadable — by pushing the useful ones off the edge, not by being
+  wrong.
+
+- **Managing categories lives on the Comercios screen, not on one of its
+  own.** A category means nothing except as the bucket a comercio sits in, and
+  that screen already filters by them. It is a collapsed panel under the
+  filters — near enough to find, far enough that the merchant list stays the
+  subject — and it lists only the user's own: the sixteen shipped ones are
+  unactionable, and putting them above the two that are actionable would bury
+  the point of the panel.
+
+- **The frontend refuses a second "Mercado" that the server would accept.**
+  Shipped labels are English on the wire and Spanish on screen, so a category
+  named "Mercado" keys as `custom:mercado`, collides with nothing, and lands
+  in the dropdown directly under the shipped `groceries` — which the app also
+  draws as "Mercado". Only the client knows the Spanish, so only the client
+  can refuse it. The server keeps owning real uniqueness; this is a second,
+  weaker rule about what a person can *see*.
+
+- **A category is validated against the asking user's own vocabulary, never
+  against shape.** `CategoryCatalog.resolve` reads their categories on every
+  edit, split and classify. A merchant filed under a category that does not
+  exist reads as a bucket the user never made, and their spending lands in it
+  quietly. Reading back is the exception: a stored key is shown as it stands
+  rather than rejected, so one unrecognised value cannot take a whole merchant
+  list down.
+
+- **`GET /merchants/catalog` no longer publishes categories, and cannot.**
+  Half of that vocabulary belongs to whoever is asking and the catalog is the
+  same answer for everybody. `GET /merchants/categories` is authenticated and
+  is the one place a dropdown reads from. Rejected: leaving the field on the
+  catalog with a note — a list that says "these are valid" while the server
+  accepts more is a trap for the next reader.
+
+- **The model may answer with a category its user wrote.** The advisor is
+  handed that user's whole vocabulary and validates its answer against what it
+  was offered, not against the enum — so a category somebody made because the
+  shipped list did not describe their spending actually collects movements on
+  its own, which is the entire point of having made it. A key belonging to
+  somebody else is well-formed and still no opinion.
+
+- **Entering a movement by hand can name its counterparty's category, and that
+  creates the merchant.** This closes the gap where a hand-written movement
+  never had a merchant at all — the automatic path only ever learns a name
+  from a bank email, so a purchase somebody typed in stayed outside every
+  breakdown by category however many times they entered it. Financial's
+  `MerchantDirectory` port gains `classify`, backed by Merchant's published
+  `ClassifyCounterpartyUseCase`; the merchant is seeded `MANUAL` and
+  `CONFIRMED`, because a person typed it and no rule may re-derive it later.
+  The category is refused *before* the movement is written — a 422 that has
+  already recorded money is a movement the user has to go and find — and the
+  classify call happens after, because naming a merchant is an enrichment and
+  losing it to a hiccup must not lose the money.
+  Deliberately not on `POST /transactions/transfer`: that side names something
+  this app does not hold ("Nequi", "efectivo"), creates no merchant, and is
+  neither spending nor income, so there is no bucket for it to fall in.
+
+- **A category given on an existing counterparty refiles it.** The user is
+  looking at that name and saying what it is, which is what the merchant
+  screen's own recategorize means — and because attribution is joined on read,
+  it applies to their past movements with that name too.
 
 ### Reports (2026-09-02)
 
@@ -2008,3 +2138,19 @@ to whatever ends up serving the bundle, which the bundle is not told.
 - Rejected as false positives in that same review: "only validates address,
   not app_password" and "fails at first request, not startup" — the API
   already eager-validates at boot via `lifespan()`.
+- **Seeding a merchant without checking the root key steals it.** Saving a
+  merchant rewrites the `ROOT#<key>` pointers its aliases derive, so
+  `ClassifyCounterpartyUseCase` creating one for a hand-typed
+  `Tiendas Ara Calle 80` repointed `ROOT#ARA` at it and sent every later
+  `ARA …` there, splitting a history that had been in one place. Any path
+  that seeds a merchant has to run the same first two tiers
+  `ResolveMerchantUseCase` does. Found 2026-09-04.
+- **An enrichment that runs after money is written may never fail the
+  request.** `POST /financial/transactions` names the merchant *after* the
+  movement is committed, and a narrow `except` there meant a hiccup in the
+  other context answered 500 for a movement that exists — which somebody then
+  enters a second time. That one call is wrapped broadly and logged.
+- **A frontend error branch must read `ApiError.status`, never the message.**
+  `message` is the API's own `detail` string and never carries the code, so
+  `message.includes("409")` looked right and could not fire. Its test passed
+  because it fabricated the error it wanted.

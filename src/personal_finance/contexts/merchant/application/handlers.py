@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import dataclasses
 import enum
 
+from personal_finance.contexts.merchant.application.categories import (
+    SHIPPED_CATEGORIES,
+    CategoryCatalog,
+)
 from personal_finance.contexts.merchant.application.commands import (
+    ClassifyCounterpartyCommand,
     ConfirmMerchantCommand,
     EditMerchantCommand,
     MergeMerchantsCommand,
@@ -13,6 +18,7 @@ from personal_finance.contexts.merchant.application.commands import (
     SplitAliasCommand,
 )
 from personal_finance.contexts.merchant.application.ports import (
+    CategoryChoice,
     MerchantAdvisor,
     MerchantCandidate,
     MerchantRepository,
@@ -24,7 +30,6 @@ from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
     AliasOrigin,
     CounterpartyKind,
-    MerchantCategory,
     MerchantId,
     MerchantRootKey,
 )
@@ -102,11 +107,13 @@ class ResolveMerchantUseCase:
         processed_events: ProcessedEventStore,
         event_publisher: EventPublisher,
         advisor: MerchantAdvisor | None = None,
+        categories: CategoryCatalog | None = None,
     ) -> None:
         self._repository = repository
         self._processed_events = processed_events
         self._event_publisher = event_publisher
         self._advisor = advisor
+        self._categories = categories
 
     def execute(self, command: RecordSightingCommand) -> ResolveMerchantResult:
         if not self._processed_events.claim(
@@ -174,6 +181,7 @@ class ResolveMerchantUseCase:
                 counterparty=command.counterparty,
                 kind=command.kind,
                 candidates=self._candidates(command.user_id),
+                categories=self._choices(command.user_id),
             )
             if self._advisor is not None
             else None
@@ -206,6 +214,18 @@ class ResolveMerchantUseCase:
             created.propose_category(advice.category)
 
         return self._finish(created, Resolution.CREATED)
+
+    def _choices(self, user_id: UserId) -> Sequence[CategoryChoice]:
+        """The vocabulary the model may answer with.
+
+        Without a catalogue wired it is the shipped list, which is every
+        category that exists until somebody writes one of their own — so the
+        model is offered less than the user has, never more.
+        """
+        if self._categories is None:
+            return SHIPPED_CATEGORIES
+
+        return self._categories.list(user_id)
 
     def _candidates(self, user_id: UserId) -> list[MerchantCandidate]:
         """The merchants worth offering, busiest first.
@@ -326,6 +346,16 @@ class _MerchantCommandUseCase:
 class EditMerchantUseCase(_MerchantCommandUseCase):
     """Renames a merchant, recategorizes it, or both."""
 
+    def __init__(
+        self,
+        *,
+        repository: MerchantRepository,
+        event_publisher: EventPublisher,
+        categories: CategoryCatalog,
+    ) -> None:
+        super().__init__(repository=repository, event_publisher=event_publisher)
+        self._categories = categories
+
     def execute(self, command: EditMerchantCommand) -> Merchant:
         merchant = self._require(
             user_id=command.user_id,
@@ -336,7 +366,12 @@ class EditMerchantUseCase(_MerchantCommandUseCase):
             merchant.rename(command.display_name)
 
         if command.category is not None:
-            merchant.recategorize(command.category)
+            merchant.recategorize(
+                self._categories.resolve(
+                    user_id=command.user_id,
+                    key=command.category,
+                ),
+            )
 
         self._save(merchant)
 
@@ -390,7 +425,25 @@ class SplitAliasUseCase(_MerchantCommandUseCase):
     to yet.
     """
 
+    def __init__(
+        self,
+        *,
+        repository: MerchantRepository,
+        event_publisher: EventPublisher,
+        categories: CategoryCatalog,
+    ) -> None:
+        super().__init__(repository=repository, event_publisher=event_publisher)
+        self._categories = categories
+
     def execute(self, command: SplitAliasCommand) -> Merchant:
+        category = (
+            None
+            if command.category is None
+            else self._categories.resolve(
+                user_id=command.user_id,
+                key=command.category,
+            )
+        )
         source = self._require(
             user_id=command.user_id,
             merchant_id=command.merchant_id,
@@ -402,7 +455,7 @@ class SplitAliasUseCase(_MerchantCommandUseCase):
             raw_text=alias.raw_text,
             seen_at=alias.first_seen,
             display_name=command.display_name,
-            category=command.category or MerchantCategory.UNCATEGORIZED,
+            category=category,
             origin=AliasOrigin.MANUAL,
         )
         # The child keeps the history it earned under its old parent.
@@ -441,3 +494,102 @@ class MergeMerchantsUseCase(_MerchantCommandUseCase):
         )
 
         return survivor
+
+
+class ClassifyCounterpartyUseCase:
+    """Files a name under a category because a user said so, creating the
+    merchant if this is the first time anybody has written that name down.
+
+    This context's published write surface for the rest of the system, and the
+    answer to a movement entered by hand having no merchant at all: the
+    automatic path only ever learns a name from a bank email, so a purchase
+    somebody typed in themselves used to stay outside every breakdown by
+    category, forever, however many times they entered it.
+
+    The category counts as a decision, not a guess. It confirms the merchant
+    and, for one that already existed, replaces whatever was there — the user
+    is looking at that counterparty right now and saying what it is, which is
+    exactly what the merchant screen's own recategorize means. It applies to
+    their past movements too, because attribution is joined on read.
+    """
+
+    def __init__(
+        self,
+        *,
+        repository: MerchantRepository,
+        event_publisher: EventPublisher,
+        categories: CategoryCatalog,
+    ) -> None:
+        self._repository = repository
+        self._event_publisher = event_publisher
+        self._categories = categories
+
+    def execute(self, command: ClassifyCounterpartyCommand) -> Merchant:
+        category = self._categories.resolve(
+            user_id=command.user_id,
+            key=command.category,
+        )
+        fingerprint = AliasFingerprint.from_raw(command.counterparty)
+        merchant = self._resolve(command, fingerprint)
+        merchant.recategorize(category)
+        self._repository.save(merchant)
+        self._event_publisher.publish(merchant.pull_events())
+
+        return merchant
+
+    def _resolve(
+        self,
+        command: ClassifyCounterpartyCommand,
+        fingerprint: AliasFingerprint,
+    ) -> Merchant:
+        """The merchant this name belongs to, created only if there is none.
+
+        The same first two tiers `ResolveMerchantUseCase` uses, and for the
+        same reason: a merchant is reachable by the root key its aliases
+        derive, and seeding one whose root another merchant already answers to
+        would take that key away from it. Every later `EXITO …` would then
+        derive onto the merchant somebody typed by hand, splitting a history
+        that had been in one place.
+
+        The guessing tier is deliberately not here. A sub-brand match is an
+        offer the user can undo, and there is nothing to undo it with when the
+        spelling arrives already claimed as a decision.
+        """
+        known = self._repository.find_by_alias(
+            user_id=command.user_id,
+            fingerprint=fingerprint,
+        )
+
+        if known is not None:
+            return known
+
+        root_key = MerchantRootKey.from_fingerprint(fingerprint)
+        owner = self._repository.list_root_keys(command.user_id).get(root_key)
+        parent = (
+            None
+            if owner is None
+            else self._repository.find(user_id=command.user_id, merchant_id=owner)
+        )
+
+        if parent is not None:
+            # The same name modulo store numbers and address tails. It goes
+            # under the merchant that already answers to it, claimed as a
+            # decision so nothing re-derives it later.
+            parent.link_alias(
+                fingerprint=fingerprint,
+                raw_text=command.counterparty,
+                origin=AliasOrigin.MANUAL,
+                seen_at=command.occurred_at,
+            )
+
+            return parent
+
+        return Merchant.seed(
+            user_id=command.user_id,
+            fingerprint=fingerprint,
+            raw_text=command.counterparty,
+            seen_at=command.occurred_at,
+            # A person typed this: no rule may later re-derive the grouping
+            # out from under them.
+            origin=AliasOrigin.MANUAL,
+        )

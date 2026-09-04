@@ -43,8 +43,15 @@ export type Merchant =
 export type MerchantDetail = components["schemas"]["MerchantDetailResponse"];
 /** One spelling a merchant's name arrives under. */
 export type MerchantAlias = components["schemas"]["AliasResponse"];
-export type MerchantCategory = components["schemas"]["MerchantCategory"];
 export type MerchantSort = components["schemas"]["MerchantSort"];
+/**
+ * One category the signed-in person may file a merchant under.
+ *
+ * `custom` says which half of the vocabulary it came from: false for the ones
+ * the app ships, true for the ones they wrote. There is no union type for
+ * `value` and there cannot be — half the list is theirs, so it is a plain
+ * string and the server is what validates it.
+ */
 export type CategoryOption = components["schemas"]["CategoryResponse"];
 export type InstrumentKind = components["schemas"]["InstrumentKind"];
 /** What a loan costs or an investment earns, and what it will do next. */
@@ -94,6 +101,37 @@ export const merchantCatalogQuery = queryOptions({
   queryKey: [...queryKeys.catalog, "merchant"],
   queryFn: () => unwrap(api.GET("/merchants/catalog")),
   staleTime: Number.POSITIVE_INFINITY,
+});
+
+/**
+ * The categories, which are *not* in the catalogue above and cannot be: the
+ * shipped ones are the same for everybody, and the rest are whatever this
+ * person wrote for themselves.
+ *
+ * So this one is not cached forever — creating a category invalidates the
+ * whole merchant family, and this lives inside it.
+ */
+export const categoriesQuery = queryOptions({
+  queryKey: [...queryKeys.merchants, "categories"],
+  queryFn: () => unwrap(api.GET("/merchants/categories")),
+  staleTime: 5 * 60_000,
+});
+
+/**
+ * The same list, plus how many merchants sit in each category.
+ *
+ * A separate query rather than a flag on the one above, because it is a
+ * separate cost: answering it reads the caller's merchants, and the six
+ * screens that only need names must not pay for it. Only the panel that
+ * manages categories asks — it is what turns "eliminar" into "7 comercios
+ * vuelven a Sin categoría".
+ */
+export const categoryUsageQuery = queryOptions({
+  queryKey: [...queryKeys.merchants, "categories", "usage"],
+  queryFn: () =>
+    unwrap(
+      api.GET("/merchants/categories", { params: { query: { with_usage: true } } }),
+    ),
 });
 
 /* ---------------------------------------------------------------- accounts */
@@ -270,11 +308,12 @@ export const merchantsForFilterQuery = queryOptions({
 export type MerchantFilters = {
   search?: string;
   /**
-   * A `MerchantCategory`, but typed as a string: it reaches this screen from
-   * the URL, where anything can be written, and the vocabulary itself is read
-   * from the catalogue rather than hardcoded here. The server is what
-   * validates it — an unknown value is a 422, which is the right answer to a
-   * hand-edited address.
+   * A category value, and a plain string on purpose twice over: it reaches
+   * this screen from the URL, where anything can be written, and half the
+   * vocabulary is whatever the signed-in person wrote for themselves, so
+   * there is no union to check it against. The server is what validates it —
+   * an unknown value is a 422, which is the right answer to a hand-edited
+   * address.
    */
   category?: string;
   /** `true` is the review queue. Omitted means every merchant. */
@@ -293,9 +332,7 @@ export const merchantsQuery = (filters: MerchantFilters = {}) =>
           // Undefined entries are dropped by the serializer, which is what
           // keeps `category` and `sort` from ever being sent empty — an enum
           // parameter sent empty is a 422, never "no filter".
-          params: {
-            query: { ...filters, category: filters.category as MerchantCategory },
-          },
+          params: { query: filters },
         }),
       ),
   });
@@ -775,6 +812,89 @@ function useMerchantMutation<TBody>(
       client.invalidateQueries({ queryKey: queryKeys.merchants });
       client.invalidateQueries({ queryKey: queryKeys.transactions });
       client.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+}
+
+type CategoryNameBody = components["schemas"]["CategoryNamePayload"];
+
+/**
+ * A category of one's own, for spending the shipped list does not describe.
+ *
+ * The name is the whole request: the value its merchants are stored under is
+ * derived from it on the server and is not something this side picks. 409
+ * when the name is already taken — accents and case folded away, so "Mascotas"
+ * and "mascotas" are one category.
+ */
+export function useCreateCategory(): UseMutationResult<
+  CategoryOption,
+  Error,
+  CategoryNameBody
+> {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: (body: CategoryNameBody) =>
+      unwrap(api.POST("/merchants/categories", { body })),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.merchants });
+    },
+  });
+}
+
+/**
+ * Fix a category's name.
+ *
+ * Only the name changes. The value merchants are filed under is opaque and
+ * permanent, so nothing moves and every screen showing that category reads
+ * the new word at once — which is why this invalidates the merchant family
+ * (the categories live in it) and nothing else.
+ */
+export function useRenameCategory(): UseMutationResult<
+  CategoryOption,
+  Error,
+  { value: string; label: string }
+> {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ value, label }: { value: string; label: string }) =>
+      unwrap(
+        api.PATCH("/merchants/categories/{category_key}", {
+          params: { path: { category_key: value } },
+          body: { label },
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.merchants });
+    },
+  });
+}
+
+export type DeletedCategory = components["schemas"]["DeletedCategoryResponse"];
+
+/**
+ * Remove a category, and hear what moved with it.
+ *
+ * Everything filed under it goes back to "Sin categoría", and the movements
+ * of those merchants follow — so this invalidates the money screens too, not
+ * just the merchant list.
+ */
+export function useDeleteCategory(): UseMutationResult<DeletedCategory, Error, string> {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: (value: string) =>
+      unwrap(
+        api.DELETE("/merchants/categories/{category_key}", {
+          params: { path: { category_key: value } },
+        }),
+      ),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: queryKeys.merchants });
+      client.invalidateQueries({ queryKey: queryKeys.transactions });
+      client.invalidateQueries({ queryKey: queryKeys.summary });
+      client.invalidateQueries({ queryKey: queryKeys.trends });
     },
   });
 }

@@ -21,7 +21,7 @@ from personal_finance.contexts.merchant.domain.normalization import (
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
-    MerchantCategory,
+    CategoryKey,
     MerchantId,
 )
 from personal_finance.shared.domain.value_objects import UserId
@@ -45,7 +45,7 @@ class MerchantQuery:
     # Matched against the merchant's name and every spelling under it, so
     # searching for what the bank wrote finds the merchant the user renamed.
     search: str | None = None
-    category: MerchantCategory | None = None
+    category: CategoryKey | None = None
     needs_review: bool | None = None
     sort: MerchantSort = MerchantSort.LAST_SEEN
     limit: int = DEFAULT_PAGE_SIZE
@@ -96,7 +96,7 @@ class MerchantAttribution:
 
     merchant_id: MerchantId
     display_name: str
-    category: MerchantCategory
+    category: CategoryKey
     needs_review: bool
 
 
@@ -178,7 +178,7 @@ class AttributeCounterpartiesUseCase:
 
 
 def _matches(merchant: Merchant, *, query: MerchantQuery) -> bool:
-    if query.category is not None and merchant.category is not query.category:
+    if query.category is not None and merchant.category != query.category:
         return False
 
     if query.needs_review is not None and merchant.needs_review != query.needs_review:

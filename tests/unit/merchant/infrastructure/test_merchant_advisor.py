@@ -2,7 +2,7 @@
 
 Two rules live in the adapter rather than the prompt, because a prompt is a
 request and these are guarantees: a parent must be one of the merchants that
-were offered, and a category must be a member of the enum.
+were offered, and a category one of the categories that were.
 """
 
 from collections.abc import Sequence
@@ -10,11 +10,16 @@ from typing import cast
 
 from pydantic import BaseModel
 
+from personal_finance.contexts.merchant.application.categories import (
+    SHIPPED_CATEGORIES,
+)
 from personal_finance.contexts.merchant.application.ports import (
+    CategoryChoice,
     MerchantAdvice,
     MerchantCandidate,
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
+    CategoryKey,
     CounterpartyKind,
     MerchantCategory,
     MerchantId,
@@ -73,6 +78,17 @@ def _candidates() -> Sequence[MerchantCandidate]:
     ]
 
 
+MASCOTAS = CategoryChoice(
+    key=CategoryKey.custom("mascotas"),
+    label="Mascotas",
+    shipped=False,
+)
+
+
+def _categories() -> Sequence[CategoryChoice]:
+    return [*SHIPPED_CATEGORIES, MASCOTAS]
+
+
 def _advise(
     answer: MerchantAdviceSchema | None = None,
     *,
@@ -86,6 +102,7 @@ def _advise(
         counterparty="BANCOLOMBIA NEQUI",
         kind=CounterpartyKind.UNKNOWN,
         candidates=_candidates(),
+        categories=_categories(),
     )
 
 
@@ -100,7 +117,7 @@ def test_a_merchant_that_was_offered_is_accepted() -> None:
 
     assert advice is not None
     assert advice.parent == MERCHANT_ID
-    assert advice.category is MerchantCategory.TRANSFERS
+    assert advice.category == CategoryKey.default(MerchantCategory.TRANSFERS)
 
 
 def test_a_merchant_that_was_never_offered_is_no_decision_at_all() -> None:
@@ -131,7 +148,7 @@ def test_no_parent_is_the_ordinary_answer() -> None:
 
     assert advice is not None
     assert advice.parent is None
-    assert advice.category is MerchantCategory.GROCERIES
+    assert advice.category == CategoryKey.default(MerchantCategory.GROCERIES)
 
 
 def test_a_category_outside_the_vocabulary_becomes_no_opinion() -> None:
@@ -140,7 +157,29 @@ def test_a_category_outside_the_vocabulary_becomes_no_opinion() -> None:
     )
 
     assert advice is not None
-    assert advice.category is MerchantCategory.UNCATEGORIZED
+    assert advice.category == CategoryKey.uncategorized()
+
+
+def test_a_category_this_user_wrote_is_an_answer_the_model_may_give() -> None:
+    # The whole point of letting somebody add one: things land in it on their
+    # own, exactly as they do in the categories the app ships.
+    advice = _advise(
+        MerchantAdviceSchema(parent_merchant_id="", category="custom:mascotas"),
+    )
+
+    assert advice is not None
+    assert advice.category == MASCOTAS.key
+
+
+def test_a_category_belonging_to_somebody_else_is_no_opinion_either() -> None:
+    # Well-formed, and not in the list this call was given. Only what was
+    # offered is an answer.
+    advice = _advise(
+        MerchantAdviceSchema(parent_merchant_id="", category="custom:mis-perros"),
+    )
+
+    assert advice is not None
+    assert advice.category == CategoryKey.uncategorized()
 
 
 def test_a_model_outage_costs_the_suggestion_and_nothing_else() -> None:
@@ -155,14 +194,18 @@ def test_every_category_the_application_accepts_is_explained_to_the_model() -> N
 
 
 def test_the_instruction_lists_the_whole_vocabulary() -> None:
-    instruction = build_system_instruction()
+    instruction = build_system_instruction(_categories())
 
     for category in MerchantCategory:
         assert category.value in instruction
 
+    # Including the one this user wrote, under their own name for it.
+    assert "custom:mascotas" in instruction
+    assert "Mascotas" in instruction
+
 
 def test_the_instruction_teaches_the_parent_and_child_model() -> None:
-    instruction = build_system_instruction()
+    instruction = build_system_instruction(_categories())
 
     assert "PARENT" in instruction
     assert "CHILDREN" in instruction

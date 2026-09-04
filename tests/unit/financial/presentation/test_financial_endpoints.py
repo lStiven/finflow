@@ -216,6 +216,11 @@ ARA = MerchantAttribution(
 class FakeDirectory:
     """Stands in for merchant, answering by exact counterparty text."""
 
+    def __init__(self) -> None:
+        # What `classify` was asked to file, so a test can assert that
+        # entering a movement with a category reached the other context.
+        self.classified: list[tuple[str, str, PosixTime]] = []
+
     def attribute(
         self,
         *,
@@ -230,13 +235,46 @@ class FakeDirectory:
             if counterparty == "TIENDAS ARA"
         }
 
-    def categories(self) -> frozenset[str]:
-        return frozenset({"groceries", "transport", "subscriptions", "uncategorized"})
+    def categories(self, *, user_id: UserId) -> frozenset[str]:
+        del user_id
+
+        return frozenset(
+            {
+                "groceries",
+                "transport",
+                "subscriptions",
+                "uncategorized",
+                "custom:gatos",
+            },
+        )
+
+    def classify(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+        category: str,
+        occurred_at: PosixTime,
+    ) -> MerchantAttribution | None:
+        del user_id
+        self.classified.append((counterparty, category, occurred_at))
+
+        if not counterparty.strip(" -"):
+            # Text no fingerprint can be built from: there is no merchant to
+            # make of it, and the movement is a movement either way.
+            return None
+
+        return MerchantAttribution(
+            merchant_id="aaaaaaaa-0000-0000-0000-00000000000c",
+            display_name=counterparty.title(),
+            category=category,
+            needs_review=False,
+        )
 
 
 @pytest.fixture
 def client() -> TestClient:
-    app, _ = _build()
+    app, _, _ = _build()
 
     return app
 
@@ -250,10 +288,22 @@ def wired() -> tuple[TestClient, InMemoryLedger]:
     lone leg, never two), so a test about how the API *reads* them puts the
     pair in place itself.
     """
-    return _build()
+    app, ledger, _ = _build()
+
+    return app, ledger
 
 
-def _build() -> tuple[TestClient, InMemoryLedger]:
+@pytest.fixture
+def attributing() -> tuple[TestClient, FakeDirectory]:
+    """The same app, plus the merchant directory standing in for the other
+    context, so a test can see what was asked of it.
+    """
+    app, _, directory = _build()
+
+    return app, directory
+
+
+def _build() -> tuple[TestClient, InMemoryLedger, FakeDirectory]:
     accounts = InMemoryAccounts()
     ledger = InMemoryLedger()
     publisher = NullPublisher()
@@ -327,7 +377,7 @@ def _build() -> tuple[TestClient, InMemoryLedger]:
         ReadFinancingUseCase(accounts=accounts, ledger=ledger)
     )
 
-    return TestClient(app), ledger
+    return TestClient(app), ledger, directory
 
 
 def _declare(client: TestClient, **overrides: object) -> dict[str, object]:
@@ -436,6 +486,108 @@ def test_half_an_instrument_is_refused(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_a_movement_entered_by_hand_can_name_its_own_category(
+    attributing: tuple[TestClient, FakeDirectory],
+) -> None:
+    """Otherwise it has no merchant at all, and no breakdown by category ever
+    counts it: the automatic path only learns a name from a bank email.
+    """
+    client, directory = attributing
+
+    entered = _enter(client, counterparty="Panaderia la esquina", category="groceries")
+
+    assert directory.classified == [
+        # The movement's own time, not the moment of the call: a merchant this
+        # creates was first seen when the spending happened.
+        ("Panaderia la esquina", "groceries", PosixTime.from_epoch_seconds(WHEN)),
+    ]
+    assert entered["merchant"] == {
+        "id": "aaaaaaaa-0000-0000-0000-00000000000c",
+        "display_name": "Panaderia La Esquina",
+        "category": "groceries",
+        "needs_review": False,
+    }
+
+
+def test_a_movement_can_name_a_category_its_owner_wrote(
+    attributing: tuple[TestClient, FakeDirectory],
+) -> None:
+    client, directory = attributing
+
+    entered = _enter(client, counterparty="Veterinaria", category="custom:gatos")
+
+    assert directory.classified == [
+        ("Veterinaria", "custom:gatos", PosixTime.from_epoch_seconds(WHEN)),
+    ]
+    assert entered["merchant"] == {
+        "id": "aaaaaaaa-0000-0000-0000-00000000000c",
+        "display_name": "Veterinaria",
+        "category": "custom:gatos",
+        "needs_review": False,
+    }
+
+
+def test_a_movement_with_no_category_files_nothing(
+    attributing: tuple[TestClient, FakeDirectory],
+) -> None:
+    # The field is optional, and omitting it leaves the behaviour that was
+    # there before: nothing is created, and the merchant shows only if some
+    # bank email already taught the system that name.
+    client, directory = attributing
+
+    _enter(client, counterparty="Panaderia la esquina")
+
+    assert directory.classified == []
+
+
+def test_a_merchant_that_cannot_be_filed_never_costs_the_movement(
+    attributing: tuple[TestClient, FakeDirectory],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The money is already written by the time the merchant is named, so
+    anything raised past that point would report a failure for a movement that
+    exists — and somebody reading that 500 enters it a second time.
+    """
+    client, directory = attributing
+
+    def unavailable(**_: object) -> None:
+        raise RuntimeError("merchant table unreachable")
+
+    monkeypatch.setattr(directory, "classify", unavailable)
+
+    entered = _enter(client, counterparty="Panaderia la esquina", category="groceries")
+
+    assert entered["amount"] == "50000"
+    # The enrichment is what was lost, and only that.
+    assert entered["merchant"] is None
+    assert client.get("/financial/transactions").json()["total"] == 1
+
+
+def test_a_category_nobody_has_is_refused_before_the_money_is_written(
+    attributing: tuple[TestClient, FakeDirectory],
+) -> None:
+    """A 422 that has already recorded money is a movement the user has to go
+    and find.
+    """
+    client, directory = attributing
+
+    response = client.post(
+        "/financial/transactions",
+        json={
+            "direction": "outgoing",
+            "amount": "50000",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Panaderia la esquina",
+            "category": "custom:mascotas",
+        },
+    )
+
+    assert response.status_code == 422
+    assert directory.classified == []
+    assert client.get("/financial/transactions").json()["total"] == 0
 
 
 def test_a_closed_account_takes_no_manual_movements(client: TestClient) -> None:

@@ -20,6 +20,7 @@ import contextlib
 import datetime as dt
 from decimal import Decimal
 import functools
+import logging
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -172,6 +173,8 @@ from personal_finance.shared.presentation.catalog import (
     options,
 )
 
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/financial", tags=["financial"])
 
@@ -974,6 +977,12 @@ class EnterTransactionPayload(BaseModel):
     account_id: str | None = None
     bank: str = Field(default="", max_length=MAX_TEXT_LENGTH)
     note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+    # What this counterparty is, when the owner already knows. One of the
+    # values `GET /merchants/categories` lists for them — the shipped ones and
+    # the ones they wrote. Omitted, the movement behaves as it always has:
+    # nothing is created, and it shows a merchant only if some bank email has
+    # already taught the system that name.
+    category: str | None = Field(default=None, max_length=64)
 
 
 class EnterTransferLegPayload(BaseModel):
@@ -1869,7 +1878,7 @@ def list_transactions(
                     direction=direction,
                     search=search,
                     merchant_id=merchant_id,
-                    category=_known_category(category, merchants),
+                    category=_known_category(category, merchants, user_id=user_id),
                     since=since,
                     until=until,
                     transfers=transfers,
@@ -1961,7 +1970,7 @@ def summarize_spending(
                     direction=direction,
                     search=search,
                     merchant_id=merchant_id,
-                    category=_known_category(category, merchants),
+                    category=_known_category(category, merchants, user_id=user_id),
                     since=since,
                     until=until,
                     transfers=transfers,
@@ -2047,7 +2056,7 @@ def read_trend(
                     direction=direction,
                     search=search,
                     merchant_id=merchant_id,
-                    category=_known_category(category, merchants),
+                    category=_known_category(category, merchants, user_id=user_id),
                     since=since,
                     until=until,
                     transfers=transfers,
@@ -2083,7 +2092,18 @@ def enter_transaction(
 
     An automatic payment, cash, a transfer that produced no alert. The account
     is optional: somebody watching only what comes in and goes out has none.
+
+    `category` is optional and is about the *counterparty*, not this one
+    movement: sending it files that name under that category for good, which
+    is what keeps a hand-written movement out of the "no merchant" bucket
+    every breakdown by category leaves out. It applies to the past movements
+    with that same counterparty too, because the attribution is joined when an
+    answer is read rather than stored on each movement.
     """
+    # Refused before the movement is written, not after: a 422 that has
+    # already recorded money is a movement the user has to go and find.
+    category = _known_category(payload.category, merchants, user_id=user_id)
+
     with _domain_errors():
         transaction = use_case.enter(
             EnterTransactionCommand(
@@ -2101,6 +2121,29 @@ def enter_transaction(
                 note=payload.note,
             ),
         )
+
+    if category is not None:
+        try:
+            # After the movement, deliberately. Naming a merchant is an
+            # enrichment, and losing it to a hiccup must not lose the money.
+            attribution = merchants.classify(
+                user_id=user_id,
+                counterparty=transaction.counterparty,
+                category=category,
+                occurred_at=transaction.occurred_at,
+            )
+        except Exception:
+            # Broad on purpose, and only here. The movement is already
+            # written, so anything raised past this point would answer a
+            # failure for money that was recorded — and somebody reading that
+            # 500 enters it a second time. Whatever went wrong (the category
+            # gone since the check above, the other context's table
+            # unreachable) costs the attribution and nothing else.
+            _logger.exception("could not file a hand-entered movement's merchant")
+        else:
+            return _transaction_response(
+                AttributedTransaction(transaction=transaction, merchant=attribution),
+            )
 
     return _transaction_response(_attributed(transaction, merchants))
 
@@ -2553,14 +2596,19 @@ def _attributed(
 def _known_category(
     category: str | None,
     merchants: MerchantDirectory,
+    *,
+    user_id: UserId,
 ) -> str | None:
     """Refuse a category that names nothing, rather than answering nothing.
 
     An unknown value would filter every movement out and return an empty page,
     which on a money screen reads as "you spent nothing here" — the one wrong
     answer worse than an error.
+
+    Asked per user: half the vocabulary is whatever they wrote for themselves,
+    so what is a real category for one person names nothing for another.
     """
-    if category is None or category in merchants.categories():
+    if category is None or category in merchants.categories(user_id=user_id):
         return category
 
     raise HTTPException(

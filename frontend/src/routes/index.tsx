@@ -11,6 +11,7 @@ import {
 import {
   type Account,
   accountsQuery,
+  categoriesQuery,
   type SpendingTotals,
   type SummaryGroup,
   summaryQuery,
@@ -35,7 +36,7 @@ import {
 } from "@/lib/dates";
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
-import { categoryGroupLabel } from "@/merchants/categories";
+import { categoryGroupLabel, categoryLabels } from "@/merchants/categories";
 
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
@@ -97,6 +98,7 @@ export const Route = createFileRoute("/")({
         staleTime: "static",
       }),
       context.queryClient.query({ ...summaryQuery("month"), staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
       context.queryClient.query({
         ...summaryQuery("category", range ?? {}),
         staleTime: "static",
@@ -121,6 +123,9 @@ function Dashboard() {
   const { data: everyMonth } = useSuspenseQuery(summaryQuery("month"));
   const { data: byCategory } = useSuspenseQuery(summaryQuery("category", range ?? {}));
   const { data: recent } = useSuspenseQuery(transactionsQuery({ limit: RECENT_LIMIT }));
+  // A summary bucket is keyed by the category value and labelled with it, so
+  // one this person wrote needs their own name for it from somewhere.
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
 
   /*
    * One currency drives the screen. Net worth is reported per currency and is
@@ -282,6 +287,7 @@ function Dashboard() {
             currency={currency}
             previousOutgoing={lastMonth?.outgoing}
             month={month}
+            labels={categoryLabels(categories.categories)}
           />
           <RecentCard transactions={recent.transactions} />
         </div>
@@ -364,13 +370,15 @@ function CategoryCard({
   currency,
   previousOutgoing,
   month,
+  labels,
 }: {
   groups: SummaryGroup[];
   currency: string;
   previousOutgoing?: string;
   month: string;
+  labels: Record<string, string>;
 }) {
-  const slices = toSlices(groups, currency);
+  const slices = toSlices(groups, currency, labels);
   const biggest = slices.parts[0];
   const change =
     previousOutgoing === undefined
@@ -422,7 +430,11 @@ type Slices = { parts: Slice[]; total: string };
  * wedge. Shares are computed from the same rounded floats the ring is drawn
  * with, so the legend's percentages always add up to what is on screen.
  */
-function toSlices(groups: SummaryGroup[], currency: string): Slices {
+function toSlices(
+  groups: SummaryGroup[],
+  currency: string,
+  labels: Record<string, string>,
+): Slices {
   const rows = groups
     .map((group) => {
       const totals = group.totals.find((total) => total.currency === currency);
@@ -432,7 +444,7 @@ function toSlices(groups: SummaryGroup[], currency: string): Slices {
       return totals
         ? {
             key: group.key ?? "__none__",
-            label: categoryGroupLabel(group),
+            label: categoryGroupLabel(group, labels),
             amount: totals.outgoing,
           }
         : null;

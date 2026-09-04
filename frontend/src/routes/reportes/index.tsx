@@ -29,6 +29,7 @@ import {
   type Account,
   accountsQuery,
   type Currency,
+  categoriesQuery,
   summaryQuery,
   type Transaction,
   transactionsQuery,
@@ -46,7 +47,7 @@ import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/dates";
 import { percentChange } from "@/lib/money";
 import { intervalFor, PRESETS, type PresetId, resolveRange } from "@/lib/periods";
-import { categoryLabel } from "@/merchants/categories";
+import { categoryLabels, labelFrom } from "@/merchants/categories";
 import {
   bandsOf,
   bucketsOf,
@@ -128,6 +129,7 @@ export const Route = createFileRoute("/reportes/")({
       context.queryClient.query({ ...merchants, ...cached }),
       context.queryClient.query({ ...weekday, ...cached }),
       context.queryClient.query({ ...biggest, ...cached }),
+      context.queryClient.query(categoriesQuery),
     ]);
   },
   component: ReportsScreen,
@@ -218,6 +220,13 @@ function ReportsScreen() {
   const { data: byMerchant } = useSuspenseQuery(merchants);
   const { data: byWeekday } = useSuspenseQuery(weekday);
   const { data: largest } = useSuspenseQuery(biggest);
+  /*
+   * Every category on this screen arrives as a value and nothing else — a
+   * summary bucket's label *is* its key — so one this person wrote would read
+   * as `custom:mascotas` in a legend without their own name for it.
+   */
+  const { data: vocabulary } = useSuspenseQuery(categoriesQuery);
+  const labels = categoryLabels(vocabulary.categories);
 
   const { currency, range, interval } = view;
   const now = figures(period.totals, currency);
@@ -232,7 +241,7 @@ function ReportsScreen() {
   const hues = bandPalette(byCategory.groups.map((group) => group.key));
   // Built once and handed to both the legend and the chart: two calls would
   // rank and colour the same bands twice on every render.
-  const bands = bandsOf(trend, hues);
+  const bands = bandsOf(trend, hues, (value) => labelFrom(labels, value));
 
   return (
     <AppShell>
@@ -378,7 +387,9 @@ function ReportsScreen() {
                     view,
                     hues,
                     label: (group) =>
-                      group.key === null ? "Sin comercio" : categoryLabel(group.key),
+                      group.key === null
+                        ? "Sin comercio"
+                        : labelFrom(labels, group.key),
                     link: (group) =>
                       group.key === null ? undefined : { category: group.key },
                   })}

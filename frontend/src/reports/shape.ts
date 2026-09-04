@@ -184,10 +184,17 @@ export function cashflowSeries(trend: Trend): ColumnSeries[] {
 export function bandsOf(
   trend: Trend,
   hues: Map<string | null, string>,
+  /*
+   * The chart is stacked by category, and a category band's label arrives as
+   * its own value — `groceries`, or `custom:mascotas` for one this person
+   * wrote. Neither is a word anybody reads, so the legend is built from the
+   * same copy every other category on the screen uses.
+   */
+  label: (value: string) => string = (value) => value,
 ): ColumnSeries[] {
   const bands: ColumnSeries[] = trend.series.map((band, index) => ({
     key: band.key ?? `__unplaced-${index}`,
-    label: band.key === null ? "Sin comercio" : band.label,
+    label: band.key === null ? "Sin comercio" : label(band.key),
     // Looked up by key, null included: the ranked list gave that bucket a hue
     // too, and the two charts have to agree on it.
     tone: hues.get(band.key) ?? REMAINDER_FILL,

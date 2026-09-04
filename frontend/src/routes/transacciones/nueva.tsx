@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { type SubmitEvent, useState } from "react";
 import {
   accountsQuery,
+  categoriesQuery,
   financialCatalogQuery,
   useCreateTransaction,
   useCreateTransferLeg,
@@ -16,6 +17,7 @@ import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { cn } from "@/lib/cn";
 import { fromLocalInput, nowInSeconds, toLocalInput } from "@/lib/dates";
+import { CategoryPicker } from "@/merchants/CategoryPicker";
 
 export const Route = createFileRoute("/transacciones/nueva")({
   beforeLoad: ({ context }) => {
@@ -25,6 +27,7 @@ export const Route = createFileRoute("/transacciones/nueva")({
     Promise.all([
       context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
       context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
     ]),
   component: NewTransactionScreen,
 });
@@ -56,6 +59,7 @@ function NewTransactionScreen() {
   const [accountId, setAccountId] = useState("");
   const [currency, setCurrency] = useState("COP");
   const [bank, setBank] = useState("");
+  const [category, setCategory] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -100,6 +104,12 @@ function NewTransactionScreen() {
               account_id: accountId || null,
               bank: bank.trim(),
               note: note.trim() || null,
+              // What this counterparty is, not what this one movement is.
+              // Sending it is what keeps the movement out of the bucket
+              // every breakdown by category leaves out; omitting it leaves
+              // the old behaviour, where it shows a merchant only if some
+              // bank email has already taught Finflow that name.
+              category: category || null,
             });
       void navigate({
         to: "/transacciones/$transactionId",
@@ -260,6 +270,20 @@ function NewTransactionScreen() {
                 label: account.name,
               }))}
             />
+
+            {/* Not on a traslado: that side names something this app does
+                not hold — "Nequi", "efectivo" — it creates no comercio, and
+                it is deliberately neither spending nor income, so there is
+                no bucket for it to fall in. */}
+            {isTransfer ? null : (
+              <CategoryPicker
+                label="Categoría (opcional)"
+                placeholder="Sin categoría"
+                hint="Se la queda el comercio, no este movimiento: los anteriores con ese mismo nombre también la toman. Sin ella, este gasto no aparece en «Gastos por categoría»."
+                value={category}
+                onChange={setCategory}
+              />
+            )}
 
             <Field
               label="Banco (opcional)"

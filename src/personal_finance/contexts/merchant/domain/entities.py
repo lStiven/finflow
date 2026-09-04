@@ -24,8 +24,8 @@ from personal_finance.contexts.merchant.domain.normalization import (
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
     AliasOrigin,
+    CategoryKey,
     MerchantAlias,
-    MerchantCategory,
     MerchantId,
     MerchantRootKey,
     MerchantStatus,
@@ -49,7 +49,7 @@ class Merchant(AggregateRoot[MerchantId]):
 
     user_id: UserId
     display_name: str
-    category: MerchantCategory
+    category: CategoryKey
     status: MerchantStatus
     created_at: PosixTime
     aliases: dict[AliasFingerprint, MerchantAlias] = field(
@@ -68,7 +68,7 @@ class Merchant(AggregateRoot[MerchantId]):
         raw_text: str,
         seen_at: PosixTime,
         display_name: str | None = None,
-        category: MerchantCategory = MerchantCategory.UNCATEGORIZED,
+        category: CategoryKey | None = None,
         origin: AliasOrigin = AliasOrigin.SEED,
     ) -> Self:
         """Create a merchant around the first spelling we saw of it."""
@@ -76,7 +76,7 @@ class Merchant(AggregateRoot[MerchantId]):
             id=MerchantId.new(),
             user_id=user_id,
             display_name=display_name or suggest_display_name(fingerprint.value),
-            category=category,
+            category=category or CategoryKey.uncategorized(),
             status=(
                 MerchantStatus.CONFIRMED
                 if origin is AliasOrigin.MANUAL
@@ -280,7 +280,7 @@ class Merchant(AggregateRoot[MerchantId]):
             ),
         )
 
-    def recategorize(self, category: MerchantCategory) -> None:
+    def recategorize(self, category: CategoryKey) -> None:
         self.category = category
         self.status = MerchantStatus.CONFIRMED
         self.record_event(
@@ -291,7 +291,27 @@ class Merchant(AggregateRoot[MerchantId]):
             ),
         )
 
-    def propose_category(self, category: MerchantCategory) -> None:
+    def uncategorize(self) -> None:
+        """Put this merchant back in the default bucket, review status intact.
+
+        For the one case nobody decided anything: the category it was filed
+        under stopped existing. `recategorize` would mark it confirmed, which
+        would quietly take a merchant nobody has looked at out of the review
+        queue on somebody else's behalf.
+        """
+        if self.category.is_uncategorized:
+            return
+
+        self.category = CategoryKey.uncategorized()
+        self.record_event(
+            MerchantReclassified(
+                merchant_id=self.id,
+                user_id=self.user_id,
+                category=self.category,
+            ),
+        )
+
+    def propose_category(self, category: CategoryKey) -> None:
         """Record a category nobody has approved yet.
 
         Distinct from `recategorize`, which is a person deciding and therefore
@@ -299,7 +319,7 @@ class Merchant(AggregateRoot[MerchantId]):
         fills the field but leaves the merchant in the review queue — the user
         still gets to see it and disagree.
         """
-        if self.category is not MerchantCategory.UNCATEGORIZED:
+        if not self.category.is_uncategorized:
             # Never overwrite a category that is already there: it may be the
             # user's, and this is only a suggestion.
             return

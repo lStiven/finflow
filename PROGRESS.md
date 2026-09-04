@@ -7,7 +7,7 @@ No se narra aquí lo que cambió (eso ya lo guarda git) ni *por qué* algo es co
 es (eso vive en [docs/decisions.md](docs/decisions.md), que **no** se lee al
 arrancar: se busca dentro cuando hay una duda concreta).
 
-Última verificación contra el código y contra AWS: **2026-09-03**.
+Última verificación contra el código y contra AWS: **2026-09-04**.
 
 ## Qué hace hoy la aplicación
 
@@ -44,15 +44,25 @@ Todo el backend de la versión 1 está terminado y probado:
   dura 30 minutos; cambiarla cierra todas las sesiones abiertas con la anterior.
 - **Reportes**: cuánto sumó un periodo, contra el periodo anterior, y la gráfica
   por categorías.
+- **Las categorías se pueden inventar, corregir y borrar.** Las dieciséis que
+  trae la aplicación las ve todo el mundo; encima de esas, cada quien escribe
+  las suyas (corto: máximo 24 caracteres, porque se leen en una lista y en una
+  gráfica). Se administran en un panel plegable dentro de Comercios. Cambiarle
+  el nombre a una no mueve nada —el nombre y la identidad son cosas distintas—
+  y borrarla devuelve sus comercios a «Sin categoría», diciendo antes cuántos
+  son. Al escribir un movimiento a mano se le puede poner la categoría ahí
+  mismo —y crear una sin salirse del formulario—, y eso además le crea el
+  comercio, que antes no pasaba nunca. El modelo también clasifica en las
+  categorías propias.
 
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 52 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1455 pruebas de Python y 281 del frontend, todas en verde.
+**Estado técnico:** 55 operaciones de API en los cuatro contextos, cinco
+procesos en la nube, 1525 pruebas de Python y 295 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
-cola compartido, la paginación de notificaciones).
+cola compartido, la paginación de notificaciones, las categorías propias).
 
 **Pantallas:** están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
@@ -75,9 +85,9 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 52 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta y reabrir cuenta |
-| API desarrollo | 52 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir | ninguna |
+| API producción | 55 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta y las categorías propias |
+| API desarrollo | 55 operaciones | 43 — igual que producción |
+| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
 verificación de correo y la recuperación de contraseña. Las dos webs
@@ -127,9 +137,6 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
-- **Un movimiento escrito a mano nunca crea un comercio.** Encuentra el comercio
-  si ese nombre ya llegó alguna vez por correo; si no, se queda sin comercio para
-  siempre.
 - **Falta decidir si los comercios son de cada usuario o compartidos.** Hoy son
   de cada uno. Compartirlos coincidiría con la intuición, pero los nombres y las
   categorías son decisiones personales, y las veces que alguien visitó un negocio
@@ -168,7 +175,20 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
-
+- 2026-09-04 — **Las categorías propias se corrigen y se borran, desde
+  Comercios.** El nombre dejó de ser la identidad: la clave es opaca, así que
+  arreglar un «Mascotss» es una sola escritura y ningún comercio se mueve —el
+  nombre nuevo se ve al instante, también en los movimientos de antes—. Borrar
+  una devuelve sus comercios a «Sin categoría» diciendo antes cuántos son, y sin
+  sacarlos de la cola de revisión: quitar un cajón no es revisar lo que había
+  dentro. Un panel plegable dentro de Comercios, no una pantalla nueva.- 2026-09-04 — **Cada quien se inventa sus categorías, y un gasto escrito a mano
+  ya no queda huérfano.** Las dieciséis de siempre las ve todo el mundo; encima
+  de esas cada usuario escribe las suyas, con la clave separada (`custom:`) para
+  que una categoría nueva de la aplicación no le cambie el nombre a la de nadie
+  nunca. Al escribir un movimiento se elige la categoría —o se crea ahí mismo, sin
+  salir del formulario— y eso le crea el comercio, que era el hueco por el que
+  esos gastos no aparecían en ningún reporte por categoría. El modelo también
+  clasifica en las categorías propias.
 - 2026-09-04 — **Valorar un fondo con una cifra ya usada hoy vuelve a contar.**
   Ir de 11 a 15, volver a 11 y subir otra vez a 15 dejaba el saldo en 11 y
   respondía 200: el último movimiento repetía la identidad del primero. Ahora la
@@ -196,8 +216,3 @@ AWS (ver Trabas).
   para que enlazarla en la cuenta correcta se los lleve. Dos operaciones nuevas,
   sus botones en la pantalla de Cuentas y el aviso que decía que reabrir «no se
   puede desde la app», que ya no es cierto.
-- 2026-09-03 — **Un solo lector de cola para los tres procesos.** Recibir, borrar
-  y contar vivía copiado en ingesta, comercios y finanzas, y una de las copias
-  dejaba escapar el error: un mensaje que fallaba tumbaba el proceso entero y
-  abandonaba a los que venían detrás en el mismo lote. Ahora el mensaje se queda
-  en la cola, como ya hacía el camino de Lambda.

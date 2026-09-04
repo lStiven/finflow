@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import {
+  categoriesQuery,
+  categoryUsageQuery,
   type Merchant,
   type MerchantFilters,
   type MerchantSort,
@@ -27,7 +29,8 @@ import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { aliasCountLabel, sortLabel, timesSeenLabel } from "@/merchants/aliases";
-import { categoryLabel } from "@/merchants/categories";
+import { CategoryManager } from "@/merchants/CategoryManager";
+import { categoryLabel, categoryLabels, labelFrom } from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -77,6 +80,8 @@ export const Route = createFileRoute("/comercios/")({
         staleTime: "static",
       }),
       context.queryClient.query({ ...merchantCatalogQuery, staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
+      context.queryClient.query(categoryUsageQuery),
     ]),
   component: MerchantsScreen,
 });
@@ -102,6 +107,9 @@ function MerchantsScreen() {
 
   const { data: page } = useSuspenseQuery(merchantsQuery(toFilters(search)));
   const { data: catalog } = useSuspenseQuery(merchantCatalogQuery);
+  // Not in the catalogue and it cannot be: half of this vocabulary is theirs.
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const labels = categoryLabels(categories.categories);
 
   /**
    * Every filter change resets to the first page — page 4 of a new filter is
@@ -169,7 +177,7 @@ function MerchantsScreen() {
                 onChange={(event) =>
                   apply({ category: event.target.value || undefined })
                 }
-                options={catalog.categories.map((option) => ({
+                options={categories.categories.map((option) => ({
                   value: option.value,
                   label: categoryLabel(option.value, option.label),
                 }))}
@@ -199,6 +207,12 @@ function MerchantsScreen() {
               ) : null}
             </div>
 
+            {/* Under the filters, not above them: the list is what this
+                screen is about, and the categories are the buckets it is
+                filtered by — near enough to be found, far enough not to be
+                in the way. */}
+            <CategoryManager />
+
             <p className="text-faint text-xs">
               {page.total === 0
                 ? "Ningún comercio coincide"
@@ -214,7 +228,7 @@ function MerchantsScreen() {
                 <ul>
                   {page.merchants.map((merchant, index) => (
                     <li key={merchant.id}>
-                      <Row merchant={merchant} index={index} />
+                      <Row merchant={merchant} index={index} labels={labels} />
                     </li>
                   ))}
                 </ul>
@@ -425,7 +439,17 @@ function SearchBar({
 
 /* --------------------------------------------------------------- la lista */
 
-function Row({ merchant, index }: { merchant: Merchant; index: number }) {
+function Row({
+  merchant,
+  index,
+  // A row holds a value and nothing else, so a category this person wrote
+  // would render as `custom:mascotas` without the names beside it.
+  labels,
+}: {
+  merchant: Merchant;
+  index: number;
+  labels: Record<string, string>;
+}) {
   return (
     <div
       className="rise flex items-center gap-2 border-line/40 border-b pr-3"
@@ -466,7 +490,7 @@ function Row({ merchant, index }: { merchant: Merchant; index: number }) {
           <span className="mt-0.5 block truncate text-faint text-xs">
             <span className="inline-flex items-center gap-1 align-middle">
               <Tag className="size-3" aria-hidden />
-              {categoryLabel(merchant.category)}
+              {labelFrom(labels, merchant.category)}
             </span>
             <span> · {timesSeenLabel(merchant.times_seen)}</span>
             {merchant.alias_count > 1 ? (

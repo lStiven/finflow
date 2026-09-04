@@ -5,7 +5,7 @@ import dataclasses
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
     AliasOrigin,
-    MerchantCategory,
+    CategoryKey,
     MerchantId,
 )
 from personal_finance.shared.domain.events import Event
@@ -27,7 +27,7 @@ class MerchantEvent(Event):
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class MerchantIdentified(MerchantEvent):
     display_name: str
-    category: MerchantCategory
+    category: CategoryKey
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -59,7 +59,7 @@ class MerchantRenamed(MerchantEvent):
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class MerchantReclassified(MerchantEvent):
-    category: MerchantCategory
+    category: CategoryKey
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

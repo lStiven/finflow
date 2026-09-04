@@ -20,10 +20,9 @@ import {
 import type { ComponentType, ReactNode } from "react";
 import { type SubmitEvent, useState } from "react";
 import {
+  categoriesQuery,
   type MerchantAlias,
-  type MerchantCategory,
   type MerchantDetail,
-  merchantCatalogQuery,
   merchantQuery,
   merchantsForFilterQuery,
   summaryQuery,
@@ -47,7 +46,8 @@ import {
   statusLabel,
   timesSeenLabel,
 } from "@/merchants/aliases";
-import { categoryLabel } from "@/merchants/categories";
+import { CategoryPicker } from "@/merchants/CategoryPicker";
+import { categoryLabels, labelFrom } from "@/merchants/categories";
 import {
   lastAliasBlocker,
   MAX_NAME_LENGTH,
@@ -65,7 +65,7 @@ export const Route = createFileRoute("/comercios/$merchantId")({
         ...merchantQuery(params.merchantId),
         staleTime: "static",
       }),
-      context.queryClient.query({ ...merchantCatalogQuery, staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
       // The other merchants: what "mover a otro" and "fusionar" pick from.
       context.queryClient.query({ ...merchantsForFilterQuery, staleTime: "static" }),
       /*
@@ -82,6 +82,10 @@ function MerchantScreen() {
   const { merchantId } = Route.useParams();
   const navigate = useNavigate();
   const { data: merchant } = useSuspenseQuery(merchantQuery(merchantId));
+  // The chip below holds a value and nothing else, so a category this person
+  // wrote would render as `custom:mascotas` without the names beside it.
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const labels = categoryLabels(categories.categories);
 
   return (
     <AppShell>
@@ -121,7 +125,7 @@ function MerchantScreen() {
             </h1>
             <p className="mt-1 flex flex-wrap items-center gap-2 text-faint text-xs">
               <span className="rounded-full border border-line px-2 py-0.5">
-                {categoryLabel(merchant.category)}
+                {labelFrom(labels, merchant.category)}
               </span>
               <span
                 className={cn(
@@ -406,7 +410,6 @@ function Spinner({ label }: { label: string }) {
  * re-asserting a category the user never looked at.
  */
 function EditSection({ merchant }: { merchant: MerchantDetail }) {
-  const { data: catalog } = useSuspenseQuery(merchantCatalogQuery);
   const edit = useEditMerchant(merchant.id);
   const [name, setName] = useState(merchant.display_name);
   const [category, setCategory] = useState(merchant.category);
@@ -432,7 +435,7 @@ function EditSection({ merchant }: { merchant: MerchantDetail }) {
     try {
       const next = await edit.mutateAsync({
         display_name: nameChanged ? name.trim() : undefined,
-        category: categoryChanged ? (category as MerchantCategory) : undefined,
+        category: categoryChanged ? category : undefined,
       });
       setName(next.display_name);
       setCategory(next.category);
@@ -458,17 +461,12 @@ function EditSection({ merchant }: { merchant: MerchantDetail }) {
             setSaved(null);
           }}
         />
-        <Select
-          label="Categoría"
+        <CategoryPicker
           value={category}
-          onChange={(event) => {
-            setCategory(event.target.value);
+          onChange={(value) => {
+            setCategory(value);
             setSaved(null);
           }}
-          options={catalog.categories.map((option) => ({
-            value: option.value,
-            label: categoryLabel(option.value, option.label),
-          }))}
         />
         {nameChanged && issue ? <p className="text-outgoing text-xs">{issue}</p> : null}
         <Failed error={edit.error} />
@@ -738,7 +736,6 @@ function SplitAliasForm({
   alias: MerchantAlias;
   onDetached: (detached: Detached | null) => void;
 }) {
-  const { data: catalog } = useSuspenseQuery(merchantCatalogQuery);
   const split = useSplitAlias(merchant.id);
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
@@ -756,7 +753,7 @@ function SplitAliasForm({
       const created = await split.mutateAsync({
         fingerprint: alias.fingerprint,
         display_name: name.trim() === "" ? undefined : name.trim(),
-        category: category === "" ? undefined : (category as MerchantCategory),
+        category: category === "" ? undefined : category,
       });
       onDetached({ kind: "split", merchant: created, rawText: alias.raw_text });
       setName("");
@@ -780,15 +777,10 @@ function SplitAliasForm({
         hint="Si lo dejas vacío se queda con el texto del banco."
         onChange={(event) => setName(event.target.value)}
       />
-      <Select
-        label="Categoría"
+      <CategoryPicker
         placeholder="Decidir después"
         value={category}
-        onChange={(event) => setCategory(event.target.value)}
-        options={catalog.categories.map((option) => ({
-          value: option.value,
-          label: categoryLabel(option.value, option.label),
-        }))}
+        onChange={setCategory}
       />
       {issue ? <p className="text-outgoing text-xs">{issue}</p> : null}
       <Failed error={split.error} />

@@ -13,6 +13,7 @@ import { type SubmitEvent, useEffect, useRef, useState } from "react";
 import {
   type Account,
   accountsQuery,
+  categoriesQuery,
   financialCatalogQuery,
   type Transaction,
   transactionQuery,
@@ -30,7 +31,7 @@ import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
 import { describeDeletion } from "@/lib/deletion";
 import { transferBlurb, transferTitle } from "@/lib/transfers";
-import { categoryLabel } from "@/merchants/categories";
+import { categoryLabels, labelFrom } from "@/merchants/categories";
 
 export const Route = createFileRoute("/transacciones/$transactionId")({
   beforeLoad: ({ context }) => {
@@ -44,6 +45,7 @@ export const Route = createFileRoute("/transacciones/$transactionId")({
       }),
       context.queryClient.query({ ...accountsQuery("all"), staleTime: "static" }),
       context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
     ]),
   component: TransactionScreen,
 });
@@ -52,6 +54,10 @@ function TransactionScreen() {
   const { transactionId } = Route.useParams();
   const navigate = useNavigate();
   const { data: movement } = useSuspenseQuery(transactionQuery(transactionId));
+  // The movement carries a category value and nothing else, so one this
+  // person wrote would read as `custom:mascotas` without the names beside it.
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const labels = categoryLabels(categories.categories);
   const [editing, setEditing] = useState(false);
 
   const incoming = movement.direction === "incoming";
@@ -113,7 +119,7 @@ function TransactionScreen() {
             </Row>
           ) : null}
           {movement.merchant?.category ? (
-            <Row label="Categoría">{categoryLabel(movement.merchant.category)}</Row>
+            <Row label="Categoría">{labelFrom(labels, movement.merchant.category)}</Row>
           ) : null}
           <Row label="Cuenta">
             {movement.account_id ? (

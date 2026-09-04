@@ -15,8 +15,8 @@ import { useState } from "react";
 import { originLabel } from "@/accounts/kinds";
 import {
   accountsQuery,
+  categoriesQuery,
   financialCatalogQuery,
-  merchantCatalogQuery,
   merchantsForFilterQuery,
   type Transaction,
   type TransactionFilters,
@@ -34,7 +34,12 @@ import {
   monthKeyOf,
 } from "@/lib/dates";
 import { transferTitle } from "@/lib/transfers";
-import { categoryLabel, isUncategorized } from "@/merchants/categories";
+import {
+  categoryLabel,
+  categoryLabels,
+  isUncategorized,
+  labelFrom,
+} from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -116,7 +121,7 @@ export const Route = createFileRoute("/transacciones/")({
       }),
       context.queryClient.query({ ...accountsQuery("all"), staleTime: "static" }),
       context.queryClient.query({ ...merchantsForFilterQuery, staleTime: "static" }),
-      context.queryClient.query({ ...merchantCatalogQuery, staleTime: "static" }),
+      context.queryClient.query(categoriesQuery),
       context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
     ]),
   component: TransactionsScreen,
@@ -170,7 +175,8 @@ function TransactionsScreen() {
   const { data: page } = useSuspenseQuery(transactionsQuery(toFilters(search)));
   const { data: accounts } = useSuspenseQuery(accountsQuery("all"));
   const { data: merchants } = useSuspenseQuery(merchantsForFilterQuery);
-  const { data: merchantCatalog } = useSuspenseQuery(merchantCatalogQuery);
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const labels = categoryLabels(categories.categories);
   const { data: catalog } = useSuspenseQuery(financialCatalogQuery);
 
   const [panelOpen, setPanelOpen] = useState(false);
@@ -297,7 +303,7 @@ function TransactionsScreen() {
               placeholder="Todas"
               value={search.category ?? ""}
               onChange={(event) => apply({ category: event.target.value || undefined })}
-              options={merchantCatalog.categories.map((option) => ({
+              options={categories.categories.map((option) => ({
                 value: option.value,
                 label: categoryLabel(option.value, option.label),
               }))}
@@ -343,7 +349,7 @@ function TransactionsScreen() {
         {page.transactions.length === 0 ? (
           <Empty filtered={active > 0} />
         ) : (
-          <MovementList transactions={page.transactions} />
+          <MovementList transactions={page.transactions} labels={labels} />
         )}
 
         {page.total > PAGE_SIZE ? (
@@ -510,7 +516,13 @@ function Toggle({
 }
 
 /** Grouped by month, the way a statement reads. */
-function MovementList({ transactions }: { transactions: Transaction[] }) {
+function MovementList({
+  transactions,
+  labels,
+}: {
+  transactions: Transaction[];
+  labels: Record<string, string>;
+}) {
   const months = new Map<string, Transaction[]>();
   for (const movement of transactions) {
     const key = monthKeyOf(movement.occurred_at);
@@ -530,7 +542,7 @@ function MovementList({ transactions }: { transactions: Transaction[] }) {
             <ul>
               {movements.map((movement) => (
                 <li key={movement.id}>
-                  <MovementRow movement={movement} />
+                  <MovementRow movement={movement} labels={labels} />
                 </li>
               ))}
             </ul>
@@ -541,7 +553,15 @@ function MovementList({ transactions }: { transactions: Transaction[] }) {
   );
 }
 
-function MovementRow({ movement }: { movement: Transaction }) {
+function MovementRow({
+  movement,
+  // A row holds a category value and nothing else, so one this person wrote
+  // would render as `custom:mascotas` without the names beside it.
+  labels,
+}: {
+  movement: Transaction;
+  labels: Record<string, string>;
+}) {
   const incoming = movement.direction === "incoming";
   const transfer = movement.transfer;
 
@@ -589,7 +609,7 @@ function MovementRow({ movement }: { movement: Transaction }) {
           {transfer ? <span className="text-violet"> · traslado</span> : null}
           {movement.merchant?.category &&
           !isUncategorized(movement.merchant.category) ? (
-            <span> · {categoryLabel(movement.merchant.category)}</span>
+            <span> · {labelFrom(labels, movement.merchant.category)}</span>
           ) : null}
           {movement.origin === "manual" ? <span> · a mano</span> : null}
           {movement.account_id ? null : (

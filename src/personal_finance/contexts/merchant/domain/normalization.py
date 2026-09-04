@@ -118,6 +118,7 @@ MINIMUM_PARENT_LENGTH = 4
 
 _PROCESSOR_SEPARATOR = "*"
 _NON_ALPHANUMERIC = re.compile(r"[^0-9A-Z]+")
+_NON_SLUG = re.compile(r"[^0-9a-z]+")
 _WHITESPACE = re.compile(r"\s+")
 # A dotted acronym is one word: `S.A.S.` must not become three tokens.
 _DOTTED_ACRONYM = re.compile(r"\b(?:[0-9A-Z]\.){2,}")
@@ -210,3 +211,16 @@ def suggest_display_name(fingerprint: str) -> str:
     rename it to anything they like.
     """
     return " ".join(token.capitalize() for token in fingerprint.split())
+
+
+def derive_slug(raw: str) -> str:
+    """A stable key for a name a person typed, or "" when there is none.
+
+    Deliberately not `normalize_counterparty`: that one is tuned for what a
+    bank writes, and it would read the `PSE*` in a category called `Pse*algo`
+    as a payment processor to strip. This only folds accents and punctuation,
+    which is all a label needs before it becomes a key.
+    """
+    text = _NON_SLUG.sub(" ", _strip_accents(raw).casefold())
+
+    return "-".join(text.split())

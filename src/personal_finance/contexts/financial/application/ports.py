@@ -10,7 +10,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
 )
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -29,6 +29,16 @@ class MerchantAttribution:
     # Whether Merchant still wants somebody to look at this grouping, so a
     # movement can say "attributed, but nobody has confirmed it".
     needs_review: bool
+
+
+class UnknownMerchantCategoryError(Exception):
+    """Raised when a movement names a category its owner does not have.
+
+    Financial's own word for it. Which categories exist is Merchant's answer,
+    but a refusal has to cross the port as something this context already
+    knows about, or the protocol would be handing every caller a dependency on
+    another context's exceptions.
+    """
 
 
 class MerchantDirectory(Protocol):
@@ -60,13 +70,47 @@ class MerchantDirectory(Protocol):
         """
         ...
 
-    def categories(self) -> frozenset[str]:
-        """Every category value a movement can come back attributed with.
+    def categories(self, *, user_id: UserId) -> frozenset[str]:
+        """Every category value this user's movements can come back with.
 
         Financial reads none of them; it only needs the vocabulary to refuse a
         `category` filter that names nothing. Without it a typo answers 200
         with an empty page, which on a money screen is indistinguishable from
         "you spent nothing here".
+
+        Per user because half of that vocabulary is theirs: the categories the
+        app ships are the same for everybody, and the ones somebody wrote for
+        themselves are not.
+        """
+        ...
+
+    def classify(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+        category: str,
+        occurred_at: PosixTime,
+    ) -> MerchantAttribution | None:
+        """File this counterparty text under this category, and say who it is.
+
+        `occurred_at` is the movement's own time, not the moment of the call:
+        a merchant this creates is first seen when the spending happened, so
+        a purchase entered a month late does not read as a merchant discovered
+        today.
+
+        The answer to a movement entered by hand having no merchant at all.
+        Nothing in the automatic path ever learns a name except from a bank
+        email, so a purchase somebody typed in themselves stayed outside every
+        breakdown by category however many times they entered it.
+
+        Financial asks; Merchant decides what that means — whether a merchant
+        is created, or an existing one refiled. None comes back when the text
+        could never be a merchant in the first place, which is not a failure:
+        the movement is recorded either way.
+
+        Raises `UnknownMerchantCategoryError` when the category is not one of
+        this user's.
         """
         ...
 

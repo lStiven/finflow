@@ -39,10 +39,12 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
     DynamoDBAccountRepository,
     DynamoDBTransactionLedger,
 )
+from personal_finance.contexts.merchant.application.categories import CategoryCatalog
 from personal_finance.contexts.merchant.application.commands import (
     RecordSightingCommand,
 )
 from personal_finance.contexts.merchant.application.handlers import (
+    ClassifyCounterpartyUseCase,
     ResolveMerchantUseCase,
 )
 from personal_finance.contexts.merchant.application.queries import (
@@ -51,6 +53,7 @@ from personal_finance.contexts.merchant.application.queries import (
 from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb import (
     PARTITION_KEY as MERCHANT_PARTITION_KEY,
     SORT_KEY as MERCHANT_SORT_KEY,
+    DynamoDBCategoryRepository,
     DynamoDBMerchantRepository,
     DynamoDBProcessedEventStore,
 )
@@ -140,12 +143,24 @@ def directory(
 ) -> MerchantContextDirectory:
     del resolve_merchant
 
+    repository = DynamoDBMerchantRepository(
+        client=dynamodb_client,
+        table_name=MERCHANT_TABLE,
+    )
+    catalog = CategoryCatalog(
+        repository=DynamoDBCategoryRepository(
+            client=dynamodb_client,
+            table_name=MERCHANT_TABLE,
+        ),
+    )
+
     return MerchantContextDirectory(
-        use_case=AttributeCounterpartiesUseCase(
-            repository=DynamoDBMerchantRepository(
-                client=dynamodb_client,
-                table_name=MERCHANT_TABLE,
-            ),
+        use_case=AttributeCounterpartiesUseCase(repository=repository),
+        catalog=catalog,
+        classify=ClassifyCounterpartyUseCase(
+            repository=repository,
+            event_publisher=NullEventPublisher(),
+            categories=catalog,
         ),
     )
 

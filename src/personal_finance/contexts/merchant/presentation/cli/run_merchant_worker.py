@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+from personal_finance.contexts.merchant.application.categories import CategoryCatalog
 from personal_finance.contexts.merchant.application.handlers import (
     ResolveMerchantUseCase,
 )
@@ -20,6 +21,7 @@ from personal_finance.contexts.merchant.infrastructure.messaging.sqs_worker impo
     SQSMerchantWorker,
 )
 from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb import (
+    DynamoDBCategoryRepository,
     DynamoDBMerchantRepository,
     DynamoDBProcessedEventStore,
 )
@@ -71,6 +73,14 @@ def build_worker() -> SQSMerchantWorker:
             ),
             event_publisher=build_merchant_event_publisher(),
             advisor=advisor,
+            # So the model may answer with a category this user wrote, which
+            # is the only way anything ever lands in one automatically.
+            categories=CategoryCatalog(
+                repository=DynamoDBCategoryRepository(
+                    client=get_dynamodb_client(),
+                    table_name=table_name,
+                ),
+            ),
         ),
     )
 

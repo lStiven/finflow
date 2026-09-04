@@ -531,6 +531,13 @@ export interface paths {
          *
          *     An automatic payment, cash, a transfer that produced no alert. The account
          *     is optional: somebody watching only what comes in and goes out has none.
+         *
+         *     `category` is optional and is about the *counterparty*, not this one
+         *     movement: sending it files that name under that category for good, which
+         *     is what keeps a hand-written movement out of the "no merchant" bucket
+         *     every breakdown by category leaves out. It applies to the past movements
+         *     with that same counterparty too, because the attribution is joined when an
+         *     answer is read rather than stored on each movement.
          */
         post: operations["enter_transaction_financial_transactions_post"];
         delete?: never;
@@ -1002,6 +1009,9 @@ export interface paths {
         /**
          * Get Catalog
          * @description What a client may send, and what the words in a response mean.
+         *
+         *     Categories are not here — they depend on who is asking. Read them from
+         *     `GET /merchants/categories`.
          */
         get: operations["get_catalog_merchants_catalog_get"];
         put?: never;
@@ -1021,15 +1031,71 @@ export interface paths {
         };
         /**
          * List Categories
-         * @description The category vocabulary, for a dropdown that cannot drift from it.
+         * @description Everything this caller may file a merchant under, in dropdown order.
+         *
+         *     Authenticated because half of the answer is theirs: the categories the app
+         *     ships, then the ones they wrote for themselves.
+         *
+         *     `with_usage` adds how many merchants sit in each, which costs a read of
+         *     this caller's merchants — so it is asked for rather than always paid, and
+         *     only the screen that manages categories has any use for it.
          */
         get: operations["list_categories_merchants_categories_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Category
+         * @description Add a category of one's own, for spending the shipped list does not
+         *     describe.
+         *
+         *     The name is the whole request: the key its merchants are stored under is
+         *     derived from it, and is not something a client chooses or can change
+         *     later.
+         */
+        post: operations["create_category_merchants_categories_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/merchants/categories/{category_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Category
+         * @description Remove a category of one's own, and say what moved.
+         *
+         *     Every merchant filed under it goes back to `uncategorized`, and their
+         *     movements follow — a movement's category is its merchant's, joined when an
+         *     answer is read. Nothing is deleted but the category itself.
+         *
+         *     Those merchants keep whatever review status they had. Removing a bucket is
+         *     not reviewing what was in it, and marking them confirmed would empty
+         *     somebody's review queue on their behalf.
+         */
+        delete: operations["delete_category_merchants_categories__category_key__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Rename Category
+         * @description Fix the name of a category of one's own.
+         *
+         *     Nothing filed under it moves: the value merchants are stored under is not
+         *     the name and never was, which is what makes correcting a typo one write
+         *     instead of a rewrite of everything in that bucket. The new name shows up
+         *     everywhere at once.
+         *
+         *     The categories the app ships are not editable — they are the same for
+         *     everybody — and naming one here is a 409.
+         */
+        patch: operations["rename_category_merchants_categories__category_key__patch"];
         trace?: never;
     };
     "/merchants/{merchant_id}": {
@@ -1317,10 +1383,33 @@ export interface components {
             /** Categories */
             categories: components["schemas"]["CategoryResponse"][];
         };
-        /** CategoryResponse */
-        CategoryResponse: {
+        /**
+         * CategoryNamePayload
+         * @description A category's name, on the way in. Held short deliberately: it is read
+         *     in a dropdown, in a chip beside a movement and in a chart legend on a
+         *     phone, and a long one makes all three unreadable.
+         */
+        CategoryNamePayload: {
             /** Label */
             label: string;
+        };
+        /**
+         * CategoryResponse
+         * @description One category this caller may file a merchant under.
+         *
+         *     `label` is English for the ones the app ships — `value` is the stable half
+         *     and a client showing another language builds its own words from it — and
+         *     the user's own text for the ones they wrote, which nobody gets to restate.
+         *     `custom` says which of the two it is, so a screen can render the second
+         *     kind as it arrived.
+         */
+        CategoryResponse: {
+            /** Custom */
+            custom: boolean;
+            /** Label */
+            label: string;
+            /** Usage */
+            usage?: number | null;
             /** Value */
             value: string;
         };
@@ -1420,6 +1509,18 @@ export interface components {
             user_id: string;
         };
         /**
+         * DeletedCategoryResponse
+         * @description What was removed, and how much moved with it.
+         */
+        DeletedCategoryResponse: {
+            /** Label */
+            label: string;
+            /** Merchants Moved */
+            merchants_moved: number;
+            /** Value */
+            value: string;
+        };
+        /**
          * DeletedTransactionResponse
          * @description What an erasure took out, and what the balances say now.
          *
@@ -1441,7 +1542,8 @@ export interface components {
         };
         /** EditMerchantPayload */
         EditMerchantPayload: {
-            category?: components["schemas"]["MerchantCategory"] | null;
+            /** Category */
+            category?: string | null;
             /** Display Name */
             display_name?: string | null;
         };
@@ -1493,6 +1595,8 @@ export interface components {
              * @default
              */
             bank: string;
+            /** Category */
+            category?: string | null;
             /** Counterparty */
             counterparty: string;
             /** @default COP */
@@ -1872,15 +1976,13 @@ export interface components {
          * MerchantCatalogResponse
          * @description Every vocabulary this context's endpoints accept or return.
          *
-         *     `categories` repeats what `GET /merchants/categories` already answers.
-         *     That endpoint stays: it is what a client already calls, and one list in
-         *     two places costs nothing next to breaking it.
+         *     Categories are not among them, and cannot be: half of that vocabulary
+         *     belongs to whoever is asking, and this answer is the same for everybody.
+         *     `GET /merchants/categories` is the one place to read it from.
          */
         MerchantCatalogResponse: {
             /** Alias Origins */
             alias_origins: components["schemas"]["CatalogOption"][];
-            /** Categories */
-            categories: components["schemas"]["CatalogOption"][];
             /** Counterparty Kinds */
             counterparty_kinds: components["schemas"]["CatalogOption"][];
             /** Sorts */
@@ -1888,15 +1990,6 @@ export interface components {
             /** Statuses */
             statuses: components["schemas"]["CatalogOption"][];
         };
-        /**
-         * MerchantCategory
-         * @description What kind of spending this merchant represents.
-         *
-         *     Explicit string values: the category is persisted and shown in a dropdown,
-         *     so reordering the members must not rewrite anybody's data.
-         * @enum {string}
-         */
-        MerchantCategory: "uncategorized" | "groceries" | "restaurants" | "transport" | "fuel" | "shopping" | "entertainment" | "subscriptions" | "utilities" | "health" | "education" | "travel" | "fees" | "transfers" | "income" | "other";
         /** MerchantDetailResponse */
         MerchantDetailResponse: {
             /** Alias Count */
@@ -2342,7 +2435,8 @@ export interface components {
          * @description Pull one child out into a merchant of its own.
          */
         SplitAliasPayload: {
-            category?: components["schemas"]["MerchantCategory"] | null;
+            /** Category */
+            category?: string | null;
             /** Display Name */
             display_name?: string | null;
             /** Fingerprint */
@@ -4061,7 +4155,7 @@ export interface operations {
         parameters: {
             query?: {
                 search?: string | null;
-                category?: components["schemas"]["MerchantCategory"] | null;
+                category?: string | null;
                 needs_review?: boolean | null;
                 sort?: components["schemas"]["MerchantSort"];
                 limit?: number;
@@ -4115,7 +4209,9 @@ export interface operations {
     };
     list_categories_merchants_categories_get: {
         parameters: {
-            query?: never;
+            query?: {
+                with_usage?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4129,6 +4225,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CategoryListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_category_merchants_categories_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategoryNamePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_category_merchants_categories__category_key__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedCategoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_category_merchants_categories__category_key__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                category_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CategoryNamePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

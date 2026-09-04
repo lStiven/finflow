@@ -414,11 +414,43 @@
         "title": "CategoryListResponse",
         "type": "object"
       },
-      "CategoryResponse": {
+      "CategoryNamePayload": {
+        "description": "A category's name, on the way in. Held short deliberately: it is read\nin a dropdown, in a chip beside a movement and in a chart legend on a\nphone, and a long one makes all three unreadable.",
         "properties": {
+          "label": {
+            "maxLength": 24,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "CategoryNamePayload",
+        "type": "object"
+      },
+      "CategoryResponse": {
+        "description": "One category this caller may file a merchant under.\n\n`label` is English for the ones the app ships — `value` is the stable half\nand a client showing another language builds its own words from it — and\nthe user's own text for the ones they wrote, which nobody gets to restate.\n`custom` says which of the two it is, so a screen can render the second\nkind as it arrived.",
+        "properties": {
+          "custom": {
+            "title": "Custom",
+            "type": "boolean"
+          },
           "label": {
             "title": "Label",
             "type": "string"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage"
           },
           "value": {
             "title": "Value",
@@ -427,7 +459,8 @@
         },
         "required": [
           "value",
-          "label"
+          "label",
+          "custom"
         ],
         "title": "CategoryResponse",
         "type": "object"
@@ -662,6 +695,30 @@
         "title": "CurrentUserResponse",
         "type": "object"
       },
+      "DeletedCategoryResponse": {
+        "description": "What was removed, and how much moved with it.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "merchants_moved": {
+            "title": "Merchants Moved",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "merchants_moved"
+        ],
+        "title": "DeletedCategoryResponse",
+        "type": "object"
+      },
       "DeletedTransactionResponse": {
         "description": "What an erasure took out, and what the balances say now.\n\n`erased` is a list because a transfer is two rows stating one movement of\nmoney and they go together: a client that assumed one would leave the\nother side on screen pointing at a movement that no longer exists.\n\n`accounts` carries the accounts whose balances the erasure gave money back\nto, already recomputed, so a screen showing a balance does not need a\nsecond call to stop showing money that no longer moved. Empty when the\nmovement was sitting on no account, which is exactly when no balance\nchanged.",
         "properties": {
@@ -692,12 +749,14 @@
           "category": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/MerchantCategory"
+                "maxLength": 64,
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Category"
           },
           "display_name": {
             "anyOf": [
@@ -849,6 +908,18 @@
             "maxLength": 512,
             "title": "Bank",
             "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
           },
           "counterparty": {
             "maxLength": 512,
@@ -1828,20 +1899,13 @@
         "type": "object"
       },
       "MerchantCatalogResponse": {
-        "description": "Every vocabulary this context's endpoints accept or return.\n\n`categories` repeats what `GET /merchants/categories` already answers.\nThat endpoint stays: it is what a client already calls, and one list in\ntwo places costs nothing next to breaking it.",
+        "description": "Every vocabulary this context's endpoints accept or return.\n\nCategories are not among them, and cannot be: half of that vocabulary\nbelongs to whoever is asking, and this answer is the same for everybody.\n`GET /merchants/categories` is the one place to read it from.",
         "properties": {
           "alias_origins": {
             "items": {
               "$ref": "#/components/schemas/CatalogOption"
             },
             "title": "Alias Origins",
-            "type": "array"
-          },
-          "categories": {
-            "items": {
-              "$ref": "#/components/schemas/CatalogOption"
-            },
-            "title": "Categories",
             "type": "array"
           },
           "counterparty_kinds": {
@@ -1867,7 +1931,6 @@
           }
         },
         "required": [
-          "categories",
           "sorts",
           "statuses",
           "alias_origins",
@@ -1875,29 +1938,6 @@
         ],
         "title": "MerchantCatalogResponse",
         "type": "object"
-      },
-      "MerchantCategory": {
-        "description": "What kind of spending this merchant represents.\n\nExplicit string values: the category is persisted and shown in a dropdown,\nso reordering the members must not rewrite anybody's data.",
-        "enum": [
-          "uncategorized",
-          "groceries",
-          "restaurants",
-          "transport",
-          "fuel",
-          "shopping",
-          "entertainment",
-          "subscriptions",
-          "utilities",
-          "health",
-          "education",
-          "travel",
-          "fees",
-          "transfers",
-          "income",
-          "other"
-        ],
-        "title": "MerchantCategory",
-        "type": "string"
       },
       "MerchantDetailResponse": {
         "properties": {
@@ -3015,12 +3055,14 @@
           "category": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/MerchantCategory"
+                "maxLength": 64,
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Category"
           },
           "display_name": {
             "anyOf": [
@@ -5297,7 +5339,7 @@
         ]
       },
       "post": {
-        "description": "Record money the bank never emailed about.\n\nAn automatic payment, cash, a transfer that produced no alert. The account\nis optional: somebody watching only what comes in and goes out has none.",
+        "description": "Record money the bank never emailed about.\n\nAn automatic payment, cash, a transfer that produced no alert. The account\nis optional: somebody watching only what comes in and goes out has none.\n\n`category` is optional and is about the *counterparty*, not this one\nmovement: sending it files that name under that category for good, which\nis what keeps a hand-written movement out of the \"no merchant\" bucket\nevery breakdown by category leaves out. It applies to the past movements\nwith that same counterparty too, because the attribution is joined when an\nanswer is read rather than stored on each movement.",
         "operationId": "enter_transaction_financial_transactions_post",
         "requestBody": {
           "content": {
@@ -6444,7 +6486,8 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/MerchantCategory"
+                  "maxLength": 64,
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -6537,7 +6580,7 @@
     },
     "/merchants/catalog": {
       "get": {
-        "description": "What a client may send, and what the words in a response mean.",
+        "description": "What a client may send, and what the words in a response mean.\n\nCategories are not here — they depend on who is asking. Read them from\n`GET /merchants/categories`.",
         "operationId": "get_catalog_merchants_catalog_get",
         "responses": {
           "200": {
@@ -6559,8 +6602,20 @@
     },
     "/merchants/categories": {
       "get": {
-        "description": "The category vocabulary, for a dropdown that cannot drift from it.",
+        "description": "Everything this caller may file a merchant under, in dropdown order.\n\nAuthenticated because half of the answer is theirs: the categories the app\nships, then the ones they wrote for themselves.\n\n`with_usage` adds how many merchants sit in each, which costs a read of\nthis caller's merchants — so it is asked for rather than always paid, and\nonly the screen that manages categories has any use for it.",
         "operationId": "list_categories_merchants_categories_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "with_usage",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "With Usage",
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6571,9 +6626,173 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "List Categories",
+        "tags": [
+          "merchants"
+        ]
+      },
+      "post": {
+        "description": "Add a category of one's own, for spending the shipped list does not\ndescribe.\n\nThe name is the whole request: the key its merchants are stored under is\nderived from it, and is not something a client chooses or can change\nlater.",
+        "operationId": "create_category_merchants_categories_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryNamePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Category",
+        "tags": [
+          "merchants"
+        ]
+      }
+    },
+    "/merchants/categories/{category_key}": {
+      "delete": {
+        "description": "Remove a category of one's own, and say what moved.\n\nEvery merchant filed under it goes back to `uncategorized`, and their\nmovements follow — a movement's category is its merchant's, joined when an\nanswer is read. Nothing is deleted but the category itself.\n\nThose merchants keep whatever review status they had. Removing a bucket is\nnot reviewing what was in it, and marking them confirmed would empty\nsomebody's review queue on their behalf.",
+        "operationId": "delete_category_merchants_categories__category_key__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "category_key",
+            "required": true,
+            "schema": {
+              "title": "Category Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCategoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Category",
+        "tags": [
+          "merchants"
+        ]
+      },
+      "patch": {
+        "description": "Fix the name of a category of one's own.\n\nNothing filed under it moves: the value merchants are stored under is not\nthe name and never was, which is what makes correcting a typo one write\ninstead of a rewrite of everything in that bucket. The new name shows up\neverywhere at once.\n\nThe categories the app ships are not editable — they are the same for\neverybody — and naming one here is a 409.",
+        "operationId": "rename_category_merchants_categories__category_key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "category_key",
+            "required": true,
+            "schema": {
+              "title": "Category Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CategoryNamePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rename Category",
         "tags": [
           "merchants"
         ]

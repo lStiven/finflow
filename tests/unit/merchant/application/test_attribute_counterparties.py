@@ -17,7 +17,7 @@ from personal_finance.contexts.merchant.application.queries import (
 from personal_finance.contexts.merchant.domain.entities import Merchant
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
-    MerchantCategory,
+    CategoryKey,
     MerchantId,
     MerchantRootKey,
 )
@@ -142,7 +142,7 @@ def test_a_spelling_that_was_resolved_comes_back_with_its_merchant(
     )
 
     assert attributed["TIENDAS ARA 123"].display_name == "Tiendas Ara 123"
-    assert attributed["TIENDAS ARA 123"].category is MerchantCategory.UNCATEGORIZED
+    assert attributed["TIENDAS ARA 123"].category == CategoryKey.uncategorized()
     # Nobody has looked at this grouping, and a movement should be able to say so.
     assert attributed["TIENDAS ARA 123"].needs_review is True
 

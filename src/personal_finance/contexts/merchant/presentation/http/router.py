@@ -19,6 +19,18 @@ from pydantic import BaseModel, Field, model_validator
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
 )
+from personal_finance.contexts.merchant.application.categories import (
+    CategoryCatalog,
+    CategoryView,
+    CreateCategoryCommand,
+    CreateCategoryUseCase,
+    DeleteCategoryCommand,
+    DeleteCategoryUseCase,
+    DeletedCategory,
+    ListCategoriesUseCase,
+    RenameCategoryCommand,
+    RenameCategoryUseCase,
+)
 from personal_finance.contexts.merchant.application.commands import (
     ConfirmMerchantCommand,
     EditMerchantCommand,
@@ -43,17 +55,24 @@ from personal_finance.contexts.merchant.application.queries import (
     MerchantQuery,
     MerchantSort,
 )
+from personal_finance.contexts.merchant.domain.categories import (
+    MAX_CATEGORY_LABEL_LENGTH,
+)
 from personal_finance.contexts.merchant.domain.entities import Merchant
 from personal_finance.contexts.merchant.domain.exceptions import (
+    DuplicateCategoryError,
+    InvalidCategoryLabelError,
     LastAliasError,
+    ShippedCategoryError,
     UnknownAliasError,
+    UnknownCategoryError,
 )
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
     AliasOrigin,
+    CategoryKey,
     CounterpartyKind,
     MerchantAlias,
-    MerchantCategory,
     MerchantId,
     MerchantStatus,
 )
@@ -61,9 +80,10 @@ from personal_finance.contexts.merchant.infrastructure.events import (
     build_merchant_event_publisher,
 )
 from personal_finance.contexts.merchant.infrastructure.persistence.dynamodb import (
+    DynamoDBCategoryRepository,
     DynamoDBMerchantRepository,
 )
-from personal_finance.shared.domain.value_objects import UserId
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
 from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
 from personal_finance.shared.infrastructure.config.settings import get_merchant_settings
 from personal_finance.shared.presentation.catalog import CatalogOption, options
@@ -117,23 +137,57 @@ class MerchantListResponse(BaseModel):
 
 
 class CategoryResponse(BaseModel):
+    """One category this caller may file a merchant under.
+
+    `label` is English for the ones the app ships — `value` is the stable half
+    and a client showing another language builds its own words from it — and
+    the user's own text for the ones they wrote, which nobody gets to restate.
+    `custom` says which of the two it is, so a screen can render the second
+    kind as it arrived.
+    """
+
     value: str
     label: str
+    custom: bool
+    # How many of this caller's merchants sit in it, and null unless
+    # `with_usage` asked — counting means reading their merchants, and every
+    # dropdown in the app reads this list. Movements follow their merchant,
+    # so this is also how much spending moves if the category is removed.
+    usage: int | None = None
 
 
 class CategoryListResponse(BaseModel):
     categories: list[CategoryResponse]
 
 
+class CategoryNamePayload(BaseModel):
+    """A category's name, on the way in. Held short deliberately: it is read
+    in a dropdown, in a chip beside a movement and in a chart legend on a
+    phone, and a long one makes all three unreadable.
+    """
+
+    label: str = Field(min_length=1, max_length=MAX_CATEGORY_LABEL_LENGTH)
+
+
+class DeletedCategoryResponse(BaseModel):
+    """What was removed, and how much moved with it."""
+
+    value: str
+    label: str
+    # Merchants that were filed under it and are now uncategorized, along with
+    # every movement of theirs. Zero is the common answer for a category
+    # created by mistake and removed straight away.
+    merchants_moved: int
+
+
 class MerchantCatalogResponse(BaseModel):
     """Every vocabulary this context's endpoints accept or return.
 
-    `categories` repeats what `GET /merchants/categories` already answers.
-    That endpoint stays: it is what a client already calls, and one list in
-    two places costs nothing next to breaking it.
+    Categories are not among them, and cannot be: half of that vocabulary
+    belongs to whoever is asking, and this answer is the same for everybody.
+    `GET /merchants/categories` is the one place to read it from.
     """
 
-    categories: list[CatalogOption]
     sorts: list[CatalogOption]
     statuses: list[CatalogOption]
     alias_origins: list[CatalogOption]
@@ -146,7 +200,7 @@ class EditMerchantPayload(BaseModel):
         min_length=1,
         max_length=MAX_NAME_LENGTH,
     )
-    category: MerchantCategory | None = None
+    category: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _require_something_to_change(self) -> EditMerchantPayload:
@@ -172,7 +226,7 @@ class SplitAliasPayload(BaseModel):
         min_length=1,
         max_length=MAX_NAME_LENGTH,
     )
-    category: MerchantCategory | None = None
+    category: str | None = Field(default=None, max_length=64)
 
 
 class MergeMerchantsPayload(BaseModel):
@@ -186,6 +240,46 @@ def build_repository() -> DynamoDBMerchantRepository:
     return DynamoDBMerchantRepository(
         client=get_dynamodb_client(),
         table_name=get_merchant_settings().merchants_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def build_category_repository() -> DynamoDBCategoryRepository:
+    return DynamoDBCategoryRepository(
+        client=get_dynamodb_client(),
+        table_name=get_merchant_settings().merchants_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def build_category_catalog() -> CategoryCatalog:
+    return CategoryCatalog(repository=build_category_repository())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_create_category_use_case() -> CreateCategoryUseCase:
+    return CreateCategoryUseCase(repository=build_category_repository())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_categories_use_case() -> ListCategoriesUseCase:
+    return ListCategoriesUseCase(
+        catalog=build_category_catalog(),
+        merchants=build_repository(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_rename_category_use_case() -> RenameCategoryUseCase:
+    return RenameCategoryUseCase(repository=build_category_repository())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_delete_category_use_case() -> DeleteCategoryUseCase:
+    return DeleteCategoryUseCase(
+        repository=build_category_repository(),
+        merchants=build_repository(),
+        event_publisher=build_merchant_event_publisher(),
     )
 
 
@@ -204,6 +298,7 @@ def _build_edit_use_case() -> EditMerchantUseCase:
     return EditMerchantUseCase(
         repository=build_repository(),
         event_publisher=build_merchant_event_publisher(),
+        categories=build_category_catalog(),
     )
 
 
@@ -228,6 +323,7 @@ def _build_split_use_case() -> SplitAliasUseCase:
     return SplitAliasUseCase(
         repository=build_repository(),
         event_publisher=build_merchant_event_publisher(),
+        categories=build_category_catalog(),
     )
 
 
@@ -267,25 +363,143 @@ def get_merge_merchants_use_case() -> MergeMerchantsUseCase:
     return _build_merge_use_case()
 
 
+def get_category_catalog() -> CategoryCatalog:
+    return build_category_catalog()
+
+
+def get_create_category_use_case() -> CreateCategoryUseCase:
+    return _build_create_category_use_case()
+
+
+def get_list_categories_use_case() -> ListCategoriesUseCase:
+    return _build_list_categories_use_case()
+
+
+def get_rename_category_use_case() -> RenameCategoryUseCase:
+    return _build_rename_category_use_case()
+
+
+def get_delete_category_use_case() -> DeleteCategoryUseCase:
+    return _build_delete_category_use_case()
+
+
 CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
 
 
 @router.get("/categories", response_model=CategoryListResponse)
-def list_categories() -> CategoryListResponse:
-    """The category vocabulary, for a dropdown that cannot drift from it."""
+def list_categories(
+    user_id: CurrentUser,
+    use_case: Annotated[ListCategoriesUseCase, Depends(get_list_categories_use_case)],
+    with_usage: bool = False,
+) -> CategoryListResponse:
+    """Everything this caller may file a merchant under, in dropdown order.
+
+    Authenticated because half of the answer is theirs: the categories the app
+    ships, then the ones they wrote for themselves.
+
+    `with_usage` adds how many merchants sit in each, which costs a read of
+    this caller's merchants — so it is asked for rather than always paid, and
+    only the screen that manages categories has any use for it.
+    """
     return CategoryListResponse(
         categories=[
-            CategoryResponse(value=option.value, label=option.label)
-            for option in options(MerchantCategory)
+            _category(view) for view in use_case.execute(user_id, with_usage=with_usage)
         ],
     )
 
 
+@router.post(
+    "/categories",
+    response_model=CategoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_category(
+    payload: CategoryNamePayload,
+    user_id: CurrentUser,
+    use_case: Annotated[CreateCategoryUseCase, Depends(get_create_category_use_case)],
+) -> CategoryResponse:
+    """Add a category of one's own, for spending the shipped list does not
+    describe.
+
+    The name is the whole request: the key its merchants are stored under is
+    derived from it, and is not something a client chooses or can change
+    later.
+    """
+    with _domain_errors():
+        category = use_case.execute(
+            CreateCategoryCommand(user_id=user_id, label=payload.label),
+            now=PosixTime.now(),
+        )
+
+    return CategoryResponse(value=category.id.value, label=category.label, custom=True)
+
+
+@router.patch("/categories/{category_key:path}", response_model=CategoryResponse)
+def rename_category(
+    category_key: str,
+    payload: CategoryNamePayload,
+    user_id: CurrentUser,
+    use_case: Annotated[RenameCategoryUseCase, Depends(get_rename_category_use_case)],
+) -> CategoryResponse:
+    """Fix the name of a category of one's own.
+
+    Nothing filed under it moves: the value merchants are stored under is not
+    the name and never was, which is what makes correcting a typo one write
+    instead of a rewrite of everything in that bucket. The new name shows up
+    everywhere at once.
+
+    The categories the app ships are not editable — they are the same for
+    everybody — and naming one here is a 409.
+    """
+    with _domain_errors():
+        category = use_case.execute(
+            RenameCategoryCommand(
+                user_id=user_id,
+                key=_category_key(category_key),
+                label=payload.label,
+            ),
+        )
+
+    return CategoryResponse(value=category.id.value, label=category.label, custom=True)
+
+
+@router.delete(
+    "/categories/{category_key:path}", response_model=DeletedCategoryResponse
+)
+def delete_category(
+    category_key: str,
+    user_id: CurrentUser,
+    use_case: Annotated[DeleteCategoryUseCase, Depends(get_delete_category_use_case)],
+) -> DeletedCategoryResponse:
+    """Remove a category of one's own, and say what moved.
+
+    Every merchant filed under it goes back to `uncategorized`, and their
+    movements follow — a movement's category is its merchant's, joined when an
+    answer is read. Nothing is deleted but the category itself.
+
+    Those merchants keep whatever review status they had. Removing a bucket is
+    not reviewing what was in it, and marking them confirmed would empty
+    somebody's review queue on their behalf.
+    """
+    with _domain_errors():
+        removed = use_case.execute(
+            DeleteCategoryCommand(
+                user_id=user_id,
+                key=_category_key(category_key),
+            ),
+        )
+
+    return _deleted(removed)
+
+
 @router.get("/catalog", response_model=MerchantCatalogResponse)
 def get_catalog() -> MerchantCatalogResponse:
-    """What a client may send, and what the words in a response mean."""
+    """What a client may send, and what the words in a response mean.
+
+    Categories are not here — they depend on who is asking. Read them from
+    `GET /merchants/categories`.
+    """
     return MerchantCatalogResponse(
-        categories=options(MerchantCategory),
         sorts=options(MerchantSort),
         statuses=options(MerchantStatus),
         alias_origins=options(AliasOrigin),
@@ -297,18 +511,29 @@ def get_catalog() -> MerchantCatalogResponse:
 def list_merchants(
     user_id: CurrentUser,
     use_case: Annotated[ListMerchantsUseCase, Depends(get_list_merchants_use_case)],
+    catalog: Annotated[CategoryCatalog, Depends(get_category_catalog)],
     search: Annotated[str | None, Query(max_length=200)] = None,
-    category: MerchantCategory | None = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
     needs_review: bool | None = None,
     sort: MerchantSort = MerchantSort.LAST_SEEN,
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> MerchantListResponse:
+    with _domain_errors():
+        # Refused rather than answered with an empty page: on a screen about
+        # money, "nothing here" and "you asked for a bucket that does not
+        # exist" must not look the same.
+        wanted = (
+            None
+            if category is None
+            else catalog.resolve(user_id=user_id, key=_category_key(category))
+        )
+
     page = use_case.execute(
         MerchantQuery(
             user_id=user_id,
             search=search,
-            category=category,
+            category=wanted,
             needs_review=needs_review,
             sort=sort,
             limit=limit,
@@ -360,7 +585,7 @@ def edit_merchant(
                 user_id=user_id,
                 merchant_id=_merchant_id(merchant_id),
                 display_name=payload.display_name,
-                category=payload.category,
+                category=_optional_category_key(payload.category),
             ),
         )
 
@@ -429,7 +654,7 @@ def split_alias(
                 merchant_id=_merchant_id(merchant_id),
                 fingerprint=_fingerprint(payload.fingerprint),
                 display_name=payload.display_name,
-                category=payload.category,
+                category=_optional_category_key(payload.category),
             ),
         )
 
@@ -489,6 +714,37 @@ def _alias(alias: MerchantAlias) -> AliasResponse:
     )
 
 
+def _category(view: CategoryView) -> CategoryResponse:
+    return CategoryResponse(
+        value=view.key.value,
+        label=view.label,
+        custom=not view.shipped,
+        usage=view.usage,
+    )
+
+
+def _deleted(removed: DeletedCategory) -> DeletedCategoryResponse:
+    return DeletedCategoryResponse(
+        value=removed.key.value,
+        label=removed.label,
+        merchants_moved=removed.merchants_moved,
+    )
+
+
+def _category_key(value: str) -> CategoryKey:
+    try:
+        return CategoryKey(value=value)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+
+
+def _optional_category_key(value: str | None) -> CategoryKey | None:
+    return None if value is None else _category_key(value)
+
+
 def _merchant_id(value: str) -> MerchantId:
     try:
         return MerchantId.from_string(value)
@@ -544,6 +800,25 @@ def _domain_errors() -> Generator[None]:
     except SameMerchantError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(error),
+        ) from error
+    except DuplicateCategoryError as error:
+        # The name is fine; it is the state of this user's vocabulary that
+        # refuses it, and asking again will refuse it again.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except ShippedCategoryError as error:
+        # Well-formed, and refused by what the world is rather than by what
+        # was asked: those categories are code, not this person's data.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except (InvalidCategoryLabelError, UnknownCategoryError) as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(error),
         ) from error
     except ValueError as error:

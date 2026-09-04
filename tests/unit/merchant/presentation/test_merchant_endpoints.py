@@ -10,6 +10,13 @@ import pytest
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
 )
+from personal_finance.contexts.merchant.application.categories import (
+    CategoryCatalog,
+    CreateCategoryUseCase,
+    DeleteCategoryUseCase,
+    ListCategoriesUseCase,
+    RenameCategoryUseCase,
+)
 from personal_finance.contexts.merchant.application.commands import (
     RecordSightingCommand,
 )
@@ -25,20 +32,31 @@ from personal_finance.contexts.merchant.application.queries import (
     GetMerchantUseCase,
     ListMerchantsUseCase,
 )
+from personal_finance.contexts.merchant.domain.categories import Category
 from personal_finance.contexts.merchant.domain.entities import Merchant
+from personal_finance.contexts.merchant.domain.exceptions import (
+    DuplicateCategoryError,
+)
+from personal_finance.contexts.merchant.domain.normalization import derive_slug
 from personal_finance.contexts.merchant.domain.value_objects import (
     AliasFingerprint,
+    CategoryKey,
     CounterpartyKind,
     MerchantId,
     MerchantRootKey,
 )
 from personal_finance.contexts.merchant.presentation.http.router import (
+    get_category_catalog,
     get_confirm_merchant_use_case,
+    get_create_category_use_case,
+    get_delete_category_use_case,
     get_edit_merchant_use_case,
+    get_list_categories_use_case,
     get_list_merchants_use_case,
     get_merchant_use_case,
     get_merge_merchants_use_case,
     get_move_alias_use_case,
+    get_rename_category_use_case,
     get_split_alias_use_case,
     router,
 )
@@ -103,6 +121,66 @@ class InMemoryMerchantRepository:
         self.merchants.pop((user_id, merchant_id), None)
 
 
+class InMemoryCategoryRepository:
+    """The user's own half of the vocabulary, holding the same rules the
+    conditional writes hold in DynamoDB: a name is claimed by exactly one
+    category, and the claim moves when the name does.
+    """
+
+    def __init__(self) -> None:
+        self.categories: dict[tuple[UserId, CategoryKey], Category] = {}
+        self.names: dict[tuple[UserId, str], CategoryKey] = {}
+
+    def list_by_user(self, user_id: UserId) -> Sequence[Category]:
+        return [
+            category
+            for (owner, _), category in self.categories.items()
+            if owner == user_id
+        ]
+
+    def find(self, *, user_id: UserId, key: CategoryKey) -> Category | None:
+        stored = self.categories.get((user_id, key))
+
+        # A copy, like a real repository hands back: whatever the caller does
+        # to it is not stored until they say so, and a write that is refused
+        # must leave nothing behind.
+        return None if stored is None else _copy(stored)
+
+    def add(self, category: Category) -> None:
+        self._claim(category)
+        self.categories[(category.user_id, category.id)] = _copy(category)
+
+    def rename(self, category: Category, *, previous_label: str) -> None:
+        previous = derive_slug(previous_label)
+
+        if previous != category.name_key:
+            self._claim(category)
+            self.names.pop((category.user_id, previous), None)
+
+        self.categories[(category.user_id, category.id)] = _copy(category)
+
+    def delete(self, category: Category) -> None:
+        self.categories.pop((category.user_id, category.id), None)
+        self.names.pop((category.user_id, category.name_key), None)
+
+    def _claim(self, category: Category) -> None:
+        held = self.names.get((category.user_id, category.name_key))
+
+        if held is not None and held != category.id:
+            raise DuplicateCategoryError(f"{category.label!r} already exists")
+
+        self.names[(category.user_id, category.name_key)] = category.id
+
+
+def _copy(category: Category) -> Category:
+    return Category(
+        id=category.id,
+        user_id=category.user_id,
+        label=category.label,
+        created_at=category.created_at,
+    )
+
+
 class AlwaysNewProcessedEventStore:
     def claim(self, *, user_id: UserId, event_id: uuid.UUID) -> bool:
         del user_id, event_id
@@ -133,8 +211,17 @@ def seed(repository: InMemoryMerchantRepository) -> ResolveMerchantUseCase:
 
 
 @pytest.fixture
-def client(repository: InMemoryMerchantRepository) -> TestClient:
+def category_repository() -> InMemoryCategoryRepository:
+    return InMemoryCategoryRepository()
+
+
+@pytest.fixture
+def client(
+    repository: InMemoryMerchantRepository,
+    category_repository: InMemoryCategoryRepository,
+) -> TestClient:
     publisher = NullEventPublisher()
+    catalog = CategoryCatalog(repository=category_repository)
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user_id] = lambda: USER_ID
@@ -144,9 +231,27 @@ def client(repository: InMemoryMerchantRepository) -> TestClient:
     app.dependency_overrides[get_merchant_use_case] = lambda: GetMerchantUseCase(
         repository=repository,
     )
+    app.dependency_overrides[get_category_catalog] = lambda: catalog
+    app.dependency_overrides[get_create_category_use_case] = lambda: (
+        CreateCategoryUseCase(repository=category_repository)
+    )
+    app.dependency_overrides[get_list_categories_use_case] = lambda: (
+        ListCategoriesUseCase(catalog=catalog, merchants=repository)
+    )
+    app.dependency_overrides[get_rename_category_use_case] = lambda: (
+        RenameCategoryUseCase(repository=category_repository)
+    )
+    app.dependency_overrides[get_delete_category_use_case] = lambda: (
+        DeleteCategoryUseCase(
+            repository=category_repository,
+            merchants=repository,
+            event_publisher=publisher,
+        )
+    )
     app.dependency_overrides[get_edit_merchant_use_case] = lambda: EditMerchantUseCase(
         repository=repository,
         event_publisher=publisher,
+        categories=catalog,
     )
     app.dependency_overrides[get_confirm_merchant_use_case] = lambda: (
         ConfirmMerchantUseCase(
@@ -161,6 +266,7 @@ def client(repository: InMemoryMerchantRepository) -> TestClient:
     app.dependency_overrides[get_split_alias_use_case] = lambda: SplitAliasUseCase(
         repository=repository,
         event_publisher=publisher,
+        categories=catalog,
     )
     app.dependency_overrides[get_merge_merchants_use_case] = lambda: (
         MergeMerchantsUseCase(
@@ -196,6 +302,226 @@ def test_the_categories_a_dropdown_can_offer_are_published(
     values = [category["value"] for category in response.json()["categories"]]
     assert "groceries" in values
     assert "uncategorized" in values
+
+
+def test_a_user_can_add_a_category_and_then_see_it_in_their_own_list(
+    client: TestClient,
+) -> None:
+    created = client.post("/merchants/categories", json={"label": "Mascotas"})
+
+    assert created.status_code == 201, created.text
+    assert created.json()["label"] == "Mascotas"
+    assert created.json()["custom"] is True
+    # Opaque, and nothing to do with the name: the name is the half that can
+    # be corrected later.
+    assert created.json()["value"].startswith("custom:")
+
+    listed = client.get("/merchants/categories").json()["categories"]
+
+    assert listed[-1] == created.json()
+    # The shipped ones are still there, in the order they have always had.
+    assert listed[0]["value"] == "uncategorized"
+    assert listed[0]["custom"] is False
+    # Counting merchants is not free, so nobody pays for it unasked.
+    assert listed[0]["usage"] is None
+
+
+def test_the_same_category_twice_is_a_conflict_not_a_second_category(
+    client: TestClient,
+) -> None:
+    client.post("/merchants/categories", json={"label": "Mascotas"})
+
+    response = client.post("/merchants/categories", json={"label": "mascotas"})
+
+    assert response.status_code == 409
+    assert len(client.get("/merchants/categories").json()["categories"]) == 17
+
+
+def test_a_category_name_too_long_for_a_chip_is_refused(client: TestClient) -> None:
+    response = client.post(
+        "/merchants/categories",
+        json={"label": "Cosas de la casa y del carro"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_category_name_with_nothing_to_key_it_by_is_refused(
+    client: TestClient,
+) -> None:
+    response = client.post("/merchants/categories", json={"label": "!!!"})
+
+    assert response.status_code == 422
+
+
+def test_a_merchant_can_be_filed_under_a_category_its_owner_wrote(
+    client: TestClient,
+    seed: ResolveMerchantUseCase,
+) -> None:
+    merchant = _see(seed, "AGROPECUARIA EL CAMPO")
+    key = _make_category(client, "Mascotas")
+
+    response = client.patch(
+        f"/merchants/{merchant.id.value}",
+        json={"category": key},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["category"] == key
+    # And the list can then be filtered down to it.
+    filtered = client.get(f"/merchants?category={key}").json()
+    assert [found["id"] for found in filtered["merchants"]] == [str(merchant.id.value)]
+
+
+def _make_category(client: TestClient, label: str) -> str:
+    response = client.post("/merchants/categories", json={"label": label})
+
+    assert response.status_code == 201, response.text
+
+    return str(response.json()["value"])
+
+
+def test_a_typo_in_a_category_name_is_fixed_without_moving_anything(
+    client: TestClient,
+    seed: ResolveMerchantUseCase,
+) -> None:
+    """The reason the key is not the name: a correction is one write, and
+    every merchant already filed under it stays where it is.
+    """
+    merchant = _see(seed, "AGROPECUARIA EL CAMPO")
+    key = _make_category(client, "Mascotss")
+    client.patch(f"/merchants/{merchant.id.value}", json={"category": key})
+
+    renamed = client.patch(f"/merchants/categories/{key}", json={"label": "Mascotas"})
+
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json() == {
+        "value": key,
+        "label": "Mascotas",
+        "custom": True,
+        "usage": None,
+    }
+    # Same key, so the merchant never moved and the filter still finds it.
+    still = client.get(f"/merchants?category={key}").json()
+    assert [found["id"] for found in still["merchants"]] == [str(merchant.id.value)]
+
+
+def test_a_rename_onto_a_name_already_taken_is_refused(client: TestClient) -> None:
+    _make_category(client, "Mascotas")
+    other = _make_category(client, "Bici")
+
+    response = client.patch(
+        f"/merchants/categories/{other}", json={"label": "mascotas"}
+    )
+
+    assert response.status_code == 409
+    # And the losing category kept its own name.
+    listed = client.get("/merchants/categories").json()["categories"]
+    assert sorted(c["label"] for c in listed if c["custom"]) == ["Bici", "Mascotas"]
+
+
+def test_a_category_frees_its_old_name_when_it_is_renamed(client: TestClient) -> None:
+    key = _make_category(client, "Mascotas")
+    client.patch(f"/merchants/categories/{key}", json={"label": "Perros"})
+
+    # "Mascotas" is nobody's now, so it can be taken again.
+    assert (
+        client.post("/merchants/categories", json={"label": "Mascotas"}).status_code
+        == 201
+    )
+
+
+def test_removing_a_category_puts_what_was_in_it_back_in_the_default_bucket(
+    client: TestClient,
+    seed: ResolveMerchantUseCase,
+) -> None:
+    merchant = _see(seed, "AGROPECUARIA EL CAMPO")
+    key = _make_category(client, "Mascotas")
+    client.patch(f"/merchants/{merchant.id.value}", json={"category": key})
+
+    removed = client.request("DELETE", f"/merchants/categories/{key}")
+
+    assert removed.status_code == 200, removed.text
+    assert removed.json() == {"value": key, "label": "Mascotas", "merchants_moved": 1}
+
+    # Gone from the vocabulary, and nothing is left naming it.
+    listed = client.get("/merchants/categories").json()["categories"]
+    assert [c for c in listed if c["custom"]] == []
+    assert (
+        client.get(f"/merchants/{merchant.id.value}").json()["category"]
+        == "uncategorized"
+    )
+
+
+def test_removing_a_category_does_not_count_as_reviewing_what_was_in_it(
+    client: TestClient,
+    seed: ResolveMerchantUseCase,
+) -> None:
+    """Filing a merchant confirms it; having its bucket taken away does not.
+
+    Otherwise removing one category would quietly empty somebody's review
+    queue of every merchant that happened to be in it.
+    """
+    reviewed = _see(seed, "AGROPECUARIA EL CAMPO")
+    unreviewed = _see(seed, "TIENDAS ARA 123")
+    key = _make_category(client, "Mascotas")
+    client.patch(f"/merchants/{reviewed.id.value}", json={"category": key})
+
+    client.request("DELETE", f"/merchants/categories/{key}")
+
+    assert client.get(f"/merchants/{reviewed.id.value}").json()["needs_review"] is False
+    assert (
+        client.get(f"/merchants/{unreviewed.id.value}").json()["needs_review"] is True
+    )
+
+
+def test_the_categories_the_app_ships_are_nobodys_to_edit(client: TestClient) -> None:
+    assert (
+        client.patch("/merchants/categories/groceries", json={"label": "Mercado"})
+    ).status_code == 409
+    assert (
+        client.request("DELETE", "/merchants/categories/groceries").status_code == 409
+    )
+
+
+def test_editing_somebody_elses_category_is_indistinguishable_from_a_typo(
+    client: TestClient,
+) -> None:
+    missing = "custom:0123456789abcdef0123456789abcdef"
+
+    assert (
+        client.patch(f"/merchants/categories/{missing}", json={"label": "Mascotas"})
+    ).status_code == 422
+    assert (
+        client.request("DELETE", f"/merchants/categories/{missing}").status_code == 422
+    )
+
+
+def test_usage_says_how_much_would_move_if_a_category_went_away(
+    client: TestClient,
+    seed: ResolveMerchantUseCase,
+) -> None:
+    """The number the confirmation dialog needs, and the reason it is opt-in:
+    answering it means reading the caller's merchants.
+    """
+    merchant = _see(seed, "AGROPECUARIA EL CAMPO")
+    _see(seed, "TIENDAS ARA 123")
+    key = _make_category(client, "Mascotas")
+    client.patch(f"/merchants/{merchant.id.value}", json={"category": key})
+
+    listed = client.get("/merchants/categories?with_usage=true").json()["categories"]
+    usage = {category["value"]: category["usage"] for category in listed}
+
+    assert usage[key] == 1
+    assert usage["uncategorized"] == 1
+    assert usage["groceries"] == 0
+
+
+def test_filtering_by_a_category_nobody_has_is_refused(client: TestClient) -> None:
+    """Not answered with an empty page: on a money screen "nothing here" and
+    "you asked for a bucket that does not exist" must not look the same.
+    """
+    assert client.get("/merchants?category=custom:mascotas").status_code == 422
 
 
 def test_listing_returns_the_users_merchants_with_a_review_badge(
@@ -467,18 +793,14 @@ def test_the_catalog_publishes_every_vocabulary_the_endpoints_use(
     assert response.status_code == 200
 
     catalog = response.json()
-    assert "groceries" in [option["value"] for option in catalog["categories"]]
     assert "last_seen" in [option["value"] for option in catalog["sorts"]]
     assert "confirmed" in [option["value"] for option in catalog["statuses"]]
     assert "manual" in [option["value"] for option in catalog["alias_origins"]]
     assert "person" in [option["value"] for option in catalog["counterparty_kinds"]]
 
 
-def test_the_catalog_and_the_older_categories_endpoint_agree(
-    client: TestClient,
-) -> None:
-    """Two endpoints answer the same list, so nothing may drift between them."""
-    catalog = client.get("/merchants/catalog").json()["categories"]
-    categories = client.get("/merchants/categories").json()["categories"]
-
-    assert catalog == categories
+def test_the_catalog_does_not_publish_categories(client: TestClient) -> None:
+    """It cannot: half of that vocabulary belongs to whoever is asking, and
+    this answer is the same for everybody.
+    """
+    assert "categories" not in client.get("/merchants/catalog").json()
