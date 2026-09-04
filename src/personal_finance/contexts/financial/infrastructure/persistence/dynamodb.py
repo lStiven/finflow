@@ -695,9 +695,16 @@ class DynamoDBAccountRepository:
         self._table_name = table_name
 
     def find(self, *, user_id: UserId, account_id: AccountId) -> Account | None:
+        # Consistent, like the deduplication read in Ingestion and for the
+        # same reason: this balance is what a write is decided against, and a
+        # replica seconds behind decides it wrong. A revaluation refused for a
+        # key already taken asks this exactly once more, to learn whether the
+        # request that took it was its own twin — an answer of "no" from a
+        # stale replica records a gain that happened once and pays it twice.
         response = self._client.get_item(
             TableName=self._table_name,
             Key=_key(user_id, f"{ACCOUNT_PREFIX}{account_id.value}"),
+            ConsistentRead=True,
         )
         item = response.get("Item")
 

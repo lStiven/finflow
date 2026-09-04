@@ -2657,6 +2657,44 @@ def test_stating_the_value_it_already_has_records_nothing(client: TestClient) ->
     assert response.json()["reason"] == "the value has not changed"
 
 
+def test_a_value_the_fund_held_earlier_today_is_recorded_again(
+    client: TestClient,
+) -> None:
+    """The answer used to say 200 over a balance that had not moved.
+
+    11M up to 15M, back to 11M, up to 15M again, in one sitting. The last call
+    repeats the first move exactly, and reporting success while leaving the
+    fund at 11 million is worse than refusing it.
+    """
+    created = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Fondo de inversión",
+            "kind": "investment",
+            "currency": "COP",
+            "opening_balance": "11000000",
+        },
+    )
+    account_id = created.json()["id"]
+
+    for value in ("15000000", "11000000"):
+        client.post(
+            f"/financial/accounts/{account_id}/value",
+            json={"market_value": value},
+        )
+
+    response = client.post(
+        f"/financial/accounts/{account_id}/value",
+        json={"market_value": "15000000"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account"]["balance"] == "15000000"
+    assert body["posted"][0]["amount"] == "4000000"
+    assert body["posted"][0]["direction"] == "incoming"
+
+
 def test_a_debt_cannot_be_revalued(client: TestClient) -> None:
     account_id = _declare_mortgage(client)
 

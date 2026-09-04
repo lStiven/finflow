@@ -91,6 +91,21 @@ DEFAULT_TIMEZONE = "America/Bogota"
 DEFAULT_SCHEDULE_PERIODS = 12
 MAX_SCHEDULE_PERIODS = 600
 
+# How many times one investment may make the exact same move — the same pair of
+# figures, on the same day — before the next one is refused. Each turn past the
+# first costs one round trip to discover it is taken, and a dozen is already
+# far past anybody correcting a typo.
+MAX_VALUATION_TURNS = 12
+
+
+class ValuationTurnsExhaustedError(Exception):
+    """Raised when one move has been repeated all day and cannot take another turn.
+
+    Its own error rather than a quiet non-answer: the request was refused and
+    the balance did not move, which is exactly what the old collision reported
+    as success.
+    """
+
 
 class NotFinancedError(Exception):
     """Raised when an account is asked for arithmetic it has no terms for.
@@ -530,6 +545,54 @@ class RevalueAccountUseCase:
     def execute(
         self, command: RevalueAccountCommand
     ) -> tuple[Account, Transaction | None]:
+        account = self._holding(command)
+        stated = Balance.from_signed(command.market_value, account.currency)
+        occurred_at = command.occurred_at or PosixTime.now()
+
+        for turn in range(1, MAX_VALUATION_TURNS + 1):
+            delta = stated.signed_amount - account.balance.signed_amount
+
+            if delta == 0:
+                # Nothing moved, so nothing is recorded. This is also what
+                # makes a double submit harmless: the second request sees the
+                # value it just set and has nothing left to say.
+                return (account, None)
+
+            transaction = _valuation(
+                account,
+                stated=command.market_value,
+                delta=delta,
+                occurred_at=occurred_at,
+                turn=turn,
+            )
+
+            if _record(account, transaction, self._ledger):
+                self._events.publish(transaction.pull_events())
+                self._events.publish(account.pull_events())
+
+                return (account, transaction)
+
+            transaction.pull_events()
+            # This move, on this day, at this turn, is already written — and
+            # the key cannot say which of the two things that means. The
+            # balance can, so read it again, which the repository does
+            # consistently for this reason. Already at the figure asked for,
+            # and this was the same request arriving twice: nothing is left to
+            # record, the same answer a second identical submit gets when it
+            # arrives late enough to see the value it set. Anywhere else, and
+            # it is a real move back to a figure this fund passed through
+            # earlier today, which needs a turn of its own.
+            account = self._holding(command)
+
+            if account.balance.signed_amount == stated.signed_amount:
+                return (account, None)
+
+        raise ValuationTurnsExhaustedError(
+            f"This value has been stated from the same balance "
+            f"{MAX_VALUATION_TURNS} times today; try again tomorrow",
+        )
+
+    def _holding(self, command: RevalueAccountCommand) -> Account:
         account = self._accounts.find(
             user_id=command.user_id,
             account_id=command.account_id,
@@ -546,50 +609,39 @@ class RevalueAccountUseCase:
                 "restated, not revalued",
             )
 
-        stated = Balance.from_signed(command.market_value, account.currency)
-        delta = stated.signed_amount - account.balance.signed_amount
+        return account
 
-        if delta == 0:
-            # Nothing moved, so nothing is recorded. This is also what makes a
-            # double submit harmless: the second request sees the value it
-            # just set and has nothing left to say.
-            return (account, None)
 
-        occurred_at = command.occurred_at or PosixTime.now()
-        transaction = Transaction.accrue(
-            user_id=account.user_id,
-            account_id=account.id,
-            item=valuation_item(
-                held=account.balance.signed_amount,
-                stated=command.market_value,
-            ),
-            label=VALUATION_LABEL,
-            direction=(
-                MovementDirection.INCOMING if delta > 0 else MovementDirection.OUTGOING
-            ),
-            amount=Money(amount=abs(delta), currency=account.currency),
-            occurred_at=occurred_at,
-            period_end=occurred_at.to_datetime()
-            .astimezone(
-                zone_of(DEFAULT_TIMEZONE),
-            )
-            .date(),
-            bank=account.bank or "",
+def _valuation(
+    account: Account,
+    *,
+    stated: Decimal,
+    delta: Decimal,
+    occurred_at: PosixTime,
+    turn: int,
+) -> Transaction:
+    """The row one revaluation leaves: the gap between the two figures."""
+    return Transaction.accrue(
+        user_id=account.user_id,
+        account_id=account.id,
+        item=valuation_item(
+            held=account.balance.signed_amount,
+            stated=stated,
+            turn=turn,
+        ),
+        label=VALUATION_LABEL,
+        direction=(
+            MovementDirection.INCOMING if delta > 0 else MovementDirection.OUTGOING
+        ),
+        amount=Money(amount=abs(delta), currency=account.currency),
+        occurred_at=occurred_at,
+        period_end=occurred_at.to_datetime()
+        .astimezone(
+            zone_of(DEFAULT_TIMEZONE),
         )
-
-        if not _record(account, transaction, self._ledger):
-            transaction.pull_events()
-            stored = self._ledger.find(
-                user_id=account.user_id,
-                transaction_id=transaction.id.value,
-            )
-
-            return (account, stored)
-
-        self._events.publish(transaction.pull_events())
-        self._events.publish(account.pull_events())
-
-        return (account, transaction)
+        .date(),
+        bank=account.bank or "",
+    )
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

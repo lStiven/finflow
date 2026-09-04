@@ -147,10 +147,6 @@ AWS (ver Trabas).
   «intereses pendientes» ignora la fecha de vencimiento, así que un CDT que
   venció hace un año muestra un rendimiento que crece cada mes. El registro de
   los cortes sí respeta el vencimiento; es solo lo proyectado lo que miente.
-- **Valorar un fondo dos veces el mismo día con la misma cifra no hace nada.**
-  Ir de 11 a 15, volver a 11 y subir otra vez a 15 en un mismo día deja el saldo
-  en 11: el segundo movimiento tiene la misma identidad que el primero y la
-  escritura condicional lo rechaza, mientras la respuesta dice 200.
 - **Falta decidir qué hacer con el saldo que reporta el banco** en algunas
   alertas: o corrige el saldo que la aplicación lleva, o se guarda solo como
   referencia. Los correos llegan desordenados, así que corregir exige distinguir
@@ -173,6 +169,13 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-04 — **Valorar un fondo con una cifra ya usada hoy vuelve a contar.**
+  Ir de 11 a 15, volver a 11 y subir otra vez a 15 dejaba el saldo en 11 y
+  respondía 200: el último movimiento repetía la identidad del primero. Ahora la
+  identidad lleva además el turno de ese movimiento en el día, y solo se pasa al
+  siguiente turno cuando el saldo releído no es ya la cifra pedida — que es lo
+  que sigue rechazando un doble envío. Doce turnos por movimiento y día; el
+  siguiente es un 409, no un 200 mentiroso.
 - 2026-09-04 — **La lista de notificaciones ya no lee toda la historia para
   mostrar una página.** El índice no tenía orden, así que «lo más reciente
   primero» salía de leerlo todo y ordenar en memoria: veinte correos costaban
@@ -198,12 +201,3 @@ AWS (ver Trabas).
   dejaba escapar el error: un mensaje que fallaba tumbaba el proceso entero y
   abandonaba a los que venían detrás en el mismo lote. Ahora el mensaje se queda
   en la cola, como ya hacía el camino de Lambda.
-- 2026-09-03 — **Un correo reenviado a mano ya se lee con la plantilla del
-  banco.** El banco se identificaba solo por el remitente del sobre, así que un
-  reenvío hecho a mano —que sale de tu propia dirección— pasaba de largo por las
-  plantillas y caía en la LLM, que rechaza un pago de tarjeta a propósito porque
-  nombra dos instrumentos propios. Ahora, y solo cuando el remitente no nombra
-  ningún banco, se lee el encabezado del reenvío. Los tres correos así en
-  desarrollo quedaron en `pending_fallback` sin registrar nada; reenviarlos otra
-  vez ya entra. 23 pruebas nuevas, incluidas las del camino automático para que
-  no se mueva.

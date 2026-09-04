@@ -538,8 +538,18 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   for a savings account whose history is incomplete, and wrong here, because
   the gain then lives in the opening balance and every report answers that the
   position returned nothing. `POST /accounts/{id}/value` records the
-  difference as a movement instead, keyed by the value stated so a double
-  submit is refused and a correction still lands. Fixed income (a CDT, a
+  difference as a movement instead, keyed by the move it makes — both figures,
+  never the target alone — plus which turn that move is taking today. The two
+  ends alone were not enough: 11M, 15M, 11M, 15M in one day ends on a move
+  identical to the first, which collided and answered 200 over a balance that
+  had not moved. A taken key is now retried on the next turn, but only when a
+  fresh read shows the balance is *not* already the figure asked for — a double
+  submit fails that test, since the request that won left it exactly there, so
+  it is still refused as before. Twelve turns for one move in one day is the
+  cap, and the thirteenth is a 409 rather than a lie. That fresh read is why
+  `DynamoDBAccountRepository.find` is strongly consistent: from a replica a
+  second behind, a losing double submit reads the old balance, decides it is a
+  correction, takes the next turn and pays one gain twice. Fixed income (a CDT, a
   remunerated account) accrues like a loan in reverse; variable income carries
   no rate, and saying so is the honest answer rather than projecting a share
   price.

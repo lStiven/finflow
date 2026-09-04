@@ -14,6 +14,7 @@ writes a key the ledger already holds and is refused there.
 """
 
 from collections.abc import Sequence
+import copy
 import datetime as dt
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -183,6 +184,56 @@ class FakeLedger:
 
     def list_unassigned(self, user_id: UserId) -> Sequence[Transaction]:
         return []
+
+
+class RacingAccounts(FakeAccounts):
+    """Accounts that hand out a copy per read, the way a stored one does.
+
+    Enough to play a race: what a request holds stops being what storage says
+    the moment somebody else writes, which is the whole situation a losing
+    write has to recognise.
+    """
+
+    def find(self, *, user_id: UserId, account_id: AccountId) -> Account | None:
+        account = super().find(user_id=user_id, account_id=account_id)
+
+        return None if account is None else copy.deepcopy(account)
+
+
+class RacingLedger(FakeLedger):
+    """A ledger that lets somebody else win the first write.
+
+    The row lands and the stored balance moves — by another request identical
+    to this one — and the caller is told its key was taken.
+    """
+
+    def __init__(self, accounts: FakeAccounts) -> None:
+        super().__init__()
+        self._accounts = accounts
+        self._raced = False
+
+    def record(
+        self,
+        *,
+        transaction: Transaction,
+        balance_delta: Decimal | None,
+    ) -> bool:
+        if self._raced:
+            return super().record(
+                transaction=transaction,
+                balance_delta=balance_delta,
+            )
+
+        self._raced = True
+        self.rows[transaction.id.value] = (transaction, balance_delta)
+        account_id = transaction.account_id
+
+        if account_id is not None:
+            stored = self._accounts.by_id[str(account_id.value)]
+            stored.apply(transaction.as_movement())
+            stored.pull_events()
+
+        return False
 
 
 class RecordingPublisher:
@@ -854,6 +905,75 @@ def test_stating_a_value_back_to_one_already_used_today_still_lands() -> None:
     assert accounts.by_id[str(account.id.value)].balance.signed_amount == Decimal(
         "11000000",
     )
+
+
+def test_a_value_held_earlier_today_can_be_stated_again() -> None:
+    """The step the round trip left stuck, and the reason turns exist.
+
+    11M, 15M, 11M, and back up to 15M, all on one day. The fourth repeats the
+    second exactly — same balance, same target, same day — so keyed by the
+    move alone it wrote a key the ledger already held, was refused, and left
+    the fund at 11 million under an answer that reported success.
+    """
+    accounts, ledger = FakeAccounts(), FakeLedger()
+    account = _cdt(accounts, balance="11000000")
+    use_case = RevalueAccountUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=RecordingPublisher(),
+    )
+
+    for value in ("15000000", "11000000", "15000000"):
+        use_case.execute(
+            RevalueAccountCommand(
+                user_id=USER,
+                account_id=account.id,
+                market_value=Decimal(value),
+            ),
+        )
+
+    assert accounts.by_id[str(account.id.value)].balance.signed_amount == Decimal(
+        "15000000",
+    )
+    # Three moves, three rows: the gain, the correction, and the gain again.
+    assert [str(row.amount.amount) for row in ledger.list_all(USER)] == [
+        "4000000",
+        "4000000",
+        "4000000",
+    ]
+
+
+def test_a_double_submit_that_loses_a_race_records_nothing_twice() -> None:
+    """The protection the turns must not undo.
+
+    Two identical requests read 11 million before either wrote. One wins, and
+    the other finds both the key taken and the balance already where it was
+    going to put it — which is what tells it apart from the correction above,
+    where the balance had moved on. Taking another turn here would record a
+    gain of four million that happened once and was paid for twice.
+    """
+    accounts = RacingAccounts()
+    account = _cdt(accounts, balance="11000000")
+    ledger = RacingLedger(accounts)
+
+    updated, movement = RevalueAccountUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=RecordingPublisher(),
+    ).execute(
+        RevalueAccountCommand(
+            user_id=USER,
+            account_id=account.id,
+            market_value=Decimal("15000000"),
+        ),
+    )
+
+    assert updated.balance.signed_amount == Decimal("15000000")
+    # One row, and nothing claimed as posted by the request that lost — the
+    # same answer the second submit gets when it arrives late enough to read
+    # the value the first one set.
+    assert movement is None
+    assert [str(row.amount.amount) for row in ledger.list_all(USER)] == ["4000000"]
 
 
 def test_a_period_that_has_not_closed_cannot_be_charged_by_asking_nicely() -> None:

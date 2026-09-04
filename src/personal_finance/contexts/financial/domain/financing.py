@@ -1237,8 +1237,9 @@ EARNINGS_LABEL = "Rendimientos"
 VALUATION_LABEL = "Valoración"
 
 
-def valuation_item(*, held: Decimal, stated: Decimal) -> str:
-    """The key one revaluation is identified by: the move it makes.
+def valuation_item(*, held: Decimal, stated: Decimal, turn: int = 1) -> str:
+    """The key one revaluation is identified by: the move it makes, and which
+    turn that move is taking today.
 
     Both ends of it, not the target alone. Stating the same figure twice from
     the same balance is one revaluation, so a double submit lands on a key the
@@ -1250,8 +1251,23 @@ def valuation_item(*, held: Decimal, stated: Decimal) -> str:
     the first one's key. It would be refused, the balance would stay at 15
     million, and the answer would report success. Two ends make every step of
     that sequence its own row.
+
+    Two ends are not enough for the step after that one. Going back up to
+    15 000 000 repeats the first move exactly — same balance, same target,
+    same day — so it collided in turn, leaving the fund at 11 million under a
+    successful answer. `turn` is what tells those apart: the caller takes the
+    first turn, and only moves to the next one when the key is taken *and* the
+    balance is not already the figure asked for. A double submit fails that
+    second test — the winning request left the balance exactly there — so it
+    is still refused on the first turn, unchanged. The first turn carries no
+    suffix, which leaves every key already written alone.
     """
-    return f"valuation:{held}->{stated}"
+    if turn < 1:
+        raise ValueError(f"A revaluation takes at least one turn, not {turn}")
+
+    move = f"valuation:{held}->{stated}"
+
+    return move if turn == 1 else f"{move}#{turn}"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

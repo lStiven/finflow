@@ -28,12 +28,14 @@ from personal_finance.contexts.financial.application.commands import (
     ClearFinancingCommand,
     EnterTransferLegCommand,
     OpenAccountCommand,
+    RevalueAccountCommand,
     SetLoanTermsCommand,
 )
 from personal_finance.contexts.financial.application.financing import (
     AccrueFinancingUseCase,
     ManageFinancingUseCase,
     ReadFinancingUseCase,
+    RevalueAccountUseCase,
 )
 from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
@@ -343,6 +345,57 @@ def test_running_the_accrual_again_writes_nothing_to_the_table(
     assert again[0].skipped == rows
     assert len(ledger.list_movements(user_id=USER_ID, account_id=account.id)) == rows
     assert after.balance.signed_amount == balance.balance.signed_amount
+
+
+def test_a_fund_walked_back_to_a_value_it_held_today_lands_on_the_table(
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """The sequence a fake ledger cannot refuse the way the table does.
+
+    11M, 15M, 11M, 15M in one day. The last move repeats the first exactly, so
+    it meets the same conditional write, and what has to come back is a stored
+    balance of 15 million with three rows behind it — not the 11 million a
+    refused write used to leave under a successful answer.
+    """
+    account = ManageAccountsUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=NullEventPublisher(),
+    ).open(
+        OpenAccountCommand(
+            user_id=USER_ID,
+            name="Fondo de inversión",
+            kind=AccountKind.INVESTMENT,
+            currency=Currency.COP,
+            opening_balance=_cop("11000000"),
+        ),
+    )
+    revalue = RevalueAccountUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=NullEventPublisher(),
+    )
+
+    for value in ("15000000", "11000000", "15000000"):
+        revalue.execute(
+            RevalueAccountCommand(
+                user_id=USER_ID,
+                account_id=account.id,
+                market_value=Decimal(value),
+            ),
+        )
+
+    stored = accounts.find(user_id=USER_ID, account_id=account.id)
+    rows = ledger.list_movements(user_id=USER_ID, account_id=account.id)
+
+    assert stored is not None
+    assert stored.balance.signed_amount == Decimal("15000000")
+    assert [str(row.amount.amount) for row in rows] == [
+        "4000000",
+        "4000000",
+        "4000000",
+    ]
 
 
 def test_the_payoff_reads_back_from_what_the_table_holds(

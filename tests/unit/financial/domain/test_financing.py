@@ -625,3 +625,26 @@ def test_a_revaluation_is_keyed_by_the_move_it_makes() -> None:
     # And the same move twice is still the same move, which is what refuses a
     # double submit.
     assert third == valuation_item(held=Decimal("15000000"), stated=Decimal("11000000"))
+
+
+def test_a_move_repeated_in_a_day_can_take_another_turn() -> None:
+    # The step after the round trip: back up to 15M repeats the very first
+    # move, so the pair alone is not enough to tell the two apart.
+    first = valuation_item(held=Decimal("11000000"), stated=Decimal("15000000"))
+    again = valuation_item(
+        held=Decimal("11000000"),
+        stated=Decimal("15000000"),
+        turn=2,
+    )
+
+    assert first != again
+    # The first turn is spelled the way it always was, so no row already
+    # written changes its key.
+    assert first == valuation_item(
+        held=Decimal("11000000"),
+        stated=Decimal("15000000"),
+        turn=1,
+    )
+
+    with pytest.raises(ValueError, match="at least one turn"):
+        valuation_item(held=Decimal(0), stated=Decimal("1"), turn=0)

@@ -57,6 +57,7 @@ from personal_finance.contexts.financial.application.financing import (
     NotFinancedError,
     ReadFinancingUseCase,
     RevalueAccountUseCase,
+    ValuationTurnsExhaustedError,
 )
 from personal_finance.contexts.financial.application.handlers import (
     AccountAlreadyExistsError,
@@ -2834,6 +2835,15 @@ def _domain_errors() -> Generator[None]:
         # that this account never answered to it. 409, and not silence: the
         # card is presumably on another account, and a 204 would report that
         # as done.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(error),
+        ) from error
+    except ValuationTurnsExhaustedError as error:
+        # The account exists and the figure is fine; what refuses it is how
+        # many times today this exact move was already made. 409, and loudly:
+        # a 200 over a balance that never moved is the bug this path exists
+        # to not have.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(error),
