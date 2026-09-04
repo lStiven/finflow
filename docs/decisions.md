@@ -2154,3 +2154,12 @@ to whatever ends up serving the bundle, which the bundle is not told.
   `message` is the API's own `detail` string and never carries the code, so
   `message.includes("409")` looked right and could not fire. Its test passed
   because it fabricated the error it wanted.
+- **A `<form>` nested in a `<form>` is invalid HTML and the browser drops the
+  inner one.** Extracting the category naming UI into a component shaped like
+  a form put one inside the movement form and inside the merchant's own edit
+  form: clicking its button submitted the *outer* form, the page reloaded, and
+  the category was never created — while the identical component on the
+  Comercios panel, which is nested in nothing, worked. Anything reusable that
+  can land inside a form is a `<div>` with ordinary buttons and Enter handled
+  by hand. Reported by the user and fixed 2026-09-04; React only says so at
+  runtime, so neither the type check nor the tests caught it.

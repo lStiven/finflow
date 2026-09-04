@@ -5,9 +5,17 @@
  * movement form, and correcting one on the Comercios screen — so the rules a
  * person meets are the same in both: the same length, the same refusal, the
  * same words for it.
+ *
+ * Deliberately **not** a `<form>`, even though that is what it is shaped like.
+ * Two of the three places this appears are already inside one — the movement
+ * form and the merchant's own "cómo lo llamas" form — and a form nested in a
+ * form is invalid HTML: the browser ignores the inner one, so pressing the
+ * button submitted the *outer* form instead. The page reloaded, the category
+ * was never created, and whatever had been typed into the screen went with
+ * it. So the button is an ordinary button and Enter is handled by hand.
  */
 
-import { type SubmitEvent, useState } from "react";
+import { type KeyboardEvent, useState } from "react";
 import type { CategoryOption } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
 import { Field } from "@/components/ui/Field";
@@ -52,20 +60,18 @@ export function CategoryNameForm({
   const taken = isNameTaken(trimmed, categories);
   const canSubmit = !pending && !taken && trimmed.length >= MIN_LENGTH;
 
-  function submit(event: SubmitEvent<HTMLFormElement>) {
+  function onEnter(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+
+    // Always, even when the name is not usable yet: an input inside a form
+    // submits that form on Enter, and the form around this one saves a
+    // movement or a merchant that the reader has not finished with.
     event.preventDefault();
-    // This form lives inside the movement form on the Nueva transacción
-    // screen. Submitting here must name a category, never save a movement
-    // that is only half written — which is what stopping the event does.
-    event.stopPropagation();
     if (canSubmit) onSubmit(trimmed);
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="flex flex-col gap-3 rounded-xl border border-violet/25 bg-violet/8 p-3.5"
-    >
+    <div className="flex flex-col gap-3 rounded-xl border border-violet/25 bg-violet/8 p-3.5">
       <Field
         label={label}
         autoFocus
@@ -74,6 +80,7 @@ export function CategoryNameForm({
         hint={`Corta: máximo ${MAX_CATEGORY_LABEL_LENGTH} caracteres, porque se lee en la lista y en las gráficas.`}
         value={name}
         onChange={(event) => setName(event.target.value)}
+        onKeyDown={onEnter}
       />
       {taken ? (
         <p role="alert" className="text-outgoing text-sm">
@@ -86,13 +93,13 @@ export function CategoryNameForm({
         </p>
       ) : null}
       <div className="flex gap-3">
-        <Button type="button" variant="ghost" full onClick={onCancel}>
+        <Button variant="ghost" full onClick={onCancel}>
           Cancelar
         </Button>
-        <Button type="submit" full disabled={!canSubmit}>
+        <Button full disabled={!canSubmit} onClick={() => onSubmit(trimmed)}>
           {pending ? pendingLabel : submitLabel}
         </Button>
       </div>
-    </form>
+    </div>
   );
 }
