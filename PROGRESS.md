@@ -59,7 +59,7 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 55 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1525 pruebas de Python y 295 del frontend, todas en verde.
+procesos en la nube, 1526 pruebas de Python y 295 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias).
@@ -175,13 +175,19 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-12 — **Bancolombia manda desde más subdominios de alerta.** Llegó una
+  alerta real desde `ayn.notificacionesbancolombia.com`, que no estaba en el
+  registro: la plantilla no se elegía y el correo se iba al modelo. Agregado al
+  registro, a la pantalla de conectar y a la guía. Aparte hay que aprobarlo en
+  la lista de remitentes de cada usuario, si no el correo ni entra.
 - 2026-09-04 — **Las categorías propias se corrigen y se borran, desde
   Comercios.** El nombre dejó de ser la identidad: la clave es opaca, así que
   arreglar un «Mascotss» es una sola escritura y ningún comercio se mueve —el
   nombre nuevo se ve al instante, también en los movimientos de antes—. Borrar
   una devuelve sus comercios a «Sin categoría» diciendo antes cuántos son, y sin
   sacarlos de la cola de revisión: quitar un cajón no es revisar lo que había
-  dentro. Un panel plegable dentro de Comercios, no una pantalla nueva.- 2026-09-04 — **Cada quien se inventa sus categorías, y un gasto escrito a mano
+  dentro. Un panel plegable dentro de Comercios, no una pantalla nueva.
+- 2026-09-04 — **Cada quien se inventa sus categorías, y un gasto escrito a mano
   ya no queda huérfano.** Las dieciséis de siempre las ve todo el mundo; encima
   de esas cada usuario escribe las suyas, con la clave separada (`custom:`) para
   que una categoría nueva de la aplicación no le cambie el nombre a la de nadie
@@ -210,9 +216,3 @@ AWS (ver Trabas).
   fallidos apuntan a ese tema y están en OK. `just alerts-prod` / `alerts-dev`
   responden quién recibe, preguntándole al tema y no a CloudFormation, que es lo
   que hacía invisible el problema.
-- 2026-09-03 — **Una tarjeta se puede sacar de la cuenta equivocada, y una
-  cuenta cerrada se puede volver a abrir.** Desenlazar suelta los movimientos que
-  entraron por esa tarjeta —vuelven a quedar sin asignar y el saldo se recalcula—
-  para que enlazarla en la cuenta correcta se los lleve. Dos operaciones nuevas,
-  sus botones en la pantalla de Cuentas y el aviso que decía que reabrir «no se
-  puede desde la app», que ya no es cierto.

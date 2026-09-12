@@ -39,6 +39,12 @@ class DeterministicParser(Protocol):
 BANK_DOMAINS: Mapping[str, str] = {
     "an.notificacionesbancolombia.com": BANCOLOMBIA,
     "notificacionesbancolombia.com": BANCOLOMBIA,
+    # Another alert subdomain, seen in the wild on 2026-09-12: the bank runs
+    # more than one, same templates behind each. Listed one by one rather than
+    # matched by a suffix — anything looser also accepts
+    # `notificacionesbancolombia.com.evil.co`. Only the domains actually
+    # observed belong here.
+    "ayn.notificacionesbancolombia.com": BANCOLOMBIA,
     "bancolombia.com.co": BANCOLOMBIA,
     # Lulo sends from `notificaciones@lulobank.com`. Its message ids come from
     # Amazon SES, which is where the mail is *sent* from and is shared with

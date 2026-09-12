@@ -28,6 +28,13 @@ def test_matching_is_by_domain_not_by_full_address() -> None:
     )
 
 
+def test_the_ayn_alert_domain_resolves_to_bancolombia() -> None:
+    registry = ParserRegistry()
+    sender = EmailAddress("alertasynotificaciones@ayn.notificacionesbancolombia.com")
+
+    assert isinstance(registry.for_sender(sender), BancolombiaParser)
+
+
 def test_an_unknown_sender_has_no_parser() -> None:
     registry = ParserRegistry()
 
