@@ -59,7 +59,7 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 55 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1526 pruebas de Python y 295 del frontend, todas en verde.
+procesos en la nube, 1539 pruebas de Python y 295 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias).
@@ -175,6 +175,13 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-12 — **Financial ya habla hacia afuera.** Era el único contexto sin
+  traductor ni publicador: sus eventos iban a un log que ni siquiera llevaba el
+  monto. Ahora salen dos hechos a `finflow.financial` —que se movió plata y que
+  un saldo cambió por ello—, campo por campo y con el dinero como string. Todo
+  lo demás (abrir, renombrar, cerrar, reconstruir, editar, borrar) se queda
+  dentro: es cómo lleva sus libros, no un contrato. Sigue faltando el canal que
+  le hable al usuario, así que todavía no se nota desde la app.
 - 2026-09-12 — **Bancolombia manda desde más subdominios de alerta.** Llegó una
   alerta real desde `ayn.notificacionesbancolombia.com`, que no estaba en el
   registro: la plantilla no se elegía y el correo se iba al modelo. Agregado al
@@ -202,17 +209,3 @@ AWS (ver Trabas).
   siguiente turno cuando el saldo releído no es ya la cifra pedida — que es lo
   que sigue rechazando un doble envío. Doce turnos por movimiento y día; el
   siguiente es un 409, no un 200 mentiroso.
-- 2026-09-04 — **La lista de notificaciones ya no lee toda la historia para
-  mostrar una página.** El índice no tenía orden, así que «lo más reciente
-  primero» salía de leerlo todo y ordenar en memoria: veinte correos costaban
-  lo mismo que dos mil. Ahora el índice está ordenado por fecha de llegada,
-  DynamoDB entrega la ventana y una fila de más responde si hay otra página.
-  Los totales por estado, que sí exigen mirar todo, quedan detrás de
-  `with_counts=true`. Falta borrar a mano el índice viejo tras desplegar.
-- 2026-09-03 — **Las alarmas de producción ya le llegan a alguien.** El tema
-  estaba sin un solo suscriptor y CloudFormation lo daba por creado, así que
-  redesplegar no lo arreglaba. Suscrito y confirmado desde el buzón; comprobado
-  contra AWS que la suscripción es real y que las tres alarmas de mensajes
-  fallidos apuntan a ese tema y están en OK. `just alerts-prod` / `alerts-dev`
-  responden quién recibe, preguntándole al tema y no a CloudFormation, que es lo
-  que hacía invisible el problema.

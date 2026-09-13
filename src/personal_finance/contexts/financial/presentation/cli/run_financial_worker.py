@@ -11,6 +11,9 @@ from personal_finance.contexts.financial.application.handlers import (
     RecordMovementUseCase,
     RecordTransferUseCase,
 )
+from personal_finance.contexts.financial.infrastructure.events import (
+    build_financial_event_publisher,
+)
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
     SQSFinancialWorker,
 )
@@ -27,9 +30,6 @@ from personal_finance.shared.infrastructure.config.settings import (
 )
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,
-)
-from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
-    LoggingEventPublisher,
 )
 from personal_finance.shared.presentation.worker_loop import drain_until_stopped
 
@@ -51,7 +51,7 @@ def build_worker() -> SQSFinancialWorker:
     table_name = settings.accounts_table
     accounts = DynamoDBAccountRepository(client=dynamodb, table_name=table_name)
     ledger = DynamoDBTransactionLedger(client=dynamodb, table_name=table_name)
-    events = LoggingEventPublisher()
+    events = build_financial_event_publisher()
 
     return SQSFinancialWorker(
         client=get_sqs_client(),

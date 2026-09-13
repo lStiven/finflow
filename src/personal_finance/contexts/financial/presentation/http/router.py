@@ -144,6 +144,9 @@ from personal_finance.contexts.financial.domain.value_objects import (
     TransactionStatus,
     TransferRole,
 )
+from personal_finance.contexts.financial.infrastructure.events import (
+    build_financial_event_publisher,
+)
 from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
     build_merchant_directory,
 )
@@ -163,9 +166,6 @@ from personal_finance.shared.domain.value_objects import (
 from personal_finance.shared.infrastructure.aws.session import get_dynamodb_client
 from personal_finance.shared.infrastructure.config.settings import (
     get_financial_settings,
-)
-from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
-    LoggingEventPublisher,
 )
 from personal_finance.shared.presentation.catalog import (
     CatalogOption,
@@ -1080,7 +1080,7 @@ def _build_manage_accounts() -> ManageAccountsUseCase:
     return ManageAccountsUseCase(
         accounts=build_accounts(),
         ledger=build_ledger(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_financial_event_publisher(),
     )
 
 
@@ -1089,7 +1089,7 @@ def _build_manage_transactions() -> ManageTransactionsUseCase:
     return ManageTransactionsUseCase(
         accounts=build_accounts(),
         ledger=build_ledger(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_financial_event_publisher(),
     )
 
 
@@ -1097,7 +1097,7 @@ def _build_manage_transactions() -> ManageTransactionsUseCase:
 def _build_manage_financing() -> ManageFinancingUseCase:
     return ManageFinancingUseCase(
         accounts=build_accounts(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_financial_event_publisher(),
     )
 
 
@@ -1106,7 +1106,7 @@ def _build_accrue_financing() -> AccrueFinancingUseCase:
     return AccrueFinancingUseCase(
         accounts=build_accounts(),
         ledger=build_ledger(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_financial_event_publisher(),
     )
 
 
@@ -1115,7 +1115,7 @@ def _build_revalue_account() -> RevalueAccountUseCase:
     return RevalueAccountUseCase(
         accounts=build_accounts(),
         ledger=build_ledger(),
-        event_publisher=LoggingEventPublisher(),
+        event_publisher=build_financial_event_publisher(),
     )
 
 
