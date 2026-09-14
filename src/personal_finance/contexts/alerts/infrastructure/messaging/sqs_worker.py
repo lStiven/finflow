@@ -34,6 +34,7 @@ from personal_finance.contexts.alerts.infrastructure.messaging.inbound import (
     IntegrationEventEnvelope,
     MovementRecordedDetail,
     UnsupportedPayloadVersionError,
+    refused_fields,
 )
 from personal_finance.shared.infrastructure.messaging.sqs_polling import (
     MessageOutcome,
@@ -68,12 +69,16 @@ class SQSAlertsWorker(SQSPollingWorker):
     def handle(self, body: str) -> MessageOutcome:
         try:
             envelope = IntegrationEventEnvelope.model_validate_json(body)
-        except ValidationError:
-            # Without the exception. A Pydantic error renders `input_value=`
-            # for every field it refused, and those fields are an amount, a
-            # counterparty and a bank — the same spending history the success
-            # path forty lines below deliberately keeps out of the log.
-            _logger.warning("discarding malformed integration event")
+        except ValidationError as error:
+            # The field names, never the exception. A Pydantic error renders
+            # `input_value=` for every field it refused, and those fields are
+            # an amount, a counterparty and a bank — the same spending history
+            # the success path forty lines below deliberately keeps out of the
+            # log. `refused_fields` is what keeps the two apart.
+            _logger.warning(
+                "discarding malformed integration event",
+                extra={"refused": refused_fields(error)},
+            )
 
             return MessageOutcome.DISCARDED
 
@@ -93,8 +98,14 @@ class SQSAlertsWorker(SQSPollingWorker):
 
         try:
             detail = MovementRecordedDetail.model_validate(envelope.detail)
-        except ValidationError:
-            _logger.warning("discarding malformed MovementRecorded payload")
+        except ValidationError as error:
+            # Named, for the reason above and because a producer that changed
+            # shape is otherwise invisible: this branch is a silent discard,
+            # and without the field nobody can tell one refusal from another.
+            _logger.warning(
+                "discarding malformed MovementRecorded payload",
+                extra={"refused": refused_fields(error)},
+            )
 
             return MessageOutcome.DISCARDED
 

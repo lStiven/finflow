@@ -119,6 +119,22 @@ def test_a_movement_is_read_into_a_command() -> None:
     assert command.alert.counterparty == "COMPRA EN *PAYU*COL"
 
 
+def test_a_movement_entered_by_hand_carries_no_bank_and_is_still_announced() -> None:
+    """Financial publishes `""` for a movement no bank emailed.
+
+    Requiring one here discarded every hand-written movement as malformed,
+    and the log line said only that a payload was malformed — so the one
+    person who could have noticed had nothing to go on.
+    """
+    use_case = StubUseCase()
+    body = _body(bank="", origin="manual")
+
+    assert _worker(use_case).handle(body) is MessageOutcome.HANDLED
+
+    [command] = use_case.commands
+    assert command.alert.bank == ""
+
+
 def test_the_time_read_is_when_the_money_moved_not_when_it_was_recorded() -> None:
     """The transport flattens its own `occurred_at` into the payload.
 
@@ -236,7 +252,35 @@ def test_a_refused_payload_never_writes_its_values_to_the_log(
     with caplog.at_level(logging.DEBUG):
         assert _worker(StubUseCase()).handle(body) is MessageOutcome.DISCARDED
 
-    written = caplog.text
+    written = caplog.text + " ".join(
+        str(getattr(record, "refused", "")) for record in caplog.records
+    )
     assert "PAYU" not in written
     assert "Bancolombia" not in written
-    assert "discarding malformed" in written
+    assert "-5" not in written
+    assert "discarding malformed" in caplog.text
+
+
+def test_a_refused_payload_says_which_field_it_was_refused_for(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without the name, every refusal reads the same and a producer that
+    changed shape is invisible — which is how a movement entered by hand went
+    unannounced for a day."""
+    body = _body(amount="-5")
+
+    with caplog.at_level(logging.WARNING):
+        assert _worker(StubUseCase()).handle(body) is MessageOutcome.DISCARDED
+
+    [record] = caplog.records
+    assert record.refused == "amount:string_pattern_mismatch"  # type: ignore[attr-defined]
+
+
+def test_an_unreadable_body_says_what_it_could_not_read(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        assert _worker(StubUseCase()).handle("{not json") is MessageOutcome.DISCARDED
+
+    [record] = caplog.records
+    assert record.refused == "(root):json_invalid"  # type: ignore[attr-defined]

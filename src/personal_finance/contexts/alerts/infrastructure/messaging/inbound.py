@@ -24,7 +24,7 @@ from __future__ import annotations
 from decimal import Decimal
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from personal_finance.contexts.alerts.application.commands import (
     DeliverMovementAlertCommand,
@@ -63,6 +63,31 @@ class UnsupportedPayloadVersionError(Exception):
     Not a malformed payload: a newer deploy wrote it, and a newer worker may
     still be able to take it. The worker leaves such a message on the queue.
     """
+
+
+def refused_fields(error: ValidationError) -> str:
+    """Which fields a payload was refused for — the names, never the values.
+
+    The whole of what a reader needs to fix a producer that changed shape,
+    and none of what they must not be shown. A `ValidationError` renders
+    `input_value=` for every field it refused, and here those fields are an
+    amount, a counterparty and a bank: one line of somebody's spending
+    history, in CloudWatch, for the log group's retention. So the message and
+    the input are both dropped and only `loc` and `type` survive —
+    `bank:string_too_short`, which is a name and a stable Pydantic code.
+
+    Nothing attacker-controlled reaches this: `loc` holds declared field
+    names, and both models here ignore what they did not declare.
+
+    This exists because its absence cost a day. A movement entered by hand
+    carries no bank, the model demanded one, and every one of them was
+    discarded behind "discarding malformed MovementRecorded payload" — true,
+    unactionable, and indistinguishable from any other refusal.
+    """
+    return ", ".join(
+        f"{'.'.join(str(part) for part in item['loc']) or '(root)'}:{item['type']}"
+        for item in error.errors()
+    )
 
 
 def _required_text(value: str) -> str:
@@ -105,14 +130,24 @@ class MovementRecordedDetail(BaseModel):
     # with when the fact was recorded — see this module's docstring.
     movement_occurred_at: int = Field(ge=MIN_OCCURRED_AT, le=MAX_OCCURRED_AT)
     counterparty: str = Field(min_length=1, max_length=512)
-    bank: str = Field(min_length=1, max_length=256)
+    # Blank where there is no bank to name. A movement entered by hand is the
+    # ordinary case of that — Financial publishes `""` rather than inventing
+    # an institution — and the message says "Tu banco" instead. Requiring one
+    # here discarded every manual movement as malformed, which is a silence
+    # nobody could have debugged from the message it logged.
+    bank: str = Field(default="", max_length=256)
     origin: str = Field(min_length=1, max_length=64)
     unassigned: bool = False
 
-    @field_validator("counterparty", "bank")
+    @field_validator("counterparty")
     @classmethod
     def _not_blank(cls, value: str) -> str:
         return _required_text(value)
+
+    @field_validator("bank")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return value.strip()
 
     def to_command(self) -> DeliverMovementAlertCommand:
         """Read the payload into this context's vocabulary.

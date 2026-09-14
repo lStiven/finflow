@@ -222,6 +222,14 @@ def test_an_empty_counterparty_still_reads_as_something() -> None:
     assert clean_counterparty("   ") == "Sin descripción"
 
 
+def test_a_movement_with_no_bank_still_names_a_source() -> None:
+    """A hand-written movement has no institution behind it, and the line it
+    shares with the time cannot be left starting with a separator."""
+    text = compose_movement_alert(_alert(bank=""), timezone=TIMEZONE)
+
+    assert "Tu banco · " in text
+
+
 def test_incoming_money_is_announced_as_income() -> None:
     text = compose_movement_alert(
         _alert(direction=MovementDirection.INCOMING),

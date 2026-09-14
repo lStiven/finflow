@@ -200,6 +200,15 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
+  `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
+  el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se
+  descartaba en silencio con un «malformed payload» que no decía qué campo. El
+  mensaje ya decía «Tu banco» para ese caso; solo la validación de entrada no
+  se había enterado. La verificación contra moto del 2026-09-14 no lo vio
+  porque solo ejerció el camino de la alerta bancaria. Y ese descarte ya
+  nombra el campo que lo causó —`refused='bank:string_too_short'`— sin el
+  valor: lo que faltaba para que el próximo se vea el mismo día.
 - 2026-09-14 — **La app ya le habla a alguien fuera de su propia pantalla.**
   Contexto nuevo `alerts`: se conecta Telegram con un toque desde Perfil y cada
   movimiento llega al teléfono. Vincular es un enlace profundo con un token de
@@ -228,11 +237,3 @@ AWS (ver Trabas).
   una devuelve sus comercios a «Sin categoría» diciendo antes cuántos son, y sin
   sacarlos de la cola de revisión: quitar un cajón no es revisar lo que había
   dentro. Un panel plegable dentro de Comercios, no una pantalla nueva.
-- 2026-09-04 — **Cada quien se inventa sus categorías, y un gasto escrito a mano
-  ya no queda huérfano.** Las dieciséis de siempre las ve todo el mundo; encima
-  de esas cada usuario escribe las suyas, con la clave separada (`custom:`) para
-  que una categoría nueva de la aplicación no le cambie el nombre a la de nadie
-  nunca. Al escribir un movimiento se elige la categoría —o se crea ahí mismo, sin
-  salir del formulario— y eso le crea el comercio, que era el hueco por el que
-  esos gastos no aparecían en ningún reporte por categoría. El modelo también
-  clasifica en las categorías propias.
