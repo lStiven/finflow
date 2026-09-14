@@ -123,6 +123,8 @@ from personal_finance.contexts.financial.domain.bills import (
     BillCadence,
     BillId,
     BillOccurrence,
+    BillStatus,
+    OccurrenceState,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -3019,22 +3021,26 @@ class BillOccurrenceResponse(BaseModel):
     bill_id: str
     due_on: dt.date
     amount: str
-    currency: str
-    direction: str
-    state: str
+    currency: Currency
+    # The enums themselves, not their strings: the generated TypeScript turns
+    # these into unions, so a screen cannot invent a state the server never
+    # sends — and a member added here breaks the frontend build rather than a
+    # screen in somebody's browser.
+    direction: MovementDirection
+    state: OccurrenceState
 
 
 class BillResponse(BaseModel):
     id: str
     name: str
     amount: str
-    currency: str
-    cadence: str
+    currency: Currency
+    cadence: BillCadence
     starts_on: dt.date
-    direction: str
+    direction: MovementDirection
     account_id: str | None
     category: str | None
-    status: str
+    status: BillStatus
     #: Its account is closed. Derived from the account, never stored — an
     #: account is closed and never deleted, so reopening one un-freezes its
     #: bills without anything having to remember to.
@@ -3054,7 +3060,7 @@ class BillTotalResponse(BaseModel):
     app cannot see either way.
     """
 
-    currency: str
+    currency: Currency
     expected: str
     upcoming: str
 
@@ -3265,7 +3271,7 @@ def _bills_response(view: BillsView) -> BillsResponse:
         occurrences=[_occurrence_response(each) for each in view.occurrences],
         totals=[
             BillTotalResponse(
-                currency=total.currency.value,
+                currency=total.currency,
                 expected=str(total.expected),
                 upcoming=str(total.upcoming),
             )
@@ -3283,13 +3289,13 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         id=str(bill.id.value),
         name=bill.name,
         amount=str(bill.amount.amount),
-        currency=bill.amount.currency.value,
-        cadence=bill.cadence.value,
+        currency=bill.amount.currency,
+        cadence=bill.cadence,
         starts_on=bill.starts_on,
-        direction=bill.direction.value,
+        direction=bill.direction,
         account_id=None if bill.account_id is None else str(bill.account_id.value),
         category=bill.category,
-        status=bill.status.value,
+        status=bill.status,
         frozen=summary.frozen,
         next_occurrence=(
             None
@@ -3304,7 +3310,7 @@ def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
         bill_id=str(occurrence.bill_id.value),
         due_on=occurrence.due_on,
         amount=str(occurrence.amount.amount),
-        currency=occurrence.amount.currency.value,
-        direction=occurrence.direction.value,
-        state=occurrence.state.value,
+        currency=occurrence.amount.currency,
+        direction=occurrence.direction,
+        state=occurrence.state,
     )

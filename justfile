@@ -673,6 +673,14 @@ _web-publish stack profile project:
 shot *args:
     cd {{frontend_dir}} && node scripts/shot.mjs {{args}}
 
+# Drive the bills screen in a real browser and check the data behind it.
+# Needs the stack up (`just up`) and the frontend (`just web`), like `just shot`.
+# Two halves: every step goes through the rendered page, and after each one the
+# server is asked directly and the two answers are compared. It also reads the
+# balances before and after and refuses to pass if declaring a bill moved one.
+e2e-bills *args:
+    cd {{frontend_dir}} && node scripts/e2e-bills.mjs {{args}}
+
 # Format check, lint and typecheck the frontend.
 web-check:
     cd {{frontend_dir}} && npm run check

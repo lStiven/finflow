@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ConectarRouteImport } from './routes/conectar'
+import { Route as FacturasRouteImport } from './routes/facturas'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PerfilRouteImport } from './routes/perfil'
 import { Route as RecuperarRouteImport } from './routes/recuperar'
@@ -37,6 +38,11 @@ const IndexRoute = IndexRouteImport.update({
 const ConectarRoute = ConectarRouteImport.update({
   id: '/conectar',
   path: '/conectar',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FacturasRoute = FacturasRouteImport.update({
+  id: '/facturas',
+  path: '/facturas',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -132,6 +138,7 @@ const CuentasAccountIdFinanciacionRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/conectar': typeof ConectarRoute
+  '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
   '/recuperar': typeof RecuperarRoute
@@ -153,6 +160,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/conectar': typeof ConectarRoute
+  '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
   '/recuperar': typeof RecuperarRoute
@@ -175,6 +183,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/conectar': typeof ConectarRoute
+  '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
   '/recuperar': typeof RecuperarRoute
@@ -198,6 +207,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/conectar'
+    | '/facturas'
     | '/login'
     | '/perfil'
     | '/recuperar'
@@ -219,6 +229,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/conectar'
+    | '/facturas'
     | '/login'
     | '/perfil'
     | '/recuperar'
@@ -240,6 +251,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/conectar'
+    | '/facturas'
     | '/login'
     | '/perfil'
     | '/recuperar'
@@ -262,6 +274,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConectarRoute: typeof ConectarRoute
+  FacturasRoute: typeof FacturasRoute
   LoginRoute: typeof LoginRoute
   PerfilRoute: typeof PerfilRoute
   RecuperarRoute: typeof RecuperarRoute
@@ -295,6 +308,13 @@ declare module '@tanstack/react-router' {
       path: '/conectar'
       fullPath: '/conectar'
       preLoaderRoute: typeof ConectarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/facturas': {
+      id: '/facturas'
+      path: '/facturas'
+      fullPath: '/facturas'
+      preLoaderRoute: typeof FacturasRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -422,6 +442,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConectarRoute: ConectarRoute,
+  FacturasRoute: FacturasRoute,
   LoginRoute: LoginRoute,
   PerfilRoute: PerfilRoute,
   RecuperarRoute: RecuperarRoute,

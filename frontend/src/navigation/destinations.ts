@@ -28,6 +28,7 @@ export type Destination = {
     | "/"
     | "/transacciones"
     | "/cuentas"
+    | "/facturas"
     | "/comercios"
     | "/reportes"
     | "/perfil"
@@ -42,7 +43,7 @@ export const DESTINATIONS: Destination[] = [
   { label: "Cuentas", icon: Wallet, to: "/cuentas" },
   // Con las pantallas del dinero y no al final: una factura es un gasto que
   // todavía no ocurrió, y se busca donde se buscan los gastos.
-  { label: "Facturas", icon: Receipt },
+  { label: "Facturas", icon: Receipt, to: "/facturas" },
   { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },

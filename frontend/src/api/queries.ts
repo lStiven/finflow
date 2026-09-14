@@ -55,6 +55,17 @@ export type MerchantSort = components["schemas"]["MerchantSort"];
  */
 export type CategoryOption = components["schemas"]["CategoryResponse"];
 export type InstrumentKind = components["schemas"]["InstrumentKind"];
+/** A charge its owner declared, with the two fields the server derives. */
+export type Bill = components["schemas"]["BillResponse"];
+export type BillsView = components["schemas"]["BillsResponse"];
+/** One expected charge. `due_on` is a calendar day, never an instant. */
+export type BillOccurrence = components["schemas"]["BillOccurrenceResponse"];
+/** Per currency, and two figures: what the month costs and what is still to
+ * come. Never summed across currencies. */
+export type BillTotal = components["schemas"]["BillTotalResponse"];
+export type BillCadence = components["schemas"]["BillCadence"];
+export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
+export type AmendBillBody = components["schemas"]["AmendBillPayload"];
 /** What a loan costs or an investment earns, and what it will do next. */
 export type Financing = components["schemas"]["FinancingResponse"];
 export type LoanTerms = components["schemas"]["LoanTermsResponse"];
@@ -87,6 +98,7 @@ export const queryKeys = {
   catalog: ["catalog"] as const,
   financing: ["financing"] as const,
   alertChannels: ["alert-channels"] as const,
+  bills: ["bills"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -1210,6 +1222,99 @@ export function useDeleteAlertChannel(): UseMutationResult<unknown, Error, strin
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.alertChannels });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ bills */
+
+/**
+ * Declared bills and what the window holds.
+ *
+ * The window is the server's business: left out, it answers for the calendar
+ * month in `DISPLAY_TIMEZONE`, which is the only month a screen ever wants.
+ * Sending one computed here would let a clock a few hours off ask for the
+ * wrong month.
+ */
+export const billsQuery = queryOptions({
+  queryKey: queryKeys.bills,
+  queryFn: () =>
+    unwrap(
+      api.GET("/financial/bills", {
+        params: { query: { timezone: DISPLAY_TIMEZONE } },
+      }),
+    ),
+});
+
+export function useDeclareBill(): UseMutationResult<Bill, Error, DeclareBillBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DeclareBillBody) =>
+      unwrap(api.POST("/financial/bills", { body })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+export function useAmendBill(
+  billId: string,
+): UseMutationResult<Bill, Error, AmendBillBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AmendBillBody) =>
+      unwrap(
+        api.PATCH("/financial/bills/{bill_id}", {
+          params: { path: { bill_id: billId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+/**
+ * Pause or resume, as one mutation.
+ *
+ * Two hooks would be two places to forget the invalidation, and the caller
+ * already knows which way it is going from the bill it is looking at.
+ */
+export function usePauseBill(): UseMutationResult<
+  Bill,
+  Error,
+  { billId: string; paused: boolean }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, paused }: { billId: string; paused: boolean }) =>
+      unwrap(
+        paused
+          ? api.POST("/financial/bills/{bill_id}/pause", {
+              params: { path: { bill_id: billId } },
+            })
+          : api.POST("/financial/bills/{bill_id}/resume", {
+              params: { path: { bill_id: billId } },
+            }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+export function useForgetBill(): UseMutationResult<unknown, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (billId: string) =>
+      unwrap(
+        api.DELETE("/financial/bills/{bill_id}", {
+          params: { path: { bill_id: billId } },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
     },
   });
 }

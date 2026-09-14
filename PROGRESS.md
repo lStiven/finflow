@@ -75,11 +75,11 @@ sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
 contexto `alerts` entero).
 
-**Pantallas:** diecinueve, y están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** veinte, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-cuatro guías. En el menú hay dos entradas anunciadas sin pantalla todavía:
-**Configuración** y **Facturas** — esta última es el segundo feature (punto 6).
+cuatro guías, más **Facturas** desde el 2026-09-14. La única entrada del menú
+anunciada sin pantalla es **Configuración**.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
 revisó el 2026-09-14.
@@ -153,8 +153,7 @@ AWS (ver Trabas).
    [docs/alerts.md](docs/alerts.md).
 
 6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
-   La API de la entrega A está hecha; **falta su pantalla**, que sigue
-   anunciada como «pronto» en el menú. Después vienen B (confirmar el pago a
+   La entrega A está completa —API y pantalla—. Siguen B (confirmar el pago a
    mano), C (que se cargue solo, con ventana de conciliación), D (que el
    detector proponga) y E (avisar antes del cobro). El plan completo —las
    cinco entregas, los riesgos y los cuatro nombres que se parecen— está en el
@@ -209,7 +208,7 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
-- 2026-09-14 — **Se pueden declarar facturas y ver lo que viene, por API.**
+- 2026-09-14 — **Se pueden declarar facturas y ver lo que viene.**
   Entrega A del segundo feature: un gasto domiciliado que el banco ya no
   anuncia por correo se declara, y la app lo proyecta sobre el calendario con
   seis cadencias —la mensual conserva el día del ancla, así que una del 31 pide
@@ -217,7 +216,11 @@ AWS (ver Trabas).
   ledger**, y hay una prueba de integración que lo comprueba contra la tabla
   real. Dos cifras por moneda y nunca una: lo que cuesta el mes y lo que aún no
   vence. Una factura cuya cuenta se cerró se lee congelada, derivado de la
-  cuenta y no guardado, así que reabrirla la descongela sola. Falta la pantalla.
+  cuenta y no guardado, así que reabrirla la descongela sola. La pantalla
+  `/facturas` ya está, y con ella una prueba de punta a punta que el proyecto
+  no tenía (`just e2e-bills`): conduce el navegador, y después de cada paso
+  compara lo que la pantalla enseña con lo que el servidor guardó. Lee saldos
+  y patrimonio antes y después, y no pasa si declarar movió alguno.
 - 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
   `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
   el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se

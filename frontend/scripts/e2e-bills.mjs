@@ -1,0 +1,358 @@
+/**
+ * Drive the bills screen in a real browser, and check the data behind it.
+ *
+ *   just up                 # emulator, seeded data, API and workers
+ *   just web                # the frontend, in another terminal
+ *   just e2e-bills          # this
+ *
+ * Two things are being asked, and they are not the same question:
+ *
+ * 1. **Does the screen work?** Every step goes through the rendered page —
+ *    typing into the form, clicking the buttons — rather than through the
+ *    API, so a screen that type-checks and renders nothing fails here.
+ * 2. **Does the data behind it say the same thing?** After each step the
+ *    server is asked directly, with the same token the page holds, and the
+ *    two answers are compared. A screen that shows what it just sent while
+ *    the server stored something else is the failure this half exists for,
+ *    and no amount of unit testing on either side can see it.
+ *
+ * And one invariant runs through all of it: **declaring bills must not move
+ * money.** Balances, net worth and the movement list are read before and
+ * after, and they have to be identical. That is the rule the whole feature
+ * rests on, and the only place it can be checked against the real stack
+ * rather than against a double is here.
+ *
+ * Exits non-zero on the first mismatch, with what it expected and what it
+ * got. It cleans up after itself: the bill it declares is deleted at the end,
+ * including when an assertion fails.
+ */
+
+import process from "node:process";
+import { chromium } from "playwright";
+
+const WEB = process.env.FINFLOW_WEB_URL ?? "http://localhost:5173";
+const API = process.env.FINFLOW_API_URL ?? "http://localhost:8000";
+const DEMO_EMAIL = process.env.FINFLOW_DEMO_EMAIL ?? "demo@finflow.local";
+const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de verdad";
+
+/** Unmistakable in a seeded database, and never a real merchant's name. */
+const NAME = `E2E Gimnasio ${Date.now()}`;
+const AMOUNT = "120.000";
+const AMENDED = "135.000";
+
+const steps = [];
+let failures = 0;
+
+function check(what, actual, expected) {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  steps.push(`${ok ? "  ok  " : " FALLA"} ${what}`);
+
+  if (!ok) {
+    failures += 1;
+    steps.push(`        esperaba: ${JSON.stringify(expected)}`);
+    steps.push(`        recibió:  ${JSON.stringify(actual)}`);
+  }
+
+  return ok;
+}
+
+function note(text) {
+  steps.push(`  ··   ${text}`);
+}
+
+async function reachable(url) {
+  try {
+    await fetch(url, { signal: AbortSignal.timeout(2000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The API, as the signed-in person — the same token the page is using. */
+function client(token) {
+  return async (path, init = {}) => {
+    const response = await fetch(`${API}${path}`, {
+      ...init,
+      headers: {
+        Authorization: token,
+        "Content-Type": "application/json",
+        ...(init.headers ?? {}),
+      },
+    });
+
+    if (!response.ok && response.status !== 204) {
+      throw new Error(`${init.method ?? "GET"} ${path} → ${response.status}`);
+    }
+
+    return response.status === 204 ? null : response.json();
+  };
+}
+
+async function signIn(page) {
+  await page.goto(`${WEB}/login`, { waitUntil: "domcontentloaded" });
+  await page.getByLabel("Correo").fill(DEMO_EMAIL);
+  await page.getByLabel("Contraseña").fill(DEMO_PASSWORD);
+  await page.locator('form button[type="submit"]').click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
+    timeout: 15_000,
+  });
+
+  const raw = await page.evaluate(() => window.localStorage.getItem("finflow.session"));
+
+  if (raw === null) throw new Error("Entró pero no dejó sesión en el navegador");
+
+  const { accessToken } = JSON.parse(raw);
+
+  return accessToken.startsWith("Bearer ") ? accessToken : `Bearer ${accessToken}`;
+}
+
+/**
+ * Shut the onboarding modals, the way `shot.mjs` does and for the same reason.
+ *
+ * A fresh browser profile has acknowledged nothing, and the welcome and the
+ * "ya quedó conectado" celebration are modal — they sit over every screen and
+ * swallow every click. The acks live in `localStorage` by design, which is
+ * why they can be written from out here.
+ */
+async function dismissOnboarding(page) {
+  const wrote = await page.evaluate(() => {
+    const raw = window.localStorage.getItem("finflow.session");
+    if (raw === null) return false;
+
+    const { userId } = JSON.parse(raw);
+    window.localStorage.setItem(
+      `finflow.onboarding.${userId}`,
+      JSON.stringify({
+        welcomeSeen: true,
+        introSeen: true,
+        addressCopied: true,
+        gmailSubmitted: true,
+        readyCelebrated: true,
+      }),
+    );
+
+    return true;
+  });
+
+  // Read at mount, so the page has to load again for them to stay shut.
+  if (wrote) await page.goto(`${WEB}/`, { waitUntil: "networkidle" });
+}
+
+/** Money as the ledger holds it, so a comparison cannot be fooled by format. */
+async function moneyState(call) {
+  const [accounts, movements] = await Promise.all([
+    call("/financial/accounts?scope=all"),
+    call("/financial/transactions?limit=200"),
+  ]);
+
+  return {
+    balances: accounts.accounts.map((a) => `${a.id}:${a.balance}`).sort(),
+    netWorth: accounts.net_worth.map((n) => `${n.currency}:${n.amount}`).sort(),
+    movements: movements.transactions.length,
+  };
+}
+
+async function main() {
+  for (const [what, url] of [
+    ["el frontend", WEB],
+    ["la API", API],
+  ]) {
+    if (!(await reachable(url))) {
+      console.error(
+        `No hay nada escuchando en ${url} (${what}).\n` +
+          "  just up     # emulador, datos de prueba y la API\n" +
+          "  just web    # el frontend, en otra terminal",
+      );
+      process.exitCode = 1;
+
+      return;
+    }
+  }
+
+  const browser = await chromium.launch();
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    locale: "es-CO",
+    timezoneId: "America/Bogota",
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+
+  const problems = [];
+  page.on("pageerror", (error) => problems.push(`error: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") problems.push(`console: ${message.text()}`);
+  });
+
+  let call;
+  let billId = null;
+
+  try {
+    const token = await signIn(page);
+    call = client(token);
+    await dismissOnboarding(page);
+
+    // ---------------------------------------------------------------- before
+    const before = await moneyState(call);
+    note(`saldos y movimientos antes: ${before.movements} movimientos`);
+
+    // --------------------------------------------------------- declare, UI
+    await page.goto(`${WEB}/facturas`, { waitUntil: "networkidle" });
+    check(
+      "la pantalla abre",
+      await page.getByRole("heading", { name: "Facturas" }).isVisible(),
+      true,
+    );
+
+    await page.getByRole("button", { name: "Declarar una factura" }).click();
+    await page.getByLabel("Nombre").fill(NAME);
+    await page.getByLabel("Monto").fill(AMOUNT);
+    await page.getByLabel("Primer cobro").fill(firstOfThisMonth());
+    await page.getByRole("button", { name: "Declarar" }).click();
+
+    // It shows twice on purpose — once as a declared bill and once as a
+    // charge of this month — so the locator has to say which.
+    const card = page.getByText(NAME, { exact: true });
+    await card.waitFor({ timeout: 10_000 });
+    check("la factura aparece en la pantalla", await card.isVisible(), true);
+    check(
+      "y también entre los cobros del mes",
+      await page.getByText(NAME, { exact: false }).count(),
+      2,
+    );
+
+    // ------------------------------------------------- integrity: it is there
+    let stored = await find(call, NAME);
+    billId = stored?.id ?? null;
+    check("el servidor la guardó", stored !== undefined, true);
+    check("con el monto que se tecleó", stored?.amount, "120000");
+    check("con la cadencia por defecto", stored?.cadence, "monthly");
+    check("activa y sin congelar", [stored?.status, stored?.frozen], ["active", false]);
+
+    // ------------------------------------- integrity: no money moved at all
+    check("declarar no movió ningún saldo", await moneyState(call), before);
+
+    // ------------------------------------------------ the two totals agree
+    const view = await call("/financial/bills");
+    const total = view.totals.find((t) => t.currency === "COP");
+    check("el mes cuenta esta factura", Number(total?.expected) >= 120000, true);
+    check(
+      "«aún no vence» nunca es mayor que «este mes»",
+      Number(total.upcoming) <= Number(total.expected),
+      true,
+    );
+    check(
+      "la pantalla enseña las dos cifras, no una",
+      [
+        await page.getByRole("figure", { name: "Este mes" }).isVisible(),
+        await page.getByRole("figure", { name: "Aún no vence" }).isVisible(),
+      ],
+      [true, true],
+    );
+
+    // ------------------------------------------------------------ amend, UI
+    await page.getByRole("button", { name: "Editar" }).first().click();
+    await page.getByLabel("Monto").fill(AMENDED);
+    await page.getByRole("button", { name: "Guardar" }).click();
+
+    stored = await until(call, "corregir el monto", (b) => b?.amount === "135000");
+    check("corregir el monto llega al servidor", stored?.amount, "135000");
+    check("y sigue sin mover saldos", await moneyState(call), before);
+
+    // ------------------------------------------------------------ pause, UI
+    await page.getByRole("button", { name: "Pausar" }).first().click();
+
+    stored = await until(call, "pausar", (b) => b?.status === "paused");
+    check("pausar llega al servidor", stored?.status, "paused");
+    check("una pausada no predice nada", stored?.next_occurrence, null);
+
+    const paused = await call("/financial/bills");
+    check(
+      "y sale del listado de cobros del mes",
+      paused.occurrences.some((o) => o.bill_id === billId),
+      false,
+    );
+
+    // ----------------------------------------------------------- resume, UI
+    await page.getByRole("button", { name: "Reanudar" }).first().click();
+
+    stored = await until(call, "reanudar", (b) => b?.status === "active");
+    check("reanudar la devuelve", stored?.status, "active");
+    check("y vuelve a predecir", stored?.next_occurrence !== null, true);
+
+    // ----------------------------------------------------------- delete, UI
+    await page.getByRole("button", { name: "Borrar" }).first().click();
+
+    await until(call, "borrar", (b) => b === undefined);
+    check("borrar la quita del servidor", (await find(call, NAME)) === undefined, true);
+    billId = null;
+    check("borrar tampoco movió saldos", await moneyState(call), before);
+
+    check("la pantalla no registró errores", problems, []);
+  } catch (error) {
+    failures += 1;
+    steps.push(` FALLA ${error.message}`);
+  } finally {
+    // Whatever happened, the seeded database goes back as it was.
+    if (billId !== null && call) {
+      try {
+        await call(`/financial/bills/${billId}`, { method: "DELETE" });
+        note("factura de prueba borrada");
+      } catch {
+        note(`no pude borrar la factura ${billId} — bórrala a mano`);
+      }
+    }
+
+    await browser.close();
+  }
+
+  console.log(steps.join("\n"));
+  console.log(
+    failures === 0
+      ? "\ne2e facturas: todo bien, y ningún saldo se movió."
+      : `\ne2e facturas: ${failures} problema(s).`,
+  );
+  process.exitCode = failures === 0 ? 0 : 1;
+}
+
+/** The first of the current month, so the charge falls inside the window. */
+function firstOfThisMonth() {
+  const now = new Date();
+
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/**
+ * Poll the server until it agrees, or give up loudly.
+ *
+ * Replaces the fixed sleeps this script started with. A sleep long enough to
+ * be safe is a slow suite, and one short enough to be fast is a suite that
+ * fails on a cold Vite module — which is exactly what it did. Waiting for the
+ * condition is both faster and the only version that means anything.
+ */
+async function until(call, describe, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+
+  while (Date.now() < deadline) {
+    last = await find(call, NAME);
+
+    if (predicate(last)) return last;
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  steps.push(` FALLA ${describe} (el servidor no lo reflejó en ${timeoutMs} ms)`);
+  failures += 1;
+
+  return last;
+}
+
+async function find(call, name) {
+  const view = await call("/financial/bills");
+
+  return view.bills.find((bill) => bill.name === name);
+}
+
+await main();

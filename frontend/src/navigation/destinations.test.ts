@@ -28,9 +28,14 @@ describe("las secciones del teléfono", () => {
     }
   });
 
-  it("anuncia Facturas y Configuración sin enlazarlas todavía", () => {
+  it("solo deja Configuración anunciada sin pantalla", () => {
     const pending = DESTINATIONS.filter((d) => d.to === undefined).map((d) => d.label);
-    expect(pending).toEqual(["Facturas", "Configuración"]);
+    expect(pending).toEqual(["Configuración"]);
+  });
+
+  it("deja Facturas al alcance", () => {
+    const facturas = DESTINATIONS.find((d) => d.label === "Facturas");
+    expect(facturas?.to).toBe("/facturas");
   });
 
   it("deja Reportes y Comercios al alcance", () => {

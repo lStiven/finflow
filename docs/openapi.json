@@ -523,12 +523,10 @@
             "type": "string"
           },
           "currency": {
-            "title": "Currency",
-            "type": "string"
+            "$ref": "#/components/schemas/Currency"
           },
           "direction": {
-            "title": "Direction",
-            "type": "string"
+            "$ref": "#/components/schemas/MovementDirection"
           },
           "due_on": {
             "format": "date",
@@ -536,8 +534,7 @@
             "type": "string"
           },
           "state": {
-            "title": "State",
-            "type": "string"
+            "$ref": "#/components/schemas/OccurrenceState"
           }
         },
         "required": [
@@ -569,8 +566,7 @@
             "type": "string"
           },
           "cadence": {
-            "title": "Cadence",
-            "type": "string"
+            "$ref": "#/components/schemas/BillCadence"
           },
           "category": {
             "anyOf": [
@@ -584,12 +580,10 @@
             "title": "Category"
           },
           "currency": {
-            "title": "Currency",
-            "type": "string"
+            "$ref": "#/components/schemas/Currency"
           },
           "direction": {
-            "title": "Direction",
-            "type": "string"
+            "$ref": "#/components/schemas/MovementDirection"
           },
           "frozen": {
             "title": "Frozen",
@@ -619,8 +613,7 @@
             "type": "string"
           },
           "status": {
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/BillStatus"
           }
         },
         "required": [
@@ -640,12 +633,20 @@
         "title": "BillResponse",
         "type": "object"
       },
+      "BillStatus": {
+        "description": "Whether this bill is still expecting charges.\n\n`PAUSED` is the owner's decision and nothing else sets it. There is no\nmember for \"its account went away\", because an account is never deleted —\n`Account.close` says so in as many words — so a bill whose account is\nclosed is answered by looking at the account, not by writing a state here\nthat would then have to be undone when they reopen it.",
+        "enum": [
+          "active",
+          "paused"
+        ],
+        "title": "BillStatus",
+        "type": "string"
+      },
       "BillTotalResponse": {
         "description": "The two figures, for one currency.\n\nTwo and not one, because \"what this month costs\" and \"what has not fallen\ndue yet\" are different questions and a reader takes whichever is on screen\nto be the answer to both.\n\n`upcoming` is what has **not fallen due yet** — deliberately not \"unpaid\".\nNothing can be confirmed yet, so a charge whose day has passed is one this\napp cannot see either way.",
         "properties": {
           "currency": {
-            "title": "Currency",
-            "type": "string"
+            "$ref": "#/components/schemas/Currency"
           },
           "expected": {
             "title": "Expected",
@@ -2800,6 +2801,15 @@
         ],
         "title": "NotificationResponse",
         "type": "object"
+      },
+      "OccurrenceState": {
+        "description": "What can be said about one expected charge, today.\n\nOnly two members while nothing can be confirmed. Paying and skipping are\nthe next delivery, and they add their own — which is why this is an enum\nfrom the start rather than a boolean that would have to be widened.",
+        "enum": [
+          "expected",
+          "overdue"
+        ],
+        "title": "OccurrenceState",
+        "type": "string"
       },
       "OpenAccountPayload": {
         "description": "Declare an account.\n\nGive it an instrument and every alert arriving under that bank and those\nlast four digits lands here — including the ones that already arrived and\nhave been waiting. Leave it out for what never emails: cash, a mortgage.",

@@ -455,6 +455,116 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/bills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bills
+         * @description What is declared, what falls inside the window, and what it adds up to.
+         *
+         *     The window defaults to the calendar month `timezone` is currently in —
+         *     read in the caller's zone rather than UTC, because a bill due on the 1st
+         *     must not show up in the previous month for somebody five hours behind.
+         *
+         *     Both ends or neither: half a window is a question with no answer, and
+         *     completing it with a month would silently answer a different one.
+         */
+        get: operations["list_bills_financial_bills_get"];
+        put?: never;
+        /**
+         * Declare Bill
+         * @description Declare a charge that is going to happen.
+         *
+         *     Nothing is recorded as spent. This is the half that works from the first
+         *     day and needs no history — the detector, which needs three months of it,
+         *     comes later and only ever proposes.
+         */
+        post: operations["declare_bill_financial_bills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Forget Bill
+         * @description Forget a bill entirely.
+         *
+         *     A real delete, where closing an account would be wrong: a closed account
+         *     still explains movements that are in the ledger, and a bill explains
+         *     nothing because it never wrote anything. Pausing is for the one worth
+         *     keeping.
+         */
+        delete: operations["forget_bill_financial_bills__bill_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Amend Bill
+         * @description Correct what the bill says.
+         *
+         *     Everything about a declared bill is a guess the first time: the gym raises
+         *     its price, the charge moves to another account, the day turns out to be
+         *     the 6th. What cannot be corrected is its identity — that is what deleting
+         *     is for.
+         */
+        patch: operations["amend_bill_financial_bills__bill_id__patch"];
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Bill
+         * @description Stop expecting charges, without forgetting what it cost.
+         *
+         *     The cancelled subscription. A paused bill predicts nothing and adds
+         *     nothing to any total — a pause that still filled the month would make that
+         *     total the one figure here nobody can trust.
+         */
+        post: operations["pause_bill_financial_bills__bill_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Bill */
+        post: operations["resume_bill_financial_bills__bill_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/catalog": {
         parameters: {
             query?: never;
@@ -1458,6 +1568,39 @@ export interface components {
             times_seen: number;
         };
         /**
+         * AmendBillPayload
+         * @description A correction. What is absent is left alone.
+         *
+         *     `clear_account` and `clear_category` exist because absence already means
+         *     "leave it alone", and an owner has to be able to say "this comes out of no
+         *     account of mine" after having said it came out of one.
+         */
+        AmendBillPayload: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Amount */
+            amount?: number | string | null;
+            cadence?: components["schemas"]["BillCadence"] | null;
+            /** Category */
+            category?: string | null;
+            /**
+             * Clear Account
+             * @default false
+             */
+            clear_account: boolean;
+            /**
+             * Clear Category
+             * @default false
+             */
+            clear_category: boolean;
+            currency?: components["schemas"]["Currency"] | null;
+            direction?: components["schemas"]["MovementDirection"] | null;
+            /** Name */
+            name?: string | null;
+            /** Starts On */
+            starts_on?: string | null;
+        };
+        /**
          * AmortizationStyle
          * @description How a loan's instalment is put together.
          *
@@ -1465,6 +1608,112 @@ export interface components {
          * @enum {string}
          */
         AmortizationStyle: "french" | "constant_principal" | "interest_only";
+        /**
+         * BillCadence
+         * @description How often the charge comes back.
+         *
+         *     Explicit string values: the cadence is persisted, so reordering the
+         *     members must not rewrite anybody's data.
+         * @enum {string}
+         */
+        BillCadence: "weekly" | "biweekly" | "monthly" | "bimonthly" | "quarterly" | "annual";
+        /**
+         * BillOccurrenceResponse
+         * @description One expected charge.
+         *
+         *     `due_on` is the calendar day the bill anchors on, not a day money moved:
+         *     nothing here can know that yet. `state` says `overdue` only once the grace
+         *     has passed as well, and even then it is a statement about the calendar.
+         */
+        BillOccurrenceResponse: {
+            /** Amount */
+            amount: string;
+            /** Bill Id */
+            bill_id: string;
+            currency: components["schemas"]["Currency"];
+            direction: components["schemas"]["MovementDirection"];
+            /**
+             * Due On
+             * Format: date
+             */
+            due_on: string;
+            state: components["schemas"]["OccurrenceState"];
+        };
+        /** BillResponse */
+        BillResponse: {
+            /** Account Id */
+            account_id: string | null;
+            /** Amount */
+            amount: string;
+            cadence: components["schemas"]["BillCadence"];
+            /** Category */
+            category: string | null;
+            currency: components["schemas"]["Currency"];
+            direction: components["schemas"]["MovementDirection"];
+            /** Frozen */
+            frozen: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            next_occurrence: components["schemas"]["BillOccurrenceResponse"] | null;
+            /**
+             * Starts On
+             * Format: date
+             */
+            starts_on: string;
+            status: components["schemas"]["BillStatus"];
+        };
+        /**
+         * BillStatus
+         * @description Whether this bill is still expecting charges.
+         *
+         *     `PAUSED` is the owner's decision and nothing else sets it. There is no
+         *     member for "its account went away", because an account is never deleted —
+         *     `Account.close` says so in as many words — so a bill whose account is
+         *     closed is answered by looking at the account, not by writing a state here
+         *     that would then have to be undone when they reopen it.
+         * @enum {string}
+         */
+        BillStatus: "active" | "paused";
+        /**
+         * BillTotalResponse
+         * @description The two figures, for one currency.
+         *
+         *     Two and not one, because "what this month costs" and "what has not fallen
+         *     due yet" are different questions and a reader takes whichever is on screen
+         *     to be the answer to both.
+         *
+         *     `upcoming` is what has **not fallen due yet** — deliberately not "unpaid".
+         *     Nothing can be confirmed yet, so a charge whose day has passed is one this
+         *     app cannot see either way.
+         */
+        BillTotalResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Expected */
+            expected: string;
+            /** Upcoming */
+            upcoming: string;
+        };
+        /** BillsResponse */
+        BillsResponse: {
+            /** Bills */
+            bills: components["schemas"]["BillResponse"][];
+            /** Occurrences */
+            occurrences: components["schemas"]["BillOccurrenceResponse"][];
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /** Totals */
+            totals: components["schemas"]["BillTotalResponse"][];
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
         /**
          * CatalogOption
          * @description One admissible value, and something to put beside it in a dropdown.
@@ -1665,6 +1914,30 @@ export interface components {
             name?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * DeclareBillPayload
+         * @description A charge the owner says is going to happen, every so often.
+         */
+        DeclareBillPayload: {
+            /** Account Id */
+            account_id?: string | null;
+            /** Amount */
+            amount: number | string;
+            cadence: components["schemas"]["BillCadence"];
+            /** Category */
+            category?: string | null;
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /** @default outgoing */
+            direction: components["schemas"]["MovementDirection"];
+            /** Name */
+            name: string;
+            /**
+             * Starts On
+             * Format: date
+             */
+            starts_on: string;
         };
         /**
          * DeletedCategoryResponse
@@ -2281,6 +2554,16 @@ export interface components {
             /** Subject */
             subject: string;
         };
+        /**
+         * OccurrenceState
+         * @description What can be said about one expected charge, today.
+         *
+         *     Only two members while nothing can be confirmed. Paying and skipping are
+         *     the next delivery, and they add their own — which is why this is an enum
+         *     from the start rather than a boolean that would have to be widened.
+         * @enum {string}
+         */
+        OccurrenceState: "expected" | "overdue";
         /**
          * OpenAccountPayload
          * @description Declare an account.
@@ -3671,6 +3954,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccrualResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bills_financial_bills_get: {
+        parameters: {
+            query?: {
+                since?: string | null;
+                until?: string | null;
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declare_bill_financial_bills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclareBillPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_bill_financial_bills__bill_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_bill_financial_bills__bill_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AmendBillPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_bill_financial_bills__bill_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_bill_financial_bills__bill_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
                 };
             };
             /** @description Validation Error */
