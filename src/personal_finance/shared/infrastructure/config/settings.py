@@ -561,6 +561,73 @@ class IdentitySettings(BaseSettings):
         return self.mail_username or self.mail_from_address
 
 
+class AlertsSettings(BaseSettings):
+    """Resources owned by the alerts context."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="ALERTS_",
+        env_file=ENV_FILE,
+        extra="ignore",
+    )
+
+    environment: Environment = Field(
+        default=Environment.LOCAL,
+        validation_alias=AliasChoices("ENVIRONMENT"),
+    )
+    # One table for channels, the links that bind them, the chats they hold
+    # and what has already been sent. The partition prefix says which, because
+    # two of the four are found by something that is not a user.
+    channels_table: str = "alert_channels"
+    # Named and resolved separately for the same reason every other context
+    # does it: provisioning knows the name, and the app only ever accepts a
+    # full URL so it never has to look one up at runtime.
+    events_queue_name: str = "alerts-events"
+    events_queue_url: str = ""
+
+    # --- Telegram ----------------------------------------------------------
+    #
+    # Empty by default so a deployment that has not set it up fails at
+    # startup instead of binding channels it can never send to. The one
+    # exception is ENVIRONMENT=local, which writes what it would have sent —
+    # see the alerts router.
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_bot_username: str = "finflow_bot"
+    telegram_api_base_url: str = "https://api.telegram.org"
+    # What Telegram echoes back in `X-Telegram-Bot-Api-Secret-Token`, and the
+    # only thing authenticating the webhook. Required in *every* environment
+    # including local: an empty expected value makes the constant-time
+    # comparison against an empty header succeed, which would leave the
+    # endpoint open to anyone who found it.
+    telegram_webhook_secret: SecretStr = SecretStr("")
+    send_timeout_seconds: float = 10.0
+
+    # Short because the person asking is holding their phone and about to tap,
+    # unlike a reset link read out of an email an hour later.
+    link_ttl_minutes: int = 15
+    max_channels_per_user: int = 5
+    # There is no per-user timezone anywhere in this codebase yet. One setting
+    # is the honest interim, not a solved problem.
+    display_timezone: str = "America/Bogota"
+
+    @model_validator(mode="after")
+    def _namespace_resources(self) -> Self:
+        self.channels_table = _namespaced(
+            self.channels_table,
+            environment=self.environment,
+        )
+        self.events_queue_name = _namespaced(
+            self.events_queue_name,
+            environment=self.environment,
+        )
+
+        return self
+
+    @field_validator("telegram_bot_token", "telegram_webhook_secret")
+    @classmethod
+    def _resolve(cls, value: SecretStr) -> SecretStr:
+        return resolve(value)
+
+
 @functools.lru_cache(maxsize=1)
 def get_aws_settings() -> AwsSettings:
     return AwsSettings()
@@ -596,6 +663,11 @@ def get_identity_settings() -> IdentitySettings:
     return IdentitySettings()
 
 
+@functools.lru_cache(maxsize=1)
+def get_alerts_settings() -> AlertsSettings:
+    return AlertsSettings()
+
+
 def reset_settings() -> None:
     """Drop the cached settings. Only useful for tests that change the
     environment after something already read it.
@@ -607,4 +679,5 @@ def reset_settings() -> None:
     get_financial_settings.cache_clear()
     get_llm_settings.cache_clear()
     get_identity_settings.cache_clear()
+    get_alerts_settings.cache_clear()
     reset_secrets_cache()

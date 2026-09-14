@@ -15,6 +15,7 @@ import logging
 import pytest
 
 from personal_finance.shared.infrastructure.observability.logging_config import (
+    SILENCED_LOGGERS,
     configure_logging,
 )
 
@@ -89,3 +90,56 @@ def test_the_requested_level_is_applied_over_the_existing_one(
     configure_logging(level=logging.DEBUG)
 
     assert logging.getLogger().level == logging.DEBUG
+
+
+# ----------------------------------------------------------------------
+# And that it turns down the libraries that would print a credential
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def silenced_levels_restored() -> Iterator[None]:
+    levels = {name: logging.getLogger(name).level for name in SILENCED_LOGGERS}
+    try:
+        yield
+    finally:
+        for name, level in levels.items():
+            logging.getLogger(name).setLevel(level)
+
+
+@pytest.mark.parametrize("name", SILENCED_LOGGERS)
+def test_a_library_that_logs_request_urls_is_pinned_above_info(
+    name: str,
+    silenced_levels_restored: None,
+) -> None:
+    """`httpx` writes the request URL at INFO, and one URL here is a secret.
+
+    Telegram's API carries the bot token in the path, so the line the alerts
+    adapter takes such care never to write, httpx would write for it — on
+    every alert. Found by running the thing and reading the log.
+    """
+    del silenced_levels_restored
+    configure_logging()
+
+    assert not logging.getLogger(name).isEnabledFor(logging.INFO)
+
+
+@pytest.mark.parametrize("name", SILENCED_LOGGERS)
+def test_turning_the_root_logger_up_does_not_unpin_them(
+    name: str,
+    silenced_levels_restored: None,
+) -> None:
+    """DEBUG is what somebody reaches for while chasing an unrelated bug."""
+    del silenced_levels_restored
+    configure_logging(level=logging.DEBUG)
+
+    assert not logging.getLogger(name).isEnabledFor(logging.INFO)
+
+
+def test_this_codebases_own_loggers_still_say_what_they_are_doing(
+    silenced_levels_restored: None,
+) -> None:
+    del silenced_levels_restored
+    configure_logging()
+
+    assert logging.getLogger("personal_finance.anything").isEnabledFor(logging.INFO)

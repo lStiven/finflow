@@ -12,6 +12,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { hasPendingLink, LINK_POLL_MS } from "@/alerts/channels";
 import { api, unwrap } from "@/api/client";
 import type { components, paths } from "@/api/schema";
 import { DISPLAY_TIMEZONE } from "@/lib/dates";
@@ -68,6 +69,10 @@ export type InvestmentTermsPayload = components["schemas"]["InvestmentTermsPaylo
 export type RateBasis = components["schemas"]["RateBasis"];
 export type ChargeBasis = components["schemas"]["ChargeBasis"];
 export type AmortizationStyle = components["schemas"]["AmortizationStyle"];
+export type AlertChannel = components["schemas"]["ChannelResponse"];
+export type AlertPreference = components["schemas"]["PreferenceResponse"];
+export type CreatedAlertChannel = components["schemas"]["CreatedChannelResponse"];
+export type AlertPreferenceBody = components["schemas"]["PreferencePayload"];
 
 export const queryKeys = {
   accounts: ["accounts"] as const,
@@ -81,6 +86,7 @@ export const queryKeys = {
   setup: ["setup"] as const,
   catalog: ["catalog"] as const,
   financing: ["financing"] as const,
+  alertChannels: ["alert-channels"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -1129,5 +1135,81 @@ export function useRevalue(
         }),
       ),
     onSuccess: () => invalidateFinancing(client),
+  });
+}
+
+/* ------------------------------------------------------------------ alerts */
+
+/**
+ * The Telegram channels this account has, bound or still waiting.
+ *
+ * Polled while a link is outstanding, and only then. Binding happens inside
+ * Telegram, where the page cannot see it, so asking is the only way it finds
+ * out — and `refetchInterval` returning false is what stops the timer once
+ * there is nothing left to find out. The same shape `/ingestion/setup` uses.
+ */
+export const alertChannelsQuery = queryOptions({
+  queryKey: queryKeys.alertChannels,
+  queryFn: () => unwrap(api.GET("/alerts/channels")),
+  staleTime: 10_000,
+  refetchInterval: (query) =>
+    hasPendingLink(query.state.data?.channels) ? LINK_POLL_MS : false,
+});
+
+/**
+ * Open a channel and get the one copy of its deep link.
+ *
+ * The link is in this response and in no other. It is never stored and
+ * `GET /alerts/channels` cannot hand it back, so the caller keeps it in
+ * component state for as long as the person needs to tap it — never in
+ * `localStorage`, which would leave a live credential on the device.
+ */
+export function useCreateAlertChannel(): UseMutationResult<
+  CreatedAlertChannel,
+  Error,
+  void
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(api.POST("/alerts/channels", { body: { kind: "telegram" } })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.alertChannels });
+    },
+  });
+}
+
+export function useUpdateAlertPreference(): UseMutationResult<
+  AlertChannel,
+  Error,
+  { channelId: string; body: AlertPreferenceBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ channelId, body }) =>
+      unwrap(
+        api.PATCH("/alerts/channels/{channel_id}", {
+          params: { path: { channel_id: channelId } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.alertChannels });
+    },
+  });
+}
+
+export function useDeleteAlertChannel(): UseMutationResult<unknown, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (channelId: string) =>
+      unwrap(
+        api.DELETE("/alerts/channels/{channel_id}", {
+          params: { path: { channel_id: channelId } },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.alertChannels });
+    },
   });
 }

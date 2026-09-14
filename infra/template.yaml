@@ -108,6 +108,31 @@ Parameters:
       and development is DISABLED. Everything else in a disabled stack still
       works; only the automatic intake stops.
 
+  TelegramBotUsername:
+    Type: String
+    Default: ""
+    Description: >
+      The bot's @name, without the @. It is not a secret — it is half of the
+      deep link every user taps — so it lives here rather than in SSM.
+
+  TelegramBotTokenParameter:
+    Type: String
+    Default: /finflow/production/telegram-bot-token
+    Description: >
+      SSM parameter holding the @BotFather token. Read by the API (which says
+      hello the moment a channel binds) and by the alerts worker (which sends
+      every alert). Write it with `just secret-put`; never put the value here.
+
+  TelegramWebhookSecretParameter:
+    Type: String
+    Default: /finflow/production/telegram-webhook-secret
+    Description: >
+      SSM parameter holding the value Telegram echoes back in
+      X-Telegram-Bot-Api-Secret-Token. It is the only thing authenticating the
+      webhook, because a Function URL with AuthType NONE has no resource
+      policy and cannot be pinned to Telegram's address ranges. Read by the
+      API alone.
+
   AlertEmail:
     Type: String
     Default: ""
@@ -167,6 +192,13 @@ Globals:
         FINANCIAL_ACCOUNTS_TABLE: financial
         FINANCIAL_EVENTS_QUEUE_NAME: financial-events
         FINANCIAL_EVENTS_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}financial-events"
+        ALERTS_CHANNELS_TABLE: alert_channels
+        ALERTS_EVENTS_QUEUE_NAME: alerts-events
+        ALERTS_EVENTS_QUEUE_URL: !Sub "https://sqs.${AWS::Region}.amazonaws.com/${AWS::AccountId}/${ResourcePrefix}alerts-events"
+        ALERTS_TELEGRAM_BOT_USERNAME: !Ref TelegramBotUsername
+        ALERTS_LINK_TTL_MINUTES: "15"
+        ALERTS_MAX_CHANNELS_PER_USER: "5"
+        ALERTS_DISPLAY_TIMEZONE: America/Bogota
         LLM_MODEL: gemini-3.6-flash
         LLM_MAX_OUTPUT_TOKENS: "4096"
         LLM_TIMEOUT_SECONDS: "30"
@@ -212,6 +244,16 @@ Resources:
           IDENTITY_MAIL_FROM_ADDRESS: !Ref MailFromAddress
           IDENTITY_MAIL_APP_PASSWORD: !Sub "ssm:${MailAppPasswordParameter}"
           IDENTITY_PASSWORD_RESET_URL: !Ref PasswordResetUrl
+          # The only thing authenticating the Telegram webhook, which only the
+          # API serves. A Function URL with AuthType NONE has no resource
+          # policy, so Telegram's address ranges cannot be pinned and this
+          # shared secret is the whole of the door.
+          ALERTS_TELEGRAM_WEBHOOK_SECRET: !Sub "ssm:${TelegramWebhookSecretParameter}"
+          # And the bot token, so binding a channel can answer "listo" in the
+          # same breath. That reply is what proves this deployment can reach
+          # the address it just bound, while its owner is still watching
+          # Telegram — rather than finding out at their first purchase.
+          ALERTS_TELEGRAM_BOT_TOKEN: !Sub "ssm:${TelegramBotTokenParameter}"
       FunctionUrlConfig:
         # The application authenticates every request itself with a bearer
         # token, so IAM auth here would only lock out the browser it exists
@@ -234,6 +276,10 @@ Resources:
             TableName: !Sub "${ResourcePrefix}merchants"
         - DynamoDBCrudPolicy:
             TableName: !Sub "${ResourcePrefix}financial"
+        # Channels, links, chat reservations. The API creates and binds them;
+        # the worker only reads channels and writes delivery markers.
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}alert_channels"
         - EventBridgePutEventsPolicy:
             EventBusName: !Sub "${ResourcePrefix}finflow"
         # Exactly the one parameter this function resolves, and no other.
@@ -250,6 +296,12 @@ Resources:
               Resource:
                 - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${JwtSecretParameter}"
                 - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MailAppPasswordParameter}"
+                # The webhook's shared secret, and the bot token it needs to
+                # answer "listo" the moment a channel binds. The hello is what
+                # proves this deployment can actually send to the address it
+                # just bound, while its owner is still looking at Telegram.
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramWebhookSecretParameter}"
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramBotTokenParameter}"
             # SecureString decryption goes through the AWS-managed SSM key,
             # reachable only via SSM itself.
             - Effect: Allow
@@ -494,6 +546,65 @@ Resources:
             EventBusName: !Sub "${ResourcePrefix}finflow"
 
   # ------------------------------------------------------------------
+  # Alerts — the only worker that talks to somebody outside this system
+  # ------------------------------------------------------------------
+  AlertsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: alerts
+    Properties:
+      PackageType: Image
+      LoggingConfig:
+        LogGroup: !Ref AlertsLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.alerts.presentation.awslambda.alerts_handler.handler
+      MemorySize: 256
+      # Must stay at or under the queue's VisibilityTimeout of 120s, or the
+      # event source mapping will not deploy.
+      Timeout: 120
+      # Serialised deliberately. Delivery is remembered *after* the message
+      # goes out — the opposite of merchant's order, because a crash that
+      # loses an alert is a purchase nobody hears about, while a crash that
+      # repeats one is a duplicate message. That trade only holds against
+      # sequential redelivery; two workers running at once would both read
+      # "not yet delivered" and both send. At this volume, one is free.
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          ALERTS_TELEGRAM_BOT_TOKEN: !Sub "ssm:${TelegramBotTokenParameter}"
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${ResourcePrefix}alerts-events"
+            # Five, not ten: each message may spend up to 10s waiting on
+            # Telegram, and 5 x 10s fits inside the 120s above with room to
+            # spare. Ten would not.
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}alert_channels"
+        # No EventBridgePutEventsPolicy: alerts is a leaf. It subscribes to
+        # finflow.financial and publishes nothing, so it has no translator and
+        # nothing to put on the bus.
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramBotTokenParameter}"
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
   # Logs — retention set explicitly, per function
   # ------------------------------------------------------------------
   # ------------------------------------------------------------------
@@ -533,6 +644,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/finflow/${AWS::StackName}/financial"
+      RetentionInDays: !Ref LogRetentionDays
+
+  AlertsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/alerts"
       RetentionInDays: !Ref LogRetentionDays
 
   # ------------------------------------------------------------------
@@ -619,6 +736,29 @@ Resources:
       Dimensions:
         - Name: QueueName
           Value: !Sub "${ResourcePrefix}financial-events-dlq"
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlertTopic
+
+  # Named for the queue, not for the context: `${AWS::StackName}-alerts` is
+  # already the SNS topic these alarms publish *to*, and two resources whose
+  # names differ by a suffix are two resources somebody will confuse at 3am.
+  AlertDeliveryDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-alerts-events-dead-letters"
+      AlarmDescription: >
+        A movement was recorded and nobody was told about it.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub "${ResourcePrefix}alerts-events-dlq"
       Statistic: Maximum
       Period: 300
       EvaluationPeriods: 1

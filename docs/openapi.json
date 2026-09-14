@@ -325,6 +325,14 @@
         "title": "AccruePayload",
         "type": "object"
       },
+      "AlertType": {
+        "description": "What a channel can be told about.\n\nExplicit string values because they are persisted. One member today;\nE2 adds the recurring charge and E4 the budget threshold.",
+        "enum": [
+          "movement"
+        ],
+        "title": "AlertType",
+        "type": "string"
+      },
       "AliasResponse": {
         "description": "One child: a spelling that resolves to this merchant.",
         "properties": {
@@ -485,6 +493,102 @@
           "new_password"
         ],
         "title": "ChangePasswordPayload",
+        "type": "object"
+      },
+      "ChannelKind": {
+        "description": "Which transport a channel speaks.\n\nOne member today. It exists as an enum rather than as an assumption so\nthat the day a second transport arrives, every stored row already says\nwhich one it is instead of meaning Telegram by omission.",
+        "enum": [
+          "telegram"
+        ],
+        "title": "ChannelKind",
+        "type": "string"
+      },
+      "ChannelListResponse": {
+        "properties": {
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelResponse"
+            },
+            "title": "Channels",
+            "type": "array"
+          }
+        },
+        "required": [
+          "channels"
+        ],
+        "title": "ChannelListResponse",
+        "type": "object"
+      },
+      "ChannelResponse": {
+        "description": "One channel, as its owner may see it.\n\nNo token, and no chat id: `chat_hint` is the last few characters of the\ndestination, which is all the owner needs to recognise which Telegram\naccount is bound.",
+        "properties": {
+          "channel_id": {
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "chat_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Hint"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "preferences": {
+            "items": {
+              "$ref": "#/components/schemas/PreferenceResponse"
+            },
+            "title": "Preferences",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At"
+          }
+        },
+        "required": [
+          "channel_id",
+          "kind",
+          "status",
+          "chat_hint",
+          "label",
+          "created_at",
+          "verified_at",
+          "preferences"
+        ],
+        "title": "ChannelResponse",
         "type": "object"
       },
       "ChargeAmountResponse": {
@@ -656,6 +760,39 @@
           "charged_to_balance"
         ],
         "title": "ChargeResponse",
+        "type": "object"
+      },
+      "CreateChannelPayload": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ChannelKind",
+            "default": "telegram"
+          }
+        },
+        "title": "CreateChannelPayload",
+        "type": "object"
+      },
+      "CreatedChannelResponse": {
+        "description": "The new channel, and the one and only copy of its link.\n\n`link_url` is shown once. It is not stored — only its hash is — and no\nother endpoint can hand it back. Losing it means asking for another one,\nwhich is the whole difference between a one-time credential and a\npermanent one.",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/ChannelResponse"
+          },
+          "expires_in_minutes": {
+            "title": "Expires In Minutes",
+            "type": "integer"
+          },
+          "link_url": {
+            "title": "Link Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "channel",
+          "link_url",
+          "expires_in_minutes"
+        ],
+        "title": "CreatedChannelResponse",
         "type": "object"
       },
       "Currency": {
@@ -2438,6 +2575,78 @@
         "title": "PeriodComparisonResponse",
         "type": "object"
       },
+      "PreferencePayload": {
+        "properties": {
+          "alert_type": {
+            "$ref": "#/components/schemas/AlertType"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "minimum_amount": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "pattern": "^\\d+(\\.\\d+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Amount"
+          },
+          "minimum_currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          }
+        },
+        "required": [
+          "alert_type",
+          "enabled"
+        ],
+        "title": "PreferencePayload",
+        "type": "object"
+      },
+      "PreferenceResponse": {
+        "properties": {
+          "alert_type": {
+            "$ref": "#/components/schemas/AlertType"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "minimum_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Amount"
+          },
+          "minimum_currency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "alert_type",
+          "enabled"
+        ],
+        "title": "PreferenceResponse",
+        "type": "object"
+      },
       "ProcessingStatus": {
         "description": "Explicit string values: this enum is persisted and serialized, so the\nstored representation must survive a reordering of the members.",
         "enum": [
@@ -3671,6 +3880,18 @@
         "title": "VerificationRequestedResponse",
         "type": "object"
       },
+      "WebhookAck": {
+        "description": "What Telegram gets back. Always the same thing — see `_accepted`.",
+        "properties": {
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "title": "WebhookAck",
+        "type": "object"
+      },
       "personal_finance__contexts__financial__presentation__http__router__MerchantResponse": {
         "description": "The canonical merchant behind this movement's counterparty text.\n\nJoined when the answer is read, never stored on the movement: the grouping\nbelongs to Merchant and a user can change it, so a rename or a merge shows\nup on every past movement at once with nothing to re-process.",
         "properties": {
@@ -3767,6 +3988,225 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/alerts/channels": {
+      "get": {
+        "description": "Every channel this caller owns, bound or still waiting.\n\nPolled by the screen while a link is outstanding: binding happens in\nTelegram, where the page cannot see it, so asking is the only way it\nlearns. Never carries the link — see this module's docstring.",
+        "operationId": "list_channels_alerts_channels_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Channels",
+        "tags": [
+          "alerts"
+        ]
+      },
+      "post": {
+        "description": "Open a channel and hand back the link that will bind it.\n\nFollowing the link in Telegram is what verifies it — there is no code to\ntype, and no chat id to look up. Asking again retires whatever attempt\nwas outstanding, so one account never has two live links at once.",
+        "operationId": "create_channel_alerts_channels_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannelPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedChannelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Channel",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/alerts/channels/{channel_id}": {
+      "delete": {
+        "description": "Unlink a destination. Nothing more is sent to it, and the Telegram\naccount it held is free to be bound again — by anyone.",
+        "operationId": "delete_channel_alerts_channels__channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Channel",
+        "tags": [
+          "alerts"
+        ]
+      },
+      "patch": {
+        "description": "Say how much of one kind of alert this channel wants.\n\nA floor is about noise, not about money: below it nothing is sent, which\nis what keeps a three-thousand-peso coffee from spending the attention a\nfour-hundred-thousand-peso charge needs.",
+        "operationId": "update_preference_alerts_channels__channel_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Preference",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/alerts/telegram/webhook": {
+      "post": {
+        "description": "Bind a channel, if this update is somebody following their own link.\n\nThe body arrives as raw bytes and is decoded here rather than in the\nsignature, for two reasons. FastAPI validates a typed body as part of\nsolving the request, which would put a JSON parse *before* the secret\ncheck and hand anonymous callers free work; and a shape Telegram changed\nwould become a 422, which is a non-2xx, which is backoff and eventually a\ndisabled webhook.",
+        "operationId": "receive_update_alerts_telegram_webhook_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Telegram-Bot-Api-Secret-Token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Telegram-Bot-Api-Secret-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAck"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Update",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
     "/financial/accounts": {
       "get": {
         "operationId": "list_accounts_financial_accounts_get",

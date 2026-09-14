@@ -12,7 +12,7 @@ version = 0.1
 stack_name = "finflow"
 
 [default.build.parameters]
-# One image, five functions: without the cache each function rebuilds it.
+# One image, six functions: without the cache each function rebuilds it.
 cached = true
 parallel = true
 

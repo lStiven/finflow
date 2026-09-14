@@ -3,13 +3,13 @@
     just up        # local, against the emulator
     just up-dev    # development, against the dev- resources in real AWS
 
-Five processes make Finflow work — the API and the four workers — and each one
-is a loop that never returns. Started by hand that is five terminals, five
-things to remember and five things to forget to stop. This starts them
+Six processes make Finflow work — the API and the five workers — and each one
+is a loop that never returns. Started by hand that is six terminals, six
+things to remember and six things to forget to stop. This starts them
 together, tags every line with the service that wrote it, and takes them all
 down on the first Ctrl+C.
 
-It refuses to run against production on purpose. There the five are Lambda
+It refuses to run against production on purpose. There the six are Lambda
 functions AWS invokes on its own, and driving them from a laptop instead is
 not a smaller version of that — it is a different thing wearing its name, one
 that consumes production's queues and competes for its mailbox. The
@@ -135,6 +135,13 @@ def _services(
             _worker(
                 "personal_finance.contexts.financial.presentation.cli"
                 ".run_financial_worker"
+            ),
+        ),
+        Service(
+            "alerts",
+            "\033[31m",
+            _worker(
+                "personal_finance.contexts.alerts.presentation.cli.run_alerts_worker"
             ),
         ),
     )

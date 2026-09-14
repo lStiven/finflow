@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from importlib.machinery import ModuleSpec
 
 
-# The five handlers `infra/template.yaml` names, and nothing else: this is
+# The six handlers `infra/template.yaml` names, and nothing else: this is
 # about what Lambda imports, not about the package at large.
 ENTRYPOINTS = [
     "personal_finance.api.main",
@@ -30,6 +30,7 @@ ENTRYPOINTS = [
     "personal_finance.contexts.ingestion.presentation.awslambda.parse_handler",
     "personal_finance.contexts.merchant.presentation.awslambda.merchant_handler",
     "personal_finance.contexts.financial.presentation.awslambda.financial_handler",
+    "personal_finance.contexts.alerts.presentation.awslambda.alerts_handler",
 ]
 
 DEV_ONLY_ROOTS = ("mypy_boto3", "moto", "pytest", "cfn_lint", "samtranslator")

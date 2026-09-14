@@ -6,6 +6,15 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from personal_finance.contexts.alerts.presentation.http.dependencies import (
+    build_message_sender,
+)
+from personal_finance.contexts.alerts.presentation.http.router import (
+    router as alerts_router,
+)
+from personal_finance.contexts.alerts.presentation.http.telegram import (
+    router as alerts_telegram_router,
+)
 from personal_finance.contexts.financial.presentation.http.router import (
     router as financial_router,
 )
@@ -63,6 +72,10 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     get_use_case()
     get_register_use_case()
     get_login_use_case()
+    # An unconfigured bot is a deployment that would bind channels it
+    # could never send to, and whose owners would find out at their
+    # first purchase rather than at the moment they linked.
+    build_message_sender()
 
     yield
 
@@ -118,6 +131,12 @@ def create_app(
     # came of it.
     app.include_router(ingestion_notifications_router)
     app.include_router(ingestion_setup_router)
+    app.include_router(alerts_router)
+    # Mounted in every environment, unlike the webhook below: this is how
+    # every channel everywhere gets bound, not a way to replay something
+    # locally. `tests/unit/api/test_app_wiring.py` pins that, because the
+    # neighbour invites the opposite assumption.
+    app.include_router(alerts_telegram_router)
 
     if expose_local_only_routes:
         # Real intake never calls this: a user forwards bank email to their

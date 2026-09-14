@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "finflow_v2",
-    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant, Financial). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/email-forwarding.md and docs/running.md for the narrative version of this API.",
+    "description": "Finflow backend API. Requests are grouped by bounded context, the same way the codebase is (Identity, Ingestion, Merchant, Financial, Alerts). Import the sibling `finflow_v2.postman_environment.json` alongside this file and select it before sending requests.\n\nAuth flow: run Identity > Auth > Register (or Login) once — its test script reads the response and fills `fetch_token`, `token`, and `user_id` on the active environment automatically. Every authenticated request below sends `Authorization: {{token}}`.\n\nSee docs/email-forwarding.md and docs/running.md for the narrative version of this API.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -2389,6 +2389,209 @@
             "description": "Erases the movement and gives the balance back what it took: a 2000 purchase deleted is 2000 the account holds again. The balance is recomputed from the rows that remain rather than nudged by the amount, so it cannot end up disagreeing with them.\n\nNot the same as PATCH with detach, which only takes the movement off its account — that one still exists and still counts in what came in and went out.\n\nBoth sides of a transfer go together: erasing either row of a payment between two of the owner's own accounts erases the other and restores both balances. A leg paid from outside this app has no second row and goes alone.\n\nAnswers `erased` (every movement id that left) and `accounts` (the accounts whose balances changed, already recomputed — empty when the movement was on no account). 404 for a movement that is not there, including a second delete of one already erased."
           },
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Alerts",
+      "item": [
+        {
+          "name": "Create channel",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const body = pm.response.json();",
+                  "    pm.environment.set('alert_channel_id', body.channel.channel_id);",
+                  "    // The link is returned once and never again. Keep the",
+                  "    // `start=` payload: `just telegram-update <token>` replays",
+                  "    // it against a local webhook.",
+                  "    const token = body.link_url.split('start=')[1];",
+                  "    pm.environment.set('telegram_link_token', token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"telegram\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/alerts/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "channels"
+              ]
+            },
+            "description": "Opens a channel and returns the deep link that binds it. Following that link in Telegram and pressing Start is what verifies it — there is no code to type and no chat id to look up.\n\n`link_url` is returned **once**. It is not stored (only its hash is) and `GET /alerts/channels` cannot hand it back, so losing it means asking for another. Asking again also retires whatever attempt was outstanding, so one account never has two live links at a time.\n\n201 on success; 409 when the account already holds as many channels as it may."
+          },
+          "response": []
+        },
+        {
+          "name": "List channels",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/channels",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "channels"
+              ]
+            },
+            "description": "Every channel this caller owns, bound or still waiting. The screen polls this while a link is outstanding: binding happens inside Telegram, where the page cannot see it.\n\nNever carries the link, and never the full chat id — `chat_hint` is its last few characters, which is all the owner needs to recognise which account is bound. Every alert type appears in `preferences`, including ones nobody has expressed an opinion about yet, so a screen can draw a switch for each without guessing the default."
+          },
+          "response": []
+        },
+        {
+          "name": "Update preference",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alert_type\": \"movement\",\n  \"enabled\": true,\n  \"minimum_amount\": \"20000\",\n  \"minimum_currency\": \"COP\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/alerts/channels/:channelId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "channels",
+                ":channelId"
+              ],
+              "variable": [
+                {
+                  "key": "channelId",
+                  "value": "{{alert_channel_id}}"
+                }
+              ]
+            },
+            "description": "Says how much of one kind of alert this channel wants.\n\n`minimum_amount` is a string, like money everywhere else here, and `null` clears the floor. Below the floor nothing is sent — it is about noise, not about money: a three-thousand-peso coffee should not spend the attention a four-hundred-thousand-peso charge needs. A floor in one currency never silences a movement in another.\n\n404 for a channel that is not yours, which is the same answer a malformed id gets."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete channel",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/channels/:channelId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "channels",
+                ":channelId"
+              ],
+              "variable": [
+                {
+                  "key": "channelId",
+                  "value": "{{alert_channel_id}}"
+                }
+              ]
+            },
+            "description": "Unlinks a destination. Nothing more is sent to it, and the Telegram account it held is free to be bound again — by anyone. 204 on success, 404 for a channel that is not yours."
+          },
+          "response": []
+        },
+        {
+          "name": "Local testing",
+          "item": [
+            {
+              "name": "Telegram webhook",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  },
+                  {
+                    "key": "X-Telegram-Bot-Api-Secret-Token",
+                    "value": "{{telegram_webhook_secret}}"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"update_id\": 1,\n  \"message\": {\n    \"message_id\": 1,\n    \"chat\": { \"id\": 987654321, \"type\": \"private\" },\n    \"from\": { \"id\": 987654321, \"first_name\": \"Local\" },\n    \"text\": \"/start {{telegram_link_token}}\"\n  }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/alerts/telegram/webhook",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "alerts",
+                    "telegram",
+                    "webhook"
+                  ]
+                },
+                "description": "What Telegram posts when somebody presses Start. **This is a product path, not a local seam** — unlike `/ingestion/bank-notifications`, it is mounted in every environment and is how every channel gets bound. It sits under Local testing only because a laptop is the one place you have to play Telegram yourself; `just telegram-update <token>` does the same thing from a terminal.\n\nAuthenticated by the shared secret header alone, compared in constant time, and checked before the body is parsed. A wrong or missing header is 403; **everything else answers 200**, including an unknown, spent or expired token — Telegram retries any non-2xx and eventually disables the webhook, and answering alike keeps the endpoint from saying whether a link exists. Check `GET /alerts/channels` to see whether the channel actually bound."
+              },
+              "response": []
+            }
+          ]
         }
       ]
     }

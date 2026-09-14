@@ -5,12 +5,31 @@ only renders `%(message)s` and silently drops whatever a call site put in
 `extra={...}` — and every `_logger.info(...)` in this codebase relies on
 those fields actually showing up. This is the one place that fixes that, so
 `extra` behaves the way every call site already assumes it does.
+
+It is also where third-party loggers that would print a secret are turned
+down. See `SILENCED_LOGGERS`.
 """
 
 from __future__ import annotations
 
 import logging
 
+
+# Libraries that log a request URL, and would therefore log a credential.
+#
+# `httpx` writes `HTTP Request: POST <url> "HTTP/1.1 400"` at INFO for every
+# call, and Telegram's API puts the bot token *in the path*:
+# `api.telegram.org/bot<TOKEN>/sendMessage`. So the one line the alerts
+# adapter takes such care never to write, httpx writes for it — on every
+# alert, into CloudWatch, where it stays for the log group's retention and
+# lets whoever reads it message every linked user as this deployment.
+#
+# `httpcore` is here for the same reason one level down: its DEBUG records
+# carry the request target, which is the same path.
+#
+# Pinned rather than left to the root level, because the root level is the
+# thing somebody turns up to DEBUG while chasing an unrelated bug.
+SILENCED_LOGGERS = ("httpx", "httpcore")
 
 # What a stock `LogRecord` already carries, so only a call site's own
 # `extra` keys get appended.
@@ -50,7 +69,14 @@ def configure_logging(*, level: int = logging.INFO) -> None:
     Off Lambda the root logger has no handlers yet, so `force` changes
     nothing. Uvicorn is unaffected either way: it configures its own named
     loggers, never the root one.
+
+    The loop at the end is not about noise. Those loggers print request URLs,
+    and one of the URLs this codebase builds carries a bot token — see
+    `SILENCED_LOGGERS`.
     """
     handler = logging.StreamHandler()
     handler.setFormatter(_ExtraFieldsFormatter("%(levelname)s:%(name)s:%(message)s"))
     logging.basicConfig(level=level, handlers=[handler], force=True)
+
+    for name in SILENCED_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

@@ -55,6 +55,26 @@ def test_ingestions_read_surface_survives_in_a_real_deployment() -> None:
     assert "/ingestion/notifications" in _routes(expose_local_only_routes=False)
 
 
+def test_alerts_survive_in_a_real_deployment() -> None:
+    paths = _routes(expose_local_only_routes=False)
+
+    assert "/alerts/channels" in paths
+    assert "/alerts/channels/{channel_id}" in paths
+
+
+def test_the_telegram_webhook_is_exposed_in_a_real_deployment() -> None:
+    """The opposite of the bank-notification webhook above, and the nearness
+    of the two invites the wrong assumption.
+
+    That one has no caller outside local testing. This one is how every
+    channel in every environment gets bound: Telegram posts here when
+    somebody presses Start, and without it linking does not work at all. It
+    is unauthenticated by bearer token and protected by a shared secret
+    compared in constant time.
+    """
+    assert "/alerts/telegram/webhook" in _routes(expose_local_only_routes=False)
+
+
 def test_merchants_survive_in_a_real_deployment() -> None:
     paths = _routes(expose_local_only_routes=False)
 

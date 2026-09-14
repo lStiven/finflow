@@ -8,6 +8,7 @@ es (eso vive en [docs/decisions.md](docs/decisions.md), que **no** se lee al
 arrancar: se busca dentro cuando hay una duda concreta).
 
 Última verificación contra el código y contra AWS: **2026-09-04**.
+La verificación local de los avisos por Telegram: **2026-09-14**.
 
 ## Qué hace hoy la aplicación
 
@@ -44,6 +45,15 @@ Todo el backend de la versión 1 está terminado y probado:
   dura 30 minutos; cambiarla cierra todas las sesiones abiertas con la anterior.
 - **Reportes**: cuánto sumó un periodo, contra el periodo anterior, y la gráfica
   por categorías.
+- **Los avisos salen de la app.** Quien quiera conecta su Telegram desde
+  Perfil con un toque —se abre el bot, se pulsa Empezar, y listo: no hay que
+  buscar ningún identificador ni teclear ningún código— y a partir de ahí cada
+  movimiento le llega al teléfono segundos después, venga del correo del banco
+  o escrito a mano. Se puede apagar, y se le puede poner un mínimo para que un
+  café no gaste la atención que necesita un cargo grande. Los intereses que la
+  propia aplicación calcula no se avisan: llegan de a cuatro cuando alguien
+  abre la pantalla del crédito, y avisarlos es lo que hace que se apaguen los
+  avisos de verdad.
 - **Las categorías se pueden inventar, corregir y borrar.** Las dieciséis que
   trae la aplicación las ve todo el mundo; encima de esas, cada quien escribe
   las suyas (corto: máximo 24 caracteres, porque se leen en una lista y en una
@@ -58,11 +68,12 @@ Todo el backend de la versión 1 está terminado y probado:
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 55 operaciones de API en los cuatro contextos, cinco
-procesos en la nube, 1539 pruebas de Python y 295 del frontend, todas en verde.
+**Estado técnico:** 60 operaciones de API en cinco contextos, seis procesos en
+la nube, 1718 pruebas de Python y 313 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
-cola compartido, la paginación de notificaciones, las categorías propias).
+cola compartido, la paginación de notificaciones, las categorías propias, y el
+contexto `alerts` entero).
 
 **Pantallas:** están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
@@ -85,9 +96,9 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 55 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta y las categorías propias |
-| API desarrollo | 55 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias | ninguna |
+| API producción | 60 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias y los avisos |
+| API desarrollo | 60 operaciones | 43 — igual que producción |
+| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
 verificación de correo y la recuperación de contraseña. Las dos webs
@@ -130,13 +141,24 @@ AWS (ver Trabas).
 
 4. **La pantalla de Configuración**, la última que falta.
 
-5. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
+5. **Registrar el webhook de Telegram al desplegar.** Los avisos funcionan de
+   punta a punta en el computador, pero en la nube Telegram no sabe todavía a
+   dónde entregar: hace falta `just telegram-webhook-dev <url>` una vez por
+   entorno, con la dirección del Function URL, y los dos secretos en SSM
+   (`just secret-put`). Sin eso vincular no hace nada, y es lo único de los
+   avisos que no se puede comprobar sin desplegar. Los dos bots ya existen.
+
+6. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
    olvidado en el computador mientras producción sigue vieja — que es exactamente
    lo que está pasando ahora mismo (punto 1).
 
 ## Huecos conocidos, sin urgencia
 
+- **La hora de los avisos es la misma para todo el mundo.** No existe zona
+  horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
+  pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
+  día que alguien lo use desde otro huso.
 - **Falta decidir si los comercios son de cada usuario o compartidos.** Hoy son
   de cada uno. Compartirlos coincidiría con la intuición, pero los nombres y las
   categorías son decisiones personales, y las veces que alguien visitó un negocio
@@ -175,6 +197,15 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-14 — **La app ya le habla a alguien fuera de su propia pantalla.**
+  Contexto nuevo `alerts`: se conecta Telegram con un toque desde Perfil y cada
+  movimiento llega al teléfono. Vincular es un enlace profundo con un token de
+  un solo uso, no un código tecleado — 256 bits en vez de un millón de
+  combinaciones, y nadie tiene que averiguar su `chat_id`. El mensaje dice solo
+  lo que trae el evento; el total del mes es de E3 y el nombre bonito del
+  comercio es de Merchant. La marca de entrega se escribe *después* de mandar,
+  al revés que en Merchant: repetir un aviso molesta, perderlo es una compra de
+  la que nadie se enteró. Verificado de punta a punta contra moto.
 - 2026-09-12 — **Financial ya habla hacia afuera.** Era el único contexto sin
   traductor ni publicador: sus eventos iban a un log que ni siquiera llevaba el
   monto. Ahora salen dos hechos a `finflow.financial` —que se movió plata y que
@@ -202,10 +233,3 @@ AWS (ver Trabas).
   salir del formulario— y eso le crea el comercio, que era el hueco por el que
   esos gastos no aparecían en ningún reporte por categoría. El modelo también
   clasifica en las categorías propias.
-- 2026-09-04 — **Valorar un fondo con una cifra ya usada hoy vuelve a contar.**
-  Ir de 11 a 15, volver a 11 y subir otra vez a 15 dejaba el saldo en 11 y
-  respondía 200: el último movimiento repetía la identidad del primero. Ahora la
-  identidad lleva además el turno de ese movimiento en el día, y solo se pasa al
-  siguiente turno cuando el saldo releído no es ya la cifra pedida — que es lo
-  que sigue rechazando un doble envío. Doce turnos por movimiento y día; el
-  siguiente es un 409, no un 200 mentiroso.

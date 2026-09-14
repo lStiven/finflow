@@ -169,6 +169,54 @@ financial-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.financial.presentation.cli.run_financial_worker
 
+# Named `alerts-worker` rather than `alerts-*`: `alerts-dev`/`alerts-prod`
+# below are the CloudWatch alarm recipes, which are an unrelated thing.
+#
+# Drain alerts' queue: MovementRecorded -> a Telegram message.
+alerts-worker: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.run_alerts_worker
+
+alerts-worker-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.run_alerts_worker
+
+# Telegram cannot reach a laptop and `setWebhook` wants a public HTTPS name,
+# so the inbound half of linking is the one part the network will not allow
+# locally. Everything else stays real. Pass the `start=` payload from the
+# link_url that `POST /alerts/channels` returned.
+#
+# Pretend to be Telegram: post a synthetic `/start <token>` to the webhook.
+telegram-update token *args: (_require-env ".env")
+    {{local_env}} uv run python scripts/telegram_update.py {{token}} {{args}}
+
+# Registering the webhook is how the two sides come to agree on the secret
+# header, which is the whole of its authentication. A one-off per deployment,
+# not part of a deploy: two stacks registering against one bot would fight,
+# and the loser would silently stop receiving updates. Telegram needs https,
+# so a laptop uses `just telegram-update` instead.
+#
+# Point the bot at a deployed webhook, e.g. `just telegram-webhook-dev https://…`.
+telegram-webhook-dev url: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.set_telegram_webhook \
+        set {{url}}
+
+# The same, for production.
+telegram-webhook-prod url: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.set_telegram_webhook \
+        set {{url}}
+
+# What Telegram thinks it is delivering to, and what went wrong last.
+telegram-webhook-info-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.set_telegram_webhook info
+
+telegram-webhook-info-prod: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.set_telegram_webhook info
+
 # Store a secret in SSM Parameter Store, so the env file only holds a
 # reference. The value is read from a prompt, never from the command line: a
 # command line is visible in `ps` to every process on the box, and lands in
@@ -231,7 +279,7 @@ dev: (_require-env ".env")
 up *args: aws-init seed
     @{{local_env}} uv run python scripts/run_stack.py {{args}}
 
-# The five processes against the dev- resources in real AWS. Run
+# The six processes against the dev- resources in real AWS. Run
 # `just provision-dev` once first; there is nothing to seed, the data persists.
 up-dev *args: (_require-env ".env.development")
     @{{dev_env}} uv run python scripts/run_stack.py {{args}}
@@ -273,8 +321,12 @@ financial-worker-dev: (_require-env ".env.development")
     {{dev_env}} uv run python -m \
         personal_finance.contexts.financial.presentation.cli.run_financial_worker
 
+alerts-worker-dev: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.run_alerts_worker
+
 # --------------------------------------------------
-# Deploying: the five functions, from infrastructure only
+# Deploying: the six functions, from infrastructure only
 # --------------------------------------------------
 #
 # SAM owns the compute plane (functions, triggers, roles, the API's URL).
@@ -386,8 +438,8 @@ deploy-logs-prod name="ApiFunction":
     sam logs --stack-name finflow --name {{name}} \
         --profile finflow-production --tail
 
-# Every deploy pushes the image once per function — five copies of ~250 MB —
-# into five repositories SAM creates and then never prunes, so ECR storage
+# Every deploy pushes the image once per function — six copies of ~250 MB —
+# into six repositories SAM creates and then never prunes, so ECR storage
 # grows by the whole set on each run and is billed for as long as the account
 # exists. It is the only bill in this project that grows on its own.
 #

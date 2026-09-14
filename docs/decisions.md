@@ -1160,6 +1160,117 @@ way out, and still stores nothing.
   somebody else's inbox and to burn its Gmail sending quota, which would take
   registration down for everybody.
 
+### Alerts — telling somebody outside the app (2026-09-14)
+
+- **Telegram, not email or push** (2026-09-14). Email is what this system
+  already reads; sending alerts back through it would put a second meaning on
+  the one channel intake depends on, and a bank alert and a Finflow alert
+  landing in the same inbox is how somebody trains themselves to ignore both.
+  Web push needs a service worker, a VAPID key pair and a permission prompt
+  per device, and it goes silent on iOS unless the page was installed to the
+  home screen — which is exactly the deployment this project is. Telegram
+  costs one bot token, works identically on every phone, and is already open
+  on the phones of the handful of people this runs for. The port is
+  `MessageSender`, so the domain never learns which one it is.
+
+- **Linking is a deep link, not a typed code** (2026-09-14). The build plan
+  said to reuse identity's one-time code and expose
+  `POST /alerts/channels/confirm`. That endpoint does not exist, and dropping
+  it removed a brute-force surface rather than merely simplifying a screen: a
+  six-digit code is a million possibilities, so it would have needed bcrypt,
+  an attempt cap and a send window to mean anything. `?start=<token>` on
+  `t.me/<bot>` carries 256 bits instead, spent by one conditional delete —
+  nothing to guess, nothing to rate limit. It also removes the step where
+  somebody had to find their own `chat_id`, which no Telegram screen shows.
+  The cost is a public webhook, below.
+
+- **The webhook is a product path, and the secret header is all of its door**
+  (2026-09-14). Unlike `/ingestion/bank-notifications`, which stays unmounted
+  outside `ENVIRONMENT=local`, this one is mounted everywhere — it is how
+  every channel in every environment binds. A Lambda Function URL with
+  `AuthType: NONE` has no resource policy, so Telegram's address ranges
+  cannot be pinned and `X-Telegram-Bot-Api-Secret-Token` is the only
+  authentication there is. Hence: `hmac.compare_digest`, checked before the
+  body is parsed, and an *unset* secret refuses everyone rather than
+  comparing — `compare_digest("", "")` is `True`, so the obvious spelling of
+  "not configured yet" would have removed the door instead of weakening it.
+  Everything else answers `200`, including an unknown, spent or expired
+  token: Telegram retries any non-2xx and eventually disables the webhook,
+  and answering alike is also what keeps the endpoint from reporting whether
+  a link exists.
+
+- **A chat belongs to one channel, not one account** (2026-09-14). The
+  reservation's condition is `attribute_not_exists OR channel_id = :channel`.
+  Scoping it to the *account* looked equivalent and was not: it let one owner
+  bind two channels to one chat, and then deleting either released a
+  reservation the other still delivered through — leaving the chat free for a
+  different account to claim while the first kept sending to it. Two people's
+  movements in one Telegram conversation is a leak neither of them agreed to.
+  Found in review, after the per-account version had already passed its tests.
+
+- **The delivery marker is written *after* the send** (2026-09-14). The
+  opposite of merchant's `ProcessedEventStore`, which claims before doing the
+  work and accepts losing one sighting to a crash because the next sighting
+  rebuilds it. Here the two failures are not symmetric: marking first means a
+  crash between the mark and the send is a purchase nobody is ever told
+  about — silent, unrecoverable, and the exact thing this context exists to
+  prevent — while marking last means a crash between the send and the mark is
+  one repeated message. The trade only holds against *sequential*
+  redelivery, which is why the function carries
+  `ReservedConcurrentExecutions: 1`. Whoever reads merchant's docstring first
+  will want to "fix" this back; the port's docstring says why not.
+
+- **The message says only what the payload says** (2026-09-14). No
+  month-to-date total and no canonical merchant name, so the plan's own
+  example — «Éxito · $84.300 · llevas $1,2 M este mes» — is not what arrives.
+  It reads `COMPRA EN *PAYU*COL`, which is what the bank itself would have
+  said. Both enrichments are other contexts' data: the friendly name is
+  Merchant's and the running total is Financial's, and reading either would
+  make an alert depend on two more things being up at the moment money moves.
+  The running total gets a real home in E3, where it is computed anyway; the
+  friendly name should arrive the same way this one did, as an event Merchant
+  publishes and alerts subscribes to — not as an adapter reaching sideways.
+
+- **Alerts publishes nothing, so it has no translator** (2026-09-14). The
+  first leaf context here, and the reason it looks different from the other
+  four: an event reaches EventBridge only through a translator its context
+  wrote, so *not writing one* is the mechanism rather than an omission. There
+  is no subscriber, and a `MessageDelivered` on the bus would be a contract
+  nobody reads plus a second at-least-once path to reason about. Its two
+  domain events go to `LoggingEventPublisher` alone, and its Lambda
+  deliberately carries no `EventBridgePutEventsPolicy`.
+
+- **Accruals are not announced** (2026-09-14). Interest and insurance are
+  real money leaving a net worth, but this app computes them and writes them
+  in bulk the moment somebody opens a credit screen and presses refresh.
+  Announcing four of those to a phone whose owner is watching them appear on
+  screen is the kind of noise that gets alerts switched off altogether,
+  taking the useful ones with it. `MovementOrigin.is_news_to_the_owner` is
+  the whole rule.
+
+- **httpx logs the URL, and one URL here is a credential** (2026-09-14). The
+  adapter takes care never to write the bot token: the token lives in
+  `base_url`, exceptions are re-raised by type, nothing logs an exception
+  object. None of that mattered, because `httpx` logs
+  `HTTP Request: POST <url> ...` at INFO for every call it makes, and
+  Telegram's API carries the token *in the path*. It was in the log the first
+  time the thing ran. `configure_logging` now pins `httpx` and `httpcore`
+  above INFO, pinned rather than left to the root level because the root
+  level is what somebody turns up to DEBUG while chasing something else.
+  Found by running it and reading the output, not by reading the code.
+
+- **Every untrusted string is cleaned before it reaches a message**
+  (2026-09-14). `counterparty` was, from the start — a newline in it would
+  forge a line of our own. `bank` was not, and on the LLM fallback path it is
+  free text a model read out of an email. Telegram turns a URL into a
+  tappable link in plain text whatever the parse mode, so a message from the
+  bot its owner has been taught to trust is a better phishing surface than
+  the email was. Collapsing whitespace is not enough there — a URL is short
+  and survives truncation — so a bank name is reduced to the characters a
+  bank name is made of, which has no `:` and no `/`. And no `parse_mode` at
+  all, anywhere: plain text makes the escaping problem not exist rather than
+  solving it.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

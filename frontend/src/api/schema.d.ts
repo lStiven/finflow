@@ -4,6 +4,94 @@
  */
 
 export interface paths {
+    "/alerts/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Channels
+         * @description Every channel this caller owns, bound or still waiting.
+         *
+         *     Polled by the screen while a link is outstanding: binding happens in
+         *     Telegram, where the page cannot see it, so asking is the only way it
+         *     learns. Never carries the link — see this module's docstring.
+         */
+        get: operations["list_channels_alerts_channels_get"];
+        put?: never;
+        /**
+         * Create Channel
+         * @description Open a channel and hand back the link that will bind it.
+         *
+         *     Following the link in Telegram is what verifies it — there is no code to
+         *     type, and no chat id to look up. Asking again retires whatever attempt
+         *     was outstanding, so one account never has two live links at once.
+         */
+        post: operations["create_channel_alerts_channels_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/channels/{channel_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Channel
+         * @description Unlink a destination. Nothing more is sent to it, and the Telegram
+         *     account it held is free to be bound again — by anyone.
+         */
+        delete: operations["delete_channel_alerts_channels__channel_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Preference
+         * @description Say how much of one kind of alert this channel wants.
+         *
+         *     A floor is about noise, not about money: below it nothing is sent, which
+         *     is what keeps a three-thousand-peso coffee from spending the attention a
+         *     four-hundred-thousand-peso charge needs.
+         */
+        patch: operations["update_preference_alerts_channels__channel_id__patch"];
+        trace?: never;
+    };
+    "/alerts/telegram/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive Update
+         * @description Bind a channel, if this update is somebody following their own link.
+         *
+         *     The body arrives as raw bytes and is decoded here rather than in the
+         *     signature, for two reasons. FastAPI validates a typed body as part of
+         *     solving the request, which would put a JSON parse *before* the secret
+         *     check and hand anonymous callers free work; and a shape Telegram changed
+         *     would become a 422, which is a non-2xx, which is backoff and eventually a
+         *     disabled webhook.
+         */
+        post: operations["receive_update_alerts_telegram_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/accounts": {
         parameters: {
             query?: never;
@@ -1341,6 +1429,15 @@ export interface components {
             timezone: string;
         };
         /**
+         * AlertType
+         * @description What a channel can be told about.
+         *
+         *     Explicit string values because they are persisted. One member today;
+         *     E2 adds the recurring charge and E4 the budget threshold.
+         * @enum {string}
+         */
+        AlertType: "movement";
+        /**
          * AliasResponse
          * @description One child: a spelling that resolves to this merchant.
          */
@@ -1421,6 +1518,46 @@ export interface components {
             new_password: string;
         };
         /**
+         * ChannelKind
+         * @description Which transport a channel speaks.
+         *
+         *     One member today. It exists as an enum rather than as an assumption so
+         *     that the day a second transport arrives, every stored row already says
+         *     which one it is instead of meaning Telegram by omission.
+         * @enum {string}
+         */
+        ChannelKind: "telegram";
+        /** ChannelListResponse */
+        ChannelListResponse: {
+            /** Channels */
+            channels: components["schemas"]["ChannelResponse"][];
+        };
+        /**
+         * ChannelResponse
+         * @description One channel, as its owner may see it.
+         *
+         *     No token, and no chat id: `chat_hint` is the last few characters of the
+         *     destination, which is all the owner needs to recognise which Telegram
+         *     account is bound.
+         */
+        ChannelResponse: {
+            /** Channel Id */
+            channel_id: string;
+            /** Chat Hint */
+            chat_hint: string | null;
+            /** Created At */
+            created_at: number;
+            kind: components["schemas"]["ChannelKind"];
+            /** Label */
+            label: string | null;
+            /** Preferences */
+            preferences: components["schemas"]["PreferenceResponse"][];
+            /** Status */
+            status: string;
+            /** Verified At */
+            verified_at: number | null;
+        };
+        /**
          * ChargeAmountResponse
          * @description One charge, priced for one period.
          */
@@ -1493,6 +1630,27 @@ export interface components {
             name: string;
             /** Rate */
             rate: string | null;
+        };
+        /** CreateChannelPayload */
+        CreateChannelPayload: {
+            /** @default telegram */
+            kind: components["schemas"]["ChannelKind"];
+        };
+        /**
+         * CreatedChannelResponse
+         * @description The new channel, and the one and only copy of its link.
+         *
+         *     `link_url` is shown once. It is not stored — only its hash is — and no
+         *     other endpoint can hand it back. Losing it means asking for another one,
+         *     which is the whole difference between a one-time credential and a
+         *     permanent one.
+         */
+        CreatedChannelResponse: {
+            channel: components["schemas"]["ChannelResponse"];
+            /** Expires In Minutes */
+            expires_in_minutes: number;
+            /** Link Url */
+            link_url: string;
         };
         /**
          * Currency
@@ -2179,6 +2337,25 @@ export interface components {
             /** Totals */
             totals: components["schemas"]["SpendingTotalsResponse"][];
         };
+        /** PreferencePayload */
+        PreferencePayload: {
+            alert_type: components["schemas"]["AlertType"];
+            /** Enabled */
+            enabled: boolean;
+            /** Minimum Amount */
+            minimum_amount?: string | null;
+            /** @default COP */
+            minimum_currency: components["schemas"]["Currency"];
+        };
+        /** PreferenceResponse */
+        PreferenceResponse: {
+            alert_type: components["schemas"]["AlertType"];
+            /** Enabled */
+            enabled: boolean;
+            /** Minimum Amount */
+            minimum_amount?: string | null;
+            minimum_currency?: components["schemas"]["Currency"] | null;
+        };
         /**
          * ProcessingStatus
          * @description Explicit string values: this enum is persisted and serialized, so the
@@ -2730,6 +2907,17 @@ export interface components {
             expires_in_minutes: number;
         };
         /**
+         * WebhookAck
+         * @description What Telegram gets back. Always the same thing — see `_accepted`.
+         */
+        WebhookAck: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
+        /**
          * MerchantResponse
          * @description The canonical merchant behind this movement's counterparty text.
          *
@@ -2777,6 +2965,154 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_channels_alerts_channels_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelListResponse"];
+                };
+            };
+        };
+    };
+    create_channel_alerts_channels_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChannelPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_channel_alerts_channels__channel_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_preference_alerts_channels__channel_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_update_alerts_telegram_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_accounts_financial_accounts_get: {
         parameters: {
             query?: {

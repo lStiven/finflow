@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# One image for all five functions.
+# One image for all six functions.
 #
 # Which one a container becomes is decided by the entry point the SAM template
 # gives it, never by anything baked in here: the four workers run Lambda's
 # runtime client against their handler, and the API runs the same uvicorn
-# command as `just run-prod` behind the Lambda Web Adapter. Five images would
-# be five things to keep in step, and the drift would only show in production.
+# command as `just run-prod` behind the Lambda Web Adapter. Six images would
+# be six things to keep in step, and the drift would only show in production.
 #
 # Both stages sit on Lambda's own base image on purpose. `bcrypt` is a
 # compiled extension, so wheels built against another distribution's glibc can
