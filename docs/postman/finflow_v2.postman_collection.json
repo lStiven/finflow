@@ -2389,6 +2389,199 @@
             "description": "Erases the movement and gives the balance back what it took: a 2000 purchase deleted is 2000 the account holds again. The balance is recomputed from the rows that remain rather than nudged by the amount, so it cannot end up disagreeing with them.\n\nNot the same as PATCH with detach, which only takes the movement off its account — that one still exists and still counts in what came in and went out.\n\nBoth sides of a transfer go together: erasing either row of a payment between two of the owner's own accounts erases the other and restores both balances. A leg paid from outside this app has no second row and goes alone.\n\nAnswers `erased` (every movement id that left) and `accounts` (the accounts whose balances changed, already recomputed — empty when the movement was on no account). 404 for a movement that is not there, including a second delete of one already erased."
           },
           "response": []
+        },
+        {
+          "name": "List bills",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills?since=2026-09-01&until=2026-09-30&timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "2026-09-01",
+                  "description": "ISO date. Both ends or neither."
+                },
+                {
+                  "key": "until",
+                  "value": "2026-09-30",
+                  "description": "ISO date. At most 400 days from `since`."
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Decides which month 'this month' is."
+                }
+              ]
+            },
+            "description": "Declared bills, every charge falling inside the window, and what it adds up to. The window defaults to the calendar month `timezone` is currently in; give both ends or neither. Two totals per currency and never one: `expected` is what the window costs, `upcoming` what has not fallen due yet — which is not the same as unpaid, because nothing can be confirmed yet. `frozen` means the bill's account is closed; it is derived from the account, so reopening it un-freezes the bill."
+          },
+          "response": []
+        },
+        {
+          "name": "Declare a bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills"
+              ]
+            },
+            "description": "A charge the owner says is going to happen, every so often — the gym, the rent, a domiciled subscription the bank stopped emailing about. **Nothing is recorded as spent:** a bill is a statement about the future, and it reaches the ledger only when a charge is confirmed. `starts_on` is the first expected charge and the day every later one derives from, which is why a bill anchored on the 31st lands on the 28th in February and is back on the 31st in March.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Gimnasio\",\n  \"amount\": \"120000\",\n  \"currency\": \"COP\",\n  \"cadence\": \"monthly\",\n  \"starts_on\": \"2026-09-04\",\n  \"direction\": \"outgoing\",\n  \"account_id\": null,\n  \"category\": \"salud\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Amend a bill",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}"
+              ]
+            },
+            "description": "Correct what the bill says: the gym raised its price, the charge moved to another account, the day turned out to be the 6th. What is absent is left alone — so taking the account or the category off needs `clear_account` / `clear_category`, since absence already means 'leave it'. Changing the amount needs its currency too.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"135000\",\n  \"currency\": \"COP\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Pause a bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/pause",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "pause"
+              ]
+            },
+            "description": "Stop expecting charges without forgetting what it cost. The cancelled subscription. A paused bill predicts nothing and adds nothing to any total."
+          },
+          "response": []
+        },
+        {
+          "name": "Resume a bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/resume",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "resume"
+              ]
+            },
+            "description": "Expect charges again, from the same anchor day."
+          },
+          "response": []
+        },
+        {
+          "name": "Forget a bill",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}"
+              ]
+            },
+            "description": "A real delete, unlike closing an account: a closed account still explains movements in the ledger, and a bill explains nothing because it never wrote anything. Pausing is for the one worth keeping. 204, or 404 when there was nothing there."
+          },
+          "response": []
         }
       ]
     },

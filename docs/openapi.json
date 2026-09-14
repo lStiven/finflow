@@ -377,6 +377,117 @@
         "title": "AliasResponse",
         "type": "object"
       },
+      "AmendBillPayload": {
+        "description": "A correction. What is absent is left alone.\n\n`clear_account` and `clear_category` exist because absence already means\n\"leave it alone\", and an owner has to be able to say \"this comes out of no\naccount of mine\" after having said it came out of one.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "cadence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BillCadence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "clear_account": {
+            "default": false,
+            "title": "Clear Account",
+            "type": "boolean"
+          },
+          "clear_category": {
+            "default": false,
+            "title": "Clear Category",
+            "type": "boolean"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MovementDirection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "starts_on": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Starts On"
+          }
+        },
+        "title": "AmendBillPayload",
+        "type": "object"
+      },
       "AmortizationStyle": {
         "description": "How a loan's instalment is put together.\n\nPersisted with the account, so the values are explicit.",
         "enum": [
@@ -386,6 +497,216 @@
         ],
         "title": "AmortizationStyle",
         "type": "string"
+      },
+      "BillCadence": {
+        "description": "How often the charge comes back.\n\nExplicit string values: the cadence is persisted, so reordering the\nmembers must not rewrite anybody's data.",
+        "enum": [
+          "weekly",
+          "biweekly",
+          "monthly",
+          "bimonthly",
+          "quarterly",
+          "annual"
+        ],
+        "title": "BillCadence",
+        "type": "string"
+      },
+      "BillOccurrenceResponse": {
+        "description": "One expected charge.\n\n`due_on` is the calendar day the bill anchors on, not a day money moved:\nnothing here can know that yet. `state` says `overdue` only once the grace\nhas passed as well, and even then it is a statement about the calendar.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "bill_id": {
+            "title": "Bill Id",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "string"
+          },
+          "due_on": {
+            "format": "date",
+            "title": "Due On",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bill_id",
+          "due_on",
+          "amount",
+          "currency",
+          "direction",
+          "state"
+        ],
+        "title": "BillOccurrenceResponse",
+        "type": "object"
+      },
+      "BillResponse": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "cadence": {
+            "title": "Cadence",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "string"
+          },
+          "frozen": {
+            "title": "Frozen",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_occurrence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BillOccurrenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "starts_on": {
+            "format": "date",
+            "title": "Starts On",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "amount",
+          "currency",
+          "cadence",
+          "starts_on",
+          "direction",
+          "account_id",
+          "category",
+          "status",
+          "frozen",
+          "next_occurrence"
+        ],
+        "title": "BillResponse",
+        "type": "object"
+      },
+      "BillTotalResponse": {
+        "description": "The two figures, for one currency.\n\nTwo and not one, because \"what this month costs\" and \"what has not fallen\ndue yet\" are different questions and a reader takes whichever is on screen\nto be the answer to both.\n\n`upcoming` is what has **not fallen due yet** — deliberately not \"unpaid\".\nNothing can be confirmed yet, so a charge whose day has passed is one this\napp cannot see either way.",
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "expected": {
+            "title": "Expected",
+            "type": "string"
+          },
+          "upcoming": {
+            "title": "Upcoming",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "expected",
+          "upcoming"
+        ],
+        "title": "BillTotalResponse",
+        "type": "object"
+      },
+      "BillsResponse": {
+        "properties": {
+          "bills": {
+            "items": {
+              "$ref": "#/components/schemas/BillResponse"
+            },
+            "title": "Bills",
+            "type": "array"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/BillOccurrenceResponse"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/BillTotalResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          },
+          "until": {
+            "format": "date",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "bills",
+          "occurrences",
+          "totals"
+        ],
+        "title": "BillsResponse",
+        "type": "object"
       },
       "CatalogOption": {
         "description": "One admissible value, and something to put beside it in a dropdown.",
@@ -830,6 +1151,77 @@
           "email"
         ],
         "title": "CurrentUserResponse",
+        "type": "object"
+      },
+      "DeclareBillPayload": {
+        "description": "A charge the owner says is going to happen, every so often.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/BillCadence"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MovementDirection",
+            "default": "outgoing"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "starts_on": {
+            "format": "date",
+            "title": "Starts On",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "cadence",
+          "starts_on"
+        ],
+        "title": "DeclareBillPayload",
         "type": "object"
       },
       "DeletedCategoryResponse": {
@@ -5140,6 +5532,327 @@
           }
         ],
         "summary": "Accrue Everything",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills": {
+      "get": {
+        "description": "What is declared, what falls inside the window, and what it adds up to.\n\nThe window defaults to the calendar month `timezone` is currently in —\nread in the caller's zone rather than UTC, because a bill due on the 1st\nmust not show up in the previous month for somebody five hours behind.\n\nBoth ends or neither: half a window is a question with no answer, and\ncompleting it with a month would silently answer a different one.",
+        "operationId": "list_bills_financial_bills_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Bills",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Declare a charge that is going to happen.\n\nNothing is recorded as spent. This is the half that works from the first\nday and needs no history — the detector, which needs three months of it,\ncomes later and only ever proposes.",
+        "operationId": "declare_bill_financial_bills_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclareBillPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Declare Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}": {
+      "delete": {
+        "description": "Forget a bill entirely.\n\nA real delete, where closing an account would be wrong: a closed account\nstill explains movements that are in the ledger, and a bill explains\nnothing because it never wrote anything. Pausing is for the one worth\nkeeping.",
+        "operationId": "forget_bill_financial_bills__bill_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Forget Bill",
+        "tags": [
+          "financial"
+        ]
+      },
+      "patch": {
+        "description": "Correct what the bill says.\n\nEverything about a declared bill is a guess the first time: the gym raises\nits price, the charge moves to another account, the day turns out to be\nthe 6th. What cannot be corrected is its identity — that is what deleting\nis for.",
+        "operationId": "amend_bill_financial_bills__bill_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AmendBillPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Amend Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/pause": {
+      "post": {
+        "description": "Stop expecting charges, without forgetting what it cost.\n\nThe cancelled subscription. A paused bill predicts nothing and adds\nnothing to any total — a pause that still filled the month would make that\ntotal the one figure here nobody can trust.",
+        "operationId": "pause_bill_financial_bills__bill_id__pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pause Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/resume": {
+      "post": {
+        "operationId": "resume_bill_financial_bills__bill_id__resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Resume Bill",
         "tags": [
           "financial"
         ]

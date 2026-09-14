@@ -5,6 +5,7 @@ import dataclasses
 from decimal import Decimal
 from typing import Protocol
 
+from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
@@ -333,4 +334,72 @@ class TransactionLedger(Protocol):
         The whole point for somebody who declared no accounts: what came in
         and what went out is a complete answer on its own.
         """
+        ...
+
+
+class ScheduledBillRepository(Protocol):
+    """Persistence port for `ScheduledBill`.
+
+    Every method takes the owner, for the reason `AccountRepository` gives:
+    an implementation that could answer without knowing whose data it is
+    asked for would be one query away from showing somebody another person's
+    commitments.
+
+    There is no `find_by_*` beyond the id. A bill is read by its owner from a
+    list of a handful of rows — nobody has two hundred subscriptions — so the
+    listing is the hot path and there is nothing here to index.
+    """
+
+    def find(self, *, user_id: UserId, bill_id: BillId) -> ScheduledBill | None:
+        """Load one bill, or None when this user has no such bill."""
+        ...
+
+    def list_by_user(self, user_id: UserId) -> Sequence[ScheduledBill]:
+        """Every bill this user declared, paused ones included.
+
+        Paused ones too: they predict nothing, but they are still the record
+        of what a cancelled subscription used to cost, and a list that hid
+        them would offer no way to bring one back.
+        """
+        ...
+
+    def save(self, bill: ScheduledBill) -> None:
+        """Store a bill, new or amended.
+
+        A plain put, unlike `AccountRepository.save`: nothing else writes
+        these rows and none of their fields is a running total, so there is
+        no half of the record that a write could quietly discard.
+        """
+        ...
+
+    def remove(self, *, user_id: UserId, bill_id: BillId) -> bool:
+        """Forget a bill. False when there was nothing to forget.
+
+        Deleting is right here, where closing an account would be wrong: a
+        closed account still explains movements that are in the ledger, and a
+        deleted bill explains nothing, because it never wrote anything. What
+        it *did* write, once confirming exists, are ordinary movements that
+        stand on their own.
+        """
+        ...
+
+
+class AccountLookup(Protocol):
+    """The two questions bills ask about accounts, and nothing more.
+
+    Deliberately narrower than `AccountRepository`, which `DynamoDBAccount\
+Repository` satisfies anyway. Declaring the wide one here would let a use case
+    that has no business moving money reach `restate_balance` and
+    `overwrite_balance` — and would make every test of it build a fake that
+    can rewrite balances in order to ask whether an account exists.
+    """
+
+    def find(self, *, user_id: UserId, account_id: AccountId) -> Account | None:
+        """Whether this id names an account of this user's, for a bill to
+        point at."""
+        ...
+
+    def list_by_user(self, user_id: UserId) -> Sequence[Account]:
+        """Every account, so a listing can tell which bills are frozen without
+        asking once per bill."""
         ...

@@ -152,15 +152,13 @@ AWS (ver Trabas).
    último, vincular parece funcionar y no pasa nada. Todo en
    [docs/alerts.md](docs/alerts.md).
 
-6. **Construir el segundo feature: facturas y pagos recurrentes** (E2 del plan).
-   Gastos domiciliados que el banco ya no anuncia por correo — el gimnasio, el
-   arriendo, el streaming— y que por eso no existen en la app, separando el
-   saldo mostrado del real. Se declaran, se ven venir, y entran al ledger solo
-   al confirmarse el pago: a mano o solo. **Empieza por la entrega A**
-   (declarar y ver venir, sin escribir nada en el ledger), que es la única sin
-   precondiciones. El plan completo —las cinco entregas, los endpoints, los
-   cuatro nombres que se parecen y los riesgos ya verificados contra el
-   código— está en el artefacto, no aquí.
+6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
+   La API de la entrega A está hecha; **falta su pantalla**, que sigue
+   anunciada como «pronto» en el menú. Después vienen B (confirmar el pago a
+   mano), C (que se cargue solo, con ventana de conciliación), D (que el
+   detector proponga) y E (avisar antes del cobro). El plan completo —las
+   cinco entregas, los riesgos y los cuatro nombres que se parecen— está en el
+   artefacto, no aquí.
 
 7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
@@ -211,6 +209,15 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-14 — **Se pueden declarar facturas y ver lo que viene, por API.**
+  Entrega A del segundo feature: un gasto domiciliado que el banco ya no
+  anuncia por correo se declara, y la app lo proyecta sobre el calendario con
+  seis cadencias —la mensual conserva el día del ancla, así que una del 31 pide
+  prestado el fin de febrero y en marzo vuelve al 31—. **No escribe nada en el
+  ledger**, y hay una prueba de integración que lo comprueba contra la tabla
+  real. Dos cifras por moneda y nunca una: lo que cuesta el mes y lo que aún no
+  vence. Una factura cuya cuenta se cerró se lee congelada, derivado de la
+  cuenta y no guardado, así que reabrirla la descongela sola. Falta la pantalla.
 - 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
   `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
   el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se
@@ -241,10 +248,3 @@ AWS (ver Trabas).
   registro: la plantilla no se elegía y el correo se iba al modelo. Agregado al
   registro, a la pantalla de conectar y a la guía. Aparte hay que aprobarlo en
   la lista de remitentes de cada usuario, si no el correo ni entra.
-- 2026-09-04 — **Las categorías propias se corrigen y se borran, desde
-  Comercios.** El nombre dejó de ser la identidad: la clave es opaca, así que
-  arreglar un «Mascotss» es una sola escritura y ningún comercio se mueve —el
-  nombre nuevo se ve al instante, también en los movimientos de antes—. Borrar
-  una devuelve sus comercios a «Sin categoría» diciendo antes cuántos son, y sin
-  sacarlos de la cola de revisión: quitar un cajón no es revisar lo que había
-  dentro. Un panel plegable dentro de Comercios, no una pantalla nueva.

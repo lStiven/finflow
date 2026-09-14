@@ -1974,11 +1974,34 @@ to whatever ends up serving the bundle, which the bundle is not told.
   report spending "down 100%", which is arithmetically true and destroys
   trust in every other number on the screen. Costs one extra query.
 
-- **Navigation shows the screens that do not exist yet, disabled.** Six
-  destinations are listed from the first release; five are `aria-disabled`
-  with a "próximamente" title until their screen lands. A nav that grows an
-  item per release reads as instability, and a link that goes nowhere reads
-  as a bug.
+- **Navigation shows the screens that do not exist yet, disabled.** The
+  destinations are listed from the first release and the ones without a screen
+  are `aria-disabled` with a "próximamente" title until it lands — today
+  Configuración and Facturas. A nav that grows an item per release reads as
+  instability, and a link that goes nowhere reads as a bug. A pending entry
+  never takes one of the bottom bar's three slots: that bar is what a thumb
+  reaches and what has least room, so a dead button there costs more than the
+  announcement is worth. `destinations.test.ts` holds both rules.
+
+- **Perfil, Conectar and Configuración divide by question, not by tidiness**
+  (2026-09-14). Decided while planning the bills screen, because the obvious
+  reading — "Configuración is where settings go" — would have moved working
+  screens around for nothing. **Perfil is who you are**: name, email, password,
+  which channel gets your alerts, signing out. **Conectar is where the data
+  comes in**: the forwarding address and the approved senders, tied to the
+  onboarding step counter, which is why pulling them into a settings screen
+  would break the "connect your bank" thread. **Configuración is how the app
+  computes and talks to you** — and today that is almost empty, which is the
+  real finding: the only setting that exists and has no home is the display
+  timezone, and it is not even per-user yet (`ALERTS_DISPLAY_TIMEZONE` is one
+  value for the whole deployment, and Financial's endpoints take it as a query
+  default). Deleting your account and exporting your data are the other two
+  things a reader expects there and that do not exist in any form. So the
+  screen stays announced and unbuilt on purpose: it earns its place when E2 and
+  E4 turn one kind of alert into three and the Telegram card can no longer hold
+  "what to announce" beside "where to send it". Categories stay inside
+  Comercios, next to where they are used; a link is the most Configuración
+  should have.
 
 - **A static SPA, not a server-rendered framework.** Vite + React +
   TypeScript, built to static files. Next.js was the reflex and was rejected:

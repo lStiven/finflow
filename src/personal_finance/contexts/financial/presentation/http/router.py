@@ -27,6 +27,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
+from personal_finance.contexts.financial.application.bills import (
+    AmendBillCommand,
+    BillSummary,
+    BillsView,
+    DeclareBillCommand,
+    ListBillsQuery,
+    ListBillsUseCase,
+    ManageBillsUseCase,
+    NoSuchBillError,
+)
 from personal_finance.contexts.financial.application.commands import (
     AccrueFinancingCommand,
     ChargeDraft,
@@ -108,6 +118,12 @@ from personal_finance.contexts.financial.application.queries import (
     TrendQuery,
     TrendSeries,
 )
+from personal_finance.contexts.financial.domain.bills import (
+    MAX_NAME_LENGTH as MAX_BILL_NAME_LENGTH,
+    BillCadence,
+    BillId,
+    BillOccurrence,
+)
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
@@ -152,6 +168,7 @@ from personal_finance.contexts.financial.infrastructure.merchant.merchant_direct
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
+    DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
@@ -2831,7 +2848,7 @@ def _domain_errors() -> Generator[None]:
     """Turn the refusals the model makes into the answers HTTP has for them."""
     try:
         yield
-    except (AccountNotFoundError, TransactionNotFoundError) as error:
+    except (AccountNotFoundError, TransactionNotFoundError, NoSuchBillError) as error:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
@@ -2909,3 +2926,385 @@ def _domain_errors() -> Generator[None]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(error),
         ) from error
+
+
+# ---------------------------------------------------------------- bills
+#
+# Money the owner knows is coming, before it comes. Nothing under this heading
+# writes to the ledger or moves a balance: declaring a charge is a statement
+# about the future, and the future has not happened. Confirming one is a
+# separate delivery, and it will go through the same use case that records a
+# movement entered by hand.
+
+
+class DeclareBillPayload(BaseModel):
+    """A charge the owner says is going to happen, every so often."""
+
+    #: What the owner reads in the list, and what a confirmed charge will
+    #: carry into the ledger as its counterparty.
+    name: str = Field(min_length=1, max_length=MAX_BILL_NAME_LENGTH)
+    amount: Decimal = Field(gt=0)
+    currency: Currency = Currency.COP
+    cadence: BillCadence
+    #: The first expected charge. Every later one is derived from this day,
+    #: which is why a bill anchored on the 31st stays on the 31st.
+    starts_on: dt.date
+    direction: MovementDirection = MovementDirection.OUTGOING
+    #: Optional, like everywhere else here: somebody watching only what goes
+    #: out has no accounts declared, and the bill is still worth knowing.
+    account_id: str | None = None
+    category: str | None = Field(default=None, max_length=64)
+
+
+class AmendBillPayload(BaseModel):
+    """A correction. What is absent is left alone.
+
+    `clear_account` and `clear_category` exist because absence already means
+    "leave it alone", and an owner has to be able to say "this comes out of no
+    account of mine" after having said it came out of one.
+    """
+
+    name: str | None = Field(
+        default=None, min_length=1, max_length=MAX_BILL_NAME_LENGTH
+    )
+    amount: Decimal | None = Field(default=None, gt=0)
+    currency: Currency | None = None
+    cadence: BillCadence | None = None
+    starts_on: dt.date | None = None
+    #: A salary declared as an expense inflates the month's total for as long
+    #: as it stands, and re-declaring it would lose what it has paid.
+    direction: MovementDirection | None = None
+    account_id: str | None = None
+    category: str | None = Field(default=None, max_length=64)
+    clear_account: bool = False
+    clear_category: bool = False
+
+    @model_validator(mode="after")
+    def _coherent(self) -> AmendBillPayload:
+        if self.amount is not None and self.currency is None:
+            raise ValueError("Changing the amount needs its currency too")
+
+        if self.clear_account and self.account_id is not None:
+            raise ValueError("Cannot both set and clear the account")
+
+        if self.clear_category and self.category is not None:
+            raise ValueError("Cannot both set and clear the category")
+
+        if not any(
+            (
+                self.name is not None,
+                self.amount is not None,
+                self.cadence is not None,
+                self.starts_on is not None,
+                self.direction is not None,
+                self.account_id is not None,
+                self.category is not None,
+                self.clear_account,
+                self.clear_category,
+            ),
+        ):
+            raise ValueError("Nothing to change")
+
+        return self
+
+
+class BillOccurrenceResponse(BaseModel):
+    """One expected charge.
+
+    `due_on` is the calendar day the bill anchors on, not a day money moved:
+    nothing here can know that yet. `state` says `overdue` only once the grace
+    has passed as well, and even then it is a statement about the calendar.
+    """
+
+    bill_id: str
+    due_on: dt.date
+    amount: str
+    currency: str
+    direction: str
+    state: str
+
+
+class BillResponse(BaseModel):
+    id: str
+    name: str
+    amount: str
+    currency: str
+    cadence: str
+    starts_on: dt.date
+    direction: str
+    account_id: str | None
+    category: str | None
+    status: str
+    #: Its account is closed. Derived from the account, never stored — an
+    #: account is closed and never deleted, so reopening one un-freezes its
+    #: bills without anything having to remember to.
+    frozen: bool
+    next_occurrence: BillOccurrenceResponse | None
+
+
+class BillTotalResponse(BaseModel):
+    """The two figures, for one currency.
+
+    Two and not one, because "what this month costs" and "what has not fallen
+    due yet" are different questions and a reader takes whichever is on screen
+    to be the answer to both.
+
+    `upcoming` is what has **not fallen due yet** — deliberately not "unpaid".
+    Nothing can be confirmed yet, so a charge whose day has passed is one this
+    app cannot see either way.
+    """
+
+    currency: str
+    expected: str
+    upcoming: str
+
+
+class BillsResponse(BaseModel):
+    since: dt.date
+    until: dt.date
+    bills: list[BillResponse]
+    #: Every charge inside the window, in date order, across every bill.
+    occurrences: list[BillOccurrenceResponse]
+    #: One entry per currency. Never summed across them: that would need an
+    #: exchange rate this app does not have.
+    totals: list[BillTotalResponse]
+
+
+@functools.lru_cache(maxsize=1)
+def build_bills() -> DynamoDBScheduledBillRepository:
+    return DynamoDBScheduledBillRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_bills() -> ManageBillsUseCase:
+    return ManageBillsUseCase(bills=build_bills(), accounts=build_accounts())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_bills() -> ListBillsUseCase:
+    return ListBillsUseCase(bills=build_bills(), accounts=build_accounts())
+
+
+def get_manage_bills_use_case() -> ManageBillsUseCase:
+    return _build_manage_bills()
+
+
+def get_list_bills_use_case() -> ListBillsUseCase:
+    return _build_list_bills()
+
+
+ManageBills = Annotated[ManageBillsUseCase, Depends(get_manage_bills_use_case)]
+
+
+@router.get("/bills", response_model=BillsResponse)
+def list_bills(
+    user_id: CurrentUser,
+    use_case: Annotated[ListBillsUseCase, Depends(get_list_bills_use_case)],
+    since: dt.date | None = None,
+    until: dt.date | None = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> BillsResponse:
+    """What is declared, what falls inside the window, and what it adds up to.
+
+    The window defaults to the calendar month `timezone` is currently in —
+    read in the caller's zone rather than UTC, because a bill due on the 1st
+    must not show up in the previous month for somebody five hours behind.
+
+    Both ends or neither: half a window is a question with no answer, and
+    completing it with a month would silently answer a different one.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            ListBillsQuery(
+                user_id=user_id,
+                since=since,
+                until=until,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    return _bills_response(view)
+
+
+@router.post("/bills", response_model=BillResponse, status_code=status.HTTP_201_CREATED)
+def declare_bill(
+    user_id: CurrentUser,
+    payload: DeclareBillPayload,
+    use_case: ManageBills,
+) -> BillResponse:
+    """Declare a charge that is going to happen.
+
+    Nothing is recorded as spent. This is the half that works from the first
+    day and needs no history — the detector, which needs three months of it,
+    comes later and only ever proposes.
+    """
+    with _domain_errors():
+        summary = use_case.declare(
+            DeclareBillCommand(
+                user_id=user_id,
+                name=payload.name,
+                amount=Money(amount=payload.amount, currency=payload.currency),
+                cadence=payload.cadence,
+                starts_on=payload.starts_on,
+                direction=payload.direction,
+                account_id=(
+                    None
+                    if payload.account_id is None
+                    else _account_id(payload.account_id)
+                ),
+                category=payload.category,
+            ),
+        )
+
+    return _bill_summary_response(summary)
+
+
+@router.patch("/bills/{bill_id}", response_model=BillResponse)
+def amend_bill(
+    user_id: CurrentUser,
+    bill_id: str,
+    payload: AmendBillPayload,
+    use_case: ManageBills,
+) -> BillResponse:
+    """Correct what the bill says.
+
+    Everything about a declared bill is a guess the first time: the gym raises
+    its price, the charge moves to another account, the day turns out to be
+    the 6th. What cannot be corrected is its identity — that is what deleting
+    is for.
+    """
+    with _domain_errors():
+        summary = use_case.amend(
+            AmendBillCommand(
+                user_id=user_id,
+                bill_id=_bill_id(bill_id),
+                name=payload.name,
+                amount=(
+                    None
+                    if payload.amount is None or payload.currency is None
+                    else Money(amount=payload.amount, currency=payload.currency)
+                ),
+                cadence=payload.cadence,
+                starts_on=payload.starts_on,
+                direction=payload.direction,
+                account_id=(
+                    None
+                    if payload.account_id is None
+                    else _account_id(payload.account_id)
+                ),
+                category=payload.category,
+                clear_account=payload.clear_account,
+                clear_category=payload.clear_category,
+            ),
+        )
+
+    return _bill_summary_response(summary)
+
+
+@router.post("/bills/{bill_id}/pause", response_model=BillResponse)
+def pause_bill(
+    user_id: CurrentUser, bill_id: str, use_case: ManageBills
+) -> BillResponse:
+    """Stop expecting charges, without forgetting what it cost.
+
+    The cancelled subscription. A paused bill predicts nothing and adds
+    nothing to any total — a pause that still filled the month would make that
+    total the one figure here nobody can trust.
+    """
+    with _domain_errors():
+        summary = use_case.pause(user_id=user_id, bill_id=_bill_id(bill_id))
+
+    return _bill_summary_response(summary)
+
+
+@router.post("/bills/{bill_id}/resume", response_model=BillResponse)
+def resume_bill(
+    user_id: CurrentUser,
+    bill_id: str,
+    use_case: ManageBills,
+) -> BillResponse:
+    with _domain_errors():
+        summary = use_case.resume(user_id=user_id, bill_id=_bill_id(bill_id))
+
+    return _bill_summary_response(summary)
+
+
+@router.delete("/bills/{bill_id}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_bill(user_id: CurrentUser, bill_id: str, use_case: ManageBills) -> None:
+    """Forget a bill entirely.
+
+    A real delete, where closing an account would be wrong: a closed account
+    still explains movements that are in the ledger, and a bill explains
+    nothing because it never wrote anything. Pausing is for the one worth
+    keeping.
+    """
+    with _domain_errors():
+        use_case.forget(user_id=user_id, bill_id=_bill_id(bill_id))
+
+
+def _bill_id(value: str) -> BillId:
+    try:
+        return BillId.from_string(value)
+    except ValueError as error:
+        # Missing rather than malformed, for the reason `_no_such_account`
+        # gives: whether a bill exists is not something this tells a stranger.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No such bill: {value}",
+        ) from error
+
+
+def _bills_response(view: BillsView) -> BillsResponse:
+    return BillsResponse(
+        since=view.since,
+        until=view.until,
+        bills=[_bill_summary_response(summary) for summary in view.bills],
+        occurrences=[_occurrence_response(each) for each in view.occurrences],
+        totals=[
+            BillTotalResponse(
+                currency=total.currency.value,
+                expected=str(total.expected),
+                upcoming=str(total.upcoming),
+            )
+            for total in view.totals
+        ],
+    )
+
+
+def _bill_summary_response(summary: BillSummary) -> BillResponse:
+    """One renderer, so a write and the listing can never disagree about the
+    two derived fields — which is exactly what they did before."""
+    bill = summary.bill
+
+    return BillResponse(
+        id=str(bill.id.value),
+        name=bill.name,
+        amount=str(bill.amount.amount),
+        currency=bill.amount.currency.value,
+        cadence=bill.cadence.value,
+        starts_on=bill.starts_on,
+        direction=bill.direction.value,
+        account_id=None if bill.account_id is None else str(bill.account_id.value),
+        category=bill.category,
+        status=bill.status.value,
+        frozen=summary.frozen,
+        next_occurrence=(
+            None
+            if summary.next_occurrence is None
+            else _occurrence_response(summary.next_occurrence)
+        ),
+    )
+
+
+def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
+    return BillOccurrenceResponse(
+        bill_id=str(occurrence.bill_id.value),
+        due_on=occurrence.due_on,
+        amount=str(occurrence.amount.amount),
+        currency=occurrence.amount.currency.value,
+        direction=occurrence.direction.value,
+        state=occurrence.state.value,
+    )

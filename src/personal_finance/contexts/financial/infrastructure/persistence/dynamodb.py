@@ -34,6 +34,12 @@ from typing import TYPE_CHECKING
 from personal_finance.contexts.financial.application.ports import (
     BalanceReversal,
 )
+from personal_finance.contexts.financial.domain.bills import (
+    BillCadence,
+    BillId,
+    BillStatus,
+    ScheduledBill,
+)
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.financing import (
     AmortizationStyle,
@@ -80,6 +86,7 @@ SORT_KEY = "entity_id"
 ACCOUNT_PREFIX = "ACCOUNT#"
 FINGERPRINT_PREFIX = "FINGERPRINT#"
 MOVEMENT_PREFIX = "MOVEMENT#"
+BILL_PREFIX = "BILL#"
 
 ACCOUNT_ID_ATTRIBUTE = "account_id"
 
@@ -1302,3 +1309,130 @@ def _query_prefix(
             return items
 
         request["ExclusiveStartKey"] = start_key
+
+
+# ----------------------------------------------------------------------
+# Scheduled bills
+# ----------------------------------------------------------------------
+
+
+def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
+    item: dict[str, AttributeValueTypeDef] = {
+        PARTITION_KEY: {"S": str(bill.user_id.value)},
+        SORT_KEY: {"S": f"{BILL_PREFIX}{bill.id.value}"},
+        "name": {"S": bill.name},
+        # A string, like money everywhere else that leaves this process: a
+        # DynamoDB number is decimal, but the JSON that carries it is not.
+        "amount": {"N": str(bill.amount.amount)},
+        "currency": {"S": bill.amount.currency.value},
+        "cadence": {"S": bill.cadence.value},
+        # ISO, not epoch: this is a calendar day and never an instant. Storing
+        # it as a timestamp would make the day depend on the zone it is read
+        # in, which is how a bill due on the 1st shows up on the 31st.
+        "starts_on": {"S": bill.starts_on.isoformat()},
+        "direction": {"S": bill.direction.value},
+        "status": {"S": bill.status.value},
+        "created_at": {"N": str(bill.created_at.as_epoch_seconds())},
+    }
+
+    if bill.account_id is not None:
+        item[ACCOUNT_ID_ATTRIBUTE] = {"S": str(bill.account_id.value)}
+
+    if bill.category is not None:
+        item["category"] = {"S": bill.category}
+
+    return item
+
+
+def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
+    sort_value = _string(item, SORT_KEY) or ""
+    user_id = _string(item, PARTITION_KEY)
+    name = _string(item, "name")
+    starts_on = _string(item, "starts_on")
+
+    if user_id is None or name is None or starts_on is None:
+        raise CorruptFinancialItemError("Stored bill is missing its identity")
+
+    # `_number` answers 0 for an attribute that is not there, which for these
+    # two is a value the domain refuses and a date in 1970 — both of which
+    # would read as a perfectly ordinary bill rather than as the corrupt row
+    # they are.
+    if "amount" not in item or "created_at" not in item:
+        raise CorruptFinancialItemError("Stored bill is missing its amount or age")
+
+    account_id = _string(item, ACCOUNT_ID_ATTRIBUTE)
+
+    return ScheduledBill(
+        id=BillId.from_string(sort_value.removeprefix(BILL_PREFIX)),
+        user_id=UserId.from_string(user_id),
+        name=name,
+        amount=Money(
+            amount=_number(item, "amount"),
+            currency=_enum(Currency, _string(item, "currency") or "", "currency"),
+        ),
+        cadence=_enum(BillCadence, _string(item, "cadence") or "", "bill cadence"),
+        starts_on=dt.date.fromisoformat(starts_on),
+        direction=_enum(
+            MovementDirection,
+            _string(item, "direction") or "",
+            "movement direction",
+        ),
+        account_id=AccountId.from_string(account_id) if account_id else None,
+        category=_string(item, "category"),
+        status=_enum(BillStatus, _string(item, "status") or "", "bill status"),
+        created_at=PosixTime.from_epoch_seconds(int(_number(item, "created_at"))),
+    )
+
+
+class DynamoDBScheduledBillRepository:
+    """`ScheduledBillRepository` over the same table as everything else here.
+
+    A whole-item put per save, unlike the account repository's field-by-field
+    update, and safe here for the reason it is unsafe there: no attribute of a
+    bill is a running total another writer moves, so there is no half of the
+    row this could discard. It also means an attribute that becomes absent —
+    the account a bill stopped coming out of — disappears with the write
+    instead of lingering, which a field-by-field update would have had to
+    delete by hand.
+    """
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def find(self, *, user_id: UserId, bill_id: BillId) -> ScheduledBill | None:
+        item = self._client.get_item(
+            TableName=self._table_name,
+            Key=_key(user_id, f"{BILL_PREFIX}{bill_id.value}"),
+        ).get("Item")
+
+        return bill_to_entity(item) if item else None
+
+    def list_by_user(self, user_id: UserId) -> Sequence[ScheduledBill]:
+        return [
+            bill_to_entity(item)
+            for item in _query_prefix(
+                self._client,
+                table_name=self._table_name,
+                user_id=user_id,
+                prefix=BILL_PREFIX,
+            )
+        ]
+
+    def save(self, bill: ScheduledBill) -> None:
+        self._client.put_item(TableName=self._table_name, Item=bill_to_item(bill))
+
+    def remove(self, *, user_id: UserId, bill_id: BillId) -> bool:
+        """Delete, and say whether there was anything there.
+
+        `ReturnValues="ALL_OLD"` rather than a read followed by a delete: two
+        calls would report "deleted" for a row somebody else removed in
+        between, and the caller turns that answer into a 404 or a 204.
+        """
+        response = self._client.delete_item(
+            TableName=self._table_name,
+            Key=_key(user_id, f"{BILL_PREFIX}{bill_id.value}"),
+            ReturnValues="ALL_OLD",
+        )
+
+        return bool(response.get("Attributes"))
