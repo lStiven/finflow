@@ -36,7 +36,8 @@ const DEMO_EMAIL = process.env.FINFLOW_DEMO_EMAIL ?? "demo@finflow.local";
 const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de verdad";
 
 /** Unmistakable in a seeded database, and never a real merchant's name. */
-const NAME = `E2E Gimnasio ${Date.now()}`;
+const PREFIX = "E2E Gimnasio";
+const NAME = `${PREFIX} ${Date.now()}`;
 const AMOUNT = "120.000";
 const AMENDED = "135.000";
 
@@ -213,12 +214,12 @@ async function main() {
 
     // It shows twice on purpose — once as a declared bill and once as a
     // charge of this month — so the locator has to say which.
-    const card = page.getByText(NAME, { exact: true });
+    const card = page.getByText(NAME, { exact: true }).first();
     await card.waitFor({ timeout: 10_000 });
     check("la factura aparece en la pantalla", await card.isVisible(), true);
     check(
       "y también entre los cobros del mes",
-      await page.getByText(NAME, { exact: false }).count(),
+      await page.getByText(NAME, { exact: true }).count(),
       2,
     );
 
@@ -252,7 +253,7 @@ async function main() {
     );
 
     // ------------------------------------------------------------ amend, UI
-    await page.getByRole("button", { name: "Editar" }).first().click();
+    await page.getByRole("button", { name: `Editar ${NAME}` }).click();
     await page.getByLabel("Monto").fill(AMENDED);
     await page.getByRole("button", { name: "Guardar" }).click();
 
@@ -261,7 +262,7 @@ async function main() {
     check("y sigue sin mover saldos", await moneyState(call), before);
 
     // ------------------------------------------------------------ pause, UI
-    await page.getByRole("button", { name: "Pausar" }).first().click();
+    await page.getByRole("button", { name: `Pausar ${NAME}` }).click();
 
     stored = await until(call, "pausar", (b) => b?.status === "paused");
     check("pausar llega al servidor", stored?.status, "paused");
@@ -275,14 +276,19 @@ async function main() {
     );
 
     // ----------------------------------------------------------- resume, UI
-    await page.getByRole("button", { name: "Reanudar" }).first().click();
+    await page.getByRole("button", { name: `Reanudar ${NAME}` }).click();
 
     stored = await until(call, "reanudar", (b) => b?.status === "active");
     check("reanudar la devuelve", stored?.status, "active");
     check("y vuelve a predecir", stored?.next_occurrence !== null, true);
 
     // ----------------------------------------------------------- delete, UI
-    await page.getByRole("button", { name: "Borrar" }).first().click();
+    // Deleting asks first, in place — a tap that removes something should
+    // have to be meant.
+    await page.getByRole("button", { name: `Borrar ${NAME}` }).click();
+    const confirm = page.getByRole("button", { name: `Sí, borrar ${NAME}` });
+    check("borrar pregunta antes", await confirm.isVisible(), true);
+    await confirm.click();
 
     await until(call, "borrar", (b) => b === undefined);
     check("borrar la quita del servidor", (await find(call, NAME)) === undefined, true);
@@ -294,13 +300,22 @@ async function main() {
     failures += 1;
     steps.push(` FALLA ${error.message}`);
   } finally {
-    // Whatever happened, the seeded database goes back as it was.
-    if (billId !== null && call) {
+    // Whatever happened, the seeded database goes back as it was — looked up
+    // by name rather than by the id captured along the way, because a failure
+    // before that point used to leave the bill behind for the next run to
+    // trip over. It also sweeps anything an earlier run leaked.
+    if (call) {
       try {
-        await call(`/financial/bills/${billId}`, { method: "DELETE" });
-        note("factura de prueba borrada");
+        const view = await call("/financial/bills");
+        const mine = view.bills.filter((bill) => bill.name.startsWith(PREFIX));
+
+        for (const bill of mine) {
+          await call(`/financial/bills/${bill.id}`, { method: "DELETE" });
+        }
+
+        if (mine.length > 0) note(`${mine.length} factura(s) de prueba borradas`);
       } catch {
-        note(`no pude borrar la factura ${billId} — bórrala a mano`);
+        note("no pude limpiar las facturas de prueba — revísalas a mano");
       }
     }
 

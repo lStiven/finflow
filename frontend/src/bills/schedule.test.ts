@@ -3,10 +3,14 @@ import type { Bill, BillOccurrence, BillTotal } from "@/api/queries";
 import {
   billState,
   countsTowardsSpending,
+  daysUntil,
+  dueShare,
   formatAmountInput,
   groupByDay,
+  initialOf,
   parseAmount,
   singleTotal,
+  whenLabel,
 } from "@/bills/schedule";
 
 function bill(overrides: Partial<Bill> = {}): Bill {
@@ -144,5 +148,60 @@ describe("el monto tal como se teclea", () => {
     expect(formatAmountInput("120000.50")).toBe("120.000,50");
     // Cents the server sends as `.00` are noise in pesos.
     expect(formatAmountInput("120000.00")).toBe("120.000");
+  });
+});
+
+describe("cuándo cae el próximo cobro", () => {
+  it("cuenta días de calendario, no instantes", () => {
+    // A `Date` built from one of these and read back in another zone is how a
+    // charge due on the 1st starts showing up on the 31st.
+    expect(daysUntil("2026-10-01", "2026-09-28")).toBe(3);
+    expect(daysUntil("2026-09-28", "2026-10-01")).toBe(-3);
+  });
+
+  it("cruza el cambio de mes sin equivocarse", () => {
+    expect(daysUntil("2026-03-01", "2026-02-28")).toBe(1);
+  });
+
+  it("dice hoy, mañana y ayer por su nombre", () => {
+    expect(whenLabel("2026-09-14", "2026-09-14")).toBe("hoy");
+    expect(whenLabel("2026-09-15", "2026-09-14")).toBe("mañana");
+    expect(whenLabel("2026-09-13", "2026-09-14")).toBe("ayer");
+  });
+
+  it("y el resto en días", () => {
+    expect(whenLabel("2026-09-18", "2026-09-14")).toBe("en 4 días");
+    expect(whenLabel("2026-09-04", "2026-09-14")).toBe("hace 10 días");
+  });
+});
+
+describe("la barra del mes", () => {
+  it("llena lo que ya venció", () => {
+    // 850.000 comprometidos, 310.000 por venir → 63,5 % ya pasó.
+    expect(dueShare("850000", "310000")).toBeCloseTo(0.635, 3);
+  });
+
+  it("vacía cuando todo está por venir", () => {
+    expect(dueShare("850000", "850000")).toBe(0);
+  });
+
+  it("no divide por cero cuando no hay nada comprometido", () => {
+    expect(dueShare("0", "0")).toBe(0);
+  });
+
+  it("se queda entre 0 y 1 aunque los números no cuadren", () => {
+    expect(dueShare("100", "500")).toBe(0);
+    expect(dueShare("100", "-500")).toBe(1);
+  });
+});
+
+describe("la letra de la tarjeta", () => {
+  it("es la primera del nombre, en mayúscula", () => {
+    expect(initialOf("gimnasio")).toBe("G");
+    expect(initialOf("  Ñandú  ")).toBe("Ñ");
+  });
+
+  it("no revienta con un nombre vacío", () => {
+    expect(initialOf("   ")).toBe("·");
   });
 });

@@ -142,3 +142,53 @@ export function formatAmountInput(amount: string): string {
 
   return cents !== "" && Number(cents) > 0 ? `${grouped},${cents}` : grouped;
 }
+
+/**
+ * How far away a charge is, in words somebody reads without doing arithmetic.
+ *
+ * "El 4 de octubre" is a date; "en 3 días" is an answer. The card shows both
+ * because they do different work: the first is what you check against your
+ * bank, the second is what tells you whether to care today.
+ *
+ * Both dates are plain `YYYY-MM-DD` — calendar days, never instants. Building
+ * a `Date` from one and reading it back in another zone is how a charge due on
+ * the 1st starts showing up on the 31st.
+ */
+export function daysUntil(due: string, today: string): number {
+  return Math.round(
+    (Date.parse(`${due}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000,
+  );
+}
+
+export function whenLabel(due: string, today: string): string {
+  const days = daysUntil(due, today);
+
+  if (days === 0) return "hoy";
+  if (days === 1) return "mañana";
+  if (days === -1) return "ayer";
+  if (days > 1) return `en ${days} días`;
+
+  return `hace ${Math.abs(days)} días`;
+}
+
+/**
+ * How much of the window has already fallen due, from 0 to 1.
+ *
+ * What the bar under the total draws. Returns 0 rather than dividing by zero
+ * when nothing is expected, because a month with no bills has no proportion
+ * to show and an empty bar says that correctly.
+ */
+export function dueShare(expected: string, upcoming: string): number {
+  const total = Number(expected);
+  if (!Number.isFinite(total) || total <= 0) return 0;
+
+  const left = Number(upcoming);
+  const share = (total - (Number.isFinite(left) ? left : 0)) / total;
+
+  return Math.min(1, Math.max(0, share));
+}
+
+/** The letter a bill is recognised by when there is no icon for it. */
+export function initialOf(name: string): string {
+  return [...name.trim()][0]?.toUpperCase() ?? "·";
+}

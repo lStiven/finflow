@@ -156,6 +156,32 @@ class SeedTransferLeg:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SeedBill:
+    """A charge the demo user declared, that no bank will ever email about.
+
+    Unlike everything else here, a bill is about the future: what it shows on
+    a screen depends on the day it is read. So `starts_on` is always in the
+    past and the calendar walks forward from it — a date chosen relative to
+    today would make the seed produce a different month every day, and a date
+    in the future would leave the screen empty until it arrived.
+    """
+
+    name: str
+    amount: str
+    currency: str
+    cadence: str
+    starts_on: str
+    direction: str = "outgoing"
+    account_name: str | None = None
+    #: One of the values `GET /merchants/categories` answers. Decides the icon
+    #: on the card, and the category the charge will carry once confirming
+    #: exists. There is no category for rent, so it lands in `other`.
+    category: str | None = None
+    #: Declared and then paused, so the screen has one of those to show.
+    paused: bool = False
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class SeedEntry:
     """Money that never emailed, entered by hand."""
 
@@ -381,6 +407,77 @@ ENTRIES: tuple[SeedEntry, ...] = (
         occurred_at=_local(2026, 8, 23, 13, 15),
         account_name="Efectivo",
         note="efectivo",
+    ),
+)
+
+
+BILLS: tuple[SeedBill, ...] = (
+    # The rent: the biggest fixed charge most people have, on the 1st.
+    SeedBill(
+        name="Arriendo",
+        amount="1850000",
+        currency="COP",
+        cadence="monthly",
+        starts_on="2026-01-01",
+        account_name="Ahorros Bancolombia",
+        category="other",
+    ),
+    # The case the whole feature was asked for: a gym that stopped emailing
+    # because it is domiciled.
+    SeedBill(
+        name="Gimnasio",
+        amount="120000",
+        currency="COP",
+        cadence="monthly",
+        starts_on="2026-01-04",
+        account_name="Ahorros Bancolombia",
+        category="health",
+    ),
+    # Anchored on the 31st, which is the rule most easily got wrong: it lands
+    # on the 28th in February and is back on the 31st in March.
+    SeedBill(
+        name="Administración",
+        amount="310000",
+        currency="COP",
+        cadence="monthly",
+        starts_on="2026-01-31",
+        account_name="Ahorros Bancolombia",
+        category="fees",
+    ),
+    # Another currency, so the screen has to show the totals apart instead of
+    # adding pesos to dollars.
+    SeedBill(
+        name="Dominio",
+        amount="14",
+        currency="USD",
+        cadence="annual",
+        starts_on="2026-02-18",
+        category="subscriptions",
+    ),
+    # Declared income. It is listed and it is never netted off what the month
+    # costs — a total that subtracted it would report a month costing less
+    # than it costs.
+    SeedBill(
+        name="Nómina",
+        amount="4200000",
+        currency="COP",
+        cadence="biweekly",
+        starts_on="2026-01-15",
+        direction="incoming",
+        account_name="Ahorros Bancolombia",
+        category="income",
+    ),
+    # Cancelled, and kept: a paused bill predicts nothing and adds nothing,
+    # but still answers what it used to cost.
+    SeedBill(
+        name="Revista",
+        amount="24900",
+        currency="COP",
+        cadence="monthly",
+        starts_on="2026-01-09",
+        account_name="Tarjeta Bancolombia",
+        paused=True,
+        category="entertainment",
     ),
 )
 
@@ -691,6 +788,68 @@ def _enter_manual(
     print(f"  manual    {entered} entered{note}")
 
 
+def _declare_bills(
+    client: TestClient,
+    *,
+    token: str,
+    accounts: dict[str, str],
+) -> None:
+    """Declare what is going to be charged, and pause the one that was cancelled.
+
+    Looked up by name before writing, for the same reason the manual entries
+    are: a bill's identity is random, so nothing in the domain would stop a
+    second run from declaring the rent twice.
+
+    Nothing here touches the ledger. After this the balances are exactly what
+    they were before it, which is the rule the feature rests on and the reason
+    it can be seeded last without disturbing anything above.
+    """
+    headers = _authorization(token)
+    listed = _expect(
+        client.get("/financial/bills", headers=headers),
+        status.HTTP_200_OK,
+    ).json()
+    already_there = {str(bill["name"]) for bill in listed["bills"]}
+    declared = 0
+
+    for bill in BILLS:
+        if bill.name in already_there:
+            continue
+
+        payload: dict[str, str | None] = {
+            "name": bill.name,
+            "amount": bill.amount,
+            "currency": bill.currency,
+            "cadence": bill.cadence,
+            "starts_on": bill.starts_on,
+            "direction": bill.direction,
+            "category": bill.category,
+        }
+
+        if bill.account_name is not None:
+            payload["account_id"] = accounts[bill.account_name]
+
+        created = _expect(
+            client.post("/financial/bills", json=payload, headers=headers),
+            status.HTTP_201_CREATED,
+        ).json()
+
+        if bill.paused:
+            _expect(
+                client.post(
+                    f"/financial/bills/{created['id']}/pause",
+                    headers=headers,
+                ),
+                status.HTTP_200_OK,
+            )
+
+        declared += 1
+
+    skipped = len(BILLS) - declared
+    note = f", {skipped} already there" if skipped else ""
+    print(f"  bills     {declared} declared{note}")
+
+
 def _enter_transfer_legs(
     client: TestClient,
     *,
@@ -807,6 +966,19 @@ def _summarize(client: TestClient, *, token: str, email: str, password: str) -> 
         f"Merchants   {merchants['total']} known, "
         f"{merchants['needs_review']} awaiting review",
     )
+    bills = _expect(
+        client.get("/financial/bills", headers=headers),
+        status.HTTP_200_OK,
+    ).json()
+
+    print(f"\nBills       {len(bills['bills'])} declared, none of them in the ledger")
+
+    for total in bills["totals"]:
+        print(
+            f"  this month {total['expected']!s:>14} {total['currency']!s}"
+            f"  (still to fall due {total['upcoming']})",
+        )
+
     print("\nSpending by category")
 
     for group in by_category["groups"]:
@@ -866,6 +1038,7 @@ def main() -> None:
     accounts = _declare_accounts(client, token=token)
     _enter_manual(client, token=token, accounts=accounts)
     _enter_transfer_legs(client, token=token, accounts=accounts)
+    _declare_bills(client, token=token, accounts=accounts)
     _summarize(client, token=token, email=args.email, password=args.password)
 
 

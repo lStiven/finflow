@@ -7,14 +7,18 @@
  * month after month, on the most predictable money a person spends.
  *
  * **Nothing on this screen is money that moved.** No balance changes, no
- * movement is recorded, and the two figures at the top are a forecast, not a
- * total from the ledger. Confirming a charge — which is what would make it
- * real — is the next deliverable and deliberately not here yet, so nothing on
- * this screen can be mistaken for it.
+ * movement is recorded, and the figures at the top are a forecast, not a total
+ * from the ledger. Confirming a charge — which is what would make it real — is
+ * the next deliverable and deliberately not here yet, so nothing here can be
+ * mistaken for it.
  *
- * Two figures and not one, which is the rule most worth keeping: "what this
- * month costs" and "what has not fallen due yet" are different questions and
- * a reader takes whichever is on screen to be the answer to both.
+ * Three pieces, in the order somebody actually reads them: **what is the month
+ * going to cost**, then **what do I have declared**, then **when does each one
+ * land**. The first is one card with a bar, because "what this month costs"
+ * and "what has not fallen due yet" are two numbers that only mean something
+ * against each other. The second is a grid of cards, each carrying its own
+ * state. The third is a dated rail — the one shape that makes "the 1st, the
+ * 4th, the 18th" read as a month passing rather than as three unrelated rows.
  */
 
 import { useSuspenseQuery } from "@tanstack/react-query";
@@ -28,8 +32,8 @@ import {
   Play,
   Plus,
   Receipt,
+  Snowflake,
   Trash2,
-  TriangleAlert,
   Wallet,
   X,
 } from "lucide-react";
@@ -41,20 +45,23 @@ import {
   type BillOccurrence,
   type BillTotal,
   billsQuery,
+  categoriesQuery,
   useAmendBill,
   useDeclareBill,
   useForgetBill,
   usePauseBill,
 } from "@/api/queries";
+import { lookOf } from "@/bills/look";
 import {
   type BillState,
   billState,
   CADENCES,
   cadenceLabel,
+  dueShare,
   formatAmountInput,
   groupByDay,
   parseAmount,
-  singleTotal,
+  whenLabel,
 } from "@/bills/schedule";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
@@ -64,6 +71,7 @@ import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { formatIsoDate, formatIsoDayMonth, todayIso } from "@/lib/dates";
+import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
 
 /** The select hands back a string; this is where it becomes a cadence. */
 function toCadence(value: string): BillCadence {
@@ -80,6 +88,7 @@ export const Route = createFileRoute("/facturas")({
       // The picker needs them, and a bill pointing at an account nobody
       // declared is refused by the server — better to offer only what exists.
       context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
+      context.queryClient.query({ ...categoriesQuery, staleTime: "static" }),
     ]),
   component: BillsScreen,
 });
@@ -87,20 +96,22 @@ export const Route = createFileRoute("/facturas")({
 function BillsScreen() {
   const { data: view } = useSuspenseQuery(billsQuery);
   const [declaring, setDeclaring] = useState(false);
+  const today = todayIso();
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-7">
         <header className="flex flex-col gap-2">
           <h1 className="font-semibold text-2xl tracking-tight">Facturas</h1>
-          <p className="max-w-prose text-muted text-sm">
+          <p className="max-w-prose text-muted text-sm leading-relaxed">
             Los cobros que ya sabes que vienen y de los que el banco no te avisa por
-            correo. Se declaran aquí y <strong>no mueven ningún saldo</strong> hasta que
+            correo. Se declaran aquí y{" "}
+            <strong className="text-text">no mueven ningún saldo</strong> hasta que
             confirmes el pago.
           </p>
         </header>
 
-        <Totals totals={view.totals} />
+        <Forecast totals={view.totals} />
 
         {declaring ? (
           <BillForm onClose={() => setDeclaring(false)} />
@@ -111,61 +122,105 @@ function BillsScreen() {
           </Button>
         )}
 
-        {view.bills.length === 0 ? <Empty /> : <BillList bills={view.bills} />}
+        {view.bills.length === 0 ? (
+          <Empty />
+        ) : (
+          <section className="flex flex-col gap-3">
+            <SectionTitle count={view.bills.length}>Declaradas</SectionTitle>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {view.bills.map((bill) => (
+                <BillCard key={bill.id} bill={bill} today={today} />
+              ))}
+            </div>
+          </section>
+        )}
 
         {view.occurrences.length > 0 ? (
-          <Upcoming occurrences={view.occurrences} bills={view.bills} />
+          <Timeline occurrences={view.occurrences} bills={view.bills} today={today} />
         ) : null}
       </div>
     </AppShell>
   );
 }
 
+function SectionTitle({ children, count }: { children: string; count?: number }) {
+  return (
+    <h2 className="flex items-center gap-2 font-medium text-sm">
+      {children}
+      {count === undefined ? null : (
+        <span className="rounded-full bg-surface-raised px-2 py-0.5 text-faint text-xs tabular-nums">
+          {count}
+        </span>
+      )}
+    </h2>
+  );
+}
+
 /**
- * The two figures.
+ * What the month is committed to, as one picture.
  *
- * With one currency they sit side by side; with two or more each currency
- * gets its own row, because adding pesos to dollars needs a rate this app
- * does not have and will not invent.
+ * The bar is the point. Two figures side by side make a reader do the
+ * arithmetic — is 310.000 out of 2.008.900 most of it or hardly any? — and the
+ * proportion answers that before either number is read. The filled part is
+ * what has already fallen due, so a month nearly over looks nearly full, which
+ * is the thing somebody is actually checking.
  */
-function Totals({ totals }: { totals: readonly BillTotal[] }) {
+function Forecast({ totals }: { totals: readonly BillTotal[] }) {
   if (totals.length === 0) return null;
 
-  const only = singleTotal(totals);
-
   return (
-    <Card glow="accent" lift={false} className="flex flex-col gap-4">
-      {(only ? [only] : totals).map((total) => (
-        <div key={total.currency} className="flex flex-col gap-2">
-          {only ? null : (
-            <span className="text-faint text-xs uppercase tracking-wider">
-              {total.currency}
-            </span>
+    <Card glow="accent" lift={false} className="flex flex-col gap-5">
+      {totals.map((total, index) => (
+        <div
+          key={total.currency}
+          className={cn(
+            "flex flex-col gap-3",
+            index > 0 && "border-line border-t pt-5",
           )}
-          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-            <figure className="flex min-w-0 items-baseline gap-2">
+        >
+          <div className="flex items-baseline justify-between gap-3">
+            <figure className="flex min-w-0 flex-col gap-1">
               <figcaption className="text-faint text-xs uppercase tracking-wider">
                 Este mes
               </figcaption>
               <Money amount={total.expected} currency={total.currency} size="md" />
             </figure>
-            <figure className="flex min-w-0 items-baseline gap-2">
-              <figcaption className="text-faint text-xs uppercase tracking-wider">
-                Aún no vence
-              </figcaption>
-              <Money
-                amount={total.upcoming}
-                currency={total.currency}
-                size="sm"
-                tone="neutral"
-              />
-            </figure>
+            {totals.length > 1 ? (
+              <span className="shrink-0 rounded-full bg-surface-raised px-2.5 py-1 text-faint text-xs">
+                {total.currency}
+              </span>
+            ) : null}
           </div>
+
+          <div
+            role="presentation"
+            className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised"
+          >
+            <div
+              className="h-full rounded-full bg-accent/70"
+              style={{
+                width: `${Math.round(dueShare(total.expected, total.upcoming) * 100)}%`,
+              }}
+            />
+          </div>
+
+          <figure className="flex items-baseline justify-between gap-3">
+            <figcaption className="text-faint text-xs uppercase tracking-wider">
+              Aún no vence
+            </figcaption>
+            <Money
+              amount={total.upcoming}
+              currency={total.currency}
+              size="sm"
+              tone="neutral"
+            />
+          </figure>
         </div>
       ))}
-      <p className="text-faint text-xs">
-        Una previsión, no un gasto registrado. «Aún no vence» es lo que todavía no ha
-        llegado a su fecha.
+
+      <p className="text-faint text-xs leading-relaxed">
+        Una previsión, no un gasto registrado. La barra es lo que ya pasó su fecha
+        dentro del mes.
       </p>
     </Card>
   );
@@ -173,9 +228,11 @@ function Totals({ totals }: { totals: readonly BillTotal[] }) {
 
 function Empty() {
   return (
-    <Card lift={false} className="flex flex-col items-center gap-3 py-10 text-center">
-      <Receipt className="size-8 text-faint" />
-      <p className="max-w-sm text-muted text-sm">
+    <Card lift={false} className="flex flex-col items-center gap-3 py-12 text-center">
+      <span className="grid size-12 place-items-center rounded-2xl bg-surface-raised">
+        <Receipt className="size-5 text-faint" />
+      </span>
+      <p className="max-w-xs text-muted text-sm leading-relaxed">
         Todavía no has declarado ninguna. El gimnasio, el arriendo, el streaming: lo que
         se cobra solo y no llega por correo.
       </p>
@@ -183,124 +240,215 @@ function Empty() {
   );
 }
 
-function BillList({ bills }: { bills: readonly Bill[] }) {
-  return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-muted text-sm">Declaradas</h2>
-      {bills.map((bill) => (
-        <BillCard key={bill.id} bill={bill} />
-      ))}
-    </section>
-  );
-}
-
-const STATE_NOTE: Record<BillState, { label: string; className: string } | null> = {
-  active: null,
-  paused: { label: "En pausa", className: "text-faint" },
-  frozen: { label: "Cuenta cerrada", className: "text-violet" },
-  overdue: { label: "Ya pasó su fecha", className: "text-outgoing" },
+/** What each state adds on top of the category's own look. */
+const STATE: Record<BillState, { label: string | null; chip: string }> = {
+  active: { label: null, chip: "text-faint" },
+  paused: { label: "En pausa", chip: "text-faint" },
+  frozen: { label: "Cuenta cerrada", chip: "text-violet" },
+  overdue: { label: "Ya pasó", chip: "text-outgoing" },
 };
 
-function BillCard({ bill }: { bill: Bill }) {
+/**
+ * One bill, as a tile.
+ *
+ * Square-ish and in a mosaic rather than a stack of rows, because the question
+ * this screen answers — "what is coming, and how much of it" — is a shape
+ * question before it is a reading question. A column of identical rows has to
+ * be read line by line; a grid is scanned.
+ *
+ * The icon and the hue come from the category (`lookOf`), so the same bill
+ * looks the same every time and the eye has something to aim at. The lift and
+ * the glow on hover are the app's own `.surface` behaviour, which every other
+ * clickable card here already has — this one had it switched off, which is
+ * what made the first version feel dead.
+ *
+ * The three actions are hidden until the pointer is on the tile, and **only
+ * where a pointer exists**: below `sm` they stay visible, because hiding a
+ * control behind a hover on a phone is hiding it for good. `focus-within`
+ * brings them back for the keyboard.
+ */
+function BillCard({ bill, today }: { bill: Bill; today: string }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const pause = usePauseBill();
   const forget = useForgetBill();
   const state = billState(bill);
-  const note = STATE_NOTE[state];
+  const note = STATE[state];
   const paused = bill.status === "paused";
+  const look = lookOf({ category: bill.category, direction: bill.direction });
+  const Icon = state === "frozen" ? Snowflake : look.icon;
 
-  if (editing) return <BillForm bill={bill} onClose={() => setEditing(false)} />;
+  if (editing) {
+    return (
+      <div className="col-span-full">
+        <BillForm bill={bill} onClose={() => setEditing(false)} />
+      </div>
+    );
+  }
 
   return (
-    <Card lift={false} className="flex flex-col gap-3">
-      <div className="flex items-start gap-3">
+    <Card
+      glow={paused ? "none" : look.glow}
+      className={cn(
+        "group flex min-h-48 flex-col gap-3 p-4",
+        paused && "opacity-70",
+        state === "overdue" && "border-outgoing/25",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
         <span
           aria-hidden
           className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-xl",
-            paused ? "bg-surface-raised text-faint" : "bg-accent/12 text-accent",
+            "grid size-10 shrink-0 place-items-center rounded-xl",
+            "transition-transform duration-200 group-hover:scale-110",
+            paused ? "bg-surface-raised text-faint" : look.badge,
           )}
         >
-          {state === "frozen" ? (
-            <TriangleAlert className="size-4" />
-          ) : (
-            <Receipt className="size-4" />
-          )}
+          <Icon className="size-[1.125rem]" />
         </span>
 
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex min-w-0 items-baseline justify-between gap-3">
-            <span className="truncate font-medium">{bill.name}</span>
+        {note.label ? (
+          <span
+            className={cn(
+              "shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem]",
+              note.chip,
+            )}
+          >
+            {note.label}
+          </span>
+        ) : null}
+      </div>
+
+      {confirming ? (
+        <div className="flex flex-1 flex-col justify-end gap-2">
+          <span className="text-muted text-xs leading-relaxed">
+            ¿Borrar «{bill.name}»? No borra ningún movimiento.
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-outgoing text-xs"
+              disabled={forget.isPending}
+              aria-label={`Sí, borrar ${bill.name}`}
+              onClick={() => forget.mutate(bill.id)}
+            >
+              Sí, borrar
+            </Button>
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-xs"
+              onClick={() => setConfirming(false)}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="truncate font-medium text-sm" title={bill.name}>
+              {bill.name}
+            </span>
             <Money
               amount={bill.amount}
               currency={bill.currency}
               size="sm"
               tone={bill.direction === "incoming" ? "positive" : "plain"}
             />
+            <span className="truncate text-faint text-xs">
+              {cadenceLabel(bill.cadence)}
+            </span>
+            {bill.next_occurrence ? (
+              <span
+                className={cn(
+                  "truncate text-xs",
+                  state === "overdue" ? "text-outgoing" : "text-muted",
+                )}
+              >
+                {formatIsoDayMonth(bill.next_occurrence.due_on)},{" "}
+                {whenLabel(bill.next_occurrence.due_on, today)}
+              </span>
+            ) : (
+              <span className="truncate text-faint text-xs">Sin próximo cobro</span>
+            )}
           </div>
-          <span className="text-faint text-xs">
-            {cadenceLabel(bill.cadence)}
-            {bill.next_occurrence
-              ? ` · próximo ${formatIsoDayMonth(bill.next_occurrence.due_on)}`
-              : ""}
-          </span>
-          {note ? (
-            <span className={cn("text-xs", note.className)}>{note.label}</span>
-          ) : null}
-        </div>
-      </div>
 
-      {/* Three actions on one row at 390px. The labels stay — an icon-only
-          button here would be three unlabelled squares, and one of them
-          deletes. What gives way instead is the padding. */}
-      <div className="flex gap-2">
-        <Button
-          variant="ghost"
-          className="flex-1 px-2 text-sm"
-          onClick={() => setEditing(true)}
-        >
-          <Pencil className="size-4" />
-          Editar
-        </Button>
-        <Button
-          variant="ghost"
-          className="flex-1 px-2 text-sm"
-          disabled={pause.isPending}
-          onClick={() => pause.mutate({ billId: bill.id, paused: !paused })}
-        >
-          {paused ? <Play className="size-4" /> : <Pause className="size-4" />}
-          {paused ? "Reanudar" : "Pausar"}
-        </Button>
-        <Button
-          variant="ghost"
-          className="flex-1 px-2 text-outgoing text-sm"
-          disabled={forget.isPending}
-          onClick={() => forget.mutate(bill.id)}
-        >
-          <Trash2 className="size-4" />
-          Borrar
-        </Button>
-      </div>
-
-      {state === "frozen" ? (
-        <p className="text-faint text-xs">
-          La cuenta de la que salía está cerrada, así que esta factura queda congelada.
-          Asígnale otra cuenta o reabre la que tenía.
-        </p>
-      ) : null}
+          {/* At the foot and faint: the tile is about what is coming, not
+              about its own buttons. They come up to full strength under the
+              pointer, and stay legible without one — hiding a control behind
+              a hover on a phone is hiding it for good. */}
+          <div className="-mr-1 flex justify-end gap-0.5 opacity-60 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+            <IconAction
+              label="Editar"
+              on={bill.name}
+              icon={Pencil}
+              onClick={() => setEditing(true)}
+            />
+            <IconAction
+              label={paused ? "Reanudar" : "Pausar"}
+              on={bill.name}
+              icon={paused ? Play : Pause}
+              disabled={pause.isPending}
+              onClick={() => pause.mutate({ billId: bill.id, paused: !paused })}
+            />
+            <IconAction
+              label="Borrar"
+              on={bill.name}
+              icon={Trash2}
+              tone="danger"
+              onClick={() => setConfirming(true)}
+            />
+          </div>
+        </>
+      )}
     </Card>
+  );
+}
+
+function IconAction({
+  label,
+  on,
+  icon: Icon,
+  onClick,
+  disabled = false,
+  tone = "plain",
+}: {
+  label: string;
+  on: string;
+  icon: typeof Pencil;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: "plain" | "danger";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`${label} ${on}`}
+      title={label}
+      className={cn(
+        "grid size-8 place-items-center rounded-lg transition-colors",
+        "hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-45",
+        tone === "danger"
+          ? "text-faint hover:text-outgoing"
+          : "text-muted hover:text-text",
+      )}
+    >
+      <Icon className="size-4" />
+    </button>
   );
 }
 
 /**
  * Declaring and correcting, in one form.
  *
- * Two forms would be two places for the same eight fields to disagree; what
- * changes between them is only which mutation runs and what the fields start
- * as.
+ * Two forms would be two places for the same fields to disagree; what changes
+ * between them is only which mutation runs and what the fields start as.
  */
 function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   const { data: accounts } = useSuspenseQuery(accountsQuery("open"));
+  const { data: categories } = useSuspenseQuery(categoriesQuery);
   const declare = useDeclareBill();
   const amend = useAmendBill(bill?.id ?? "");
   const saving = bill ? amend : declare;
@@ -310,14 +458,18 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   const [cadence, setCadence] = useState<BillCadence>(bill?.cadence ?? "monthly");
   const [startsOn, setStartsOn] = useState(bill?.starts_on ?? todayIso());
   const [accountId, setAccountId] = useState(bill?.account_id ?? "");
+  // The category is what the tile draws its icon and its hue from, and what a
+  // confirmed charge will carry into the reports. Empty is a real answer.
+  const [category, setCategory] = useState(bill?.category ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
     const parsed = parseAmount(amount);
 
     if (name.trim() === "") return setError("Ponle un nombre.");
-    if (parsed === null)
+    if (parsed === null) {
       return setError("El monto tiene que ser un número mayor que cero.");
+    }
 
     setError(null);
     const onSuccess = () => onClose();
@@ -334,12 +486,12 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         {
           ...shared,
           direction: bill.direction,
-          category: null,
+          category: category === "" ? null : category,
           // Absence means "leave it alone" on a correction, so taking the
           // account off has to say so out loud.
           account_id: accountId === "" ? null : accountId,
           clear_account: accountId === "" && bill.account_id !== null,
-          clear_category: false,
+          clear_category: category === "" && bill.category !== null,
         },
         { onSuccess },
       );
@@ -351,7 +503,7 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
       {
         ...shared,
         direction: "outgoing",
-        category: null,
+        category: category === "" ? null : category,
         account_id: accountId === "" ? null : accountId,
       },
       { onSuccess },
@@ -365,10 +517,10 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         <button
           type="button"
           onClick={onClose}
+          aria-label="Cerrar"
           className="grid size-8 place-items-center rounded-lg text-faint hover:bg-surface-raised hover:text-text"
         >
           <X className="size-4" />
-          <span className="sr-only">Cerrar</span>
         </button>
       </div>
 
@@ -407,6 +559,20 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
       />
 
       <Select
+        label="Categoría"
+        value={category}
+        onChange={(event) => setCategory(event.target.value)}
+        placeholder="Sin categoría"
+        hint="Decide el icono de la ficha, y la categoría del gasto cuando se confirme."
+        options={categories.categories
+          .filter((option) => option.value !== UNCATEGORIZED)
+          .map((option) => ({
+            value: option.value,
+            label: categoryLabel(option.value, option.label),
+          }))}
+      />
+
+      <Select
         label="Sale de"
         value={accountId}
         onChange={(event) => setAccountId(event.target.value)}
@@ -423,63 +589,109 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         <p className="text-outgoing text-sm">{saving.error.message}</p>
       ) : null}
 
-      <div className="flex gap-2">
-        <Button onClick={submit} disabled={saving.isPending} full>
-          {saving.isPending ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Check className="size-4" />
-          )}
-          {bill ? "Guardar" : "Declarar"}
-        </Button>
-      </div>
+      <Button onClick={submit} disabled={saving.isPending} full>
+        {saving.isPending ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Check className="size-4" />
+        )}
+        {bill ? "Guardar" : "Declarar"}
+      </Button>
     </Card>
   );
 }
 
-/** Everything falling inside the month, by the day it falls on. */
-function Upcoming({
+/**
+ * The month as a dated rail.
+ *
+ * A flat list makes "the 1st, the 4th, the 18th" read as unrelated rows. A
+ * rail with a node per day reads as time passing, which is what "when does
+ * this land" is actually asking. Today's node is marked, so the split between
+ * what has gone and what is coming is visible without reading a date.
+ */
+function Timeline({
   occurrences,
   bills,
+  today,
 }: {
   occurrences: readonly BillOccurrence[];
   bills: readonly Bill[];
+  today: string;
 }) {
   const names = new Map(bills.map((bill) => [bill.id, bill.name]));
 
   return (
     <section className="flex flex-col gap-3">
-      <h2 className="text-muted text-sm">Cobros de este mes</h2>
-      <Card lift={false} className="flex flex-col divide-y divide-line">
-        {groupByDay(occurrences).map((group) => (
-          <div
-            key={group.day}
-            className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0"
-          >
-            <span className="text-faint text-xs uppercase tracking-wider">
-              {formatIsoDate(group.day)}
-            </span>
-            {group.occurrences.map((occurrence) => (
-              <div
-                key={`${occurrence.bill_id}-${occurrence.due_on}`}
-                className="flex items-center justify-between gap-3"
-              >
-                <span className="min-w-0 truncate text-sm">
-                  {names.get(occurrence.bill_id) ?? "Factura"}
-                  {occurrence.state === "overdue" ? (
-                    <span className="ml-2 text-outgoing text-xs">ya pasó</span>
-                  ) : null}
+      <SectionTitle>Cobros de este mes</SectionTitle>
+
+      <Card lift={false} className="flex flex-col gap-0">
+        {groupByDay(occurrences).map((group, index) => {
+          const past = group.day < today;
+          const isToday = group.day === today;
+
+          return (
+            <div
+              key={group.day}
+              className={cn(
+                "flex gap-4 pl-1",
+                index === 0 ? "pb-5" : "py-5",
+                index > 0 && "border-line/60 border-t",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "mt-1.5 size-2.5 shrink-0 rounded-full",
+                  isToday
+                    ? "bg-accent ring-4 ring-accent/20"
+                    : past
+                      ? "bg-line"
+                      : "bg-muted/60",
+                )}
+              />
+
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <span
+                  className={cn(
+                    "text-xs uppercase tracking-wider",
+                    isToday ? "text-accent" : "text-faint",
+                  )}
+                >
+                  {formatIsoDate(group.day)}
+                  {isToday ? " · hoy" : ""}
                 </span>
-                <Money
-                  amount={occurrence.amount}
-                  currency={occurrence.currency}
-                  size="sm"
-                  tone={occurrence.direction === "incoming" ? "positive" : "neutral"}
-                />
+
+                {group.occurrences.map((occurrence) => (
+                  <div
+                    key={`${occurrence.bill_id}-${occurrence.due_on}`}
+                    className="flex items-baseline justify-between gap-3"
+                  >
+                    <span
+                      className={cn(
+                        "min-w-0 truncate text-sm",
+                        past ? "text-muted" : "text-text",
+                      )}
+                    >
+                      {names.get(occurrence.bill_id) ?? "Factura"}
+                    </span>
+                    <Money
+                      amount={occurrence.amount}
+                      currency={occurrence.currency}
+                      size="sm"
+                      tone={
+                        occurrence.direction === "incoming"
+                          ? "positive"
+                          : past
+                            ? "neutral"
+                            : "plain"
+                      }
+                    />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </Card>
     </section>
   );

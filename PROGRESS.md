@@ -217,10 +217,14 @@ AWS (ver Trabas).
   real. Dos cifras por moneda y nunca una: lo que cuesta el mes y lo que aún no
   vence. Una factura cuya cuenta se cerró se lee congelada, derivado de la
   cuenta y no guardado, así que reabrirla la descongela sola. La pantalla
-  `/facturas` ya está, y con ella una prueba de punta a punta que el proyecto
-  no tenía (`just e2e-bills`): conduce el navegador, y después de cada paso
-  compara lo que la pantalla enseña con lo que el servidor guardó. Lee saldos
-  y patrimonio antes y después, y no pasa si declarar movió alguno.
+  `/facturas` ya está —la barra del mes arriba, un mosaico de fichas donde el
+  icono y el color salen de la categoría de cada factura, y los cobros en una
+  línea de tiempo con el día de hoy marcado—, y con ella una
+  prueba de punta a punta que el proyecto no tenía (`just e2e-bills`): conduce
+  el navegador, y después de cada paso compara lo que la pantalla enseña con lo
+  que el servidor guardó. Lee saldos y patrimonio antes y después, y no pasa si
+  declarar movió alguno. `just seed` deja seis facturas declaradas con su
+  categoría, así que el entorno local arranca con el flujo completo.
 - 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
   `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
   el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se
