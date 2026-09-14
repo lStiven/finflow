@@ -6,9 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from personal_finance.contexts.alerts.presentation.http.dependencies import (
-    build_message_sender,
-)
 from personal_finance.contexts.alerts.presentation.http.router import (
     router as alerts_router,
 )
@@ -72,10 +69,12 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
     get_use_case()
     get_register_use_case()
     get_login_use_case()
-    # An unconfigured bot is a deployment that would bind channels it
-    # could never send to, and whose owners would find out at their
-    # first purchase rather than at the moment they linked.
-    build_message_sender()
+    # Alerts are deliberately *not* built here. They were, and a missing
+    # Telegram parameter took the whole deployment down with them — no login,
+    # no movements, nothing — for a feature that adds to the app rather than
+    # holding it up. An unconfigured bot now answers 503 on `/alerts/*` and
+    # changes nothing else. The worker still refuses to start, because a
+    # process whose only job is sending has nothing to do without a transport.
 
     yield
 

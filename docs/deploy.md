@@ -9,7 +9,7 @@ Un despliegue completo son **tres cosas**, y cada una tiene su herramienta:
 | Qué | Con qué | Por qué así |
 |---|---|---|
 | Tablas, colas, DLQ, bus y reglas | `just provision-dev` / `provision-prod` | Es el plano de datos, y **local también lo necesita**: moto lo emula con este mismo código |
-| Las cinco funciones Lambda, sus disparadores, sus roles y la URL de la API | `just deploy-dev` / `deploy-prod` (AWS SAM) | moto no ejecuta tu código; esto solo existe en AWS de verdad |
+| Las seis funciones Lambda, sus disparadores, sus roles y la URL de la API | `just deploy-dev` / `deploy-prod` (AWS SAM) | moto no ejecuta tu código; esto solo existe en AWS de verdad |
 | El bundle del frontend | `just web-publish-dev` / `web-publish` | Es estático: no hay servidor que mantener |
 
 De ahí **el orden, que no es negociable**: aprovisionar, desplegar, publicar.
@@ -90,6 +90,18 @@ just secret-put /finflow/production/jwt-secret
 just secret-put /finflow/production/mailbox-app-password
 just secret-put /finflow/production/mail-app-password
 just secret-put /finflow/production/llm-api-key
+just secret-put /finflow/production/telegram-bot-token
+just secret-put /finflow/production/telegram-webhook-secret
+```
+
+La receta es `secret-put` **seguida de la ruta**; `just /finflow/...` a secas
+no es un comando y `just` responde que no conoce esa receta.
+
+Los dos últimos son de los avisos y los explica
+[alerts.md](alerts.md#desplegarlo). El del webhook lo inventas tú:
+
+```bash
+uv run python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 `mail-app-password` es de dónde **salen** los correos que manda Identity —
@@ -118,7 +130,20 @@ stack o reiniciar el proceso local.
 
 Qué ruta lee cada stack está en `infra/samconfig.toml`
 (`JwtSecretParameter`, `MailboxPasswordParameter`, `MailAppPasswordParameter`,
-`LlmApiKeyParameter`).
+`LlmApiKeyParameter`, `TelegramBotTokenParameter`,
+`TelegramWebhookSecretParameter`).
+
+> **Un override olvidado ahí no falla: cruza los entornos.** Cada uno de esos
+> parámetros se declara en `infra/template.yaml` con un *default* que apunta a
+> `/finflow/production/`, así que un stack al que se le olvide el override no
+> se queda sin secreto — lee el del otro entorno. Pasó el 14 de septiembre con
+> los tres de Telegram: `finflow-dev` arrancó pidiendo
+> `/finflow/production/telegram-bot-token`, no existía, y **la API entera se
+> quedó sin arrancar**. Si hubiera existido, dev habría estado mandando avisos
+> con el bot de producción y nada habría fallado.
+>
+> Al añadir un parámetro nuevo de tipo secreto, añádelo a los **dos** bloques
+> `parameter_overrides` en el mismo cambio.
 
 Además de la ruta del secreto, Identity necesita dos valores que **no** son
 secretos y viven en `parameter_overrides` del mismo fichero:
@@ -132,6 +157,11 @@ secretos y viven en `parameter_overrides` del mismo fichero:
 despliegue que no puede mandar un código es uno donde nadie puede registrarse
 ni recuperar su cuenta, y eso tiene que fallar al desplegar y no en la cara del
 primer usuario que lo intente.
+
+**Los de Telegram no lo son**, y la diferencia importa: un despliegue sin bot
+sirve todo lo demás con normalidad y responde `503` solo en `/alerts/*`. Los
+avisos se suman a la app; no la sostienen. El worker de avisos sí se niega a
+arrancar sin token, porque su único trabajo es mandar.
 
 > Hoy `finflow-dev` y `finflow-production` resuelven a la **misma cuenta de
 > AWS**, con usuarios IAM distintos. Compruébalo antes de fiarte de la
@@ -173,7 +203,7 @@ aws sso login --profile finflow-dev            # si usas SSO
 just provision-dev          # tablas, colas, DLQ, bus y reglas, todo `dev-`
 # pega en .env.development las cuatro URLs de cola que imprime
 
-just deploy-dev             # construye la imagen y despliega las cinco funciones
+just deploy-dev             # construye la imagen y despliega las seis funciones
 just deploy-outputs-dev     # imprime la ApiUrl y lo demás que publica el stack
 just smoke <ApiUrl>         # comprueba que responde de verdad
 ```
@@ -305,7 +335,7 @@ los copia tal cual a la raíz de `dist/`:
 
 ## Comprobar que sirve
 
-Que el despliegue termine bien dice que CloudFormation creó cinco funciones,
+Que el despliegue termine bien dice que CloudFormation creó seis funciones,
 no que la aplicación funcione. Eso lo responde `just smoke`, que habla **por
 HTTP contra la URL desplegada** — lo único que ejerce el arranque en frío, el
 adaptador, y que la API resolviera su secreto de firma en Parameter Store.
@@ -334,10 +364,24 @@ Sale con código 0 solo si pasó todo, así que sirve como puerta en CI.
 
 ## Después del primer despliegue
 
-Tres cosas que solo hacen falta una vez, y que no avisan si faltan.
+Cuatro cosas que solo hacen falta una vez, y que no avisan si faltan.
+
+**Registra el webhook de Telegram.** Los avisos no funcionan hasta que Telegram
+sepa a dónde entregar, y eso es una orden aparte del despliegue: la URL solo
+cambia cuando cambia el Function URL. Una vez por entorno:
+
+```bash
+just deploy-outputs-dev                       # de aquí sale ApiUrl
+just telegram-webhook-dev https://<ApiUrl>/alerts/telegram/webhook
+just telegram-webhook-info-dev                # qué cree Telegram, y el último error
+```
+
+Sin esto, vincular un canal parece funcionar —el enlace se abre, el bot
+responde con su mensaje por defecto— y no pasa nada más. Todo lo demás de la
+app sigue igual. Está entero en [alerts.md](alerts.md).
 
 **Confirma la suscripción de las alarmas.** La plantilla crea un tema SNS y
-tres alarmas, una por DLQ. Tras el primer despliegue con `AlertEmail` puesto
+cuatro alarmas, una por DLQ. Tras el primer despliegue con `AlertEmail` puesto
 en `infra/samconfig.toml`, AWS manda un correo de confirmación: hasta que
 pulses ese enlace no llega ningún aviso, y la alarma parecerá funcionar. Es el
 paso que más se olvida.
@@ -349,7 +393,7 @@ que renombrar una cola en `provisioning.py` deja aquí una alarma vigilando un
 nombre que ya no existe, en `INSUFFICIENT_DATA`, con aspecto de sana.
 
 **Cierra el grifo de ECR.** Cada despliegue sube la imagen una vez por
-función —cinco copias de ~250 MB— a repositorios que SAM crea y nunca poda. Es
+función —seis copias de ~250 MB— a repositorios que SAM crea y nunca poda. Es
 la única línea de esta factura que crece sola:
 
 ```bash
@@ -379,6 +423,7 @@ just deploy-logs-dev FinancialFunction
 | `ParseFunction` | La cola `parse-notifications` | Lotes de 3 |
 | `MerchantFunction` | La cola `merchant-events` | Lotes de 3, y **una** ejecución simultánea |
 | `FinancialFunction` | La cola `financial-events` | Lotes de 10, sin límite de concurrencia |
+| `AlertsFunction` | La cola `alerts-events` | Lotes de 5, y **una** ejecución simultánea. Ver [alerts.md](alerts.md#por-qué-una-sola-ejecución-a-la-vez) |
 
 **Por qué esos números.** El timeout de una función no puede pasar del
 `VisibilityTimeout` de su cola (120s): si lo pasara, AWS rechaza el enganche al

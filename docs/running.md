@@ -48,7 +48,7 @@ variable `ENV_FILE` lo decide, y cada recipe de `just` ya la fija por ti:
 | **production** | `.env.production` | cuenta real | desnudos | `just run-prod`, `just deploy-prod` |
 
 Los ficheros `.env` configuran lo que corre **desde tu máquina**. Lo que corre
-**desplegado** son cinco funciones Lambda, y su configuración vive en
+**desplegado** son seis funciones Lambda, y su configuración vive en
 `infra/template.yaml` — ver [deploy.md](deploy.md).
 
 **El frontend no sigue esta tabla, y conviene saberlo antes de perder una
@@ -219,7 +219,7 @@ Por eso los workers avisan `no model configured`; aquí es lo esperado.
 crea, por si quieres sembrar dos usuarios y comprobar que cada uno solo ve lo
 suyo.
 
-### 4. Los cinco procesos
+### 4. Los seis procesos
 
 Todos a la vez, en una sola terminal:
 
@@ -248,11 +248,20 @@ just ingest-worker     # IMAP -> filtrado por remitente -> SQS
 just parse-worker      # SQS -> parser determinista -> LLM -> EventBridge
 just merchant-worker   # EventBridge -> comercios canónicos
 just financial-worker  # EventBridge -> filas del ledger y saldos
+just alerts-worker     # EventBridge -> un mensaje de Telegram
 ```
 
 `merchant-worker` y `financial-worker` escuchan el mismo evento en colas
 distintas y no dependen uno del otro: puedes correr solo el que te interese.
-Cada worker avisa al arrancar si le falta configurar algo.
+`alerts-worker` va un paso más allá en la cadena — escucha lo que *financial*
+publica, no lo que publica ingestion. Cada worker avisa al arrancar si le
+falta configurar algo.
+
+En local, sin `ALERTS_TELEGRAM_BOT_TOKEN`, el worker **escribe el mensaje en
+vez de mandarlo**, así que ves el texto exacto que habría recibido una
+persona. Con el token puesto llega de verdad a un teléfono. Cómo probar la
+vinculación entera sin que Telegram pueda alcanzar tu máquina está en
+[alerts.md](alerts.md#probarlo-en-local).
 
 La API expone su documentación interactiva en `http://localhost:8000/docs`.
 
@@ -323,11 +332,11 @@ aws configure --profile finflow-dev   # la cuenta de dev, no la de producción
 # edita AWS_PROFILE, IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
 just provision-dev          # crea los recursos dev-*, una sola vez
 # pega en .env.development las cuatro URLs de cola que imprime
-just up-dev                 # los cinco procesos, en una terminal
+just up-dev                 # los seis procesos, en una terminal
 ```
 
 Eso corre los procesos **desde tu máquina** contra los recursos `dev-`. Para
-dejarlos corriendo en AWS como cinco funciones Lambda, ver
+dejarlos corriendo en AWS como seis funciones Lambda, ver
 [deploy.md → Backend → development](deploy.md#backend--development).
 
 Aquí `ingest-worker` **sí** arranca: development es un entorno donde el correo
@@ -407,8 +416,8 @@ Comprueba qué existe ahora mismo con `just aws-status .env.production`.
 
 ### 3. Correr producción desde tu máquina
 
-Lo normal es que producción corra desplegada, como cinco funciones Lambda
-([deploy.md](deploy.md)). Aun así los cinco procesos de siempre siguen
+Lo normal es que producción corra desplegada, como seis funciones Lambda
+([deploy.md](deploy.md)). Aun así los seis procesos de siempre siguen
 sirviendo para depurar contra datos reales, hacer una migración puntual o
 comprobar algo sin desplegar:
 

@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
-import { ArrowRight, BookOpen, Mail, Percent, Wallet } from "lucide-react";
+import { ArrowRight, Bell, BookOpen, Mail, Percent, Wallet } from "lucide-react";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Card } from "@/components/ui/Card";
@@ -31,7 +31,7 @@ function GuidesScreen() {
       <header className="mb-8">
         <h1 className="font-semibold text-2xl tracking-tight">Guías</h1>
         <p className="mt-1.5 max-w-xl text-muted text-sm">
-          Lo que hay que entender de Finflow, en tres lecturas cortas. Están aquí para
+          Lo que hay que entender de Finflow, en cuatro lecturas cortas. Están aquí para
           volver cuando algo no cuadre.
         </p>
       </header>
@@ -68,6 +68,14 @@ function GuidesScreen() {
           title="Créditos e inversiones"
           blurb="Por qué pagar 2 millones no baja la deuda 2 millones, qué datos pide Finflow para calcularlo bien y para qué sirve cada uno."
         />
+
+        <GuideCard
+          to="/guias/avisos"
+          icon={Bell}
+          glow="violet"
+          title="Avisos en tu teléfono"
+          blurb="Cómo conectar Telegram con un toque, qué te va a llegar y qué nunca, y cómo bajarle el volumen sin apagarlo del todo."
+        />
       </div>
 
       <p className="mt-8 flex items-start gap-2.5 text-faint text-xs leading-relaxed">
@@ -88,9 +96,13 @@ function GuideCard({
   badge,
   pending = false,
 }: {
-  to: "/conectar" | "/guias/cuentas-y-movimientos" | "/guias/prestamos-e-inversiones";
+  to:
+    | "/conectar"
+    | "/guias/cuentas-y-movimientos"
+    | "/guias/prestamos-e-inversiones"
+    | "/guias/avisos";
   icon: ComponentType<{ className?: string }>;
-  glow: "cyan" | "accent";
+  glow: "cyan" | "accent" | "violet";
   title: string;
   blurb: string;
   badge?: string;

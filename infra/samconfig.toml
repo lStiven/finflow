@@ -63,6 +63,15 @@ parameter_overrides = [
     # La página del frontend que recibe el token del enlace.
     "PasswordResetUrl=https://finflow-dev-2tc.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
+    # Los avisos por Telegram. **Estas tres tienen que estar aquí**: el
+    # template las declara con un default que apunta a `/finflow/production/`,
+    # así que un override olvidado no falla — hace que este stack lea los
+    # secretos del otro. Es exactamente el cruce que el comentario de
+    # `template.yaml` describe sobre `/finflow/*`, y así se cayó el primer
+    # despliegue de dev con E1: pedía `/finflow/production/telegram-bot-token`.
+    "TelegramBotUsername=finflow_v2_dev_bot",
+    "TelegramBotTokenParameter=/finflow/development/telegram-bot-token",
+    "TelegramWebhookSecretParameter=/finflow/development/telegram-webhook-secret",
     # El bundle de este stack. El subdominio **no** es el nombre del
     # proyecto: `*.pages.dev` es único en todo Cloudflare, así que un nombre
     # ya tomado recibe un sufijo — `finflow-dev.pages.dev` es de otra
@@ -118,6 +127,12 @@ parameter_overrides = [
     # https: el token viaja en la query.
     "PasswordResetUrl=https://finflow-apk.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
+    # Los avisos por Telegram. Un bot distinto al de desarrollo: son dos
+    # stacks hablándole a personas reales, y un solo bot no podría decir de
+    # cuál de los dos viene un aviso.
+    "TelegramBotUsername=finflow_v2_bot",
+    "TelegramBotTokenParameter=/finflow/production/telegram-bot-token",
+    "TelegramWebhookSecretParameter=/finflow/production/telegram-webhook-secret",
     # The bundle is on Cloudflare Pages while this account cannot create a
     # CloudFront distribution, so the frontend is on an origin the API does
     # not otherwise know. Put the exact origin `just web-publish` prints here

@@ -94,6 +94,8 @@ class WebhookAck(BaseModel):
 
 
 def _build_redeem_use_case() -> RedeemChannelLinkUseCase:
+    """Built per request, not cached: without a bot this raises, and caching
+    the failure would outlive fixing the configuration."""
     return RedeemChannelLinkUseCase(
         channels=build_channel_repository(),
         links=build_link_repository(),

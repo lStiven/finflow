@@ -75,6 +75,21 @@ def test_the_telegram_webhook_is_exposed_in_a_real_deployment() -> None:
     assert "/alerts/telegram/webhook" in _routes(expose_local_only_routes=False)
 
 
+def test_an_unconfigured_bot_does_not_take_the_deployment_down() -> None:
+    """It did, once. A forgotten SAM parameter pointed the development stack
+    at production's Telegram secret, the lookup failed, and the whole API
+    refused to boot — no login, no movements, nothing — for a feature that
+    adds to the app rather than holding it up.
+
+    Building the app is what boots it, so this passing at all is the
+    assertion; the 503 those endpoints answer is covered in the alerts tests.
+    """
+    paths = _routes(expose_local_only_routes=False)
+
+    assert "/identity/login" in paths
+    assert "/financial/transactions" in paths
+
+
 def test_merchants_survive_in_a_real_deployment() -> None:
     paths = _routes(expose_local_only_routes=False)
 

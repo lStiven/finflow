@@ -1259,6 +1259,28 @@ way out, and still stores nothing.
   level is what somebody turns up to DEBUG while chasing something else.
   Found by running it and reading the output, not by reading the code.
 
+- **A missing Telegram parameter must not take the deployment down**
+  (2026-09-14). It did, on the first real deploy. The API built the message
+  sender eagerly at startup — the same shape identity uses for mail — and a
+  `ParameterNotFound` in Parameter Store meant no login, no movements,
+  nothing. The shapes look alike and the stakes are not: without mail nobody
+  can register, so the app is useless and failing loudly is right; without
+  Telegram only the alerts are useless. So the API builds it lazily, `/alerts/*`
+  answers `503` when no bot is configured, and everything else serves
+  normally. The **worker** still refuses to start, because a process whose
+  only job is sending has nothing to do without a transport.
+
+- **A secret parameter with a production default is a cross-environment leak
+  waiting for a forgotten override** (2026-09-14). Every `*Parameter` in
+  `infra/template.yaml` defaults to `/finflow/production/...` and is corrected
+  per stack in `samconfig.toml`. Three new ones shipped without their
+  overrides, so `finflow-dev` asked for `/finflow/production/telegram-bot-token`.
+  It did not exist, which is the *lucky* outcome: had it existed, development
+  would have been sending alerts with production's bot and nothing would have
+  failed. The defaults were left as they are — changing all of them is a
+  separate change — and `docs/deploy.md` now says out loud that a new secret
+  parameter is not done until it appears in both `parameter_overrides` blocks.
+
 - **Every untrusted string is cleaned before it reaches a message**
   (2026-09-14). `counterparty` was, from the start — a newline in it would
   forge a line of our own. `bank` was not, and on the LLM fallback path it is

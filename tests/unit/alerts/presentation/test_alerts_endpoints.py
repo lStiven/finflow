@@ -183,6 +183,38 @@ def _client(
 
 
 # ----------------------------------------------------------------------
+# A deployment with no bot
+# ----------------------------------------------------------------------
+
+
+def test_without_a_bot_a_link_is_refused_rather_than_handed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """503, not 500, and not a dead link: a token that can never be redeemed
+    is worse than being told the feature is not set up here."""
+    monkeypatch.setenv("ALERTS_TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    reset_settings()
+
+    response = _client().post("/alerts/channels", json={})
+
+    assert response.status_code == 503
+
+
+def test_without_a_bot_the_channels_already_linked_can_still_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A question this deployment can answer, so it answers it."""
+    monkeypatch.setenv("ALERTS_TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    reset_settings()
+
+    client = _client(listing=StubList(_channel(verified=True)))
+
+    assert client.get("/alerts/channels").status_code == 200
+
+
+# ----------------------------------------------------------------------
 # Creating
 # ----------------------------------------------------------------------
 

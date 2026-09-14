@@ -12,13 +12,14 @@ Cada guía tiene un trabajo. Busca aquí la tuya y no leas las otras.
 | **Integrar el frontend con la API**: endpoints, orden de llamadas, reglas | [frontend-integration.md](frontend-integration.md) |
 | Trabajar dentro del frontend (tipos, dev server, diagnóstico) | [../frontend/README.md](../frontend/README.md) |
 | Saber cómo un usuario conecta su banco | [email-forwarding.md](email-forwarding.md) |
+| **Configurar o arreglar los avisos** por Telegram | [alerts.md](alerts.md) |
 | Probar la API a mano | [postman/](postman/README.md) |
 | Por qué algo está hecho así, y qué se descartó | [decisions.md](decisions.md) |
 
 ## Los cuatro caminos, en corto
 
 **Local, todo en una terminal.** El emulador, los recursos, los datos demo y
-los cinco procesos:
+los seis procesos:
 
 ```bash
 cp .env.example .env       # y edita dos valores

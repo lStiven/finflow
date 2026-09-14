@@ -58,6 +58,7 @@ from personal_finance.contexts.alerts.infrastructure.telegram.deep_link import (
     build_deep_link,
 )
 from personal_finance.contexts.alerts.presentation.http.dependencies import (
+    alerts_are_configured,
     build_channel_repository,
     build_link_repository,
 )
@@ -200,6 +201,21 @@ def get_delete_channel_use_case() -> DeleteChannelUseCase:
 CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
 
 
+def require_alerts_configured() -> None:
+    """Refuse to hand out a link this deployment could never complete.
+
+    503 rather than 500, and rather than taking the app down at boot: a
+    missing bot token makes alerts unavailable and nothing else. Reading the
+    channels one already has still works — that is a question this deployment
+    can answer.
+    """
+    if not alerts_are_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=("Los avisos no están configurados en este despliegue todavía."),
+        )
+
+
 @contextlib.contextmanager
 def _domain_errors() -> Generator[None]:
     try:
@@ -269,6 +285,7 @@ def _minimum_amount(payload: PreferencePayload) -> Money | None:
     "/channels",
     response_model=CreatedChannelResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_alerts_configured)],
 )
 def create_channel(
     payload: CreateChannelPayload,

@@ -23,6 +23,7 @@ import {
   parseMinimumAmount,
 } from "@/alerts/channels";
 import { ApiError } from "@/api/client";
+import type { AlertChannel } from "@/api/queries";
 import {
   alertChannelsQuery,
   profileQuery,
@@ -311,7 +312,13 @@ function TelegramCard() {
         <div className="min-w-0">
           <h2 className="font-medium">Avisos por Telegram</h2>
           <p className="mt-1 text-faint text-xs">
-            Cada movimiento te llega al teléfono segundos después, sin abrir la app.
+            Cada movimiento te llega al teléfono segundos después, sin abrir la app.{" "}
+            <Link
+              to="/guias/avisos"
+              className="text-violet underline underline-offset-2"
+            >
+              Cómo funciona
+            </Link>
           </p>
         </div>
         {linked ? (
@@ -327,8 +334,8 @@ function TelegramCard() {
           <Detail
             icon={Send}
             label="Chat"
-            value={linked.label ?? linked.chat_hint ?? "Telegram"}
-            note="Solo mostramos el final de la dirección; no hace falta más."
+            value={describeChat(linked)}
+            note="De la dirección solo guardamos el final; no hace falta más."
           />
 
           <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
@@ -634,6 +641,18 @@ function Detail({
       </div>
     </div>
   );
+}
+
+/**
+ * Cómo se nombra el destino en pantalla.
+ *
+ * El nombre que la persona tiene en Telegram, y detrás el final de la
+ * dirección — que es lo que de verdad identifica el chat cuando hay dos
+ * cuentas con el mismo nombre, y lo único que esta app llegó a guardar.
+ */
+function describeChat(channel: AlertChannel): string {
+  if (!channel.label) return channel.chat_hint ?? "Telegram";
+  return channel.chat_hint ? `${channel.label} · ${channel.chat_hint}` : channel.label;
 }
 
 /** The avatar stands in for a picture there is no way to upload. */

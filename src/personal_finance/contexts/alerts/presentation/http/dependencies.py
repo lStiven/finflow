@@ -42,15 +42,34 @@ def build_link_repository() -> DynamoDBChannelLinkRepository:
     )
 
 
+def alerts_are_configured() -> bool:
+    """Whether this deployment could send an alert if it had one to send.
+
+    Asked instead of catching the failure below, so that a deployment with no
+    bot answers "not available" on the alerts endpoints and serves everything
+    else normally. Alerts are additive: nobody should lose the ability to log
+    in or read their movements because a Telegram token is missing.
+    """
+    settings = get_alerts_settings()
+
+    return bool(settings.telegram_bot_token.get_secret_value()) or (
+        get_aws_settings().is_local
+    )
+
+
 @functools.lru_cache(maxsize=1)
 def build_message_sender() -> MessageSender:
     """The transport this deployment sends through, or a refusal to start.
 
-    An unconfigured bot is a startup failure everywhere but a developer's own
-    machine, and deliberately so: the degraded alternative is a deployment
-    that binds channels it can never send to, and the owner finds out at
-    their first purchase rather than while they are looking at Telegram
-    waiting for the confirmation.
+    Raises where no bot is configured, which the *worker* treats as a reason
+    not to start: a process whose only job is sending has nothing to do
+    without a transport. The API does not call this until an alerts endpoint
+    needs it, and asks `alerts_are_configured` first — see there for why a
+    missing token must not take down a whole deployment.
+
+    The degraded alternative this still refuses is a channel bound to a
+    destination nothing can ever reach, whose owner finds out at their first
+    purchase rather than while they are looking at Telegram waiting.
 
     The local branch is derived from `ENVIRONMENT` and nothing else. A switch
     of its own would be a switch somebody could set in production, and there

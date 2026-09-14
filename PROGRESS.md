@@ -75,12 +75,13 @@ sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
 contexto `alerts` entero).
 
-**Pantallas:** están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** diecinueve, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-tres guías. Falta **Configuración**, la única entrada del menú sin pantalla.
+cuatro guías. Falta **Configuración**, la única entrada del menú sin pantalla.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
-cifras se comprobaron contra la API.
+cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
+revisó el 2026-09-14.
 
 **En cualquier pantalla, del teléfono más pequeño al monitor.** Comprobado a
 320, 360, 390, 430, 768, 1024 y 1440 px, y con el teléfono acostado: ninguna
@@ -141,12 +142,14 @@ AWS (ver Trabas).
 
 4. **La pantalla de Configuración**, la última que falta.
 
-5. **Registrar el webhook de Telegram al desplegar.** Los avisos funcionan de
-   punta a punta en el computador, pero en la nube Telegram no sabe todavía a
-   dónde entregar: hace falta `just telegram-webhook-dev <url>` una vez por
-   entorno, con la dirección del Function URL, y los dos secretos en SSM
-   (`just secret-put`). Sin eso vincular no hace nada, y es lo único de los
-   avisos que no se puede comprobar sin desplegar. Los dos bots ya existen.
+5. **Terminar de conectar los avisos en la nube.** Funcionan de punta a punta
+   en el computador. En dev falta poner los dos secretos en SSM
+   (`just secret-put /finflow/development/telegram-bot-token` y
+   `…/telegram-webhook-secret`), volver a desplegar —el despliegue del 14 de
+   septiembre no llevaba los `parameter_overrides`, ya arreglados— y registrar
+   el webhook con `just telegram-webhook-dev <ApiUrl>/alerts/telegram/webhook`.
+   Sin lo último, vincular parece funcionar y no pasa nada. Todo en
+   [docs/alerts.md](docs/alerts.md). Los dos bots ya existen.
 
 6. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse

@@ -20,6 +20,7 @@ import { Route as ComerciosMerchantIdRouteImport } from './routes/comercios/$mer
 import { Route as CuentasIndexRouteImport } from './routes/cuentas/index'
 import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
 import { Route as GuiasIndexRouteImport } from './routes/guias/index'
+import { Route as GuiasAvisosRouteImport } from './routes/guias/avisos'
 import { Route as GuiasCuentasYMovimientosRouteImport } from './routes/guias/cuentas-y-movimientos'
 import { Route as GuiasPrestamosEInversionesRouteImport } from './routes/guias/prestamos-e-inversiones'
 import { Route as ReportesIndexRouteImport } from './routes/reportes/index'
@@ -83,6 +84,11 @@ const GuiasIndexRoute = GuiasIndexRouteImport.update({
   path: '/guias/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const GuiasAvisosRoute = GuiasAvisosRouteImport.update({
+  id: '/guias/avisos',
+  path: '/guias/avisos',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GuiasCuentasYMovimientosRoute =
   GuiasCuentasYMovimientosRouteImport.update({
     id: '/guias/cuentas-y-movimientos',
@@ -132,6 +138,7 @@ export interface FileRoutesByFullPath {
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
@@ -152,6 +159,7 @@ export interface FileRoutesByTo {
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
@@ -173,6 +181,7 @@ export interface FileRoutesById {
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
   '/cuentas/nueva': typeof CuentasNuevaRoute
+  '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
@@ -195,6 +204,7 @@ export interface FileRouteTypes {
     | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
+    | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
@@ -215,6 +225,7 @@ export interface FileRouteTypes {
     | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
+    | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
@@ -235,6 +246,7 @@ export interface FileRouteTypes {
     | '/restablecer'
     | '/comercios/$merchantId'
     | '/cuentas/nueva'
+    | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
@@ -256,6 +268,7 @@ export interface RootRouteChildren {
   RestablecerRoute: typeof RestablecerRoute
   ComerciosMerchantIdRoute: typeof ComerciosMerchantIdRoute
   CuentasNuevaRoute: typeof CuentasNuevaRoute
+  GuiasAvisosRoute: typeof GuiasAvisosRoute
   GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
   GuiasPrestamosEInversionesRoute: typeof GuiasPrestamosEInversionesRoute
   TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
@@ -347,6 +360,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuiasIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/guias/avisos': {
+      id: '/guias/avisos'
+      path: '/guias/avisos'
+      fullPath: '/guias/avisos'
+      preLoaderRoute: typeof GuiasAvisosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/guias/cuentas-y-movimientos': {
       id: '/guias/cuentas-y-movimientos'
       path: '/guias/cuentas-y-movimientos'
@@ -408,6 +428,7 @@ const rootRouteChildren: RootRouteChildren = {
   RestablecerRoute: RestablecerRoute,
   ComerciosMerchantIdRoute: ComerciosMerchantIdRoute,
   CuentasNuevaRoute: CuentasNuevaRoute,
+  GuiasAvisosRoute: GuiasAvisosRoute,
   GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,
   GuiasPrestamosEInversionesRoute: GuiasPrestamosEInversionesRoute,
   TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
