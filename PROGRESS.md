@@ -78,7 +78,8 @@ contexto `alerts` entero).
 **Pantallas:** diecinueve, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-cuatro guías. Falta **Configuración**, la única entrada del menú sin pantalla.
+cuatro guías. En el menú hay dos entradas anunciadas sin pantalla todavía:
+**Configuración** y **Facturas** — esta última es el segundo feature (punto 6).
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
 revisó el 2026-09-14.
@@ -142,16 +143,26 @@ AWS (ver Trabas).
 
 4. **La pantalla de Configuración**, la última que falta.
 
-5. **Terminar de conectar los avisos en la nube.** Funcionan de punta a punta
-   en el computador. En dev falta poner los dos secretos en SSM
-   (`just secret-put /finflow/development/telegram-bot-token` y
-   `…/telegram-webhook-secret`), volver a desplegar —el despliegue del 14 de
-   septiembre no llevaba los `parameter_overrides`, ya arreglados— y registrar
-   el webhook con `just telegram-webhook-dev <ApiUrl>/alerts/telegram/webhook`.
-   Sin lo último, vincular parece funcionar y no pasa nada. Todo en
-   [docs/alerts.md](docs/alerts.md). Los dos bots ya existen.
+5. **Terminar de conectar los avisos en producción.** En desarrollo ya está
+   cerrado y comprobado el 2026-09-14: los dos secretos están en SSM, el
+   webhook quedó registrado y `getWebhookInfo` lo confirma entregando, sin
+   errores y sin cola. Falta la misma pareja de pasos en producción, con el
+   otro bot (`finflow_v2_bot`): `just secret-put /finflow/production/…` y
+   `just telegram-webhook-prod <ApiUrl>/alerts/telegram/webhook`. Sin lo
+   último, vincular parece funcionar y no pasa nada. Todo en
+   [docs/alerts.md](docs/alerts.md).
 
-6. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
+6. **Construir el segundo feature: facturas y pagos recurrentes** (E2 del plan).
+   Gastos domiciliados que el banco ya no anuncia por correo — el gimnasio, el
+   arriendo, el streaming— y que por eso no existen en la app, separando el
+   saldo mostrado del real. Se declaran, se ven venir, y entran al ledger solo
+   al confirmarse el pago: a mano o solo. **Empieza por la entrega A**
+   (declarar y ver venir, sin escribir nada en el ledger), que es la única sin
+   precondiciones. El plan completo —las cinco entregas, los endpoints, los
+   cuatro nombres que se parecen y los riesgos ya verificados contra el
+   código— está en el artefacto, no aquí.
+
+7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
    olvidado en el computador mientras producción sigue vieja — que es exactamente
    lo que está pasando ahora mismo (punto 1).

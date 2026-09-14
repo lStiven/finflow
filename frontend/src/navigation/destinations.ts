@@ -13,6 +13,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   LayoutGrid,
+  Receipt,
   Settings,
   Store,
   Wallet,
@@ -39,6 +40,9 @@ export const DESTINATIONS: Destination[] = [
   { label: "Resumen", icon: LayoutGrid, to: "/" },
   { label: "Transacciones", icon: ArrowLeftRight, to: "/transacciones" },
   { label: "Cuentas", icon: Wallet, to: "/cuentas" },
+  // Con las pantallas del dinero y no al final: una factura es un gasto que
+  // todavía no ocurrió, y se busca donde se buscan los gastos.
+  { label: "Facturas", icon: Receipt },
   { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },

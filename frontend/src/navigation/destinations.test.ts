@@ -20,6 +20,19 @@ describe("las secciones del teléfono", () => {
     expect(BAR_SIZE).toBeLessThanOrEqual(3);
   });
 
+  it("no gasta un puesto de la barra en una pantalla que no existe", () => {
+    // Un botón deshabilitado ocupando uno de los tres huecos del pulgar es
+    // peor que no estar: la barra es lo que más se usa y lo que menos cabe.
+    for (const destination of BAR) {
+      expect(destination.to).toBeDefined();
+    }
+  });
+
+  it("anuncia Facturas y Configuración sin enlazarlas todavía", () => {
+    const pending = DESTINATIONS.filter((d) => d.to === undefined).map((d) => d.label);
+    expect(pending).toEqual(["Facturas", "Configuración"]);
+  });
+
   it("deja Reportes y Comercios al alcance", () => {
     const labels = [...BAR, ...OVERFLOW].map((d) => d.label);
     expect(labels).toContain("Reportes");
