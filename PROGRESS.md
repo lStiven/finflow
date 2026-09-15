@@ -278,7 +278,19 @@ AWS (ver Trabas).
   suscriptores y las alarmas; lo que hoy se comprobó que **no** puede es leer los
   atributos de una suscripción (`sns:GetSubscriptionAttributes`), que es por qué
   `just alerts-prod` mira la lista del tema y no la suscripción. Se descubre el
-  resto al desplegar, no adivinando.
+  resto al desplegar, no adivinando. El 2026-09-15 salió otro:
+  `lambda:PutFunctionConcurrency`, que producción no tiene y desarrollo sí, así
+  que el mismo despliegue que pasó en dev se fue entero a `ROLLBACK` en prod al
+  crear `AlertsFunction`. Ninguno de los dos usuarios puede leer IAM, ni
+  siquiera sobre sí mismo, así que esto se arregla desde la consola con una
+  identidad administradora. Se comprueba sin desplegar, pidiendo la acción
+  sobre una función que no existe: `ResourceNotFound` es permiso, `AccessDenied`
+  es que falta.
+- **`infra/iam/finflow-deploy-policy.json` no es lo que hay adjunto.** Medido el
+  2026-09-15: los dos usuarios pueden `lambda:ListFunctions`, que el archivo no
+  concede en ninguna parte, y producción no puede algo que el archivo sí. Es una
+  política de referencia, no un espejo — arreglar el archivo no arregla la
+  cuenta.
 
 ## Últimos trabajos terminados
 - 2026-09-18 — **Un presupuesto ya no es una categoría: es un alcance.**
