@@ -74,6 +74,30 @@ aws iam attach-user-policy --user-name <tu-usuario> \
   --policy-arn arn:aws:iam::<cuenta>:policy/FinflowDeploy
 ```
 
+Si ya está adjunta y el archivo cambió, `create-policy` falla con
+`EntityAlreadyExists`: lo que toca es una versión nueva, por defecto. IAM sólo
+guarda cinco, así que borra la vieja si se llena.
+
+```bash
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::<cuenta>:policy/FinflowDeploy \
+  --policy-document file://infra/iam/finflow-deploy-policy.json \
+  --set-as-default
+```
+
+**Este archivo es la política de referencia, no un espejo de la cuenta.** Se
+comprobó el 2026-09-15 que los dos usuarios tienen permisos que no están aquí
+(`lambda:ListFunctions`, por ejemplo) y que producción no tiene alguno que sí
+está. Editarlo no cambia nada por sí solo, y ninguno de los dos usuarios puede
+leer IAM ni sobre sí mismo: lo que hay adjunto se mira en la consola, con una
+identidad administradora.
+
+Un permiso que falta no se ve hasta que CloudFormation llama a esa API a mitad
+del despliegue, y entonces el stack entra en `ROLLBACK` con el resto de
+funciones canceladas. Pasó con `lambda:PutFunctionConcurrency`: las funciones
+que ya tenían `ReservedConcurrentExecutions` no volvían a pedirlo, así que el
+hueco sólo salió al crear una función nueva que sí lo usaba.
+
 Dos sitios quedan en `*` y no por pereza: los repositorios de ECR los nombra
 el *companion stack* de SAM con un hash impredecible, y los *event source
 mappings* de SQS se identifican por UUID. No hay prefijo al que agarrarse.
