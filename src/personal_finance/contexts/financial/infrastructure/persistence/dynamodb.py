@@ -51,6 +51,7 @@ from personal_finance.contexts.financial.domain.financing import (
     RateBasis,
     RecurringCharge,
 )
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -88,6 +89,10 @@ ACCOUNT_PREFIX = "ACCOUNT#"
 FINGERPRINT_PREFIX = "FINGERPRINT#"
 MOVEMENT_PREFIX = "MOVEMENT#"
 BILL_PREFIX = "BILL#"
+# Not a prefix: the whole sort key. There is exactly one plan per person, so
+# its row sits at a fixed place in their partition rather than under a
+# generated id — which also means no listing, no paging and no key to guess.
+PLAN_KEY = "PLAN"
 
 # How many times a throttled `BatchGetItem` is re-sent before giving up, and
 # how long the first wait is — doubling each time, so five attempts spread
@@ -1512,6 +1517,88 @@ class DynamoDBScheduledBillRepository:
         response = self._client.delete_item(
             TableName=self._table_name,
             Key=_key(user_id, f"{BILL_PREFIX}{bill_id.value}"),
+            ReturnValues="ALL_OLD",
+        )
+
+        return bool(response.get("Attributes"))
+
+
+def plan_to_item(plan: MonthlyPlan) -> dict[str, AttributeValueTypeDef]:
+    """One row, at the one place a plan can be.
+
+    The savings target is always written, zero included: absent it would read
+    back as zero anyway, but a row whose shape depends on whether somebody
+    wanted to save is a row two readers can disagree about.
+    """
+    return {
+        PARTITION_KEY: {"S": str(plan.user_id.value)},
+        SORT_KEY: {"S": PLAN_KEY},
+        # Money as a string, like everywhere else that leaves this process.
+        "expected_income": {"N": str(plan.expected_income.amount)},
+        "savings_target": {"N": str(plan.savings_target.amount)},
+        "currency": {"S": plan.currency.value},
+        "updated_at": {"N": str(plan.updated_at.as_epoch_seconds())},
+    }
+
+
+def plan_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> MonthlyPlan:
+    user_id = _string(item, PARTITION_KEY)
+
+    # `_number` answers 0 for an attribute that is not there, which for these
+    # two is an income the domain refuses and a date in 1970 — both of which
+    # would read as an ordinary plan rather than as the corrupt row they are.
+    if user_id is None or "expected_income" not in item or "updated_at" not in item:
+        raise CorruptFinancialItemError("Stored plan is missing its identity or age")
+
+    currency = _enum(Currency, _string(item, "currency") or "", "currency")
+
+    return MonthlyPlan(
+        id=UserId.from_string(user_id),
+        expected_income=Money(
+            amount=_number(item, "expected_income"),
+            currency=currency,
+        ),
+        savings_target=Money(
+            amount=_number(item, "savings_target"),
+            currency=currency,
+        ),
+        updated_at=PosixTime.from_epoch_seconds(int(_number(item, "updated_at"))),
+    )
+
+
+class DynamoDBMonthlyPlanRepository:
+    """`MonthlyPlanRepository` over the same table as everything else here.
+
+    A whole-item put, like the bills repository and safe for the same reason:
+    no field of a plan is a running total another writer moves, so there is no
+    half of the row this could discard.
+    """
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def find(self, *, user_id: UserId) -> MonthlyPlan | None:
+        item = self._client.get_item(
+            TableName=self._table_name,
+            Key=_key(user_id, PLAN_KEY),
+        ).get("Item")
+
+        return plan_to_entity(item) if item else None
+
+    def save(self, plan: MonthlyPlan) -> None:
+        self._client.put_item(TableName=self._table_name, Item=plan_to_item(plan))
+
+    def remove(self, *, user_id: UserId) -> bool:
+        """Delete, and say whether there was anything there.
+
+        `ReturnValues="ALL_OLD"` rather than a read and then a delete, for the
+        reason the bills repository gives: two calls would report "deleted"
+        for a row somebody else removed in between.
+        """
+        response = self._client.delete_item(
+            TableName=self._table_name,
+            Key=_key(user_id, PLAN_KEY),
             ReturnValues="ALL_OLD",
         )
 

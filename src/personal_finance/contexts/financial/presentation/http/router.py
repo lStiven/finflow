@@ -27,6 +27,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
+from personal_finance.contexts.financial.application.allowance import (
+    DeclarePlanCommand,
+    ManageMonthlyPlanUseCase,
+    MonthlyAllowance,
+    ReadAllowanceQuery,
+    ReadMonthlyAllowanceUseCase,
+)
 from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
     BillSummary,
@@ -161,6 +168,7 @@ from personal_finance.contexts.financial.domain.financing import (
     RecurringCharge,
     ScheduledPayment,
 )
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.recurring import (
     HISTORY_MONTHS,
     SeriesState,
@@ -183,6 +191,7 @@ from personal_finance.contexts.financial.infrastructure.merchant.merchant_direct
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
+    DynamoDBMonthlyPlanRepository,
     DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
 )
@@ -3785,4 +3794,235 @@ def _series_response(found: DetectedSeries) -> RecurringSeriesResponse:
             None if series.account_id is None else str(series.account_id.value)
         ),
         bill_id=None if found.bill_id is None else str(found.bill_id.value),
+    )
+
+
+# ------------------------------------------------------------------ plan
+#
+# «¿Cuánto puedo gastar?» — the number the rest of this context was building
+# towards, and the most dangerous one here: if it lies once, nobody looks at
+# it again.
+#
+# So it is **declared, never discovered**, like an account: what somebody
+# expects to earn and how much of it they mean to keep are statements about
+# the future, and the future has not happened. With nothing declared there is
+# no number — 404 rather than a zero, because a zero reads as "you have
+# nothing left to spend".
+#
+# And it always travels with its parts. A figure somebody cannot take apart is
+# a figure they cannot check, and the first time it disagrees with their own
+# arithmetic they stop believing it.
+
+
+class DeclarePlanPayload(BaseModel):
+    """What the month is supposed to bring in, and what is not to be spent.
+
+    One currency for both. Subtracting a target in dollars from an income in
+    pesos needs a rate this app does not have, and treating the two as
+    comparable is the kind of wrong that looks right.
+    """
+
+    expected_income: Decimal = Field(gt=0)
+    currency: Currency = Currency.COP
+    #: Optional, and zero is the ordinary answer. Never larger than the
+    #: income: a plan that is short before a peso is spent is not a warning
+    #: anybody can act on.
+    savings_target: Decimal = Field(default=Decimal(0), ge=0)
+
+
+class PlanResponse(BaseModel):
+    expected_income: str
+    savings_target: str
+    currency: Currency
+    #: When it was last stated, in epoch seconds. A plan is a guess that gets
+    #: corrected, so how old it is matters.
+    updated_at: int
+
+
+class AllowanceResponse(BaseModel):
+    """The figure and every piece of the subtraction that produced it.
+
+    The components are not decoration. `available` is
+    `expected_income` less `savings_target`, `spent` and `committed`, and a screen that
+    could only show the result would be asking somebody to trust arithmetic
+    they cannot see.
+
+    `committed` is what is **still owed** of this month's declared bills, never
+    what the month costs: a charge already confirmed is in `spent`, through the
+    ledger row confirming it wrote, and counting it here too would discount it
+    twice.
+    """
+
+    currency: Currency
+    expected_income: str
+    savings_target: str
+    spent: str
+    committed: str
+    #: Can be negative, and is reported negative rather than floored at zero —
+    #: somebody who has overspent needs to see by how much.
+    available: str
+    since: dt.date
+    until: dt.date
+    #: Today included: it is a day somebody still has to get through.
+    days_left: int
+
+
+@functools.lru_cache(maxsize=1)
+def build_plans() -> DynamoDBMonthlyPlanRepository:
+    return DynamoDBMonthlyPlanRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_plan() -> ManageMonthlyPlanUseCase:
+    return ManageMonthlyPlanUseCase(plans=build_plans())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_read_allowance() -> ReadMonthlyAllowanceUseCase:
+    """Wired to the very objects behind `/summary` and `/bills`.
+
+    Handed over whole rather than re-created: a second instance would be a
+    second set of rules about what counts as spending, and the allowance would
+    quietly disagree with the two screens it is made of.
+    """
+    return ReadMonthlyAllowanceUseCase(
+        plans=build_plans(),
+        spending=_build_summarize_spending(),
+        bills=_build_list_bills(),
+    )
+
+
+def get_manage_plan_use_case() -> ManageMonthlyPlanUseCase:
+    return _build_manage_plan()
+
+
+def get_read_allowance_use_case() -> ReadMonthlyAllowanceUseCase:
+    return _build_read_allowance()
+
+
+ManagePlan = Annotated[ManageMonthlyPlanUseCase, Depends(get_manage_plan_use_case)]
+
+
+@router.put("/plan", response_model=PlanResponse)
+def declare_plan(
+    user_id: CurrentUser,
+    payload: DeclarePlanPayload,
+    use_case: ManagePlan,
+) -> PlanResponse:
+    """State what the month is supposed to look like, or restate it.
+
+    A `PUT` and not a `PATCH`, deliberately: a plan is two figures that are
+    both guesses, and replacing it whole is what makes it impossible to leave
+    a savings target standing against an income it was never set against.
+
+    Nothing is recorded as earned or spent. This writes two numbers and a
+    currency, and no balance moves.
+    """
+    with _domain_errors():
+        plan = use_case.declare(
+            DeclarePlanCommand(
+                user_id=user_id,
+                expected_income=Money(
+                    amount=payload.expected_income,
+                    currency=payload.currency,
+                ),
+                savings_target=Money(
+                    amount=payload.savings_target,
+                    currency=payload.currency,
+                ),
+            ),
+        )
+
+    return _plan_response(plan)
+
+
+@router.get("/plan", response_model=PlanResponse)
+def read_plan(user_id: CurrentUser, use_case: ManagePlan) -> PlanResponse:
+    """What is declared, or 404 when nothing is.
+
+    Missing rather than an empty body: "no plan" is a different thing from "a
+    plan of zero", and only one of them is a state somebody can be in.
+    """
+    plan = use_case.read(user_id)
+
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No monthly plan declared",
+        )
+
+    return _plan_response(plan)
+
+
+@router.delete("/plan", status_code=status.HTTP_204_NO_CONTENT)
+def forget_plan(user_id: CurrentUser, use_case: ManagePlan) -> None:
+    """Take the plan back. The card disappears and nothing else changes.
+
+    Silent when there was nothing to forget, like every other undo here: a 404
+    on the second press of a button somebody is unsure about is a worse answer
+    than nothing. The plan never wrote anything, so there is nothing left
+    behind to explain.
+    """
+    use_case.forget(user_id)
+
+
+@router.get("/allowance", response_model=AllowanceResponse)
+def read_allowance(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ReadMonthlyAllowanceUseCase,
+        Depends(get_read_allowance_use_case),
+    ],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> AllowanceResponse:
+    """What is left to spend this month, and the four figures behind it.
+
+    404 with no plan declared, for the reason `GET /plan` gives: the card is
+    absent rather than showing a zero that reads like an answer.
+
+    The month is the calendar month in `timezone`, read there and not in UTC —
+    a Bogotá month starting five hours early would count the last evening of
+    the previous one, and being wrong on the 1st is being wrong on the day
+    this is most likely to be looked at.
+    """
+    with _domain_errors():
+        allowance = use_case.execute(
+            ReadAllowanceQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    if allowance is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No monthly plan declared",
+        )
+
+    return _allowance_response(allowance)
+
+
+def _plan_response(plan: MonthlyPlan) -> PlanResponse:
+    return PlanResponse(
+        expected_income=str(plan.expected_income.amount),
+        savings_target=str(plan.savings_target.amount),
+        currency=plan.currency,
+        updated_at=plan.updated_at.as_epoch_seconds(),
+    )
+
+
+def _allowance_response(allowance: MonthlyAllowance) -> AllowanceResponse:
+    return AllowanceResponse(
+        currency=allowance.currency,
+        expected_income=str(allowance.expected_income),
+        savings_target=str(allowance.savings_target),
+        spent=str(allowance.spent),
+        committed=str(allowance.committed),
+        available=str(allowance.available),
+        since=allowance.since,
+        until=allowance.until,
+        days_left=allowance.days_left,
     )

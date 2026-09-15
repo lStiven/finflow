@@ -1826,6 +1826,117 @@
           "response": []
         },
         {
+          "name": "Declare the monthly plan",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expected_income\": \"5000000\",\n  \"currency\": \"COP\",\n  \"savings_target\": \"1000000\"\n}"
+            },
+            "description": "Two guesses about the month: what it is supposed to bring in, and how much of that is not to be spent. One currency for both — subtracting a target in dollars from an income in pesos needs a rate this app does not have, and treating the two as comparable is the kind of wrong that looks right. `expected_income` must be greater than zero; `savings_target` is optional, defaults to 0 and is never larger than the income, because a plan that is short before a peso is spent is not a warning anybody can act on. A `PUT` and not a `PATCH` on purpose: a plan is two figures that are both guesses, and replacing it whole is what stops a savings target outliving the income it was set against. **Nothing is recorded as earned or spent** — this writes two numbers and a currency, no ledger row and no balance."
+          },
+          "response": []
+        },
+        {
+          "name": "Read the monthly plan",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "description": "What is declared, plus `updated_at` in epoch seconds — a plan is a guess that gets corrected, so how old it is matters. **404 when nothing is declared**, deliberately: \"no plan\" is a different thing from \"a plan of zero\", and only one of them is a state somebody can be in. A zero would read as \"you have nothing left to spend\"."
+          },
+          "response": []
+        },
+        {
+          "name": "Forget the monthly plan",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "description": "Take the plan back: 204, and silent when there was nothing to forget — a 404 on the second press of a button somebody is unsure about is a worse answer than nothing. Nothing else changes, because the plan never wrote anything: no movement, no balance, nothing left behind to explain. The allowance goes back to 404 along with it."
+          },
+          "response": []
+        },
+        {
+          "name": "Monthly allowance",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/allowance?timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "allowance"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Decides which month 'this month' is."
+                }
+              ]
+            },
+            "description": "What is left to spend this month, and every piece of the subtraction behind it: `available` is `expected_income` less `savings_target`, `spent` and `committed`. The parts are not decoration — a figure nobody can take apart is one they stop believing the first time it disagrees with their own arithmetic. `committed` is what this month's declared bills **still owe**, never what the month costs: a charge already confirmed is counted in `spent`, through the ledger row confirming it wrote, and counting it here too would discount it twice. `available` can be negative and is reported negative rather than floored at zero, because somebody who overspent needs to see by how much. `since` and `until` are the calendar month read in `timezone` and not in UTC — a Bogotá month starting five hours early would count the last evening of the previous one; `days_left` includes today, which is still a day to get through. 404 when no plan is declared, for the reason `GET /financial/plan` gives."
+          },
+          "response": []
+        },
+        {
           "name": "Spending summary",
           "request": {
             "method": "GET",

@@ -14,6 +14,7 @@ import {
 } from "@tanstack/react-query";
 import { hasPendingLink, LINK_POLL_MS } from "@/alerts/channels";
 import { api, unwrap } from "@/api/client";
+import { ApiError } from "@/api/errors";
 import type { components, paths } from "@/api/schema";
 import { DISPLAY_TIMEZONE } from "@/lib/dates";
 
@@ -73,6 +74,11 @@ export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
  * is the same call the form makes — a heuristic does not get to create the
  * thing that can charge money.
  */
+/** What the month is supposed to look like, as its owner declared it. */
+export type MonthlyPlan = components["schemas"]["PlanResponse"];
+export type PlanBody = components["schemas"]["DeclarePlanPayload"];
+/** The figure and every piece of the subtraction that produced it. */
+export type Allowance = components["schemas"]["AllowanceResponse"];
 export type RecurringSeries = components["schemas"]["RecurringSeriesResponse"];
 export type RecurringView = components["schemas"]["RecurringResponse"];
 export type AmendBillBody = components["schemas"]["AmendBillPayload"];
@@ -110,6 +116,13 @@ export const queryKeys = {
   alertChannels: ["alert-channels"] as const,
   bills: ["bills"] as const,
   recurring: ["recurring"] as const,
+  plan: ["plan"] as const,
+  // Deliberately *under* `summary`: the allowance is made of the month's
+  // spending, so everything that already invalidates the totals takes it
+  // along by prefix instead of every call site having to remember a second
+  // key. What it also needs — the declared bills — is added by hand in the
+  // few mutations that change those.
+  allowance: [...["summary"], "allowance"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -1247,6 +1260,81 @@ export function useDeleteAlertChannel(): UseMutationResult<unknown, Error, strin
   });
 }
 
+/* ------------------------------------------------------------------- plan */
+
+/**
+ * «Nothing declared» read as an answer instead of as a failure.
+ *
+ * Both plan endpoints say 404 when the owner has not stated their month, and
+ * that is not an error: it is the state everybody starts in. Turning it into
+ * `null` here is what lets the card be **absent** rather than showing a zero
+ * — and a zero on this particular number reads as "you have nothing left to
+ * spend", which is the one wrong answer worse than no answer.
+ */
+async function orAbsent<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export const planQuery = queryOptions({
+  queryKey: queryKeys.plan,
+  queryFn: () => orAbsent(unwrap(api.GET("/financial/plan"))),
+  staleTime: 60_000,
+  // 404 is the ordinary answer here, and `orAbsent` has already turned it
+  // into one. Retrying would only slow down the screen that has to decide
+  // whether to draw the card.
+  retry: false,
+});
+
+/**
+ * What is left to spend this month, and what it is made of.
+ *
+ * The window is the server's business, read in `DISPLAY_TIMEZONE`: a month
+ * computed in the browser would start five hours early for anybody whose
+ * clock is not Bogotá, and being wrong on the 1st is being wrong on the day
+ * this is most likely to be read.
+ */
+export const allowanceQuery = queryOptions({
+  queryKey: queryKeys.allowance,
+  queryFn: () =>
+    orAbsent(
+      unwrap(
+        api.GET("/financial/allowance", {
+          params: { query: { timezone: DISPLAY_TIMEZONE } },
+        }),
+      ),
+    ),
+  retry: false,
+});
+
+export function useDeclarePlan(): UseMutationResult<MonthlyPlan, Error, PlanBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PlanBody) => unwrap(api.PUT("/financial/plan", { body })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plan });
+      // The number is built out of the plan, so it is stale the instant the
+      // plan changes — and it is the one on screen.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
+export function useForgetPlan(): UseMutationResult<unknown, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/financial/plan")),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plan });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
 /* ------------------------------------------------------------------ bills */
 
 /**
@@ -1277,6 +1365,8 @@ export function useDeclareBill(): UseMutationResult<Bill, Error, DeclareBillBody
       // A suggestion that was just accepted has to come back marked as
       // declared, or the list goes on offering what is already there.
       void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1298,6 +1388,8 @@ export function useAmendBill(
       // The name is what the detector matches a declared bill on, so a
       // rename can change which suggestions are marked.
       void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1327,6 +1419,8 @@ export function usePauseBill(): UseMutationResult<
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // A paused bill predicts nothing, so what the month owes moves with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1345,6 +1439,8 @@ export function useForgetBill(): UseMutationResult<unknown, Error, string> {
       // Forgetting a bill un-declares what the detector had marked, so the
       // suggestion is worth offering again.
       void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }

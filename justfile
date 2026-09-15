@@ -681,6 +681,19 @@ shot *args:
 e2e-bills *args:
     cd {{frontend_dir}} && node scripts/e2e-bills.mjs {{args}}
 
+# The dashboard's allowance, in a real browser and against the real stack.
+# Declares a month, then checks the figure is exactly what `/summary` and
+# `/bills` add up to — never what `/allowance` says its own parts are — and
+# that confirming a bill moves it from "owed" to "spent" without moving the
+# total. Needs `just up` and `just web`.
+#
+# Drive the allowance card and check its arithmetic.
+e2e-allowance *args:
+    cd {{frontend_dir}} && node scripts/e2e-allowance.mjs {{args}}
+
+# Both browser suites, in order.
+e2e: e2e-bills e2e-allowance
+
 # Format check, lint and typecheck the frontend.
 web-check:
     cd {{frontend_dir}} && npm run check

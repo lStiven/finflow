@@ -11,7 +11,9 @@ import {
 import {
   type Account,
   accountsQuery,
+  allowanceQuery,
   categoriesQuery,
+  planQuery,
   type SpendingTotals,
   type SummaryGroup,
   summaryQuery,
@@ -37,6 +39,7 @@ import {
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
 import { categoryGroupLabel, categoryLabels } from "@/merchants/categories";
+import { AllowanceCard } from "@/plan/AllowanceCard";
 
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
@@ -107,6 +110,14 @@ export const Route = createFileRoute("/")({
         ...transactionsQuery({ limit: RECENT_LIMIT }),
         staleTime: "static",
       }),
+      // Both answer 404 until somebody declares their month, which the query
+      // turns into `null` — so this loads a real answer either way and the
+      // card never flashes in after the rest of the screen has painted.
+      // Caught, because the card is the one piece of this screen that is
+      // optional: anything else failing is a broken dashboard, and this
+      // failing should only be a missing card.
+      context.queryClient.query(planQuery).catch(() => null),
+      context.queryClient.query(allowanceQuery).catch(() => null),
     ]);
   },
   component: Dashboard,
@@ -163,6 +174,11 @@ function Dashboard() {
             {formatMonthKey(month)}
           </p>
         </header>
+
+        {/* Above the tiles on purpose: «qué me queda» is the question
+            somebody opens this screen with, and the tiles are what it is made
+            of. It draws nothing until the month is declared. */}
+        <AllowanceCard />
 
         <section
           aria-label="Cifras del mes"

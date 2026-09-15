@@ -455,6 +455,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/allowance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Allowance
+         * @description What is left to spend this month, and the four figures behind it.
+         *
+         *     404 with no plan declared, for the reason `GET /plan` gives: the card is
+         *     absent rather than showing a zero that reads like an answer.
+         *
+         *     The month is the calendar month in `timezone`, read there and not in UTC —
+         *     a Bogotá month starting five hours early would count the last evening of
+         *     the previous one, and being wrong on the 1st is being wrong on the day
+         *     this is most likely to be looked at.
+         */
+        get: operations["read_allowance_financial_allowance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/bills": {
         parameters: {
             query?: never;
@@ -731,6 +759,49 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Plan
+         * @description What is declared, or 404 when nothing is.
+         *
+         *     Missing rather than an empty body: "no plan" is a different thing from "a
+         *     plan of zero", and only one of them is a state somebody can be in.
+         */
+        get: operations["read_plan_financial_plan_get"];
+        /**
+         * Declare Plan
+         * @description State what the month is supposed to look like, or restate it.
+         *
+         *     A `PUT` and not a `PATCH`, deliberately: a plan is two figures that are
+         *     both guesses, and replacing it whole is what makes it impossible to leave
+         *     a savings target standing against an income it was never set against.
+         *
+         *     Nothing is recorded as earned or spent. This writes two numbers and a
+         *     currency, and no balance moves.
+         */
+        put: operations["declare_plan_financial_plan_put"];
+        post?: never;
+        /**
+         * Forget Plan
+         * @description Take the plan back. The card disappears and nothing else changes.
+         *
+         *     Silent when there was nothing to forget, like every other undo here: a 404
+         *     on the second press of a button somebody is unsure about is a worse answer
+         *     than nothing. The plan never wrote anything, so there is nothing left
+         *     behind to explain.
+         */
+        delete: operations["forget_plan_financial_plan_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1694,6 +1765,45 @@ export interface components {
             times_seen: number;
         };
         /**
+         * AllowanceResponse
+         * @description The figure and every piece of the subtraction that produced it.
+         *
+         *     The components are not decoration. `available` is
+         *     `expected_income` less `savings_target`, `spent` and `committed`, and a screen that
+         *     could only show the result would be asking somebody to trust arithmetic
+         *     they cannot see.
+         *
+         *     `committed` is what is **still owed** of this month's declared bills, never
+         *     what the month costs: a charge already confirmed is in `spent`, through the
+         *     ledger row confirming it wrote, and counting it here too would discount it
+         *     twice.
+         */
+        AllowanceResponse: {
+            /** Available */
+            available: string;
+            /** Committed */
+            committed: string;
+            currency: components["schemas"]["Currency"];
+            /** Days Left */
+            days_left: number;
+            /** Expected Income */
+            expected_income: string;
+            /** Savings Target */
+            savings_target: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /** Spent */
+            spent: string;
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
+        /**
          * AmendBillPayload
          * @description A correction. What is absent is left alone.
          *
@@ -2112,6 +2222,25 @@ export interface components {
              * Format: date
              */
             starts_on: string;
+        };
+        /**
+         * DeclarePlanPayload
+         * @description What the month is supposed to bring in, and what is not to be spent.
+         *
+         *     One currency for both. Subtracting a target in dollars from an income in
+         *     pesos needs a rate this app does not have, and treating the two as
+         *     comparable is the kind of wrong that looks right.
+         */
+        DeclarePlanPayload: {
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /** Expected Income */
+            expected_income: number | string;
+            /**
+             * Savings Target
+             * @default 0
+             */
+            savings_target: number | string;
         };
         /**
          * DeletedCategoryResponse
@@ -2794,6 +2923,16 @@ export interface components {
             through: number;
             /** Totals */
             totals: components["schemas"]["SpendingTotalsResponse"][];
+        };
+        /** PlanResponse */
+        PlanResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Expected Income */
+            expected_income: string;
+            /** Savings Target */
+            savings_target: string;
+            /** Updated At */
+            updated_at: number;
         };
         /** PreferencePayload */
         PreferencePayload: {
@@ -4244,6 +4383,37 @@ export interface operations {
             };
         };
     };
+    read_allowance_financial_allowance_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllowanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_bills_financial_bills_get: {
         parameters: {
             query?: {
@@ -4637,6 +4807,77 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["NetWorthResponse"][];
                 };
+            };
+        };
+    };
+    read_plan_financial_plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanResponse"];
+                };
+            };
+        };
+    };
+    declare_plan_financial_plan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclarePlanPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_plan_financial_plan_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

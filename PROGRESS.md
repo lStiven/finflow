@@ -88,11 +88,22 @@ Todo el backend de la versión 1 está terminado y probado:
   recordándose es peor que no tener detector—. La nómina sí se detecta, con su
   dirección, pero no se ofrece: E3 la necesita, la pantalla no.
 
+- **Y dice cuánto queda para gastar.** Quien diga cuánto espera que entre
+  este mes —y cuánto quiere guardar— ve arriba del Resumen un solo número:
+  lo declarado, menos lo que ya se gastó, menos lo que las facturas todavía
+  deben. **Una factura pagada se descuenta una sola vez**: al confirmarla sale
+  de lo que se debe y entra en lo gastado, y el número no se mueve. La tarjeta
+  enseña la resta completa —nadie cree un número que no puede comprobar— y
+  reparte lo que queda entre los días que faltan. Sin declarar nada **no hay
+  tarjeta**, no un cero: «no me has dicho cómo es tu mes» y «no te queda nada»
+  son cosas distintas. La nómina que el detector ya reconoció se ofrece para
+  rellenar el ingreso de un toque.
+
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 71 operaciones de API en cinco contextos, seis procesos en
-la nube, 1943 pruebas de Python y 364 del frontend, todas en verde.
+**Estado técnico:** 75 operaciones de API en cinco contextos, seis procesos en
+la nube, 1984 pruebas de Python y 382 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -122,8 +133,8 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 71 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
-| API desarrollo | 71 operaciones | 43 — igual que producción |
+| API producción | 75 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
+| API desarrollo | 75 operaciones | 43 — igual que producción |
 | Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
@@ -176,10 +187,11 @@ AWS (ver Trabas).
    último, vincular parece funcionar y no pasa nada. Todo en
    [docs/alerts.md](docs/alerts.md).
 
-6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
-   Las entregas A, B y D están completas —declarar, ver venir, confirmar o
-   saltar el cobro a mano, y que el detector proponga—. Siguen C (que se
-   cargue solo, con ventana de conciliación) y E (avisar antes del cobro).
+6. **Lo que queda de los dos features en curso.** De las facturas (E2) están
+   A, B y D —declarar, confirmar o saltar a mano, y que el detector proponga—;
+   faltan **C** (que se cargue solo, con ventana de conciliación) y **E**
+   (avisar antes del cobro), esta última **aplazada a propósito**. El tercer
+   feature (E3, el disponible del mes) está entregado.
    El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
    se parecen— está en el artefacto, no aquí.
    **Al desplegar esto, `alerts` va primero:** Financial ya publica
@@ -236,6 +248,20 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-15 — **La app ya dice cuánto queda para gastar.**
+  Tercer feature (E3). Se declara el mes —cuánto esperas que entre, cuánto
+  quieres guardar— y arriba del Resumen aparece un número con su resta a la
+  vista. Lo delicado no es la aritmética sino **cuál de las dos cifras de las
+  facturas se resta**: se resta lo que *aún se debe*, nunca lo que el mes
+  cuesta, porque un cobro ya confirmado está en lo gastado —es una fila del
+  ledger— y contarlo también como compromiso lo descontaría dos veces. Un e2e
+  lo comprueba contra la pila real: declara su propia factura, la confirma y
+  exige que el número **no se mueva**. Sin plan declarado los dos endpoints
+  responden 404 y la tarjeta no existe: un cero ahí se lee como «no te queda
+  nada». El plan se reemplaza entero y nunca se fusiona, para que una meta de
+  ahorro no sobreviva al ingreso contra el que se fijó. La revisión encontró
+  cinco cosas reales, entre ellas que teclear «0» en «quieres guardar» se
+  rechazaba y que un 5xx de la tarjeta se llevaba por delante todo el panel.
 - 2026-09-15 — **La app propone las facturas que uno no declaró.**
   Entrega D del segundo feature. Lee el historial, agrupa por el comercio
   atribuido —no por el texto, que el mismo gimnasio llega como `PAGO GYM SA`
@@ -295,12 +321,3 @@ AWS (ver Trabas).
   porque solo ejerció el camino de la alerta bancaria. Y ese descarte ya
   nombra el campo que lo causó —`refused='bank:string_too_short'`— sin el
   valor: lo que faltaba para que el próximo se vea el mismo día.
-- 2026-09-14 — **La app ya le habla a alguien fuera de su propia pantalla.**
-  Contexto nuevo `alerts`: se conecta Telegram con un toque desde Perfil y cada
-  movimiento llega al teléfono. Vincular es un enlace profundo con un token de
-  un solo uso, no un código tecleado — 256 bits en vez de un millón de
-  combinaciones, y nadie tiene que averiguar su `chat_id`. El mensaje dice solo
-  lo que trae el evento; el total del mes es de E3 y el nombre bonito del
-  comercio es de Merchant. La marca de entrega se escribe *después* de mandar,
-  al revés que en Merchant: repetir un aviso molesta, perderlo es una compra de
-  la que nadie se enteró. Verificado de punta a punta contra moto.

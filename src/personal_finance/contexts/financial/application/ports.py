@@ -7,6 +7,7 @@ from typing import Protocol
 
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -381,6 +382,37 @@ class ScheduledBillRepository(Protocol):
         it *did* write, once confirming exists, are ordinary movements that
         stand on their own.
         """
+        ...
+
+
+class MonthlyPlanRepository(Protocol):
+    """Persistence port for `MonthlyPlan`.
+
+    No id anywhere, and that is the shape of the thing rather than an
+    omission: nobody has two plans, so the owner *is* the identity. There is
+    nothing to list and nothing to page, and no key a caller could guess their
+    way into.
+    """
+
+    def find(self, *, user_id: UserId) -> MonthlyPlan | None:
+        """This user's plan, or None when they have not declared one.
+
+        None is a real answer the whole way up: the screen shows no card
+        rather than a zero, because a zero reads as "nothing left to spend".
+        """
+        ...
+
+    def save(self, plan: MonthlyPlan) -> None:
+        """Store a plan, new or restated.
+
+        A plain put, like a bill: nothing else writes this row and none of its
+        fields is a running total, so there is no half of the record a write
+        could quietly discard.
+        """
+        ...
+
+    def remove(self, *, user_id: UserId) -> bool:
+        """Forget the plan. False when there was nothing to forget."""
         ...
 
 

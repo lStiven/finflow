@@ -200,7 +200,27 @@ async function main() {
   const problems = [];
   page.on("pageerror", (error) => problems.push(`error: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") problems.push(`console: ${message.text()}`);
+    if (message.type() !== "error") return;
+
+    // The browser logs a failed request as a console error without saying
+    // which one, and this app asks for 404s on purpose: «no hay plan
+    // declarado» is the answer both plan endpoints give. So the generic line
+    // is ignored here and the responses themselves are watched below — where
+    // the URL *is* known, so a real missing resource still fails.
+    if (message.text().includes("404 (Not Found)")) return;
+
+    problems.push(`console: ${message.text()}`);
+  });
+
+  // The 404s this app asks for, by path. Anything else answering 404 is a
+  // regression and is reported with the URL that caused it.
+  const EXPECTED_404 = ["/financial/plan", "/financial/allowance"];
+  page.on("response", (response) => {
+    if (response.status() !== 404) return;
+    const path = new URL(response.url()).pathname;
+    if (EXPECTED_404.includes(path)) return;
+
+    problems.push(`404 inesperado: ${path}`);
   });
 
   let call;
@@ -407,8 +427,16 @@ async function main() {
     const suggestion = page.getByRole("button", {
       name: `Declarar ${DETECTED} como factura`,
     });
+    // Waited for rather than asked about: the suggestions are a separate,
+    // slower read that is deliberately not blocking the screen, so a bare
+    // `isVisible` races it and reports "no había sugerencia" for a section
+    // that was still on its way.
+    const proposed = await suggestion
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
 
-    if (await suggestion.isVisible().catch(() => false)) {
+    if (proposed) {
       await suggestion.click();
       const accepted = await until(
         call,

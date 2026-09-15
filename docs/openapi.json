@@ -377,6 +377,61 @@
         "title": "AliasResponse",
         "type": "object"
       },
+      "AllowanceResponse": {
+        "description": "The figure and every piece of the subtraction that produced it.\n\nThe components are not decoration. `available` is\n`expected_income` less `savings_target`, `spent` and `committed`, and a screen that\ncould only show the result would be asking somebody to trust arithmetic\nthey cannot see.\n\n`committed` is what is **still owed** of this month's declared bills, never\nwhat the month costs: a charge already confirmed is in `spent`, through the\nledger row confirming it wrote, and counting it here too would discount it\ntwice.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "string"
+          },
+          "committed": {
+            "title": "Committed",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "days_left": {
+            "title": "Days Left",
+            "type": "integer"
+          },
+          "expected_income": {
+            "title": "Expected Income",
+            "type": "string"
+          },
+          "savings_target": {
+            "title": "Savings Target",
+            "type": "string"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "until": {
+            "format": "date",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "expected_income",
+          "savings_target",
+          "spent",
+          "committed",
+          "available",
+          "since",
+          "until",
+          "days_left"
+        ],
+        "title": "AllowanceResponse",
+        "type": "object"
+      },
       "AmendBillPayload": {
         "description": "A correction. What is absent is left alone.\n\n`clear_account` and `clear_category` exist because absence already means\n\"leave it alone\", and an owner has to be able to say \"this comes out of no\naccount of mine\" after having said it came out of one.",
         "properties": {
@@ -1329,6 +1384,47 @@
           "starts_on"
         ],
         "title": "DeclareBillPayload",
+        "type": "object"
+      },
+      "DeclarePlanPayload": {
+        "description": "What the month is supposed to bring in, and what is not to be spent.\n\nOne currency for both. Subtracting a target in dollars from an income in\npesos needs a rate this app does not have, and treating the two as\ncomparable is the kind of wrong that looks right.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "expected_income": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Expected Income"
+          },
+          "savings_target": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "default": "0",
+            "title": "Savings Target"
+          }
+        },
+        "required": [
+          "expected_income"
+        ],
+        "title": "DeclarePlanPayload",
         "type": "object"
       },
       "DeletedCategoryResponse": {
@@ -3083,6 +3179,33 @@
           "previous_net_worth"
         ],
         "title": "PeriodComparisonResponse",
+        "type": "object"
+      },
+      "PlanResponse": {
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "expected_income": {
+            "title": "Expected Income",
+            "type": "string"
+          },
+          "savings_target": {
+            "title": "Savings Target",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_income",
+          "savings_target",
+          "currency",
+          "updated_at"
+        ],
+        "title": "PlanResponse",
         "type": "object"
       },
       "PreferencePayload": {
@@ -5826,6 +5949,56 @@
         ]
       }
     },
+    "/financial/allowance": {
+      "get": {
+        "description": "What is left to spend this month, and the four figures behind it.\n\n404 with no plan declared, for the reason `GET /plan` gives: the card is\nabsent rather than showing a zero that reads like an answer.\n\nThe month is the calendar month in `timezone`, read there and not in UTC —\na Bogotá month starting five hours early would count the last evening of\nthe previous one, and being wrong on the 1st is being wrong on the day\nthis is most likely to be looked at.",
+        "operationId": "read_allowance_financial_allowance_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllowanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Allowance",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/bills": {
       "get": {
         "description": "What is declared, what falls inside the window, and what it adds up to.\n\nThe window defaults to the calendar month `timezone` is currently in —\nread in the caller's zone rather than UTC, because a bill due on the 1st\nmust not show up in the previous month for somebody five hours behind.\n\nBoth ends or neither: half a window is a question with no answer, and\ncompleting it with a month would silently answer a different one.",
@@ -6495,6 +6668,96 @@
           }
         ],
         "summary": "Get Net Worth",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/plan": {
+      "delete": {
+        "description": "Take the plan back. The card disappears and nothing else changes.\n\nSilent when there was nothing to forget, like every other undo here: a 404\non the second press of a button somebody is unsure about is a worse answer\nthan nothing. The plan never wrote anything, so there is nothing left\nbehind to explain.",
+        "operationId": "forget_plan_financial_plan_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Forget Plan",
+        "tags": [
+          "financial"
+        ]
+      },
+      "get": {
+        "description": "What is declared, or 404 when nothing is.\n\nMissing rather than an empty body: \"no plan\" is a different thing from \"a\nplan of zero\", and only one of them is a state somebody can be in.",
+        "operationId": "read_plan_financial_plan_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Plan",
+        "tags": [
+          "financial"
+        ]
+      },
+      "put": {
+        "description": "State what the month is supposed to look like, or restate it.\n\nA `PUT` and not a `PATCH`, deliberately: a plan is two figures that are\nboth guesses, and replacing it whole is what makes it impossible to leave\na savings target standing against an income it was never set against.\n\nNothing is recorded as earned or spent. This writes two numbers and a\ncurrency, and no balance moves.",
+        "operationId": "declare_plan_financial_plan_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclarePlanPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Declare Plan",
         "tags": [
           "financial"
         ]
