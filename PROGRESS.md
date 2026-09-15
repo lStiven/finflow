@@ -77,11 +77,22 @@ Todo el backend de la versión 1 está terminado y probado:
   declarado —la nómina— usa los mismos botones con otras palabras: llega, no
   se paga.
 
+- **Y la app propone las que uno no declaró.** Mira los últimos dos años de
+  movimientos y, cuando algo se repite —el mismo comercio, el mismo día del
+  mes, tres veces o más—, lo ofrece en `/facturas` con qué tan seguro está y
+  con la evidencia a la vista («4 cobros, ninguno faltó»). Aceptar es declarar
+  la factura con esas cifras: **el detector nunca declara ni cobra nada por su
+  cuenta**. No propone lo que la propia app escribió (los intereses de un
+  crédito, un cobro de factura ya confirmado), ni los traslados, ni lo que
+  lleva dos cobros sin aparecer —una suscripción cancelada que sigue
+  recordándose es peor que no tener detector—. La nómina sí se detecta, con su
+  dirección, pero no se ofrece: E3 la necesita, la pantalla no.
+
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 70 operaciones de API en cinco contextos, seis procesos en
-la nube, 1884 pruebas de Python y 354 del frontend, todas en verde.
+**Estado técnico:** 71 operaciones de API en cinco contextos, seis procesos en
+la nube, 1943 pruebas de Python y 364 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -111,8 +122,8 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 70 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
-| API desarrollo | 70 operaciones | 43 — igual que producción |
+| API producción | 71 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
+| API desarrollo | 71 operaciones | 43 — igual que producción |
 | Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
@@ -166,9 +177,9 @@ AWS (ver Trabas).
    [docs/alerts.md](docs/alerts.md).
 
 6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
-   Las entregas A y B están completas —declarar, ver venir, y confirmar o
-   saltar el cobro a mano—. Siguen C (que se cargue solo, con ventana de
-   conciliación), D (que el detector proponga) y E (avisar antes del cobro).
+   Las entregas A, B y D están completas —declarar, ver venir, confirmar o
+   saltar el cobro a mano, y que el detector proponga—. Siguen C (que se
+   cargue solo, con ventana de conciliación) y E (avisar antes del cobro).
    El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
    se parecen— está en el artefacto, no aquí.
    **Al desplegar esto, `alerts` va primero:** Financial ya publica
@@ -225,6 +236,23 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-15 — **La app propone las facturas que uno no declaró.**
+  Entrega D del segundo feature. Lee el historial, agrupa por el comercio
+  atribuido —no por el texto, que el mismo gimnasio llega como `PAGO GYM SA`
+  y `GYMSA*BOG`— y decide la cadencia por el calendario y no por los días:
+  Netflix cobra el 15 con brechas de 30, 31 y 31, y medir días la llamaría
+  irregular. **No escribe nada**: aceptar una sugerencia es declarar la
+  factura por el mismo endpoint del formulario. Construirlo corrigió dos
+  suposiciones del plan. La ventana de trece meses **no podía funcionar**: con
+  tres apariciones como mínimo, trece meses caben dos cobros anuales, así que
+  lo anual no se habría sugerido nunca —en silencio, porque «no es una serie»
+  y «no alcanza la ventana» se ven igual desde afuera—; son veinticinco meses.
+  Y una subida de precio no es ruido: 16.900 tres veces y luego 19.900 se lee
+  como el precio nuevo, no como una serie variable que predice el viejo. La
+  revisión encontró las dos, más una colisión de claves entre monedas y un
+  emparejamiento que fallaba justo para las facturas que esta pantalla crea.
+  `just seed` deja dos series para mirarlas, y `just e2e-bills` acepta una en
+  el navegador y comprueba que no movió un peso.
 - 2026-09-14 — **Una factura ya se puede pagar, y eso sí es plata.**
   Entrega B del segundo feature. «Pagado» escribe el movimiento por el mismo
   caso de uso que respalda el movimiento a mano, así que el saldo, el comercio,
@@ -276,10 +304,3 @@ AWS (ver Trabas).
   comercio es de Merchant. La marca de entrega se escribe *después* de mandar,
   al revés que en Merchant: repetir un aviso molesta, perderlo es una compra de
   la que nadie se enteró. Verificado de punta a punta contra moto.
-- 2026-09-12 — **Financial ya habla hacia afuera.** Era el único contexto sin
-  traductor ni publicador: sus eventos iban a un log que ni siquiera llevaba el
-  monto. Ahora salen dos hechos a `finflow.financial` —que se movió plata y que
-  un saldo cambió por ello—, campo por campo y con el dinero como string. Todo
-  lo demás (abrir, renombrar, cerrar, reconstruir, editar, borrar) se queda
-  dentro: es cómo lleva sus libros, no un contrato. Sigue faltando el canal que
-  le hable al usuario, así que todavía no se nota desde la app.

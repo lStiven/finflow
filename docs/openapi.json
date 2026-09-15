@@ -3278,6 +3278,166 @@
         "title": "RateResponse",
         "type": "object"
       },
+      "RecurringResponse": {
+        "description": "The suggestions, and the stretch of history they were read from.\n\nThe window is answered so a screen can say what \"nothing found\" was looked\nfor in. An empty list is the ordinary answer for somebody who connected\ntheir bank last week, and it means \"not enough history yet\" rather than\n\"you have no subscriptions\".",
+        "properties": {
+          "months": {
+            "title": "Months",
+            "type": "integer"
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/RecurringSeriesResponse"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "until": {
+            "format": "date",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "months",
+          "series"
+        ],
+        "title": "RecurringResponse",
+        "type": "object"
+      },
+      "RecurringSeriesResponse": {
+        "description": "One rhythm found in the history, with how much to believe it.\n\n`amount` is what the **next** charge is expected to cost, which for a\nvariable series — the phone bill, the electricity — is a median and not a\nfigure anybody has ever been charged. `variable` is what says so: \"about\n$90.000\" and \"$90.000\" are different promises and a screen has to be able\nto tell them apart.\n\n`bill_id` is the mark that matters. A suggestion to declare something\nalready declared is worse than no suggestion, because it teaches the\nreader to distrust the rest of the list.",
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "bill_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bill Id"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/BillCadence"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MovementDirection"
+          },
+          "first_seen": {
+            "format": "date",
+            "title": "First Seen",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "last_seen": {
+            "format": "date",
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
+          "missed": {
+            "title": "Missed",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "next_due_on": {
+            "format": "date",
+            "title": "Next Due On",
+            "type": "string"
+          },
+          "sightings": {
+            "title": "Sightings",
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SeriesState"
+          },
+          "variable": {
+            "title": "Variable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "merchant_id",
+          "category",
+          "direction",
+          "cadence",
+          "amount",
+          "currency",
+          "variable",
+          "confidence",
+          "sightings",
+          "missed",
+          "first_seen",
+          "last_seen",
+          "next_due_on",
+          "state",
+          "account_id",
+          "bill_id"
+        ],
+        "title": "RecurringSeriesResponse",
+        "type": "object"
+      },
       "RegisterPayload": {
         "description": "Registration, plus the same optional sender approval `PATCH\n/identity/inbox` accepts — set here to skip a second call, or leave\nempty and approve senders later. The forwarding address itself is\nassigned regardless of whether any sender is named here.",
         "properties": {
@@ -3518,6 +3678,16 @@
         ],
         "title": "ScheduledPaymentResponse",
         "type": "object"
+      },
+      "SeriesState": {
+        "description": "Whether this rhythm is still going.\n\n`DORMANT` is the important one and it is why a detector needs a state at\nall: a cancelled subscription that keeps proposing itself, or keeps\nreminding, is worse than no detector — it teaches its owner to ignore the\none screen that was supposed to be worth reading.",
+        "enum": [
+          "active",
+          "late",
+          "dormant"
+        ],
+        "title": "SeriesState",
+        "type": "string"
       },
       "SetCreditLimitPayload": {
         "description": "State or restate what a card may owe. `null` clears it.",
@@ -5740,7 +5910,7 @@
         ]
       },
       "post": {
-        "description": "Declare a charge that is going to happen.\n\nNothing is recorded as spent. This is the half that works from the first\nday and needs no history — the detector, which needs three months of it,\ncomes later and only ever proposes.",
+        "description": "Declare a charge that is going to happen.\n\nNothing is recorded as spent. This is the half that works from the first\nday and needs no history — the detector, which needs three months of it,\ncomes later and only ever proposes.\n\nThe category is checked against this user's own vocabulary, like every\nother place one is accepted. It is not decoration: a confirmed charge is\nfiled under it, and a bill carrying a category nobody has would produce\ncharges that sit outside every breakdown — silently, because filing a\nmerchant is an enrichment that may not fail a movement.",
         "operationId": "declare_bill_financial_bills_post",
         "requestBody": {
           "content": {
@@ -6325,6 +6495,56 @@
           }
         ],
         "summary": "Get Net Worth",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/recurring": {
+      "get": {
+        "description": "What looks like it comes back every so often, and is not declared yet.\n\nA proposal and nothing more. Accepting one is `POST /financial/bills` with\nthese figures — the same call anybody declares a bill with — so that the\nthing which ends up able to charge money is always something a person\nstated, never something this guessed.\n\nCharges this application wrote itself are left out: the interest a credit\naccrues every cut is perfectly monthly and would head the ranking, and a\nconfirmed bill charge would have the detector reading its own handwriting.\nTransfers too — paying the card from savings every month is the most\nregular charge anybody has and it is not a subscription.\n\nThe day of each charge is read in `timezone`, like every other date here:\na purchase at nine in the evening in Bogotá is the 15th there and the 16th\nin UTC, and a series whose days alternate between the two has no cadence\nleft to find.",
+        "operationId": "list_recurring_financial_recurring_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Recurring",
         "tags": [
           "financial"
         ]

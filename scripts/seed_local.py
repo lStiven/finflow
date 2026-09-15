@@ -415,6 +415,49 @@ ENTRIES: tuple[SeedEntry, ...] = (
 )
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SeedSeries:
+    """A charge that repeats, so the detector has something to find.
+
+    The one fixture here that is **not** anchored to a fixed date. Everything
+    else in this file is, deliberately — a balance nobody can predict is a
+    balance nobody can check. But a rhythm is only detected while it is still
+    going: dated in 2026 for good, these would read as cancelled the moment
+    the calendar moved on, and the suggestions section would be empty on the
+    one screen it was added for.
+    """
+
+    counterparty: str
+    #: One per month, oldest first. A single figure repeated is a fixed
+    #: charge; several are a variable one, which the detector says out loud.
+    amounts: tuple[str, ...]
+    day: int
+    account_name: str | None
+    note: str
+
+
+SERIES: tuple[SeedSeries, ...] = (
+    # Fixed to the peso, four months running: the clean case, and the one the
+    # screen should offer to declare with no hesitation.
+    SeedSeries(
+        counterparty="SPOTIFY COL",
+        amounts=("16900", "16900", "16900", "16900"),
+        day=9,
+        account_name="Tarjeta Bancolombia",
+        note="suscripcion domiciliada, sin correo",
+    ),
+    # The phone bill: recurring and never the same figure twice. Dropping
+    # these would lose exactly the charges people feel.
+    SeedSeries(
+        counterparty="CLARO COLOMBIA",
+        amounts=("78200", "91400", "82650", "88900"),
+        day=22,
+        account_name="Ahorros Bancolombia",
+        note="plan de celular, varia cada mes",
+    ),
+)
+
+
 BILLS: tuple[SeedBill, ...] = (
     # The rent: the biggest fixed charge most people have, on the 1st.
     SeedBill(
@@ -798,6 +841,77 @@ def _enter_manual(
     print(f"  manual    {entered} entered{note}")
 
 
+def _enter_series(
+    client: TestClient,
+    *,
+    token: str,
+    accounts: dict[str, str],
+) -> None:
+    """Months of a repeating charge, so `/facturas` has something to suggest.
+
+    Written as ordinary manual movements, which is the point: the detector
+    reads the ledger and nothing else, so a suggestion in the local
+    environment is produced by exactly the path a real one is. Nothing here
+    declares a bill — accepting the suggestion is what does that, and doing it
+    here would leave the section empty.
+    """
+    headers = _authorization(token)
+    listed = _expect(
+        client.get(
+            "/financial/transactions",
+            params={"origin": "manual", "limit": 200},
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
+    already_there = {
+        (str(movement["counterparty"]), int(movement["occurred_at"]))
+        for movement in listed["transactions"]
+    }
+    entered = 0
+    total = 0
+
+    for series in SERIES:
+        for month, amount in enumerate(reversed(series.amounts), start=1):
+            total += 1
+            occurred_at = int(_months_back(series.day, months=month).timestamp())
+
+            if (series.counterparty, occurred_at) in already_there:
+                continue
+
+            payload: dict[str, str | int] = {
+                "direction": "outgoing",
+                "amount": amount,
+                "currency": "COP",
+                "occurred_at": occurred_at,
+                "counterparty": series.counterparty,
+                "note": series.note,
+            }
+
+            if series.account_name is not None:
+                payload["account_id"] = accounts[series.account_name]
+
+            _expect(
+                client.post("/financial/transactions", json=payload, headers=headers),
+                status.HTTP_201_CREATED,
+            )
+            entered += 1
+
+    skipped = total - entered
+    note = f", {skipped} already there" if skipped else ""
+    print(f"  series    {entered} charges entered{note}")
+
+
+def _months_back(day: int, *, months: int) -> datetime:
+    """The same day of the month, that many months ago, at midday."""
+    today = datetime.now(tz=BOGOTA).date()
+    total = today.month - 1 - months
+    year = today.year + total // 12
+    month = total % 12 + 1
+
+    return _local(year, month, day, 12, 0)
+
+
 def _declare_bills(
     client: TestClient,
     *,
@@ -1115,6 +1229,7 @@ def main() -> None:
     accounts = _declare_accounts(client, token=token)
     _enter_manual(client, token=token, accounts=accounts)
     _enter_transfer_legs(client, token=token, accounts=accounts)
+    _enter_series(client, token=token, accounts=accounts)
     _declare_bills(client, token=token, accounts=accounts)
     _summarize(client, token=token, email=args.email, password=args.password)
 

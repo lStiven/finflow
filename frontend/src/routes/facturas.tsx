@@ -26,7 +26,7 @@
  * unrelated rows — and now the place where each of those days is answered for.
  */
 
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import {
   CalendarClock,
@@ -40,6 +40,7 @@ import {
   Receipt,
   RotateCcw,
   Snowflake,
+  Sparkles,
   Trash2,
   Wallet,
   X,
@@ -53,12 +54,22 @@ import {
   type BillTotal,
   billsQuery,
   categoriesQuery,
+  type RecurringSeries,
+  recurringQuery,
   useAmendBill,
   useDeclareBill,
   useForgetBill,
   usePauseBill,
   useSettleCharge,
 } from "@/api/queries";
+import {
+  asDeclaration,
+  type Certainty,
+  certaintyOf,
+  evidenceLabel,
+  nextChargeLabel,
+  suggestions,
+} from "@/bills/detected";
 import { lookOf } from "@/bills/look";
 import {
   type BillState,
@@ -150,6 +161,8 @@ function BillsScreen() {
         {view.occurrences.length > 0 ? (
           <Timeline occurrences={view.occurrences} bills={view.bills} today={today} />
         ) : null}
+
+        <Detected today={today} />
       </div>
     </AppShell>
   );
@@ -935,5 +948,163 @@ function ChargeAction({
       <Icon className="size-3.5" />
       {label}
     </button>
+  );
+}
+
+/**
+ * What looks like it repeats, and is not declared yet.
+ *
+ * The other half of this feature, and the weaker one by design: everything
+ * above is somebody's own statement about their money, and this is the app
+ * guessing from what the ledger already holds. So it sits at the bottom, it
+ * proposes rather than does, and **accepting one is declaring a bill** —
+ * literally the same call the form above makes, with the figures filled in.
+ *
+ * It is an enrichment and it behaves like one. While it is loading there is
+ * nothing here, and if it fails there is nothing here either: a screen whose
+ * point is the month must not show an error about a suggestion.
+ *
+ * Empty means "not enough history yet" far more often than "you have no
+ * subscriptions" — three charges at one merchant is what it takes — so
+ * nothing is rendered rather than a line claiming there is nothing to find.
+ */
+function Detected({ today }: { today: string }) {
+  const { data } = useQuery(recurringQuery);
+  const found = suggestions(data?.series ?? []);
+
+  if (found.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionTitle count={found.filter((each) => each.bill_id === null).length}>
+        Parece que se repiten
+      </SectionTitle>
+
+      <p className="max-w-prose text-muted text-sm leading-relaxed">
+        Cobros que ya están en tu historial y vuelven cada cierto tiempo. Esto es una
+        lectura de lo que ya pasó:{" "}
+        <strong className="text-text">no declara nada por su cuenta</strong> y no mueve
+        ningún saldo.
+      </p>
+
+      <Card lift={false} className="flex flex-col gap-0 p-0">
+        {found.map((series, index) => (
+          <Suggestion
+            key={series.key}
+            series={series}
+            today={today}
+            first={index === 0}
+          />
+        ))}
+      </Card>
+    </section>
+  );
+}
+
+/** How sure the detector is, in the one word a reader acts on. */
+const CERTAINTY: Record<Certainty, { label: string; tone: string }> = {
+  high: { label: "Muy probable", tone: "text-accent" },
+  medium: { label: "Probable", tone: "text-muted" },
+  low: { label: "Puede ser", tone: "text-faint" },
+};
+
+/**
+ * One suggestion: what it looks like, what it costs, and the evidence.
+ *
+ * The evidence line is the part that earns the trust. "4 cobros, ninguno
+ * faltó" is something somebody can check against their own bank in ten
+ * seconds; a percentage is a number they have to take on faith, which on a
+ * money screen is the same as ignoring it.
+ *
+ * A variable charge says so out loud — «≈ $88.900» — because "about ninety
+ * thousand" and "ninety thousand" are different promises, and declaring the
+ * second when the app meant the first puts a wrong figure into the month's
+ * forecast every month.
+ */
+function Suggestion({
+  series,
+  today,
+  first,
+}: {
+  series: RecurringSeries;
+  today: string;
+  first: boolean;
+}) {
+  const declare = useDeclareBill();
+  const look = lookOf({ category: series.category, direction: series.direction });
+  const Icon = look.icon;
+  const certainty = CERTAINTY[certaintyOf(series)];
+  const declared = series.bill_id !== null;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 p-4 sm:flex-row sm:items-center",
+        !first && "border-line/60 border-t",
+        declared && "opacity-60",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-10 shrink-0 place-items-center rounded-xl",
+          declared ? "bg-surface-raised text-faint" : look.badge,
+        )}
+      >
+        <Icon className="size-[1.125rem]" />
+      </span>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="min-w-0 truncate font-medium text-sm" title={series.name}>
+            {series.name}
+          </span>
+          <span className={cn("shrink-0 text-[0.6875rem]", certainty.tone)}>
+            {certainty.label}
+          </span>
+        </span>
+        <span className="text-faint text-xs leading-relaxed">
+          {cadenceLabel(series.cadence)} ·{" "}
+          {nextChargeLabel(series, formatIsoDayMonth(series.next_due_on), today)} ·{" "}
+          {evidenceLabel(series)}
+        </span>
+      </div>
+
+      <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+        <span className="flex items-baseline gap-1">
+          {series.variable ? (
+            <span className="text-muted text-sm" title="El monto cambia cada vez">
+              ≈
+            </span>
+          ) : null}
+          <Money amount={series.amount} currency={series.currency} size="sm" />
+        </span>
+
+        {declared ? (
+          <span className="shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-faint text-[0.6875rem]">
+            Ya declarada
+          </span>
+        ) : (
+          <Button
+            variant="ghost"
+            className="shrink-0 px-3 py-1.5 text-xs"
+            aria-label={`Declarar ${series.name} como factura`}
+            disabled={declare.isPending}
+            onClick={() => declare.mutate(asDeclaration(series))}
+          >
+            {declare.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            Declarar
+          </Button>
+        )}
+      </div>
+
+      {declare.isError ? (
+        <span className="text-outgoing text-xs">{declare.error.message}</span>
+      ) : null}
+    </div>
   );
 }

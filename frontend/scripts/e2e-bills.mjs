@@ -29,6 +29,12 @@
  *   table refuses the second write. A count in the use case would pass every
  *   unit test and fail here.
  *
+ * And one more, added with the detector: **a suggestion is not a bill until
+ * somebody says so.** The section at the foot of the screen proposes what the
+ * seeded history repeats, and accepting one has to produce an ordinary
+ * declared bill — through the same endpoint the form uses — without moving a
+ * peso, and has to come back marked so it is never offered twice.
+ *
  * Neither can be checked against a double, which is why this script exists.
  *
  * Exits non-zero on the first mismatch, with what it expected and what it
@@ -48,6 +54,8 @@ const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de v
 const PREFIX = "E2E Gimnasio";
 const NAME = `${PREFIX} ${Date.now()}`;
 const AMOUNT = "120.000";
+/** What `just seed` leaves four months of, and declares no bill for. */
+const DETECTED = "SPOTIFY COL";
 const AMENDED = "135.000";
 
 const steps = [];
@@ -224,7 +232,10 @@ async function main() {
     // row count — a balance that moved by the wrong amount is the failure
     // worth catching, and an unassigned charge cannot show it.
     await page.getByLabel("Sale de").selectOption({ index: 1 });
-    await page.getByRole("button", { name: "Declarar" }).click();
+    // `exact`, and not by accident: the suggestions section at the foot of
+    // this screen has buttons called «Declarar SPOTIFY COL como factura», and
+    // Playwright matches an accessible name by substring unless told not to.
+    await page.getByRole("button", { name: "Declarar", exact: true }).click();
 
     // It shows twice on purpose — once as a declared bill and once as a
     // charge of this month — so the locator has to say which.
@@ -387,6 +398,47 @@ async function main() {
     billId = null;
     check("borrar tampoco movió saldos", await moneyState(call), before);
 
+    // ------------------------------------------------- suggestions, UI
+    // The detector's half. `just seed` leaves four months of SPOTIFY COL in
+    // the ledger and declares no bill for it, so the section has to be
+    // proposing it — and accepting has to produce an ordinary declared bill
+    // without moving a peso, because a guess may not be what moves money.
+    await page.goto(`${WEB}/facturas`, { waitUntil: "networkidle" });
+    const suggestion = page.getByRole("button", {
+      name: `Declarar ${DETECTED} como factura`,
+    });
+
+    if (await suggestion.isVisible().catch(() => false)) {
+      await suggestion.click();
+      const accepted = await until(
+        call,
+        "aceptar la sugerencia",
+        (bill) => bill !== undefined,
+        10_000,
+        DETECTED,
+      );
+      check("aceptar una sugerencia declara la factura", accepted?.name, DETECTED);
+      check("con la cadencia que el detector leyó", accepted?.cadence, "monthly");
+      check("y sin mover un peso", await moneyState(call), before);
+
+      // Guarded: `until` answers `undefined` when it gives up, and reaching
+      // into that turns a clear FALLA into a TypeError that swallows every
+      // check below it.
+      if (accepted !== undefined) {
+        const marked = await call("/financial/recurring");
+        const back = marked.series.find((each) => each.name === DETECTED);
+        check(
+          "y la sugerencia vuelve marcada como ya declarada",
+          back?.bill_id,
+          accepted.id,
+        );
+
+        await call(`/financial/bills/${accepted.id}`, { method: "DELETE" });
+      }
+    } else {
+      note(`no había sugerencia para ${DETECTED} — ¿corriste 'just seed'?`);
+    }
+
     check("la pantalla no registró errores", problems, []);
   } catch (error) {
     failures += 1;
@@ -399,7 +451,9 @@ async function main() {
     if (call) {
       try {
         const view = await call("/financial/bills");
-        const mine = view.bills.filter((bill) => bill.name.startsWith(PREFIX));
+        const mine = view.bills.filter(
+          (bill) => bill.name.startsWith(PREFIX) || bill.name === DETECTED,
+        );
 
         for (const bill of mine) {
           await call(`/financial/bills/${bill.id}`, { method: "DELETE" });
@@ -438,12 +492,12 @@ function firstOfThisMonth() {
  * fails on a cold Vite module — which is exactly what it did. Waiting for the
  * condition is both faster and the only version that means anything.
  */
-async function until(call, describe, predicate, timeoutMs = 10_000) {
+async function until(call, describe, predicate, timeoutMs = 10_000, name = NAME) {
   const deadline = Date.now() + timeoutMs;
   let last;
 
   while (Date.now() < deadline) {
-    last = await find(call, NAME);
+    last = await find(call, name);
 
     if (predicate(last)) return last;
 

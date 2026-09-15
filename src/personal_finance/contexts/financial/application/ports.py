@@ -416,6 +416,21 @@ class ChargeLookup(Protocol):
         ...
 
 
+class MovementHistory(Protocol):
+    """Everything one user has, for reading rather than for writing.
+
+    Narrow like `ChargeLookup` and `AccountLookup`, and for the same reason:
+    the detector's whole job is to look at the past and propose, so handing it
+    the full `TransactionLedger` would put `record` and `remove` within reach
+    of a heuristic. `DynamoDBTransactionLedger` satisfies this already, so
+    nothing extra is wired up.
+    """
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        """Every movement this user has, assigned or not, in no order."""
+        ...
+
+
 class AccountLookup(Protocol):
     """The two questions bills ask about accounts, and nothing more.
 

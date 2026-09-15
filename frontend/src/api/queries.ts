@@ -66,6 +66,15 @@ export type BillTotal = components["schemas"]["BillTotalResponse"];
 export type BillCadence = components["schemas"]["BillCadence"];
 export type BillCharge = components["schemas"]["BillChargeResponse"];
 export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
+/**
+ * A rhythm the detector found in the history, with how much to believe it.
+ *
+ * Never a bill. Accepting one is `useDeclareBill` with these figures, which
+ * is the same call the form makes — a heuristic does not get to create the
+ * thing that can charge money.
+ */
+export type RecurringSeries = components["schemas"]["RecurringSeriesResponse"];
+export type RecurringView = components["schemas"]["RecurringResponse"];
 export type AmendBillBody = components["schemas"]["AmendBillPayload"];
 /** What a loan costs or an investment earns, and what it will do next. */
 export type Financing = components["schemas"]["FinancingResponse"];
@@ -100,6 +109,7 @@ export const queryKeys = {
   financing: ["financing"] as const,
   alertChannels: ["alert-channels"] as const,
   bills: ["bills"] as const,
+  recurring: ["recurring"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -1264,6 +1274,9 @@ export function useDeclareBill(): UseMutationResult<Bill, Error, DeclareBillBody
       unwrap(api.POST("/financial/bills", { body })),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // A suggestion that was just accepted has to come back marked as
+      // declared, or the list goes on offering what is already there.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
     },
   });
 }
@@ -1282,6 +1295,9 @@ export function useAmendBill(
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // The name is what the detector matches a declared bill on, so a
+      // rename can change which suggestions are marked.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
     },
   });
 }
@@ -1326,9 +1342,36 @@ export function useForgetBill(): UseMutationResult<unknown, Error, string> {
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // Forgetting a bill un-declares what the detector had marked, so the
+      // suggestion is worth offering again.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
     },
   });
 }
+
+/**
+ * What looks like it comes back, and is not declared yet.
+ *
+ * Its own query rather than a field on `billsQuery`, and that is a decision
+ * about cost as much as about shape: answering it reads thirteen months of
+ * movements, and the screen must not wait on a suggestion in order to show
+ * somebody what they already declared. It is an enrichment — when it fails,
+ * the section is simply not there.
+ *
+ * Invalidated by `useDeclareBill` as well as by the settle mutations: a
+ * suggestion that has just been accepted has to come back marked as declared,
+ * or the list keeps offering it.
+ */
+export const recurringQuery = queryOptions({
+  queryKey: queryKeys.recurring,
+  queryFn: () =>
+    unwrap(
+      api.GET("/financial/recurring", {
+        params: { query: { timezone: DISPLAY_TIMEZONE } },
+      }),
+    ),
+  staleTime: 5 * 60_000,
+});
 
 /**
  * Answering for one charge: it happened, it did not, or undo either.

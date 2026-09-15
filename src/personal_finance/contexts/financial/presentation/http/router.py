@@ -121,6 +121,12 @@ from personal_finance.contexts.financial.application.queries import (
     TrendQuery,
     TrendSeries,
 )
+from personal_finance.contexts.financial.application.recurring import (
+    DetectedSeries,
+    DetectRecurringQuery,
+    DetectRecurringSeriesUseCase,
+    RecurringView,
+)
 from personal_finance.contexts.financial.domain.bills import (
     MAX_NAME_LENGTH as MAX_BILL_NAME_LENGTH,
     BillCadence,
@@ -154,6 +160,10 @@ from personal_finance.contexts.financial.domain.financing import (
     RateBasis,
     RecurringCharge,
     ScheduledPayment,
+)
+from personal_finance.contexts.financial.domain.recurring import (
+    HISTORY_MONTHS,
+    SeriesState,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
@@ -3610,3 +3620,169 @@ def _file_charge_merchant(
         )
     except Exception:
         _logger.exception("could not file a confirmed bill charge's merchant")
+
+
+# ------------------------------------------------------------ recurring
+#
+# What the history says comes back, guessed rather than declared — and the
+# weaker half of this feature on purpose. **Nothing under this heading
+# writes.** A suggestion is accepted by declaring a bill, through `POST
+# /financial/bills` like any other, because a heuristic has no authority to
+# move money or even to create the thing that will.
+#
+# Read every time from the ledger and never stored, which is what makes it
+# correct itself: a charge that lands tomorrow fixes today's guess with
+# nothing to re-process, and a subscription somebody cancelled stops being
+# proposed on its own.
+
+
+class RecurringSeriesResponse(BaseModel):
+    """One rhythm found in the history, with how much to believe it.
+
+    `amount` is what the **next** charge is expected to cost, which for a
+    variable series — the phone bill, the electricity — is a median and not a
+    figure anybody has ever been charged. `variable` is what says so: "about
+    $90.000" and "$90.000" are different promises and a screen has to be able
+    to tell them apart.
+
+    `bill_id` is the mark that matters. A suggestion to declare something
+    already declared is worse than no suggestion, because it teaches the
+    reader to distrust the rest of the list.
+    """
+
+    #: Stable across calls for the same group, so a screen can key on it.
+    key: str
+    name: str
+    merchant_id: str | None
+    category: str | None
+    # The enums themselves rather than their strings, like the bills
+    # responses: the generated TypeScript turns these into unions, so a screen
+    # cannot invent a state the server never sends.
+    direction: MovementDirection
+    cadence: BillCadence
+    amount: str
+    currency: Currency
+    variable: bool
+    #: From 0 to 1. Something to sort by and to show — never a threshold
+    #: anything acts on by itself.
+    confidence: str
+    sightings: int
+    #: Expected charges that never turned up inside the stretch that was seen.
+    missed: int
+    first_seen: dt.date
+    last_seen: dt.date
+    next_due_on: dt.date
+    state: SeriesState
+    #: The account these charges mostly landed on, for a suggestion to
+    #: prefill. Null when none of them landed on a declared account.
+    account_id: str | None
+    #: The declared bill already covering this, when there is one.
+    bill_id: str | None
+
+
+class RecurringResponse(BaseModel):
+    """The suggestions, and the stretch of history they were read from.
+
+    The window is answered so a screen can say what "nothing found" was looked
+    for in. An empty list is the ordinary answer for somebody who connected
+    their bank last week, and it means "not enough history yet" rather than
+    "you have no subscriptions".
+    """
+
+    since: dt.date
+    until: dt.date
+    #: How many months back the detector reads, so nobody has to derive it
+    #: from the two dates above.
+    months: int
+    series: list[RecurringSeriesResponse]
+
+
+@functools.lru_cache(maxsize=1)
+def _build_detect_recurring() -> DetectRecurringSeriesUseCase:
+    return DetectRecurringSeriesUseCase(
+        ledger=build_ledger(),
+        bills=build_bills(),
+        merchants=build_merchant_directory(),
+    )
+
+
+def get_detect_recurring_use_case() -> DetectRecurringSeriesUseCase:
+    return _build_detect_recurring()
+
+
+@router.get("/recurring", response_model=RecurringResponse)
+def list_recurring(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        DetectRecurringSeriesUseCase,
+        Depends(get_detect_recurring_use_case),
+    ],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> RecurringResponse:
+    """What looks like it comes back every so often, and is not declared yet.
+
+    A proposal and nothing more. Accepting one is `POST /financial/bills` with
+    these figures — the same call anybody declares a bill with — so that the
+    thing which ends up able to charge money is always something a person
+    stated, never something this guessed.
+
+    Charges this application wrote itself are left out: the interest a credit
+    accrues every cut is perfectly monthly and would head the ranking, and a
+    confirmed bill charge would have the detector reading its own handwriting.
+    Transfers too — paying the card from savings every month is the most
+    regular charge anybody has and it is not a subscription.
+
+    The day of each charge is read in `timezone`, like every other date here:
+    a purchase at nine in the evening in Bogotá is the 15th there and the 16th
+    in UTC, and a series whose days alternate between the two has no cadence
+    left to find.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            DetectRecurringQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    return _recurring_response(view)
+
+
+def _recurring_response(view: RecurringView) -> RecurringResponse:
+    return RecurringResponse(
+        since=view.since,
+        until=view.until,
+        months=HISTORY_MONTHS,
+        series=[_series_response(found) for found in view.series],
+    )
+
+
+def _series_response(found: DetectedSeries) -> RecurringSeriesResponse:
+    series = found.series
+
+    return RecurringSeriesResponse(
+        key=found.key,
+        name=found.name,
+        merchant_id=found.merchant_id,
+        category=found.category,
+        direction=series.direction,
+        cadence=series.cadence,
+        amount=str(series.amount.amount),
+        currency=series.amount.currency,
+        variable=series.variable,
+        # A string like every other decimal that crosses this boundary: a
+        # JSON float is the wrong shape for a figure with fixed places, and
+        # having two conventions in one payload is how one of them gets read
+        # with the other's parser.
+        confidence=str(series.confidence),
+        sightings=series.sightings,
+        missed=series.missed,
+        first_seen=series.first_seen,
+        last_seen=series.last_seen,
+        next_due_on=series.next_due_on,
+        state=series.state,
+        account_id=(
+            None if series.account_id is None else str(series.account_id.value)
+        ),
+        bill_id=None if found.bill_id is None else str(found.bill_id.value),
+    )

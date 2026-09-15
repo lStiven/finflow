@@ -2702,6 +2702,37 @@
             "description": "A real delete, unlike closing an account: a closed account still explains movements in the ledger, and a bill explains nothing because it never wrote anything. Pausing is for the one worth keeping. 204, or 404 when there was nothing there."
           },
           "response": []
+        },
+        {
+          "name": "Detected recurring series",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/recurring?timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "recurring"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "IANA name. Decides which day each charge fell on: nine at night in Bogotá is the 15th there and the 16th in UTC, and a series whose days alternate between the two has no cadence left to find."
+                }
+              ]
+            },
+            "description": "The detector half of bills: what looks like it comes back every so often and is nobody's declared bill yet, read off thirteen months of movements. A proposal and nothing more — this writes nothing, and accepting one is `POST /financial/bills` with these figures, the same call anybody declares a bill with, so whatever ends up able to charge money is always something a person stated.\n\nThe window (`since`, `until`, `months`) comes back so a screen can say what \"nothing found\" was looked for in: an empty list is the ordinary answer for somebody two weeks in, and it means \"not enough history yet\", not \"you have no subscriptions\".\n\nLeft out on purpose: charges this app wrote itself — the interest a credit accrues every cut is perfectly monthly and would head the ranking, and a confirmed bill charge would be the detector reading its own handwriting — and transfers, because paying the card from savings every month is the most regular charge anybody has and it is not a subscription. Dormant series (two expected charges missed) are dropped rather than proposed; a list that suggests declaring a cancelled subscription is one nobody reads twice.\n\n`bill_id` is the mark that matters: non-null means this series is already declared, and the screen should not offer it again. `amount` is what the *next* charge is expected to cost, a median when `variable` is true, so \"about $90.000\" and \"$90.000\" stay different promises. Ordered by `confidence` (0 to 1) — it ranks a list read top-down and decides nothing, which is why there is no threshold anywhere in this feature. At most 40 series, a bound rather than a page."
+          },
+          "response": []
         }
       ]
     },

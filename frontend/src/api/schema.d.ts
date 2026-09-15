@@ -482,6 +482,12 @@ export interface paths {
          *     Nothing is recorded as spent. This is the half that works from the first
          *     day and needs no history — the detector, which needs three months of it,
          *     comes later and only ever proposes.
+         *
+         *     The category is checked against this user's own vocabulary, like every
+         *     other place one is accepted. It is not decoration: a confirmed charge is
+         *     filed under it, and a bill carrying a category nobody has would produce
+         *     charges that sit outside every breakdown — silently, because filing a
+         *     merchant is an enrichment that may not fail a movement.
          */
         post: operations["declare_bill_financial_bills_post"];
         delete?: never;
@@ -722,6 +728,42 @@ export interface paths {
          *     they are watching what comes in and goes out, not a net position.
          */
         get: operations["get_net_worth_financial_net_worth_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/recurring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Recurring
+         * @description What looks like it comes back every so often, and is not declared yet.
+         *
+         *     A proposal and nothing more. Accepting one is `POST /financial/bills` with
+         *     these figures — the same call anybody declares a bill with — so that the
+         *     thing which ends up able to charge money is always something a person
+         *     stated, never something this guessed.
+         *
+         *     Charges this application wrote itself are left out: the interest a credit
+         *     accrues every cut is perfectly monthly and would head the ranking, and a
+         *     confirmed bill charge would have the detector reading its own handwriting.
+         *     Transfers too — paying the card from savings every month is the most
+         *     regular charge anybody has and it is not a subscription.
+         *
+         *     The day of each charge is read in `timezone`, like every other date here:
+         *     a purchase at nine in the evening in Bogotá is the 15th there and the 16th
+         *     in UTC, and a series whose days alternate between the two has no cadence
+         *     left to find.
+         */
+        get: operations["list_recurring_financial_recurring_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2837,6 +2879,88 @@ export interface components {
             value: string;
         };
         /**
+         * RecurringResponse
+         * @description The suggestions, and the stretch of history they were read from.
+         *
+         *     The window is answered so a screen can say what "nothing found" was looked
+         *     for in. An empty list is the ordinary answer for somebody who connected
+         *     their bank last week, and it means "not enough history yet" rather than
+         *     "you have no subscriptions".
+         */
+        RecurringResponse: {
+            /** Months */
+            months: number;
+            /** Series */
+            series: components["schemas"]["RecurringSeriesResponse"][];
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
+        /**
+         * RecurringSeriesResponse
+         * @description One rhythm found in the history, with how much to believe it.
+         *
+         *     `amount` is what the **next** charge is expected to cost, which for a
+         *     variable series — the phone bill, the electricity — is a median and not a
+         *     figure anybody has ever been charged. `variable` is what says so: "about
+         *     $90.000" and "$90.000" are different promises and a screen has to be able
+         *     to tell them apart.
+         *
+         *     `bill_id` is the mark that matters. A suggestion to declare something
+         *     already declared is worse than no suggestion, because it teaches the
+         *     reader to distrust the rest of the list.
+         */
+        RecurringSeriesResponse: {
+            /** Account Id */
+            account_id: string | null;
+            /** Amount */
+            amount: string;
+            /** Bill Id */
+            bill_id: string | null;
+            cadence: components["schemas"]["BillCadence"];
+            /** Category */
+            category: string | null;
+            /** Confidence */
+            confidence: string;
+            currency: components["schemas"]["Currency"];
+            direction: components["schemas"]["MovementDirection"];
+            /**
+             * First Seen
+             * Format: date
+             */
+            first_seen: string;
+            /** Key */
+            key: string;
+            /**
+             * Last Seen
+             * Format: date
+             */
+            last_seen: string;
+            /** Merchant Id */
+            merchant_id: string | null;
+            /** Missed */
+            missed: number;
+            /** Name */
+            name: string;
+            /**
+             * Next Due On
+             * Format: date
+             */
+            next_due_on: string;
+            /** Sightings */
+            sightings: number;
+            state: components["schemas"]["SeriesState"];
+            /** Variable */
+            variable: boolean;
+        };
+        /**
          * RegisterPayload
          * @description Registration, plus the same optional sender approval `PATCH
          *     /identity/inbox` accepts — set here to skip a second call, or leave
@@ -2934,6 +3058,17 @@ export interface components {
             /** Starts On */
             starts_on: string;
         };
+        /**
+         * SeriesState
+         * @description Whether this rhythm is still going.
+         *
+         *     `DORMANT` is the important one and it is why a detector needs a state at
+         *     all: a cancelled subscription that keeps proposing itself, or keeps
+         *     reminding, is worse than no detector — it teaches its owner to ignore the
+         *     one screen that was supposed to be worth reading.
+         * @enum {string}
+         */
+        SeriesState: "active" | "late" | "dormant";
         /**
          * SetCreditLimitPayload
          * @description State or restate what a card may owe. `null` clears it.
@@ -4501,6 +4636,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NetWorthResponse"][];
+                };
+            };
+        };
+    };
+    list_recurring_financial_recurring_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecurringResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
