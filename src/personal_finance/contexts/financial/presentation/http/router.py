@@ -3822,12 +3822,12 @@ class DeclarePlanPayload(BaseModel):
     comparable is the kind of wrong that looks right.
     """
 
-    expected_income: Decimal = Field(gt=0)
+    expected_income: Decimal = Field(gt=0, le=MAX_MONEY)
     currency: Currency = Currency.COP
     #: Optional, and zero is the ordinary answer. Never larger than the
     #: income: a plan that is short before a peso is spent is not a warning
     #: anybody can act on.
-    savings_target: Decimal = Field(default=Decimal(0), ge=0)
+    savings_target: Decimal = Field(default=Decimal(0), ge=0, le=MAX_MONEY)
 
 
 class PlanResponse(BaseModel):

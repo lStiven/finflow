@@ -1397,6 +1397,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1409,6 +1410,7 @@
           "savings_target": {
             "anyOf": [
               {
+                "maximum": 1000000000000000.0,
                 "minimum": 0.0,
                 "type": "number"
               },

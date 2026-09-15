@@ -302,6 +302,19 @@ class TestDeclaring:
 
         assert response.status_code == 422
 
+    def test_a_magnitude_the_table_cannot_store_is_refused_not_a_500(
+        self,
+        wired: Wiring,
+    ) -> None:
+        """The bound every other money payload in this router carries.
+        Unbounded, the figure reaches boto3 and comes back as a stack trace."""
+        response = wired.client.put(
+            "/financial/plan",
+            json={"expected_income": "1e20", "currency": "COP"},
+        )
+
+        assert response.status_code == 422
+
     def test_keeping_more_than_you_earn_is_refused(self, wired: Wiring) -> None:
         response = wired.client.put(
             "/financial/plan",
