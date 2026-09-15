@@ -350,11 +350,21 @@ class TransactionOrigin(enum.Enum):
     but it is the only movement in the ledger whose authority is an
     arithmetic rather than a fact, so a wrong rate is corrected by restating
     the terms rather than by arguing with the bank.
+
+    A **scheduled** charge is a declared bill somebody confirmed: the owner
+    said the gym would be charged on the 4th, and then said it was. Deliberately
+    not `MANUAL`, which it otherwise resembles, because two later pieces of
+    this feature need to tell them apart — the detector must not propose
+    declaring a bill it is looking at the charges of, and an automatic charge
+    has to be distinguishable from money its owner typed. And deliberately not
+    `ACCRUAL`, which is excluded from alerts on purpose: a charge landing on a
+    bill's due date is exactly the moment its owner wants to hear about it.
     """
 
     BANK_ALERT = "bank_alert"
     MANUAL = "manual"
     ACCRUAL = "accrual"
+    SCHEDULED = "scheduled"
 
 
 class TransactionStatus(enum.Enum):
@@ -653,6 +663,51 @@ class MovementFingerprint(ValueObject):
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
     @classmethod
+    def from_schedule(
+        cls,
+        *,
+        user_id: UserId,
+        bill_id: uuid.UUID,
+        period: dt.date,
+    ) -> Self:
+        """What makes two confirmations of one declared charge the same charge.
+
+        The bill and the period it is the charge of — and, exactly as in
+        `from_accrual`, **not the amount**. The gym raises its price and the
+        owner confirms 130 000 where the bill still says 120 000; that is the
+        same September charge, corrected, not a second one. Including the
+        amount would make confirming twice at two figures write two rows and
+        take the money twice.
+
+        Not the date either, for the same reason and a sharper one: the money
+        moves on the 6th when the 4th is a Saturday, so a key that included
+        when it moved would let one charge be confirmed once per day it could
+        plausibly have landed on. `period` is the occurrence's own day on the
+        calendar — its identity — and the day the money actually moved is
+        recorded on the row rather than in its key.
+
+        The **bill** stands where the account would. A bill may name no
+        account at all, and two bills charged from one account on one day are
+        two charges; keying on the account would collapse them into one and
+        lose the second silently.
+
+        Tagged, so this can never canonicalize to what `from_accrual` or
+        `from_movement` produce. Changing the tag re-identifies every charge
+        ever confirmed, and every one of them would become confirmable a
+        second time.
+        """
+        canonical = _canonical(
+            (
+                _SCHEDULED_BILL_TAG,
+                str(user_id.value),
+                str(bill_id),
+                period.isoformat(),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    @classmethod
     def from_transfer_leg(
         cls,
         *,
@@ -711,6 +766,11 @@ _TRANSFER_LEG_TAG = "transfer-leg"
 # The same contract for a computed charge: changing this re-identifies every
 # accrual, and every period already posted would be posted a second time.
 _ACCRUAL_TAG = "accrual"
+
+# And for a declared bill's charge. Same contract again: change it and every
+# charge already confirmed becomes confirmable a second time, at which point
+# the money leaves twice.
+_SCHEDULED_BILL_TAG = "scheduled-bill"
 
 
 class TransferRole(enum.Enum):

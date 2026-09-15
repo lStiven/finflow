@@ -1293,6 +1293,102 @@ way out, and still stores nothing.
   all, anywhere: plain text makes the escaping problem not exist rather than
   solving it.
 
+### Declared bills, and confirming one (2026-09-14)
+
+- **"Paid" is read off the ledger row, never stored** (2026-09-14). A
+  confirmed charge's `MovementId` is derived from the bill and the period, so
+  the row *is* the record and a bill's stored item says nothing about which of
+  its charges are settled. Considered and rejected: a `paid` flag or a
+  settlement row per period, which read faster and would be the copy that
+  survives somebody deleting the movement — leaving a charge that claims to be
+  paid with no money behind it, and a total that cannot be reconciled with any
+  account. Deriving it means **erasing the movement un-pays the charge**, with
+  nothing to remember to undo. The cost is one `BatchGetItem` per listing,
+  bounded by the window plus 31 days ahead (`SETTLEMENT_HORIZON_DAYS`); past
+  that a charge simply reads unsettled, which is the safe direction — shown as
+  still coming rather than hidden as done.
+
+- **Skipping is the exception and *is* stored** (2026-09-14). No money moves,
+  so there is no row to read the answer back off. It lives as a string set on
+  the bill, capped at `MAX_SKIPPED_PERIODS` (240) with the oldest dropped
+  rather than the newest refused: a skip from four years ago reappearing as an
+  uncleared charge is visible and harmless, while refusing the skip somebody is
+  asking for today is a button that does nothing. Skipping a charge that is
+  already paid is refused — it would hide a movement that moved a balance, and
+  nothing on screen would say why the figures stopped adding up.
+
+- **The amount and the date are deliberately outside the charge's identity**
+  (2026-09-14). `MovementFingerprint.from_schedule` keys on user, bill and
+  period only, copying `from_accrual`. Including the amount would make
+  confirming again at a corrected figure write a second row and take the money
+  twice; including the date would let one charge be confirmed once per day it
+  could plausibly have landed on, which is exactly the range a bill's grace
+  covers. Correcting a confirmed figure is therefore editing the movement,
+  where every other correction in this app is made — not re-confirming.
+
+- **A new `TransactionOrigin.SCHEDULED`, not `MANUAL` and not `ACCRUAL`**
+  (2026-09-14). It resembles `MANUAL` — the owner is asserting it — but two
+  later pieces of E2 need to tell them apart, and neither could afterwards: the
+  detector must not propose declaring a bill whose own charges it is reading,
+  and an automatically posted charge has to be distinguishable from one
+  somebody typed. Not `ACCRUAL` either, which is excluded from alerts on
+  purpose: a charge landing on its due date is exactly when its owner wants to
+  hear about it. **`alerts` learned the value in the same change, and has to be
+  deployed first** — an origin it cannot read is a message refused as
+  malformed, retried five times and in the DLQ within minutes.
+
+- **Confirming goes through `ManageTransactionsUseCase`, the same object that
+  backs `POST /financial/transactions`** (2026-09-14). Not a ledger of its own.
+  That is the argument for bills living inside Financial rather than in a
+  context of their own, cashed: the balance, the merchant attribution, the
+  month's spending, the integration event and the Telegram alert all come free,
+  and the blast radius of the feature is one call. The router hands the very
+  cached instance over rather than building a second one, which would be a
+  second set of rules about what happens when a movement lands.
+
+- **Undo is part of the delivery, not a nicety** (2026-09-14). Both
+  confirming and skipping have a `DELETE` of their own, and both are silent
+  when there is nothing to undo. "Pagar" is one tap from a figure that changes
+  what an account says it holds; a tap that cannot be taken back on a money
+  screen is how somebody stops trusting the screen. Undoing a confirmation
+  deliberately skips the "is this a day the bill is charged on" check —
+  amending the bill's anchor can strand a confirmed charge on a date the
+  calendar no longer visits, and refusing to undo that would strand real money.
+
+- **`upcoming` was renamed `outstanding`, and the meaning is what changed**
+  (2026-09-14). It used to be "has not fallen due", which was all it could say
+  when nothing could be confirmed; calling it unpaid then would have been a
+  claim. Now it is one. The rename is what made the frontend build fail rather
+  than a screen quietly keep showing the old meaning under the old label. The
+  bar under the total moved with it: it fills with money that has actually
+  left, not with days gone past, so a month nearly over with an empty bar is
+  somebody who has paid none of their bills — which is the thing worth seeing.
+
+- **The default day is noon UTC on the period, not midnight and not now**
+  (2026-09-14). A charge's identity is a calendar day, and midnight lands on
+  the previous day for everybody west of Greenwich — this deployment's own
+  users included — filing a charge due on the 1st into the previous month's
+  spending. Noon is the same calendar day from UTC-11 to UTC+11.
+
+- **The buttons live on the timeline, not on the bill cards** (2026-09-14).
+  What gets paid is one charge of one month, not the bill. A card has nothing
+  to say about *which* month, and the two somebody is most likely to mean —
+  this one and the one they forgot — are exactly the two it cannot tell apart.
+
+- **The verbs follow the direction** (2026-09-14). Found by looking at the
+  screen, not by reading the code: a declared salary goes through the same
+  buttons as the gym, and "Sin pagar · Pagar" beside the money somebody is
+  waiting *for* reads as a debt they owe. Income says "Sin llegar · Ya llegó ·
+  Recibido" instead.
+
+- **`just seed` confirms one charge and skips another, on every run**
+  (2026-09-14). Not only on the first: the bills survive a re-run, so a
+  confirmation inside the declaration loop would leave every later local
+  database showing nothing but unpaid charges — which is how the state most
+  worth looking at while building this becomes the one nobody ever sees. It is
+  re-runnable without checking anything, because the charge's id makes the
+  second write DynamoDB's problem.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

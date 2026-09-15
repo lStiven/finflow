@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 import datetime as dt
 from decimal import Decimal
 import enum
+import time
 from typing import TYPE_CHECKING
 
 from personal_finance.contexts.financial.application.ports import (
@@ -87,6 +88,14 @@ ACCOUNT_PREFIX = "ACCOUNT#"
 FINGERPRINT_PREFIX = "FINGERPRINT#"
 MOVEMENT_PREFIX = "MOVEMENT#"
 BILL_PREFIX = "BILL#"
+
+# How many times a throttled `BatchGetItem` is re-sent before giving up, and
+# how long the first wait is — doubling each time, so five attempts spread
+# over roughly a second and a half. Small on purpose: this sits behind a
+# screen somebody is looking at, and an answer that takes a minute to arrive
+# is worse than one that says it could not be read.
+_BATCH_GET_ATTEMPTS = 5
+_BATCH_GET_BACKOFF_SECONDS = 0.05
 
 ACCOUNT_ID_ATTRIBUTE = "account_id"
 
@@ -1222,6 +1231,68 @@ class DynamoDBTransactionLedger:
 
         return movement_to_entity(item) if item else None
 
+    def find_many(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> Mapping[str, Transaction]:
+        """The rows among these ids that exist, in as few calls as possible.
+
+        `BatchGetItem` rather than a query with a filter: these ids are
+        scattered through the partition and a filtered query would read every
+        movement the user has ever had to answer a question about twenty of
+        them. Rather than a `get_item` each, too — a month of bills is tens of
+        ids behind one screen.
+
+        Unprocessed keys are retried rather than dropped. DynamoDB returns
+        them when a batch is throttled, and treating them as "not there" would
+        read a charge somebody paid as still owing, which is the one wrong
+        answer this lookup can give.
+
+        The retry backs off and gives up. Re-queueing immediately and forever
+        is what a throttled table turns into a request that never returns:
+        this one is on-demand and small, so sustained throttling means
+        something is wrong rather than something is busy, and raising says so
+        while a spin would only hang.
+        """
+        found: dict[str, Transaction] = {}
+        pending: list[dict[str, AttributeValueTypeDef]] = [
+            _key(user_id, f"{MOVEMENT_PREFIX}{movement_id}")
+            for movement_id in dict.fromkeys(movement_ids)
+        ]
+        throttled = 0
+
+        while pending:
+            # 100 is DynamoDB's own ceiling per request.
+            batch, pending = pending[:100], pending[100:]
+            response = self._client.batch_get_item(
+                RequestItems={self._table_name: {"Keys": batch}},
+            )
+
+            for item in response.get("Responses", {}).get(self._table_name, []):
+                movement = movement_to_entity(item)
+                found[movement.id.value] = movement
+
+            retry = response.get("UnprocessedKeys", {}).get(self._table_name)
+            unprocessed = retry["Keys"] if retry is not None else []
+
+            if not unprocessed:
+                continue
+
+            throttled += 1
+
+            if throttled > _BATCH_GET_ATTEMPTS:
+                raise CorruptFinancialItemError(
+                    f"DynamoDB kept deferring {len(unprocessed)} of these "
+                    f"movements after {_BATCH_GET_ATTEMPTS} retries",
+                )
+
+            time.sleep(_BATCH_GET_BACKOFF_SECONDS * 2 ** (throttled - 1))
+            pending = [*unprocessed, *pending]
+
+        return found
+
     def list_movements(
         self,
         *,
@@ -1341,6 +1412,12 @@ def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
     if bill.category is not None:
         item["category"] = {"S": bill.category}
 
+    if bill.skipped:
+        # Only when there are any: DynamoDB refuses an empty string set, and a
+        # bill nobody has skipped anything on is the ordinary case. Sorted so
+        # the stored row does not churn on a rewrite that changed nothing else.
+        item["skipped"] = {"SS": sorted(day.isoformat() for day in bill.skipped)}
+
     return item
 
 
@@ -1380,6 +1457,9 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         account_id=AccountId.from_string(account_id) if account_id else None,
         category=_string(item, "category"),
         status=_enum(BillStatus, _string(item, "status") or "", "bill status"),
+        skipped=frozenset(
+            dt.date.fromisoformat(day) for day in item.get("skipped", {}).get("SS", [])
+        ),
         created_at=PosixTime.from_epoch_seconds(int(_number(item, "created_at"))),
     )
 

@@ -187,6 +187,8 @@ export function canLinkAlerts(kind: string): boolean {
 const ORIGIN_COPY: Record<string, string> = {
   bank_alert: "Alerta del banco",
   manual: "Registrado a mano",
+  accrual: "Calculado por la app",
+  scheduled: "Cobro de una factura",
 };
 
 export function originLabel(value: string, catalogLabel = value): string {

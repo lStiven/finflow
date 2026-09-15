@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import datetime as dt
 from decimal import Decimal
 from typing import Self
+import uuid
 
 from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
@@ -1198,6 +1199,67 @@ class Transaction(AggregateRoot[MovementId]):
             counterparty=_valid_counterparty(label),
             bank=bank.strip().lower(),
             origin=TransactionOrigin.ACCRUAL,
+            account_id=account_id,
+            note=note,
+        )
+        transaction._announce()
+
+        return transaction
+
+    @classmethod
+    def confirm_scheduled(
+        cls,
+        *,
+        user_id: UserId,
+        bill_id: uuid.UUID,
+        period: dt.date,
+        direction: MovementDirection,
+        amount: Money,
+        occurred_at: PosixTime,
+        counterparty: str,
+        account_id: AccountId | None = None,
+        note: str | None = None,
+    ) -> Self:
+        """One charge of a declared bill, the moment its owner confirms it.
+
+        The gym is domiciled, so the bank stopped emailing about it and the
+        charge exists nowhere until somebody says it happened. This is them
+        saying so — and from here on it is an ordinary movement: it moves a
+        balance, it counts as spending, it carries a merchant, and it is
+        announced to whoever asked to be told.
+
+        Its own origin rather than `MANUAL`, which it otherwise is. Two later
+        pieces of this feature need to tell them apart, and neither could
+        afterwards: a detector reading the history must not propose declaring
+        a bill whose own charges it is looking at, and a charge posted
+        automatically has to be distinguishable from one somebody typed.
+
+        Its identity comes from the bill and the period, never the amount or
+        the day the money moved — `MovementFingerprint.from_schedule` says
+        why. So confirming September twice is refused by the ledger's own
+        conditional write rather than by a check somebody has to remember to
+        keep.
+
+        The account is optional, unlike an accrual's: a bill may be paid in
+        cash, and `ScheduledBill` lets it name no account at all. Unassigned,
+        the charge is still a charge — visible, counted in what went out, and
+        placeable later like any other movement.
+        """
+        transaction = cls(
+            id=MovementId.from_fingerprint(
+                MovementFingerprint.from_schedule(
+                    user_id=user_id,
+                    bill_id=bill_id,
+                    period=period,
+                ),
+            ),
+            user_id=user_id,
+            direction=direction,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(counterparty),
+            bank="",
+            origin=TransactionOrigin.SCHEDULED,
             account_id=account_id,
             note=note,
         )

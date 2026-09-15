@@ -16,11 +16,20 @@
  *    the server stored something else is the failure this half exists for,
  *    and no amount of unit testing on either side can see it.
  *
- * And one invariant runs through all of it: **declaring bills must not move
- * money.** Balances, net worth and the movement list are read before and
- * after, and they have to be identical. That is the rule the whole feature
- * rests on, and the only place it can be checked against the real stack
- * rather than against a double is here.
+ * And two invariants run through all of it, which are two halves of one rule:
+ *
+ * * **Declaring a bill must not move money.** Balances, net worth and the
+ *   movement list are read before and after declaring, amending, pausing,
+ *   skipping and deleting, and they have to be identical.
+ * * **Confirming a charge must move it exactly once.** The same figures are
+ *   read after paying, and the chosen account has to have moved by exactly
+ *   what was confirmed — then a second confirmation is sent straight at the
+ *   API, and nothing may move again. That is at-least-once delivery played
+ *   out for real: the row's key comes from the bill and the period, so the
+ *   table refuses the second write. A count in the use case would pass every
+ *   unit test and fail here.
+ *
+ * Neither can be checked against a double, which is why this script exists.
  *
  * Exits non-zero on the first mismatch, with what it expected and what it
  * got. It cleans up after itself: the bill it declares is deleted at the end,
@@ -210,6 +219,11 @@ async function main() {
     await page.getByLabel("Nombre").fill(NAME);
     await page.getByLabel("Monto").fill(AMOUNT);
     await page.getByLabel("Primer cobro").fill(firstOfThisMonth());
+    // Index 0 is "Ninguna cuenta". Picking a real one is what lets the
+    // confirmation below be checked against a balance rather than against a
+    // row count — a balance that moved by the wrong amount is the failure
+    // worth catching, and an unassigned charge cannot show it.
+    await page.getByLabel("Sale de").selectOption({ index: 1 });
     await page.getByRole("button", { name: "Declarar" }).click();
 
     // It shows twice on purpose — once as a declared bill and once as a
@@ -230,6 +244,7 @@ async function main() {
     check("con el monto que se tecleó", stored?.amount, "120000");
     check("con la cadencia por defecto", stored?.cadence, "monthly");
     check("activa y sin congelar", [stored?.status, stored?.frozen], ["active", false]);
+    check("y contra la cuenta que se eligió", stored?.account_id !== null, true);
 
     // ------------------------------------- integrity: no money moved at all
     check("declarar no movió ningún saldo", await moneyState(call), before);
@@ -239,15 +254,15 @@ async function main() {
     const total = view.totals.find((t) => t.currency === "COP");
     check("el mes cuenta esta factura", Number(total?.expected) >= 120000, true);
     check(
-      "«aún no vence» nunca es mayor que «este mes»",
-      Number(total.upcoming) <= Number(total.expected),
+      "«falta por pagar» nunca es mayor que «este mes»",
+      Number(total.outstanding) <= Number(total.expected),
       true,
     );
     check(
       "la pantalla enseña las dos cifras, no una",
       [
         await page.getByRole("figure", { name: "Este mes" }).isVisible(),
-        await page.getByRole("figure", { name: "Aún no vence" }).isVisible(),
+        await page.getByRole("figure", { name: "Falta por pagar" }).isVisible(),
       ],
       [true, true],
     );
@@ -260,6 +275,83 @@ async function main() {
     stored = await until(call, "corregir el monto", (b) => b?.amount === "135000");
     check("corregir el monto llega al servidor", stored?.amount, "135000");
     check("y sigue sin mover saldos", await moneyState(call), before);
+
+    // ------------------------------------------------------- confirm, UI
+    // The one control on this screen that moves money. It lives on the
+    // timeline, not on the card, because what gets paid is one charge of one
+    // month rather than the bill.
+    await page.getByRole("button", { name: `Pagar ${NAME}` }).click();
+    await page.getByRole("button", { name: "Confirmar" }).click();
+
+    const paid = await untilCharge(
+      call,
+      "confirmar el cobro",
+      (charge) => charge?.state === "paid",
+    );
+    check("el cobro queda pagado en el servidor", paid?.state, "paid");
+    check("y nombra el movimiento que lo respalda", paid?.movement_id !== null, true);
+    check("con lo que de verdad salió", paid?.settled_amount, "135000");
+
+    const afterPay = await moneyState(call);
+    check(
+      "confirmar escribió exactamente un movimiento",
+      afterPay.movements,
+      before.movements + 1,
+    );
+    check(
+      "y movió la cuenta de la factura por exactamente lo confirmado",
+      moved(before, afterPay),
+      [`${stored.account_id}:-135000`],
+    );
+
+    const view2 = await call("/financial/bills");
+    const total2 = view2.totals.find((t) => t.currency === "COP");
+    check(
+      "lo pagado sale de «falta por pagar» y se queda en «este mes»",
+      Number(total2.outstanding) < Number(total.expected),
+      true,
+    );
+
+    // ------------------------------------ integrity: at-least-once, for real
+    // Straight at the API, because the screen no longer offers the button —
+    // which is the point: this is the retry, the double submit, the second
+    // tab. The row's key comes from the bill and the period, so the table
+    // refuses it. A count in the use case would pass every unit test and
+    // take the money twice here.
+    const again = await call(
+      `/financial/bills/${billId}/occurrences/${paid.due_on}/pay`,
+      { method: "POST", body: "{}" },
+    );
+    check(
+      "confirmar dos veces devuelve el mismo movimiento",
+      again.occurrence.movement_id,
+      paid.movement_id,
+    );
+    check("y no mueve nada la segunda vez", await moneyState(call), afterPay);
+
+    // ---------------------------------------------------------- undo, UI
+    await page.getByRole("button", { name: `Deshacer el pago ${NAME}` }).click();
+
+    await untilCharge(call, "deshacer el pago", (charge) => charge?.state !== "paid");
+    check("deshacer devuelve el saldo tal como estaba", await moneyState(call), before);
+
+    // ---------------------------------------------------------- skip, UI
+    await page.getByRole("button", { name: `Saltar ${NAME}` }).click();
+
+    const skipped = await untilCharge(
+      call,
+      "saltar el cobro",
+      (charge) => charge?.state === "skipped",
+    );
+    check("saltar queda guardado", skipped?.state, "skipped");
+    check("y no escribe nada en el ledger", await moneyState(call), before);
+
+    await page.getByRole("button", { name: `Ya no saltarlo ${NAME}` }).click();
+    await untilCharge(
+      call,
+      "deshacer el salto",
+      (charge) => charge?.state !== "skipped",
+    );
 
     // ------------------------------------------------------------ pause, UI
     await page.getByRole("button", { name: `Pausar ${NAME}` }).click();
@@ -325,7 +417,7 @@ async function main() {
   console.log(steps.join("\n"));
   console.log(
     failures === 0
-      ? "\ne2e facturas: todo bien, y ningún saldo se movió."
+      ? "\ne2e facturas: todo bien. Declarar no movió nada, confirmar movió una vez."
       : `\ne2e facturas: ${failures} problema(s).`,
   );
   process.exitCode = failures === 0 ? 0 : 1;
@@ -368,6 +460,47 @@ async function find(call, name) {
   const view = await call("/financial/bills");
 
   return view.bills.find((bill) => bill.name === name);
+}
+
+/** `until`, but watching one charge of the window rather than the bill. */
+async function untilCharge(call, describe, predicate, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+
+  while (Date.now() < deadline) {
+    const view = await call("/financial/bills");
+    const bill = view.bills.find((each) => each.name === NAME);
+    last = view.occurrences.find((charge) => charge.bill_id === bill?.id);
+
+    if (predicate(last)) return last;
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  steps.push(` FALLA ${describe} (el servidor no lo reflejó en ${timeoutMs} ms)`);
+  failures += 1;
+
+  return last;
+}
+
+/**
+ * Which balances changed between two readings, and by how much.
+ *
+ * A diff rather than a comparison, because "nothing moved" and "exactly this
+ * moved" are the two assertions this script is made of, and only the second
+ * one catches a charge posted at the wrong figure.
+ */
+function moved(before, after) {
+  const was = new Map(before.balances.map((row) => row.split(/:(?=[^:]*$)/)));
+
+  return after.balances
+    .map((row) => {
+      const [id, balance] = row.split(/:(?=[^:]*$)/);
+      const delta = Number(balance) - Number(was.get(id) ?? 0);
+
+      return delta === 0 ? null : `${id}:${delta}`;
+    })
+    .filter((row) => row !== null);
 }
 
 await main();

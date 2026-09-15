@@ -172,20 +172,78 @@ export function whenLabel(due: string, today: string): string {
 }
 
 /**
- * How much of the window has already fallen due, from 0 to 1.
+ * How much of the month is already answered for, from 0 to 1.
  *
- * What the bar under the total draws. Returns 0 rather than dividing by zero
- * when nothing is expected, because a month with no bills has no proportion
- * to show and an empty bar says that correctly.
+ * What the bar under the total draws, and it now means something it could not
+ * mean before: the filled part is money that has actually left, not merely
+ * days that have gone past. A month nearly over with nothing confirmed reads
+ * empty, which is the honest picture and the one worth acting on.
+ *
+ * Returns 0 rather than dividing by zero when nothing is expected: a month
+ * with no bills has no proportion to show, and an empty bar says so.
  */
-export function dueShare(expected: string, upcoming: string): number {
+export function settledShare(expected: string, outstanding: string): number {
   const total = Number(expected);
   if (!Number.isFinite(total) || total <= 0) return 0;
 
-  const left = Number(upcoming);
+  const left = Number(outstanding);
   const share = (total - (Number.isFinite(left) ? left : 0)) / total;
 
   return Math.min(1, Math.max(0, share));
+}
+
+/** Whether anybody has answered for this charge, either way. */
+export function isSettled(occurrence: BillOccurrence): boolean {
+  return occurrence.state === "paid" || occurrence.state === "skipped";
+}
+
+/**
+ * What a charge's state is called where somebody reads it.
+ *
+ * Null for the ordinary case. A charge nobody has answered for and whose day
+ * has not come needs no word beside it — labelling every row "pendiente" is
+ * how the two that do need a word stop being visible.
+ *
+ * **Income is not paid, it arrives.** A declared salary is a charge like any
+ * other here and goes through the same buttons, but "sin pagar" beside the
+ * money somebody is waiting *for* reads as a debt they owe. The verb follows
+ * the direction, which is the one thing about a bill that decides it.
+ */
+export function chargeLabel(occurrence: BillOccurrence): string | null {
+  const incoming = occurrence.direction === "incoming";
+
+  if (occurrence.state === "paid") return incoming ? "Recibido" : "Pagado";
+  if (occurrence.state === "skipped") return "Saltado";
+  if (occurrence.state === "overdue") return incoming ? "Sin llegar" : "Sin pagar";
+
+  return null;
+}
+
+/** The three words the buttons on a charge use, in its own direction. */
+export type ChargeVerbs = {
+  /** Confirm it happened. */
+  settle: string;
+  /** Take that confirmation back. */
+  undo: string;
+  /** What the amount field on the confirmation is asking for. */
+  amount: string;
+};
+
+export function chargeVerbs(occurrence: BillOccurrence): ChargeVerbs {
+  return occurrence.direction === "incoming"
+    ? { settle: "Ya llegó", undo: "Deshacer", amount: "Llegó" }
+    : { settle: "Pagar", undo: "Deshacer el pago", amount: "Salió" };
+}
+
+/**
+ * What the charge actually cost, which is not always what the bill projected.
+ *
+ * The gym raised its price and the owner confirmed the real figure. Reading
+ * the projection back at them once the money has moved would mean the screen
+ * and their account disagree.
+ */
+export function chargedAmount(occurrence: BillOccurrence): string {
+  return occurrence.settled_amount ?? occurrence.amount;
 }
 
 /** The letter a bill is recognised by when there is no icon for it. */

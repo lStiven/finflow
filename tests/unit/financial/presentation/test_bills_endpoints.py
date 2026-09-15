@@ -1,13 +1,20 @@
 """The bills surface a frontend calls, over fakes.
 
-Its own file rather than more rows in `test_financial_endpoints.py`: nothing
-here touches the ledger or a balance, and that is the property most worth
-being able to see at a glance.
+Its own file rather than more rows in `test_financial_endpoints.py`: declaring
+a bill touches neither the ledger nor a balance, and that is the property most
+worth being able to see at a glance.
+
+**Confirming one does**, and the ledger is wired in here for exactly that — so
+the file can also show the other half: that money moves only through the pay
+endpoint, and that pressing it twice moves it once.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+import dataclasses
 import datetime as dt
+from decimal import Decimal
 from typing import Any
 
 from fastapi import FastAPI
@@ -17,21 +24,33 @@ import pytest
 from personal_finance.contexts.financial.application.bills import (
     ListBillsUseCase,
     ManageBillsUseCase,
+    SettleBillChargeUseCase,
+)
+from personal_finance.contexts.financial.application.handlers import (
+    ManageTransactionsUseCase,
+)
+from personal_finance.contexts.financial.application.ports import (
+    BalanceReversal,
+    MerchantAttribution,
 )
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
-from personal_finance.contexts.financial.domain.entities import Account
+from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.value_objects import (
+    AccountFingerprint,
     AccountId,
     AccountKind,
 )
 from personal_finance.contexts.financial.presentation.http.router import (
     get_list_bills_use_case,
     get_manage_bills_use_case,
+    get_merchant_directory,
+    get_settle_charge_use_case,
     router,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
 )
+from personal_finance.shared.domain.entities import Event
 from personal_finance.shared.domain.value_objects import (
     Currency,
     PosixTime,
@@ -77,29 +96,232 @@ class InMemoryAccounts:
     def list_by_user(self, user_id: UserId) -> list[Account]:
         return [a for a in self.rows.values() if a.user_id == user_id]
 
+    # The rest of `AccountRepository`, because confirming a charge goes through
+    # the very use case that records a movement entered by hand.
+
+    def save(self, account: Account) -> None:
+        self.rows[account.id] = account
+
+    def overwrite_balance(self, account: Account) -> None:
+        self.save(account)
+
+    def restate_balance(self, account: Account) -> None:
+        self.save(account)
+
+    def find_by_fingerprint(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Account | None:
+        for account in self.list_by_user(user_id):
+            if fingerprint in account.fingerprints:
+                return account
+
+        return None
+
+    def unlink_fingerprint(
+        self,
+        account: Account,
+        fingerprint: AccountFingerprint,
+    ) -> None:
+        del fingerprint
+        self.save(account)
+
+    def add(self, account: Account) -> bool:
+        self.save(account)
+
+        return True
+
+
+class InMemoryLedger:
+    """Enough of the ledger for a confirmation to land in it.
+
+    `record` refuses a key it already holds, which is the only behaviour that
+    matters here: it is what makes confirming the same period twice write one
+    row, with no counting anywhere.
+    """
+
+    def __init__(self) -> None:
+        self.rows: dict[str, Transaction] = {}
+
+    def record(
+        self,
+        *,
+        transaction: Transaction,
+        balance_delta: Decimal | None,
+    ) -> bool:
+        del balance_delta
+
+        if transaction.id.value in self.rows:
+            return False
+
+        self.rows[transaction.id.value] = transaction
+
+        return True
+
+    def save(self, transaction: Transaction) -> None:
+        self.rows[transaction.id.value] = transaction
+
+    def remove(
+        self,
+        transactions: Sequence[Transaction],
+        *,
+        reversals: Sequence[BalanceReversal],
+    ) -> None:
+        del reversals
+
+        for transaction in transactions:
+            self.rows.pop(transaction.id.value, None)
+
+    def find(self, *, user_id: UserId, transaction_id: str) -> Transaction | None:
+        row = self.rows.get(transaction_id)
+
+        return row if row is not None and row.user_id == user_id else None
+
+    def find_many(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> Mapping[str, Transaction]:
+        return {
+            movement_id: row
+            for movement_id in movement_ids
+            if (row := self.rows.get(movement_id)) is not None
+            and row.user_id == user_id
+        }
+
+    def list_movements(
+        self,
+        *,
+        user_id: UserId,
+        account_id: AccountId,
+    ) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.rows.values()
+            if row.user_id == user_id and row.account_id == account_id
+        ]
+
+    def list_unassigned(self, user_id: UserId) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.rows.values()
+            if row.user_id == user_id and row.account_id is None
+        ]
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        return [row for row in self.rows.values() if row.user_id == user_id]
+
+    def list_unassigned_matching(
+        self,
+        *,
+        user_id: UserId,
+        fingerprint: AccountFingerprint,
+    ) -> Sequence[Transaction]:
+        return [
+            row
+            for row in self.list_unassigned(user_id)
+            if row.account_fingerprint == fingerprint
+        ]
+
+
+class NullPublisher:
+    def publish(self, events: Sequence[Event]) -> None:
+        del events
+
+
+class RecordingMerchants:
+    """Only what a confirmed charge asks of Merchant: file this name here."""
+
+    def __init__(self) -> None:
+        self.filed: list[tuple[str, str]] = []
+
+    def attribute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> Mapping[str, MerchantAttribution]:
+        del user_id, counterparties
+
+        return {}
+
+    def categories(self, *, user_id: UserId) -> frozenset[str]:
+        del user_id
+
+        return frozenset({"health", "housing"})
+
+    def classify(
+        self,
+        *,
+        user_id: UserId,
+        counterparty: str,
+        category: str,
+        occurred_at: PosixTime,
+    ) -> MerchantAttribution | None:
+        del user_id, occurred_at
+        self.filed.append((counterparty, category))
+
+        return None
+
+
+@dataclasses.dataclass(slots=True)
+class Wiring:
+    client: TestClient
+    bills: InMemoryBills
+    accounts: InMemoryAccounts
+    ledger: InMemoryLedger
+    merchants: RecordingMerchants
+
 
 @pytest.fixture
-def wired() -> tuple[TestClient, InMemoryBills, InMemoryAccounts]:
+def wired() -> Wiring:
     bills = InMemoryBills()
     accounts = InMemoryAccounts()
+    ledger = InMemoryLedger()
+    merchants = RecordingMerchants()
+    transactions = ManageTransactionsUseCase(
+        accounts=accounts,
+        ledger=ledger,
+        event_publisher=NullPublisher(),
+    )
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_current_user_id] = lambda: USER_ID
+    app.dependency_overrides[get_merchant_directory] = lambda: merchants
     app.dependency_overrides[get_manage_bills_use_case] = lambda: ManageBillsUseCase(
         bills=bills,
         accounts=accounts,
+        charges=ledger,
     )
     app.dependency_overrides[get_list_bills_use_case] = lambda: ListBillsUseCase(
         bills=bills,
         accounts=accounts,
+        charges=ledger,
+    )
+    app.dependency_overrides[get_settle_charge_use_case] = lambda: (
+        SettleBillChargeUseCase(
+            bills=bills,
+            accounts=accounts,
+            charges=ledger,
+            transactions=transactions,
+        )
     )
 
-    return TestClient(app), bills, accounts
+    return Wiring(
+        client=TestClient(app),
+        bills=bills,
+        accounts=accounts,
+        ledger=ledger,
+        merchants=merchants,
+    )
 
 
 @pytest.fixture
-def client(wired: tuple[TestClient, InMemoryBills, InMemoryAccounts]) -> TestClient:
-    return wired[0]
+def client(wired: Wiring) -> TestClient:
+    return wired.client
 
 
 def _declare(client: TestClient, **overrides: Any) -> dict[str, Any]:  # noqa: ANN401
@@ -228,7 +450,7 @@ def test_the_listing_carries_both_totals(client: TestClient) -> None:
 
     assert total["currency"] == "COP"
     assert total["expected"] == "900000"
-    assert "upcoming" in total
+    assert total["outstanding"] == "900000"
 
 
 def test_half_a_window_is_a_bad_request(client: TestClient) -> None:
@@ -248,9 +470,9 @@ def test_an_unknown_timezone_is_refused_rather_than_silently_utc(
 
 
 def test_a_bill_whose_account_is_closed_reads_as_frozen(
-    wired: tuple[TestClient, InMemoryBills, InMemoryAccounts],
+    wired: Wiring,
 ) -> None:
-    client, _, accounts = wired
+    client, accounts = wired.client, wired.accounts
     account = _account(accounts, closed=True)
     _declare(client, account_id=str(account.id.value))
 
@@ -260,10 +482,10 @@ def test_a_bill_whose_account_is_closed_reads_as_frozen(
 
 
 def test_reopening_the_account_unfreezes_the_bill(
-    wired: tuple[TestClient, InMemoryBills, InMemoryAccounts],
+    wired: Wiring,
 ) -> None:
     """Nothing had to remember to undo it: frozen is read off the account."""
-    client, _, accounts = wired
+    client, accounts = wired.client, wired.accounts
     account = _account(accounts, closed=True)
     _declare(client, account_id=str(account.id.value))
 
@@ -311,9 +533,9 @@ def test_a_patch_that_changes_nothing_is_refused(client: TestClient) -> None:
 
 
 def test_setting_and_clearing_the_same_field_at_once_is_refused(
-    wired: tuple[TestClient, InMemoryBills, InMemoryAccounts],
+    wired: Wiring,
 ) -> None:
-    client, _, accounts = wired
+    client, accounts = wired.client, wired.accounts
     account = _account(accounts)
     bill = _declare(client)
 
@@ -326,9 +548,9 @@ def test_setting_and_clearing_the_same_field_at_once_is_refused(
 
 
 def test_an_account_can_be_taken_off_a_bill(
-    wired: tuple[TestClient, InMemoryBills, InMemoryAccounts],
+    wired: Wiring,
 ) -> None:
-    client, _, accounts = wired
+    client, accounts = wired.client, wired.accounts
     account = _account(accounts)
     bill = _declare(client, account_id=str(account.id.value))
 
@@ -373,11 +595,11 @@ def test_an_id_that_is_not_one_reads_as_missing(client: TestClient) -> None:
 
 
 def test_declaring_on_a_closed_account_answers_frozen_immediately(
-    wired: tuple[TestClient, InMemoryBills, InMemoryAccounts],
+    wired: Wiring,
 ) -> None:
     """The write used to answer `frozen: false` and the listing rendered right
     after it answered `true`."""
-    client, _, accounts = wired
+    client, accounts = wired.client, wired.accounts
     account = _account(accounts, closed=True)
 
     body = _declare(client, account_id=str(account.id.value))
@@ -416,3 +638,318 @@ def test_a_name_longer_than_the_ledger_takes_is_refused(client: TestClient) -> N
     )
 
     assert response.status_code == 422
+
+
+# ----------------------------------------------------------------------
+# Answering for a charge — the half that moves money
+# ----------------------------------------------------------------------
+
+
+def _charge_url(bill: dict[str, Any], period: str, what: str = "pay") -> str:
+    return f"/financial/bills/{bill['id']}/occurrences/{period}/{what}"
+
+
+def test_confirming_a_charge_writes_one_movement(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    body = client.post(_charge_url(bill, "2026-09-04"), json={}).json()
+
+    assert body["occurrence"]["state"] == "paid"
+    assert body["occurrence"]["movement_id"] is not None
+    [movement] = ledger.rows.values()
+    assert movement.counterparty == "Gimnasio"
+    assert movement.origin.value == "scheduled"
+
+
+def test_confirming_the_same_charge_twice_moves_the_money_once(
+    wired: Wiring,
+) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    first = client.post(_charge_url(bill, "2026-09-04"), json={})
+    second = client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(ledger.rows) == 1
+    assert (
+        first.json()["occurrence"]["movement_id"]
+        == second.json()["occurrence"]["movement_id"]
+    )
+
+
+def test_the_period_in_the_path_is_what_decides_which_charge_is_paid(
+    wired: Wiring,
+) -> None:
+    """Without it, "paid" in September and "paid" in October would be the same
+    request."""
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    client.post(_charge_url(bill, "2026-09-04"), json={})
+    client.post(_charge_url(bill, "2026-10-04"), json={})
+
+    assert len(ledger.rows) == 2
+
+
+def test_a_period_this_bill_is_not_charged_on_is_a_bad_request(
+    wired: Wiring,
+) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    response = client.post(_charge_url(bill, "2026-09-05"), json={})
+
+    assert response.status_code == 400
+    assert ledger.rows == {}
+
+
+def test_a_period_that_is_not_a_date_never_reaches_the_ledger(
+    wired: Wiring,
+) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    response = client.post(_charge_url(bill, "manana"), json={})
+
+    assert response.status_code == 422
+    assert ledger.rows == {}
+
+
+def test_a_stated_price_is_what_is_recorded(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, amount="120000", starts_on="2026-09-04")
+
+    body = client.post(
+        _charge_url(bill, "2026-09-04"),
+        json={"amount": "130000", "currency": "COP"},
+    ).json()
+
+    [movement] = ledger.rows.values()
+    assert movement.amount.amount == Decimal("130000")
+    # The projection is kept beside it rather than overwritten: the gap is the
+    # gym raising its price, and it is worth seeing.
+    assert body["occurrence"]["amount"] == "120000"
+    assert body["occurrence"]["settled_amount"] == "130000"
+
+
+def test_a_price_without_its_currency_is_refused(wired: Wiring) -> None:
+    client = wired.client
+    bill = _declare(client, starts_on="2026-09-04")
+
+    response = client.post(_charge_url(bill, "2026-09-04"), json={"amount": "130000"})
+
+    assert response.status_code == 422
+
+
+def test_the_default_day_stays_on_the_period_it_belongs_to(wired: Wiring) -> None:
+    """Midnight would file a charge due on the 1st into the previous month for
+    everybody west of Greenwich, this app's own users included."""
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-01")
+
+    client.post(_charge_url(bill, "2026-09-01"), json={})
+
+    [movement] = ledger.rows.values()
+    moved = dt.datetime.fromtimestamp(
+        movement.occurred_at.as_epoch_seconds(),
+        tz=dt.timezone(dt.timedelta(hours=-5)),
+    )
+    assert moved.date() == dt.date(2026, 9, 1)
+
+
+def test_a_confirmed_charge_is_filed_under_the_bills_category(
+    wired: Wiring,
+) -> None:
+    """Without this a confirmed charge would sit outside every breakdown by
+    category, which is most of what it was declared for."""
+    client, merchants = wired.client, wired.merchants
+    bill = _declare(client, starts_on="2026-09-04", category="health")
+
+    client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    assert merchants.filed == [("Gimnasio", "health")]
+
+
+def test_confirming_a_charge_on_a_closed_account_is_a_conflict(
+    wired: Wiring,
+) -> None:
+    client, accounts, ledger = wired.client, wired.accounts, wired.ledger
+    account = _account(accounts)
+    bill = _declare(client, starts_on="2026-09-04", account_id=str(account.id.value))
+    account.close(PosixTime.now())
+
+    response = client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    assert response.status_code == 409
+    assert ledger.rows == {}
+
+
+def test_a_paused_bill_charges_nothing_through_the_api(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    client.post(f"/financial/bills/{bill['id']}/pause")
+
+    response = client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    assert response.status_code == 400
+    assert ledger.rows == {}
+
+
+def test_undoing_a_confirmation_erases_the_movement(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    body = client.delete(_charge_url(bill, "2026-09-04")).json()
+
+    assert ledger.rows == {}
+    assert body["occurrence"]["state"] != "paid"
+    assert body["occurrence"]["movement_id"] is None
+
+
+def test_undoing_a_confirmation_that_never_happened_is_not_a_404(
+    wired: Wiring,
+) -> None:
+    """The undo behind a button somebody presses because they are unsure. A
+    404 on the second press is a worse answer than nothing."""
+    client = wired.client
+    bill = _declare(client, starts_on="2026-09-04")
+
+    response = client.delete(_charge_url(bill, "2026-09-04"))
+
+    assert response.status_code == 200
+
+
+def test_skipping_writes_nothing_to_the_ledger(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+
+    body = client.post(_charge_url(bill, "2026-09-04", "skip")).json()
+
+    assert body["occurrence"]["state"] == "skipped"
+    assert ledger.rows == {}
+
+
+def test_a_skipped_charge_is_in_neither_of_the_months_figures(
+    wired: Wiring,
+) -> None:
+    client = wired.client
+    bill = _declare(client, starts_on="2026-09-04")
+
+    client.post(_charge_url(bill, "2026-09-04", "skip"))
+
+    body = client.get(
+        "/financial/bills",
+        params={"since": "2026-09-01", "until": "2026-09-30"},
+    ).json()
+    assert body["totals"] == []
+
+
+def test_a_paid_charge_leaves_outstanding_and_stays_in_expected(
+    wired: Wiring,
+) -> None:
+    client = wired.client
+    bill = _declare(client, amount="900000", starts_on="2026-09-04")
+
+    client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    [total] = client.get(
+        "/financial/bills",
+        params={"since": "2026-09-01", "until": "2026-09-30"},
+    ).json()["totals"]
+    assert total["expected"] == "900000"
+    assert total["outstanding"] == "0"
+
+
+def test_a_paid_charge_cannot_be_skipped(wired: Wiring) -> None:
+    client = wired.client
+    bill = _declare(client, starts_on="2026-09-04")
+    client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    response = client.post(_charge_url(bill, "2026-09-04", "skip"))
+
+    assert response.status_code == 400
+    assert "already paid" in response.json()["detail"]
+
+
+def test_a_skip_can_be_taken_back(wired: Wiring) -> None:
+    client = wired.client
+    bill = _declare(client, starts_on="2026-09-04")
+    client.post(_charge_url(bill, "2026-09-04", "skip"))
+
+    body = client.delete(_charge_url(bill, "2026-09-04", "skip")).json()
+
+    assert body["occurrence"]["state"] != "skipped"
+
+
+def test_a_stranger_cannot_charge_somebody_elses_bill(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    stranger = UserId.from_string("99999999-9999-9999-9999-999999999999")
+    client.app.dependency_overrides[get_current_user_id] = lambda: stranger  # type: ignore[attr-defined]
+
+    response = client.post(_charge_url(bill, "2026-09-04"), json={})
+
+    assert response.status_code == 404
+    assert ledger.rows == {}
+
+
+def test_a_bill_cannot_name_a_category_its_owner_does_not_have(
+    wired: Wiring,
+) -> None:
+    """Not decoration: a confirmed charge is filed under it, and filing is an
+    enrichment that may not fail a movement — so an unknown category would
+    produce charges silently absent from every breakdown."""
+    client = wired.client
+
+    response = client.post(
+        "/financial/bills",
+        json={
+            "name": "Gimnasio",
+            "amount": "120000",
+            "currency": "COP",
+            "cadence": "monthly",
+            "starts_on": "2026-09-04",
+            "category": "gimnasio",
+        },
+    )
+
+    assert response.status_code == 422
+    assert client.get("/financial/bills").json()["bills"] == []
+
+
+def test_correcting_a_bill_into_an_unknown_category_is_refused_too(
+    wired: Wiring,
+) -> None:
+    client = wired.client
+    bill = _declare(client, category="health")
+
+    response = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"category": "gimnasio"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_charge_is_confirmed_in_the_bills_own_currency(wired: Wiring) -> None:
+    """A rate is a fact about a moment nobody recorded here, so a figure in
+    another currency is refused rather than converted."""
+    client = wired.client
+    bill = _declare(client, amount="14", currency="USD", starts_on="2026-09-04")
+
+    refused = client.post(
+        _charge_url(bill, "2026-09-04"),
+        json={"amount": "14", "currency": "COP"},
+    )
+    accepted = client.post(
+        _charge_url(bill, "2026-09-04"),
+        json={"amount": "15", "currency": "USD"},
+    )
+
+    assert refused.status_code == 400
+    assert accepted.status_code == 200
+    assert accepted.json()["occurrence"]["settled_amount"] == "15"

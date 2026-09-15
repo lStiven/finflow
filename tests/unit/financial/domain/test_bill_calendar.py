@@ -16,9 +16,11 @@ import pytest
 from personal_finance.contexts.financial.domain.bills import (
     GRACE_DAYS,
     MAX_NAME_LENGTH,
+    MAX_SKIPPED_PERIODS,
     MAX_WINDOW_DAYS,
     BillCadence,
     BillStatus,
+    ChargePayment,
     OccurrenceState,
     ScheduledBill,
 )
@@ -26,7 +28,12 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     MovementDirection,
 )
-from personal_finance.shared.domain.value_objects import Currency, Money, UserId
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
 
 
 USER = UserId.new()
@@ -379,3 +386,204 @@ def test_jumping_into_a_window_lands_where_stepping_would_have(
     )
 
     assert jumped[0].due_on == stepped
+
+
+# ----------------------------------------------------------------------
+# Answering for a charge
+# ----------------------------------------------------------------------
+
+
+def _payment(
+    amount: str = "120000", *, on: dt.date = dt.date(2026, 9, 6)
+) -> ChargePayment:
+    return ChargePayment(
+        movement_id="row",
+        amount=_money(amount),
+        occurred_at=PosixTime.from_epoch_seconds(
+            int(dt.datetime.combine(on, dt.time(hour=12), tzinfo=dt.UTC).timestamp()),
+        ),
+    )
+
+
+def test_a_confirmed_charge_reads_paid_however_late_it_is() -> None:
+    """Settlement outranks the calendar, and this is why it has to.
+
+    A charge paid a week after its day is paid. Read the other way round the
+    screen would put a red "ya pasó" beside money that has already left.
+    """
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+
+    charge = bill.charge_on(
+        dt.date(2026, 9, 4),
+        today=dt.date(2026, 10, 30),
+        payment=_payment(),
+    )
+
+    assert charge.state is OccurrenceState.PAID
+    assert charge.state.is_settled
+
+
+def test_the_same_charge_without_a_payment_is_overdue() -> None:
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+
+    charge = bill.charge_on(dt.date(2026, 9, 4), today=dt.date(2026, 10, 30))
+
+    assert charge.state is OccurrenceState.OVERDUE
+    assert not charge.state.is_settled
+
+
+def test_a_paid_charge_keeps_both_figures() -> None:
+    """What the bill projects and what actually moved are different facts, and
+    the difference is the gym raising its price."""
+    bill = _bill(amount="120000")
+
+    charge = bill.charge_on(
+        dt.date(2026, 9, 4),
+        today=dt.date(2026, 9, 10),
+        payment=_payment("130000"),
+    )
+
+    assert charge.amount == _money("120000")
+    assert charge.payment is not None
+    assert charge.payment.amount == _money("130000")
+
+
+def test_skipping_takes_a_charge_out_of_the_calendar_answer() -> None:
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+
+    bill.skip(dt.date(2026, 9, 4))
+
+    [charge] = bill.occurrences(
+        since=dt.date(2026, 9, 1),
+        until=dt.date(2026, 9, 30),
+        today=dt.date(2026, 9, 1),
+    )
+    assert charge.state is OccurrenceState.SKIPPED
+    assert charge.state.is_settled
+
+
+def test_a_payment_outranks_a_skip() -> None:
+    """Money that moved wins over a note saying it would not.
+
+    The use case refuses to skip a paid charge, so this is the state after a
+    race or a stale tab: the row is the fact, and the answer follows the fact.
+    """
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+    bill.skip(dt.date(2026, 9, 4))
+
+    charge = bill.charge_on(
+        dt.date(2026, 9, 4),
+        today=dt.date(2026, 9, 10),
+        payment=_payment(),
+    )
+
+    assert charge.state is OccurrenceState.PAID
+
+
+def test_a_skip_can_be_taken_back() -> None:
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+    bill.skip(dt.date(2026, 9, 4))
+
+    bill.unskip(dt.date(2026, 9, 4))
+
+    assert bill.skipped == frozenset()
+
+
+def test_a_skip_survives_the_day_leaving_the_calendar() -> None:
+    """Amending the anchor can strand a skip on a day nothing visits any more.
+    Removing it must still work, or it would be permanent."""
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+    bill.skip(dt.date(2026, 9, 4))
+
+    bill.amend(starts_on=dt.date(2026, 9, 11))
+    bill.unskip(dt.date(2026, 9, 4))
+
+    assert bill.skipped == frozenset()
+
+
+def test_a_day_the_bill_is_not_charged_on_cannot_be_skipped() -> None:
+    """The path segment is a date somebody can type. Without this, a skip
+    could answer for a charge that does not exist."""
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+
+    with pytest.raises(ValueError, match="not charged on"):
+        bill.skip(dt.date(2026, 9, 5))
+
+
+def test_skipping_twice_is_not_an_error() -> None:
+    """A screen retrying a request it is unsure landed must not be told off:
+    the answer is the same either way."""
+    bill = _bill(starts_on=dt.date(2026, 9, 4))
+
+    bill.skip(dt.date(2026, 9, 4))
+    bill.skip(dt.date(2026, 9, 4))
+
+    assert bill.skipped == frozenset({dt.date(2026, 9, 4)})
+
+
+def test_the_skipped_set_forgets_its_oldest_rather_than_growing_forever() -> None:
+    bill = _bill(cadence=BillCadence.WEEKLY, starts_on=dt.date(2020, 1, 1))
+    days = [dt.date(2020, 1, 1) + dt.timedelta(weeks=week) for week in range(300)]
+
+    for day in days:
+        bill.skip(day)
+
+    assert len(bill.skipped) == MAX_SKIPPED_PERIODS
+    assert max(bill.skipped) == days[-1]
+    assert days[0] not in bill.skipped
+
+
+@pytest.mark.parametrize(
+    ("period", "charged"),
+    [
+        (dt.date(2026, 9, 3), False),
+        (dt.date(2026, 9, 4), True),
+        (dt.date(2026, 9, 5), False),
+        (dt.date(2026, 10, 4), True),
+        (dt.date(2027, 2, 4), True),
+    ],
+)
+def test_occurs_on_answers_for_the_calendar_and_nothing_else(
+    period: dt.date,
+    charged: bool,
+) -> None:
+    assert _bill(starts_on=dt.date(2026, 9, 4)).occurs_on(period) is charged
+
+
+def test_a_day_before_the_bill_started_is_not_one_of_its_charges() -> None:
+    """`_first_on_or_after` answers `starts_on` for anything earlier, so
+    without the lower bound every past date would look like a charge."""
+    assert _bill(starts_on=dt.date(2026, 9, 4)).occurs_on(dt.date(2020, 1, 1)) is False
+
+
+# ----------------------------------------------------------------------
+# What a charge is called
+# ----------------------------------------------------------------------
+
+
+def test_a_charge_is_identified_by_its_bill_and_its_period() -> None:
+    bill = _bill()
+
+    assert bill.charge_id(dt.date(2026, 9, 4)) == bill.charge_id(dt.date(2026, 9, 4))
+    assert bill.charge_id(dt.date(2026, 9, 4)) != bill.charge_id(dt.date(2026, 10, 4))
+
+
+def test_the_price_changing_does_not_re_identify_a_charge() -> None:
+    """The one property that makes confirming twice safe. Were the amount in
+    the key, correcting a figure would write a second row and take the money
+    again."""
+    bill = _bill(amount="120000")
+    before = bill.charge_id(dt.date(2026, 9, 4))
+
+    bill.amend(amount=_money("130000"))
+
+    assert bill.charge_id(dt.date(2026, 9, 4)) == before
+
+
+def test_two_bills_charged_on_one_day_are_two_charges() -> None:
+    """Keying on the account would collapse them and lose the second."""
+    account = AccountId.new()
+    gym = _bill(name="Gimnasio", account_id=account)
+    rent = _bill(name="Arriendo", account_id=account)
+
+    assert gym.charge_id(dt.date(2026, 9, 4)) != rent.charge_id(dt.date(2026, 9, 4))

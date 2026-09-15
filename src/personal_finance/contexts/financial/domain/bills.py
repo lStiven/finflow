@@ -23,6 +23,16 @@ The three nouns are easy to confuse, so they are named apart:
 * `RecurringSeries` — what a detector *guesses* from the history. Does not
   exist yet, and will never write anything.
 
+Confirming a charge does not change that. **"Paid" is read back off the ledger
+row it wrote**, never written down here: the row's identity is derived from the
+bill and the period, so the ledger already knows, and a second copy of the
+answer would be the copy that survives somebody deleting the movement. Erasing
+that movement therefore un-pays the charge, with nothing to remember to undo.
+
+The one thing the ledger cannot answer is a charge that was *skipped* — the
+month the gym did not bill, the subscription that was already cancelled. No
+money moved, so there is no row to read, and that answer is stored on the bill.
+
 And a fourth that already exists and is none of these: `RecurringCharge` in
 `financing.py` is the insurance a credit carries every period.
 """
@@ -30,6 +40,7 @@ And a fourth that already exists and is none of these: `RecurringCharge` in
 from __future__ import annotations
 
 import calendar
+from collections.abc import Mapping
 import dataclasses
 import datetime as dt
 import enum
@@ -39,6 +50,8 @@ import uuid
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     MovementDirection,
+    MovementFingerprint,
+    MovementId,
 )
 from personal_finance.shared.domain.entities import AggregateRoot
 from personal_finance.shared.domain.value_objects import (
@@ -68,6 +81,15 @@ GRACE_DAYS = 3
 # over ten years is five hundred rows nobody asked to read, built one date at
 # a time.
 MAX_WINDOW_DAYS = 400
+
+# How many skipped periods one bill remembers. Skipping is the rare answer —
+# the month a charge simply did not come — so this is years of them, and it
+# exists only so a stored bill cannot grow without a bound. Past it the oldest
+# is forgotten rather than the newest refused: a skip from four years ago
+# reappearing as an uncleared charge is visible and harmless, while refusing
+# the skip somebody is asking for today is a screen with a button that does
+# nothing.
+MAX_SKIPPED_PERIODS = 240
 
 
 class BillCadence(enum.Enum):
@@ -164,18 +186,52 @@ class BillStatus(enum.Enum):
 
 
 class OccurrenceState(enum.Enum):
-    """What can be said about one expected charge, today.
+    """What can be said about one charge, today.
 
-    Only two members while nothing can be confirmed. Paying and skipping are
-    the next delivery, and they add their own — which is why this is an enum
-    from the start rather than a boolean that would have to be widened.
+    Settled first, calendar second, and the order is the rule: a charge that
+    was paid on the 9th is paid, not overdue, however far past its day it is.
+    Only a charge nobody has answered for falls back on what the calendar can
+    say about it.
     """
 
-    #: Its day has not arrived yet, or is within the grace period.
+    #: Confirmed: a ledger row exists for this bill and this period.
+    PAID = "paid"
+    #: The owner said this one is not going to happen. No money moved and none
+    #: is expected to, so it leaves both of the month's figures.
+    SKIPPED = "skipped"
+    #: Nobody has answered for it, and its day has not arrived yet or is
+    #: within the grace period.
     EXPECTED = "expected"
-    #: Its day and its grace both passed. Says nothing about whether the money
-    #: moved — nothing here can know that yet.
+    #: Nobody has answered for it and its day and grace both passed. Now that
+    #: confirming exists this does mean unpaid, which is exactly what it could
+    #: not mean before.
     OVERDUE = "overdue"
+
+    @property
+    def is_settled(self) -> bool:
+        """Whether somebody has answered for this charge, either way."""
+        return self in _SETTLED_STATES
+
+
+_SETTLED_STATES = frozenset({OccurrenceState.PAID, OccurrenceState.SKIPPED})
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ChargePayment(ValueObject):
+    """The ledger row that confirmed one charge, as this side of it reads.
+
+    Carried rather than merely counted because the three fields answer three
+    different questions a screen asks, and none of them is on the bill. What
+    it actually cost may not be what the bill says — the gym raised its price
+    and the owner confirmed the real figure. When it actually moved is not the
+    day it was due — the 4th was a Saturday. And the movement's own id is what
+    lets somebody go and look at it, or delete it, which is the only way to
+    un-pay a charge.
+    """
+
+    movement_id: str
+    amount: Money
+    occurred_at: PosixTime
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -199,10 +255,15 @@ class BillOccurrence(ValueObject):
     """One charge of one period, as the calendar predicts it.
 
     `due_on` is both the date and the identity: a charge is the charge of that
-    day, and the pair (bill, date) is what the next delivery will key a ledger
-    row on. It is the anchor's own calendar date, not the date the money
-    actually moved — the money may move three days later, and when a
-    confirmation records that, it records both.
+    day, and the pair (bill, date) is what a confirmed row is keyed on. It is
+    the anchor's own calendar date, not the date the money actually moved —
+    the money may move three days later, and `payment` is where that is
+    recorded, so both are kept.
+
+    `amount` stays what the bill projects even once it is paid. The two can
+    differ and the difference is worth seeing: "120 000 expected, 130 000
+    charged" is the gym raising its price, and a screen that overwrote the
+    first with the second would hide it.
     """
 
     bill_id: BillId
@@ -210,6 +271,9 @@ class BillOccurrence(ValueObject):
     amount: Money
     direction: MovementDirection
     state: OccurrenceState
+    #: The ledger row confirming it, when there is one. Always None unless
+    #: `state` is `PAID`, and never None when it is.
+    payment: ChargePayment | None = None
 
 
 @dataclasses.dataclass(eq=False, slots=True)
@@ -236,6 +300,10 @@ class ScheduledBill(AggregateRoot[BillId]):
     account_id: AccountId | None = None
     category: str | None = None
     status: BillStatus = BillStatus.ACTIVE
+    #: The periods the owner said would not happen. Stored, unlike "paid",
+    #: because nothing else records them: a skip moves no money, so there is
+    #: no ledger row to read the answer back off.
+    skipped: frozenset[dt.date] = frozenset()
     created_at: PosixTime = dataclasses.field(default_factory=PosixTime.now)
 
     @classmethod
@@ -334,12 +402,73 @@ class ScheduledBill(AggregateRoot[BillId]):
     def resume(self) -> None:
         self.status = BillStatus.ACTIVE
 
+    def charge_id(self, period: dt.date) -> MovementId:
+        """What the ledger row for this period is, or would be, called.
+
+        Here rather than in the caller so there is exactly one answer. Reading
+        a charge back and writing one have to agree on this to the byte — they
+        are the same question asked from two directions — and a second place
+        that derived it would be a second place to get it wrong, with the
+        failure showing up as money that can be taken twice.
+        """
+        return MovementId.from_fingerprint(
+            MovementFingerprint.from_schedule(
+                user_id=self.user_id,
+                bill_id=self.id.value,
+                period=period,
+            ),
+        )
+
+    def occurs_on(self, period: dt.date) -> bool:
+        """Whether this bill is charged on exactly that day.
+
+        What stops a period from being invented. Nothing else checks it: the
+        day is a path segment, and without this anybody could confirm — and so
+        move money for — a charge that is not on this bill's calendar at all,
+        or skip a day it was never going to be charged on and leave a skip
+        that answers for nothing.
+        """
+        return period >= self.starts_on and self._first_on_or_after(period) == period
+
+    def skip(self, period: dt.date) -> None:
+        """Say this charge is not going to happen.
+
+        The month the gym did not bill, the subscription cancelled before its
+        renewal. It writes nothing anywhere else — that is the difference from
+        confirming — and it takes the charge out of both of the month's
+        figures, because a charge nobody is going to be asked for is not what
+        the month costs and not what is left to pay.
+
+        Refused on a period this bill is not charged on, for the reason
+        `occurs_on` gives. Skipping one already skipped is not an error: the
+        answer is the same either way, and a screen retrying a request it is
+        not sure landed must not be told off for it.
+        """
+        if not self.occurs_on(period):
+            raise ValueError(f"This bill is not charged on {period.isoformat()}")
+
+        kept = sorted({*self.skipped, period})
+
+        # Oldest first out, so what is forgotten is the skip furthest from
+        # anything anybody is still reading.
+        self.skipped = frozenset(kept[-MAX_SKIPPED_PERIODS:])
+
+    def unskip(self, period: dt.date) -> None:
+        """Take a skip back, and let the charge be expected again.
+
+        No `occurs_on` check, deliberately: amending the bill's day or its
+        cadence can leave a skip on a date the calendar no longer visits, and
+        refusing to remove that would make it permanent.
+        """
+        self.skipped = self.skipped - {period}
+
     def occurrences(
         self,
         *,
         since: dt.date,
         until: dt.date,
         today: dt.date,
+        payments: Mapping[dt.date, ChargePayment] | None = None,
     ) -> tuple[BillOccurrence, ...]:
         """Every charge this bill expects inside the window, in order.
 
@@ -351,6 +480,14 @@ class ScheduledBill(AggregateRoot[BillId]):
         a month-based cadence has to keep the anchor's day — see
         `next_after`. The walk is bounded twice: by `until`, and by the window
         the caller is allowed to ask for.
+
+        `payments` is what the ledger holds for this bill, keyed by period —
+        handed in rather than looked up, because whether a row exists is a
+        question for a repository and an aggregate that could ask one would
+        be an aggregate holding a connection. Absent, every charge reads
+        unsettled, which is the safe direction: a charge shown as still coming
+        is a charge somebody looks at, and one hidden as paid is one they
+        never think about again.
         """
         if self.status is BillStatus.PAUSED or until < since:
             return ()
@@ -360,22 +497,44 @@ class ScheduledBill(AggregateRoot[BillId]):
                 f"A bill window cannot be wider than {MAX_WINDOW_DAYS} days",
             )
 
+        settled = payments or {}
         found: list[BillOccurrence] = []
         date = self._first_on_or_after(since)
 
         while date <= until:
-            found.append(
-                BillOccurrence(
-                    bill_id=self.id,
-                    due_on=date,
-                    amount=self.amount,
-                    direction=self.direction,
-                    state=_state_on(date, today=today),
-                ),
-            )
+            found.append(self.charge_on(date, today=today, payment=settled.get(date)))
             date = self.cadence.next_after(date, anchor=self.starts_on)
 
         return tuple(found)
+
+    def charge_on(
+        self,
+        date: dt.date,
+        *,
+        today: dt.date,
+        payment: ChargePayment | None = None,
+    ) -> BillOccurrence:
+        """One charge of one period, with settlement outranking the calendar.
+
+        Paid first, then skipped, then what the day says. A charge paid a week
+        late is paid, not overdue — reading it the other way round would put a
+        red figure beside money that has already left.
+        """
+        if payment is not None:
+            state = OccurrenceState.PAID
+        elif date in self.skipped:
+            state = OccurrenceState.SKIPPED
+        else:
+            state = _state_on(date, today=today)
+
+        return BillOccurrence(
+            bill_id=self.id,
+            due_on=date,
+            amount=self.amount,
+            direction=self.direction,
+            state=state,
+            payment=payment,
+        )
 
     def _first_on_or_after(self, since: dt.date) -> dt.date:
         """The first charge at or after `since`, reached by arithmetic.

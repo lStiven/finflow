@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { Bill, BillOccurrence, BillTotal } from "@/api/queries";
 import {
   billState,
+  chargedAmount,
+  chargeLabel,
+  chargeVerbs,
   countsTowardsSpending,
   daysUntil,
-  dueShare,
   formatAmountInput,
   groupByDay,
   initialOf,
+  isSettled,
   parseAmount,
+  settledShare,
   singleTotal,
   whenLabel,
 } from "@/bills/schedule";
@@ -92,8 +96,12 @@ describe("qué entra en el total del mes", () => {
 });
 
 describe("las dos cifras", () => {
-  const cop: BillTotal = { currency: "COP", expected: "850000", upcoming: "310000" };
-  const usd: BillTotal = { currency: "USD", expected: "15", upcoming: "15" };
+  const cop: BillTotal = {
+    currency: "COP",
+    expected: "850000",
+    outstanding: "310000",
+  };
+  const usd: BillTotal = { currency: "USD", expected: "15", outstanding: "15" };
 
   it("con una sola moneda hay titular", () => {
     expect(singleTotal([cop])).toBe(cop);
@@ -176,22 +184,65 @@ describe("cuándo cae el próximo cobro", () => {
 });
 
 describe("la barra del mes", () => {
-  it("llena lo que ya venció", () => {
-    // 850.000 comprometidos, 310.000 por venir → 63,5 % ya pasó.
-    expect(dueShare("850000", "310000")).toBeCloseTo(0.635, 3);
+  it("llena lo que ya se pagó, no lo que ya venció", () => {
+    // 850.000 comprometidos, 310.000 sin pagar → 63,5 % confirmado. Antes esto
+    // medía días pasados, que es algo sobre lo que nadie puede actuar.
+    expect(settledShare("850000", "310000")).toBeCloseTo(0.635, 3);
   });
 
-  it("vacía cuando todo está por venir", () => {
-    expect(dueShare("850000", "850000")).toBe(0);
+  it("vacía cuando no se ha confirmado nada, aunque el mes se acabe", () => {
+    expect(settledShare("850000", "850000")).toBe(0);
   });
 
   it("no divide por cero cuando no hay nada comprometido", () => {
-    expect(dueShare("0", "0")).toBe(0);
+    expect(settledShare("0", "0")).toBe(0);
   });
 
   it("se queda entre 0 y 1 aunque los números no cuadren", () => {
-    expect(dueShare("100", "500")).toBe(0);
-    expect(dueShare("100", "-500")).toBe(1);
+    expect(settledShare("100", "500")).toBe(0);
+    expect(settledShare("100", "-500")).toBe(1);
+  });
+});
+
+describe("responder por un cobro", () => {
+  it("pagado y saltado están resueltos; lo demás no", () => {
+    expect(isSettled(occurrence({ state: "paid" }))).toBe(true);
+    expect(isSettled(occurrence({ state: "skipped" }))).toBe(true);
+    expect(isSettled(occurrence({ state: "expected" }))).toBe(false);
+    expect(isSettled(occurrence({ state: "overdue" }))).toBe(false);
+  });
+
+  it("lo normal no lleva etiqueta: ponerle una a todo esconde las dos que importan", () => {
+    expect(chargeLabel(occurrence({ state: "expected" }))).toBeNull();
+  });
+
+  it("lo resuelto y lo vencido sí", () => {
+    expect(chargeLabel(occurrence({ state: "paid" }))).toBe("Pagado");
+    expect(chargeLabel(occurrence({ state: "skipped" }))).toBe("Saltado");
+    expect(chargeLabel(occurrence({ state: "overdue" }))).toBe("Sin pagar");
+  });
+
+  it("un ingreso no se paga, llega", () => {
+    // «Sin pagar» junto a la nómina lee como una deuda propia. El verbo lo
+    // decide la dirección, que es lo único que distingue una de otra.
+    const salary = { direction: "incoming" as const };
+
+    expect(chargeLabel(occurrence({ ...salary, state: "overdue" }))).toBe("Sin llegar");
+    expect(chargeLabel(occurrence({ ...salary, state: "paid" }))).toBe("Recibido");
+    expect(chargeVerbs(occurrence(salary)).settle).toBe("Ya llegó");
+    expect(chargeVerbs(occurrence()).settle).toBe("Pagar");
+  });
+
+  it("una vez pagado manda lo que salió, no lo que la factura proyectaba", () => {
+    // El gimnasio subió de precio. Enseñar la previsión después de que el
+    // dinero salió es que la pantalla y el extracto no coincidan.
+    expect(chargedAmount(occurrence({ state: "paid", settled_amount: "130000" }))).toBe(
+      "130000",
+    );
+  });
+
+  it("sin pagar, la previsión es lo único que hay", () => {
+    expect(chargedAmount(occurrence())).toBe("120000");
   });
 });
 

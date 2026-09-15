@@ -2427,7 +2427,7 @@
                 }
               ]
             },
-            "description": "Declared bills, every charge falling inside the window, and what it adds up to. The window defaults to the calendar month `timezone` is currently in; give both ends or neither. Two totals per currency and never one: `expected` is what the window costs, `upcoming` what has not fallen due yet — which is not the same as unpaid, because nothing can be confirmed yet. `frozen` means the bill's account is closed; it is derived from the account, so reopening it un-freezes the bill."
+            "description": "Declared bills, every charge falling inside the window, and what it adds up to. The window defaults to the calendar month `timezone` is currently in; give both ends or neither. Two totals per currency and never one: `expected` is what the window costs, `outstanding` what nobody has answered for yet — it was called `upcoming` and meant \"has not fallen due\", which was all it could mean before charges could be confirmed. A paid charge stays in `expected` and leaves `outstanding`; a skipped one leaves both. Each occurrence carries its `state` (`expected`, `overdue`, `paid`, `skipped`) and, once paid, the `movement_id` behind it with what actually moved. `frozen` means the bill's account is closed; it is derived from the account, so reopening it un-freezes the bill."
           },
           "response": []
         },
@@ -2555,6 +2555,126 @@
               ]
             },
             "description": "Expect charges again, from the same anchor day."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm a charge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/pay",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "pay"
+              ]
+            },
+            "description": "Say one charge of one period happened, and write it into the ledger. **The only call under `/bills` that moves money**, and it goes through the same use case as `POST /financial/transactions`, so the balance, the merchant attribution, the month's spending and the Telegram alert all follow. The period in the path is the charge's `due_on` and has to be a day the bill is actually charged on — without it, \"paid\" in September and in October would be the same request. Calling it twice is one charge and answers 200 both times: the row's id comes from the bill and the period, so the second write is refused by DynamoDB rather than by a check. An empty body `{}` confirms what the bill says, on the period's own day at noon UTC; send `amount` (with its `currency`) when the price changed, and `occurred_at` (epoch seconds) when the money moved on another day. Neither takes part in the identity, so correcting a figure by calling again cannot write a second row — edit the movement instead. 409 when the bill's account is closed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": \"130000\",\n  \"currency\": \"COP\",\n  \"occurred_at\": null,\n  \"note\": null\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Undo a confirmation",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/pay",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "pay"
+              ]
+            },
+            "description": "Erase the movement the confirmation wrote. The account gets back exactly what the charge took, because that is what erasing a movement already does — and \"paid\" is never stored anywhere, it is read back off that very row, so removing the row is the whole of removing the answer. Silent (200) when there is nothing to erase: this is the undo behind a button somebody presses because they are unsure."
+          },
+          "response": []
+        },
+        {
+          "name": "Skip a charge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/skip",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "skip"
+              ]
+            },
+            "description": "Say this charge is not going to happen — the month the gym did not bill, the subscription cancelled before its renewal. Writes nothing to the ledger and takes the charge out of **both** of the month's figures. Unlike \"paid\", this one *is* stored on the bill: no money moves, so there is no row to read the answer back off. 400 on a charge that is already paid — undo the payment first, or the figures would stop adding up with nothing on screen saying why."
+          },
+          "response": []
+        },
+        {
+          "name": "Un-skip a charge",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/skip",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "skip"
+              ]
+            },
+            "description": "Let a skipped charge be expected again. No calendar check, on purpose: amending the bill's day can leave a skip on a date the calendar no longer visits, and refusing to remove that would make it permanent."
           },
           "response": []
         },

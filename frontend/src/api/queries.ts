@@ -64,6 +64,7 @@ export type BillOccurrence = components["schemas"]["BillOccurrenceResponse"];
  * come. Never summed across currencies. */
 export type BillTotal = components["schemas"]["BillTotalResponse"];
 export type BillCadence = components["schemas"]["BillCadence"];
+export type BillCharge = components["schemas"]["BillChargeResponse"];
 export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
 export type AmendBillBody = components["schemas"]["AmendBillPayload"];
 /** What a loan costs or an investment earns, and what it will do next. */
@@ -203,6 +204,16 @@ export const financingQuery = (accountId: string, periods = 12) =>
 
 /* ------------------------------------------------------------ transactions */
 
+/**
+ * Where a movement came from, straight off the contract.
+ *
+ * Read from the schema rather than spelled out, because the filter offers
+ * whatever `/financial/catalog` serves: written by hand, the list on screen
+ * and the list the filter accepts drift the moment an origin is added, and
+ * the symptom is a dropdown option that silently does nothing.
+ */
+export type TransactionOrigin = components["schemas"]["TransactionOrigin"];
+
 export type TransactionFilters = {
   limit?: number;
   offset?: number;
@@ -210,7 +221,7 @@ export type TransactionFilters = {
   account_id?: string;
   merchant_id?: string;
   category?: string;
-  origin?: "bank_alert" | "manual";
+  origin?: TransactionOrigin;
   direction?: "incoming" | "outgoing";
   search?: string;
   from?: number;
@@ -1315,6 +1326,93 @@ export function useForgetBill(): UseMutationResult<unknown, Error, string> {
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+/**
+ * Answering for one charge: it happened, it did not, or undo either.
+ *
+ * One hook for all four, like `usePauseBill`, and here it matters more: this
+ * is the only mutation on this screen that moves money, so **everything it
+ * touches has to be invalidated together**. A confirmed charge writes a ledger
+ * row and changes a balance, so the movements list, the accounts, net worth
+ * and the summary are all stale the instant it returns — and a screen showing
+ * a balance that has not caught up is the kind of wrong number somebody stops
+ * trusting the app over.
+ *
+ * `period` is the charge's due date, which is its identity. Sending it in the
+ * path rather than the body is what makes paying September and paying October
+ * two different requests.
+ */
+export type ChargeAction = "pay" | "unpay" | "skip" | "unskip";
+
+export type SettleChargeVariables = {
+  billId: string;
+  period: string;
+  action: ChargeAction;
+  /** What actually moved, when it is not what the bill says. */
+  amount?: string;
+  /**
+   * The currency that amount is in — the charge's own, never a constant.
+   *
+   * The server refuses an amount in a currency the bill is not in rather than
+   * converting it, so hardcoding one here is a USD bill that can never be
+   * confirmed from the screen.
+   */
+  currency?: Currency;
+  /** When it actually moved, in epoch seconds. */
+  occurredAt?: number;
+};
+
+export function useSettleCharge(): UseMutationResult<
+  BillCharge,
+  Error,
+  SettleChargeVariables
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, period, action, amount, currency, occurredAt }) => {
+      const params = {
+        path: { bill_id: billId, period },
+      } as const;
+
+      if (action === "pay") {
+        return unwrap(
+          api.POST("/financial/bills/{bill_id}/occurrences/{period}/pay", {
+            params,
+            body: {
+              ...(amount === undefined ? {} : { amount, currency }),
+              ...(occurredAt === undefined ? {} : { occurred_at: occurredAt }),
+            },
+          }),
+        );
+      }
+
+      if (action === "unpay") {
+        return unwrap(
+          api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/pay", {
+            params,
+          }),
+        );
+      }
+
+      if (action === "skip") {
+        return unwrap(
+          api.POST("/financial/bills/{bill_id}/occurrences/{period}/skip", { params }),
+        );
+      }
+
+      return unwrap(
+        api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/skip", { params }),
+      );
+    },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+      void client.invalidateQueries({ queryKey: queryKeys.transactions });
+      void client.invalidateQueries({ queryKey: queryKeys.summary });
+      void client.invalidateQueries({ queryKey: queryKeys.trends });
+      void client.invalidateQueries({ queryKey: queryKeys.accounts });
     },
   });
 }

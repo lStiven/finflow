@@ -511,8 +511,25 @@
         "title": "BillCadence",
         "type": "string"
       },
+      "BillChargeResponse": {
+        "description": "One charge after somebody answered for it, and its bill.\n\nBoth, because both change. The charge gains a state; the bill's \"next\ncharge\" moves past it. Answering with only the first would leave the card\non screen still saying the charge is due today.",
+        "properties": {
+          "bill": {
+            "$ref": "#/components/schemas/BillResponse"
+          },
+          "occurrence": {
+            "$ref": "#/components/schemas/BillOccurrenceResponse"
+          }
+        },
+        "required": [
+          "bill",
+          "occurrence"
+        ],
+        "title": "BillChargeResponse",
+        "type": "object"
+      },
       "BillOccurrenceResponse": {
-        "description": "One expected charge.\n\n`due_on` is the calendar day the bill anchors on, not a day money moved:\nnothing here can know that yet. `state` says `overdue` only once the grace\nhas passed as well, and even then it is a statement about the calendar.",
+        "description": "One charge of one period.\n\n`due_on` is the calendar day the bill anchors on, and the charge's own\nidentity — it is what a confirmation is keyed on and what goes in the path\nof the endpoints below. It is **not** the day money moved: that is\n`settled_at`, and the two differ whenever the 4th falls on a Saturday.\n\n`amount` stays what the bill projects even once it is paid. What actually\nleft is `settled_amount`, and keeping both is what makes \"120 000\nexpected, 130 000 charged\" visible instead of silently overwritten.",
         "properties": {
           "amount": {
             "title": "Amount",
@@ -532,6 +549,39 @@
             "format": "date",
             "title": "Due On",
             "type": "string"
+          },
+          "movement_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Movement Id"
+          },
+          "settled_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled Amount"
+          },
+          "settled_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settled At"
           },
           "state": {
             "$ref": "#/components/schemas/OccurrenceState"
@@ -643,7 +693,7 @@
         "type": "string"
       },
       "BillTotalResponse": {
-        "description": "The two figures, for one currency.\n\nTwo and not one, because \"what this month costs\" and \"what has not fallen\ndue yet\" are different questions and a reader takes whichever is on screen\nto be the answer to both.\n\n`upcoming` is what has **not fallen due yet** — deliberately not \"unpaid\".\nNothing can be confirmed yet, so a charge whose day has passed is one this\napp cannot see either way.",
+        "description": "The two figures, for one currency.\n\nTwo and not one, because \"what this month costs\" and \"what is still to\npay\" are different questions and a reader takes whichever is on screen to\nbe the answer to both.\n\n`outstanding` is what nobody has answered for yet. It was called\n`upcoming` and meant \"has not fallen due\", which was all this could say\nbefore charges could be confirmed; now that they can, it means unpaid and\nis named for it. A paid charge stays in `expected` — it is exactly what\nthe month cost — and a skipped one leaves both.",
         "properties": {
           "currency": {
             "$ref": "#/components/schemas/Currency"
@@ -652,15 +702,15 @@
             "title": "Expected",
             "type": "string"
           },
-          "upcoming": {
-            "title": "Upcoming",
+          "outstanding": {
+            "title": "Outstanding",
             "type": "string"
           }
         },
         "required": [
           "currency",
           "expected",
-          "upcoming"
+          "outstanding"
         ],
         "title": "BillTotalResponse",
         "type": "object"
@@ -1082,6 +1132,62 @@
           "charged_to_balance"
         ],
         "title": "ChargeResponse",
+        "type": "object"
+      },
+      "ConfirmChargePayload": {
+        "description": "What actually happened, where it differs from what the bill projected.\n\nEvery field is optional and the empty body is the ordinary case: the gym\ncharged what it always charges, on the day it always charges it. What this\nexists for is the month it did not — a price that went up, and the 4th\nthat fell on a Saturday so the money left on the 6th.\n\nNone of it takes part in the charge's identity, which is the bill and the\nperiod. So a figure corrected by confirming again does not write a second\nrow; it is answered with the row already there, and correcting it is\nediting that movement, where every other correction in this app is made.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 280,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          }
+        },
+        "title": "ConfirmChargePayload",
         "type": "object"
       },
       "CreateChannelPayload": {
@@ -2803,8 +2909,10 @@
         "type": "object"
       },
       "OccurrenceState": {
-        "description": "What can be said about one expected charge, today.\n\nOnly two members while nothing can be confirmed. Paying and skipping are\nthe next delivery, and they add their own — which is why this is an enum\nfrom the start rather than a boolean that would have to be widened.",
+        "description": "What can be said about one charge, today.\n\nSettled first, calendar second, and the order is the rule: a charge that\nwas paid on the 9th is paid, not overdue, however far past its day it is.\nOnly a charge nobody has answered for falls back on what the calendar can\nsay about it.",
         "enum": [
+          "paid",
+          "skipped",
           "expected",
           "overdue"
         ],
@@ -3837,11 +3945,12 @@
         "type": "object"
       },
       "TransactionOrigin": {
-        "description": "Where a movement came from, which decides what may be trusted about it.\n\nA bank alert states a fact somebody else recorded; a manual entry is the\nuser's own claim. Automatic payments that never email are exactly why the\nsecond exists.\n\nAn **accrual** is neither: nobody typed it and no bank announced it. It is\nwhat this app computed from the terms the owner declared — a month of\ninterest on a mortgage, the insurance that month carried, what a CDT\nearned. Its own origin because it is the one a reader has to be able to\ntell apart: an interest charge is real money leaving somebody's net worth,\nbut it is the only movement in the ledger whose authority is an\narithmetic rather than a fact, so a wrong rate is corrected by restating\nthe terms rather than by arguing with the bank.",
+        "description": "Where a movement came from, which decides what may be trusted about it.\n\nA bank alert states a fact somebody else recorded; a manual entry is the\nuser's own claim. Automatic payments that never email are exactly why the\nsecond exists.\n\nAn **accrual** is neither: nobody typed it and no bank announced it. It is\nwhat this app computed from the terms the owner declared — a month of\ninterest on a mortgage, the insurance that month carried, what a CDT\nearned. Its own origin because it is the one a reader has to be able to\ntell apart: an interest charge is real money leaving somebody's net worth,\nbut it is the only movement in the ledger whose authority is an\narithmetic rather than a fact, so a wrong rate is corrected by restating\nthe terms rather than by arguing with the bank.\n\nA **scheduled** charge is a declared bill somebody confirmed: the owner\nsaid the gym would be charged on the 4th, and then said it was. Deliberately\nnot `MANUAL`, which it otherwise resembles, because two later pieces of\nthis feature need to tell them apart — the detector must not propose\ndeclaring a bill it is looking at the charges of, and an automatic charge\nhas to be distinguishable from money its owner typed. And deliberately not\n`ACCRUAL`, which is excluded from alerts on purpose: a charge landing on a\nbill's due date is exactly the moment its owner wants to hear about it.",
         "enum": [
           "bank_alert",
           "manual",
-          "accrual"
+          "accrual",
+          "scheduled"
         ],
         "title": "TransactionOrigin",
         "type": "string"
@@ -5768,6 +5877,244 @@
           }
         ],
         "summary": "Amend Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/occurrences/{period}/pay": {
+      "delete": {
+        "description": "Erase the movement this charge's confirmation wrote.\n\nThe account gets back exactly what the charge took, because that is what\nerasing a movement already does. Nothing else is undone: \"paid\" is never\nwritten down — it is read back off this very row — so removing the row is\nthe whole of removing the answer.\n\nSilent when there is nothing to erase. This is the undo behind a button\nsomebody presses because they are not sure, and a 404 on the second press\nis a worse answer than nothing.",
+        "operationId": "undo_bill_charge_financial_bills__bill_id__occurrences__period__pay_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undo Bill Charge",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Say this charge happened, and write it into the ledger.\n\nThe first thing under `/bills` that moves money. From here the charge is\nan ordinary movement: it moves the bill's account, it counts as spending,\nit is attributed to a merchant, and whoever connected Telegram hears about\nit — all of which was already built, which is the whole reason a bill is\nan aggregate inside Financial rather than a context of its own.\n\nThe **period is in the path**, not the body, because what is being paid is\none charge and not the bill: without it, \"paid\" in September and \"paid\" in\nOctober would be the same request. It has to be a day this bill is\nactually charged on — the amount and the account come off the bill, so an\ninvented period would be money moving for a charge that does not exist.\n\nPressing it twice is one charge, and not because anything counts: the\nrow's id comes from the bill and the period, so the second attempt finds\nthe row already there and answers with it. 200, never 201, for the same\nreason — the honest answer is \"this charge is settled\", which is as true\nthe second time as the first.",
+        "operationId": "confirm_bill_charge_financial_bills__bill_id__occurrences__period__pay_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmChargePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Bill Charge",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/occurrences/{period}/skip": {
+      "delete": {
+        "description": "Let a skipped charge be expected again.",
+        "operationId": "undo_bill_skip_financial_bills__bill_id__occurrences__period__skip_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undo Bill Skip",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Say this charge is not going to happen.\n\nThe month the gym did not bill, the subscription cancelled before its\nrenewal. It writes nothing to the ledger — that is the difference from\nconfirming — and takes the charge out of both of the month's figures: a\ncharge nobody is going to be asked for is not what the month costs and not\nwhat is left to pay.\n\nUnlike \"paid\", this **is** stored, on the bill. No money moves, so there\nis no ledger row to read the answer back off.",
+        "operationId": "skip_bill_charge_financial_bills__bill_id__occurrences__period__skip_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Skip Bill Charge",
         "tags": [
           "financial"
         ]

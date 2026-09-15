@@ -384,6 +384,38 @@ class ScheduledBillRepository(Protocol):
         ...
 
 
+class ChargeLookup(Protocol):
+    """Which of a handful of named movements the ledger already holds.
+
+    Narrow like `AccountLookup`, and for the same reason: reading a bill's
+    charges is a question about what exists, and a use case that had the whole
+    `TransactionLedger` to ask it with would be one typo away from recording
+    or erasing money it has no business touching. `DynamoDBTransactionLedger`
+    satisfies both, so nothing extra is wired up.
+
+    This is the whole of how "paid" is answered. A confirmed charge's id comes
+    from its bill and its period, so the row *is* the record — there is no
+    second copy anywhere, and none to fall out of step when somebody deletes
+    the movement.
+    """
+
+    def find_many(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> Mapping[str, Transaction]:
+        """The movements among these ids that exist, keyed by id.
+
+        Absent from the mapping means no such row, which is the ordinary
+        answer for a charge nobody has confirmed. One call rather than one per
+        id: a month of bills is tens of ids, and asking for them one at a time
+        would put a round trip per charge behind a screen somebody opens to
+        read two numbers.
+        """
+        ...
+
+
 class AccountLookup(Protocol):
     """The two questions bills ask about accounts, and nothing more.
 

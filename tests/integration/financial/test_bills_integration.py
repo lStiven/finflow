@@ -24,21 +24,25 @@ import pytest
 
 from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
+    ConfirmChargeCommand,
     DeclareBillCommand,
     ListBillsQuery,
     ListBillsUseCase,
     ManageBillsUseCase,
     NoSuchBillError,
+    SettleBillChargeUseCase,
 )
 from personal_finance.contexts.financial.application.commands import OpenAccountCommand
 from personal_finance.contexts.financial.application.handlers import (
     AccountNotFoundError,
     ManageAccountsUseCase,
+    ManageTransactionsUseCase,
 )
 from personal_finance.contexts.financial.domain.bills import (
     BillCadence,
     BillId,
     BillStatus,
+    OccurrenceState,
 )
 from personal_finance.contexts.financial.domain.entities import Account
 from personal_finance.contexts.financial.domain.value_objects import AccountKind
@@ -95,19 +99,47 @@ def accounts(dynamodb_client: DynamoDBClient, table: str) -> DynamoDBAccountRepo
 
 
 @pytest.fixture
+def ledger(
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> DynamoDBTransactionLedger:
+    return DynamoDBTransactionLedger(client=dynamodb_client, table_name=table)
+
+
+@pytest.fixture
 def manage(
     bills: DynamoDBScheduledBillRepository,
     accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
 ) -> ManageBillsUseCase:
-    return ManageBillsUseCase(bills=bills, accounts=accounts)
+    return ManageBillsUseCase(bills=bills, accounts=accounts, charges=ledger)
 
 
 @pytest.fixture
 def listing(
     bills: DynamoDBScheduledBillRepository,
     accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
 ) -> ListBillsUseCase:
-    return ListBillsUseCase(bills=bills, accounts=accounts)
+    return ListBillsUseCase(bills=bills, accounts=accounts, charges=ledger)
+
+
+@pytest.fixture
+def settle(
+    bills: DynamoDBScheduledBillRepository,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> SettleBillChargeUseCase:
+    return SettleBillChargeUseCase(
+        bills=bills,
+        accounts=accounts,
+        charges=ledger,
+        transactions=ManageTransactionsUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=NullEventPublisher(),
+        ),
+    )
 
 
 def _declare(user_id: UserId = OWNER, **overrides: object) -> DeclareBillCommand:
@@ -306,12 +338,10 @@ def test_a_bill_cannot_be_declared_against_a_stranger_s_account(
 def test_declaring_a_bill_writes_no_ledger_row_and_moves_no_balance(
     manage: ManageBillsUseCase,
     accounts: DynamoDBAccountRepository,
-    dynamodb_client: DynamoDBClient,
-    table: str,
+    ledger: DynamoDBTransactionLedger,
 ) -> None:
     """The rule the whole feature rests on, checked where it would actually
     break: against the real ledger, not against a fake that was never asked."""
-    ledger = DynamoDBTransactionLedger(client=dynamodb_client, table_name=table)
     account = _open_account(accounts, ledger)
 
     manage.declare(_declare(account_id=account.id))
@@ -347,3 +377,208 @@ def test_an_unknown_bill_id_is_refused_rather_than_creating_one(
 ) -> None:
     with pytest.raises(NoSuchBillError):
         manage.amend(AmendBillCommand(user_id=OWNER, bill_id=BillId.new(), name="X"))
+
+
+# ----------------------------------------------------------------------
+# Confirming a charge — the half that is money
+# ----------------------------------------------------------------------
+
+
+def test_confirming_a_charge_writes_one_row_and_moves_the_balance(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    account = _open_account(accounts, ledger)
+    bill = manage.declare(_declare(account_id=account.id)).bill
+
+    settle.confirm(
+        ConfirmChargeCommand(
+            user_id=OWNER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+        ),
+    )
+
+    [row] = list(ledger.list_all(OWNER))
+    assert row.counterparty == "Gimnasio"
+    assert row.amount == Money(amount=Decimal("120000"), currency=Currency.COP)
+    stored = accounts.find(user_id=OWNER, account_id=account.id)
+    assert stored is not None
+    assert stored.balance.signed_amount == Decimal("-120000")
+
+
+def test_confirming_twice_is_refused_by_the_table_and_not_by_a_check(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """The property the whole delivery rests on, checked where it would
+    actually break: the row's key is derived from the bill and the period, so
+    a second write is a conditional write onto a key that is already there.
+
+    The balance is what would give it away. Counting in the use case would look
+    identical here and fail the day two requests arrive at once.
+    """
+    account = _open_account(accounts, ledger)
+    bill = manage.declare(_declare(account_id=account.id)).bill
+    command = ConfirmChargeCommand(
+        user_id=OWNER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+    )
+
+    settle.confirm(command)
+    settle.confirm(command)
+
+    assert len(list(ledger.list_all(OWNER))) == 1
+    stored = accounts.find(user_id=OWNER, account_id=account.id)
+    assert stored is not None
+    assert stored.balance.signed_amount == Decimal("-120000")
+
+
+def test_paid_is_read_back_off_the_row_and_stored_nowhere(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    listing: ListBillsUseCase,
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> None:
+    """A second copy of "paid" would be the copy that survives the movement
+    being deleted. There is none — the stored bill says nothing about it."""
+    bill = manage.declare(_declare()).bill
+    settle.confirm(
+        ConfirmChargeCommand(
+            user_id=OWNER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+        ),
+    )
+
+    item = dynamodb_client.get_item(
+        TableName=table,
+        Key={
+            PARTITION_KEY: {"S": str(OWNER.value)},
+            SORT_KEY: {"S": f"{BILL_PREFIX}{bill.id.value}"},
+        },
+    ).get("Item")
+
+    assert item is not None
+    assert "paid" not in item
+    assert "skipped" not in item
+    view = listing.execute(
+        ListBillsQuery(
+            user_id=OWNER,
+            since=dt.date(2026, 9, 1),
+            until=dt.date(2026, 9, 30),
+            timezone=TIMEZONE,
+        ),
+    )
+    assert [charge.state for charge in view.occurrences] == [OccurrenceState.PAID]
+
+
+def test_erasing_the_movement_un_pays_the_charge(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    listing: ListBillsUseCase,
+) -> None:
+    """The point of deriving it. Nothing had to remember to undo anything."""
+    bill = manage.declare(_declare()).bill
+    settle.confirm(
+        ConfirmChargeCommand(
+            user_id=OWNER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+        ),
+    )
+
+    settle.undo_confirmation(
+        user_id=OWNER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+    )
+
+    view = listing.execute(
+        ListBillsQuery(
+            user_id=OWNER,
+            since=dt.date(2026, 9, 1),
+            until=dt.date(2026, 9, 30),
+            timezone=TIMEZONE,
+        ),
+    )
+    assert [charge.state for charge in view.occurrences] != [OccurrenceState.PAID]
+
+
+def test_a_skip_survives_the_round_trip(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    """The one answer that *is* stored, because no money moved to read it off."""
+    bill = manage.declare(_declare()).bill
+
+    settle.skip(user_id=OWNER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    stored = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert stored is not None
+    assert stored.skipped == frozenset({dt.date(2026, 9, 4)})
+
+
+def test_taking_a_skip_back_removes_it_from_the_stored_row(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    bills: DynamoDBScheduledBillRepository,
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> None:
+    """A whole-item put has to make the attribute go away. Left behind, the
+    charge would read skipped for ever and nothing would say why."""
+    bill = manage.declare(_declare()).bill
+    settle.skip(user_id=OWNER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    settle.undo_skip(user_id=OWNER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    item = dynamodb_client.get_item(
+        TableName=table,
+        Key={
+            PARTITION_KEY: {"S": str(OWNER.value)},
+            SORT_KEY: {"S": f"{BILL_PREFIX}{bill.id.value}"},
+        },
+    ).get("Item")
+    assert item is not None
+    assert "skipped" not in item
+    stored = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert stored is not None
+    assert stored.skipped == frozenset()
+
+
+def test_one_persons_charges_are_never_read_as_anothers(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    listing: ListBillsUseCase,
+) -> None:
+    """The user is inside the key a charge is stored under, not a filter
+    applied after it."""
+    mine = manage.declare(_declare()).bill
+    settle.confirm(
+        ConfirmChargeCommand(
+            user_id=OWNER,
+            bill_id=mine.id,
+            period=dt.date(2026, 9, 4),
+        ),
+    )
+    theirs = manage.declare(_declare(user_id=STRANGER)).bill
+
+    view = listing.execute(
+        ListBillsQuery(
+            user_id=STRANGER,
+            since=dt.date(2026, 9, 1),
+            until=dt.date(2026, 9, 30),
+            timezone=TIMEZONE,
+        ),
+    )
+
+    assert theirs.id != mine.id
+    assert [charge.state for charge in view.occurrences] != [OccurrenceState.PAID]

@@ -64,12 +64,24 @@ Todo el backend de la versión 1 está terminado y probado:
   mismo —y crear una sin salirse del formulario—, y eso además le crea el
   comercio, que antes no pasaba nunca. El modelo también clasifica en las
   categorías propias.
+- **Las facturas se declaran y se confirman.** Un gasto domiciliado que el
+  banco ya no anuncia —el gimnasio, el arriendo, el streaming— se declara una
+  vez y la app lo proyecta sobre el calendario. Declararlo **no mueve ningún
+  saldo**; marcarlo como pagado sí: escribe el movimiento, mueve la cuenta, lo
+  clasifica en la categoría de la factura y avisa por Telegram como cualquier
+  otro gasto. Marcarlo dos veces lo cobra una sola vez —la identidad del cobro
+  sale de la factura y del periodo, así que el segundo intento lo rechaza la
+  tabla— y se puede deshacer, que borra el movimiento y devuelve la plata. El
+  mes que un cobro no llegó se salta, y eso no escribe nada. La pantalla lee
+  dos cifras: lo que cuesta el mes y lo que falta por pagar. Un ingreso
+  declarado —la nómina— usa los mismos botones con otras palabras: llega, no
+  se paga.
 
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 60 operaciones de API en cinco contextos, seis procesos en
-la nube, 1718 pruebas de Python y 313 del frontend, todas en verde.
+**Estado técnico:** 70 operaciones de API en cinco contextos, seis procesos en
+la nube, 1884 pruebas de Python y 354 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -82,7 +94,8 @@ cuatro guías, más **Facturas** desde el 2026-09-14. La única entrada del men�
 anunciada sin pantalla es **Configuración**.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
-revisó el 2026-09-14.
+revisó el 2026-09-14. Facturas se revisó en el navegador el 2026-09-14, con
+`just e2e-bills` y a ojo.
 
 **En cualquier pantalla, del teléfono más pequeño al monitor.** Comprobado a
 320, 360, 390, 430, 768, 1024 y 1440 px, y con el teléfono acostado: ninguna
@@ -98,9 +111,9 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 60 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias y los avisos |
-| API desarrollo | 60 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos | ninguna |
+| API producción | 70 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
+| API desarrollo | 70 operaciones | 43 — igual que producción |
+| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
 verificación de correo y la recuperación de contraseña. Las dos webs
@@ -153,11 +166,15 @@ AWS (ver Trabas).
    [docs/alerts.md](docs/alerts.md).
 
 6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
-   La entrega A está completa —API y pantalla—. Siguen B (confirmar el pago a
-   mano), C (que se cargue solo, con ventana de conciliación), D (que el
-   detector proponga) y E (avisar antes del cobro). El plan completo —las
-   cinco entregas, los riesgos y los cuatro nombres que se parecen— está en el
-   artefacto, no aquí.
+   Las entregas A y B están completas —declarar, ver venir, y confirmar o
+   saltar el cobro a mano—. Siguen C (que se cargue solo, con ventana de
+   conciliación), D (que el detector proponga) y E (avisar antes del cobro).
+   El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
+   se parecen— está en el artefacto, no aquí.
+   **Al desplegar esto, `alerts` va primero:** Financial ya publica
+   `origin: "scheduled"` y un consumidor que no sepa leerlo manda el mensaje a
+   la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
+   la práctica es solo no partirlo en dos.
 
 7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
    desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
@@ -208,6 +225,22 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-14 — **Una factura ya se puede pagar, y eso sí es plata.**
+  Entrega B del segundo feature. «Pagado» escribe el movimiento por el mismo
+  caso de uso que respalda el movimiento a mano, así que el saldo, el comercio,
+  el gasto del mes y el aviso por Telegram vienen puestos. **Pagar dos veces
+  cobra una:** la identidad del cobro sale de la factura y del periodo —nunca
+  del monto ni del día—, así que el segundo intento lo rechaza la escritura
+  condicional de la tabla y no un `if`. «Pagado» **no se guarda en ninguna
+  parte**: se lee de la fila del ledger, de modo que borrar el movimiento
+  despaga el cobro sin que nada tenga que acordarse de deshacer nada. Saltar sí
+  se guarda, porque no hay fila que leer. Las dos cosas se deshacen. Origen
+  nuevo `scheduled` —ni `manual` ni `accrual`— que `alerts` aprendió en el
+  mismo cambio y que **debe desplegarse primero**. `upcoming` pasó a
+  `outstanding` porque cambió de significado: ya no es «aún no vence», es «sin
+  pagar». Comprobado de punta a punta contra la pila real: el e2e confirma por
+  el navegador, comprueba que la cuenta se movió por exactamente lo confirmado,
+  y manda una segunda confirmación por la API para ver que no se mueve nada.
 - 2026-09-14 — **Se pueden declarar facturas y ver lo que viene.**
   Entrega A del segundo feature: un gasto domiciliado que el banco ya no
   anuncia por correo se declara, y la app lo proyecta sobre el calendario con
@@ -250,8 +283,3 @@ AWS (ver Trabas).
   lo demás (abrir, renombrar, cerrar, reconstruir, editar, borrar) se queda
   dentro: es cómo lleva sus libros, no un contrato. Sigue faltando el canal que
   le hable al usuario, así que todavía no se nota desde la app.
-- 2026-09-12 — **Bancolombia manda desde más subdominios de alerta.** Llegó una
-  alerta real desde `ayn.notificacionesbancolombia.com`, que no estaba en el
-  registro: la plantilla no se elegía y el correo se iba al modelo. Agregado al
-  registro, a la pantalla de conectar y a la guía. Aparte hay que aprobarlo en
-  la lista de remitentes de cada usuario, si no el correo ni entra.

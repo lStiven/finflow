@@ -31,11 +31,14 @@ from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
     BillSummary,
     BillsView,
+    ConfirmChargeCommand,
     DeclareBillCommand,
     ListBillsQuery,
     ListBillsUseCase,
     ManageBillsUseCase,
     NoSuchBillError,
+    SettleBillChargeUseCase,
+    SettledCharge,
 )
 from personal_finance.contexts.financial.application.commands import (
     AccrueFinancingCommand,
@@ -2932,11 +2935,15 @@ def _domain_errors() -> Generator[None]:
 
 # ---------------------------------------------------------------- bills
 #
-# Money the owner knows is coming, before it comes. Nothing under this heading
-# writes to the ledger or moves a balance: declaring a charge is a statement
-# about the future, and the future has not happened. Confirming one is a
-# separate delivery, and it will go through the same use case that records a
-# movement entered by hand.
+# Money the owner knows is coming, before it comes. Declaring a charge writes
+# nothing to the ledger and moves no balance: it is a statement about the
+# future, and the future has not happened.
+#
+# **Confirming one does.** That is the one path under this heading that moves
+# money, and it goes through the same use case that records a movement entered
+# by hand, so everything downstream — the balance, the merchant, the month's
+# spending, the alert on a phone — already works. Its identity comes from the
+# bill and the period, so pressing the button twice is one charge.
 
 
 class DeclareBillPayload(BaseModel):
@@ -3010,12 +3017,47 @@ class AmendBillPayload(BaseModel):
         return self
 
 
-class BillOccurrenceResponse(BaseModel):
-    """One expected charge.
+class ConfirmChargePayload(BaseModel):
+    """What actually happened, where it differs from what the bill projected.
 
-    `due_on` is the calendar day the bill anchors on, not a day money moved:
-    nothing here can know that yet. `state` says `overdue` only once the grace
-    has passed as well, and even then it is a statement about the calendar.
+    Every field is optional and the empty body is the ordinary case: the gym
+    charged what it always charges, on the day it always charges it. What this
+    exists for is the month it did not — a price that went up, and the 4th
+    that fell on a Saturday so the money left on the 6th.
+
+    None of it takes part in the charge's identity, which is the bill and the
+    period. So a figure corrected by confirming again does not write a second
+    row; it is answered with the row already there, and correcting it is
+    editing that movement, where every other correction in this app is made.
+    """
+
+    amount: Decimal | None = Field(default=None, gt=0)
+    currency: Currency | None = None
+    #: When the money actually moved, in epoch seconds. Absent, the period's
+    #: own day is used — at noon UTC, which is the same calendar day in every
+    #: zone this is read in, unlike midnight.
+    occurred_at: int | None = None
+    note: str | None = Field(default=None, max_length=280)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> ConfirmChargePayload:
+        if self.amount is not None and self.currency is None:
+            raise ValueError("Stating the amount needs its currency too")
+
+        return self
+
+
+class BillOccurrenceResponse(BaseModel):
+    """One charge of one period.
+
+    `due_on` is the calendar day the bill anchors on, and the charge's own
+    identity — it is what a confirmation is keyed on and what goes in the path
+    of the endpoints below. It is **not** the day money moved: that is
+    `settled_at`, and the two differ whenever the 4th falls on a Saturday.
+
+    `amount` stays what the bill projects even once it is paid. What actually
+    left is `settled_amount`, and keeping both is what makes "120 000
+    expected, 130 000 charged" visible instead of silently overwritten.
     """
 
     bill_id: str
@@ -3028,6 +3070,13 @@ class BillOccurrenceResponse(BaseModel):
     # screen in somebody's browser.
     direction: MovementDirection
     state: OccurrenceState
+    #: The ledger row that confirmed this charge. Present exactly when `state`
+    #: is `paid`, and what an undo needs in order to erase the movement.
+    movement_id: str | None = None
+    #: What actually moved, which may not be what the bill says.
+    settled_amount: str | None = None
+    #: When it actually moved, in epoch seconds.
+    settled_at: int | None = None
 
 
 class BillResponse(BaseModel):
@@ -3048,21 +3097,35 @@ class BillResponse(BaseModel):
     next_occurrence: BillOccurrenceResponse | None
 
 
+class BillChargeResponse(BaseModel):
+    """One charge after somebody answered for it, and its bill.
+
+    Both, because both change. The charge gains a state; the bill's "next
+    charge" moves past it. Answering with only the first would leave the card
+    on screen still saying the charge is due today.
+    """
+
+    bill: BillResponse
+    occurrence: BillOccurrenceResponse
+
+
 class BillTotalResponse(BaseModel):
     """The two figures, for one currency.
 
-    Two and not one, because "what this month costs" and "what has not fallen
-    due yet" are different questions and a reader takes whichever is on screen
-    to be the answer to both.
+    Two and not one, because "what this month costs" and "what is still to
+    pay" are different questions and a reader takes whichever is on screen to
+    be the answer to both.
 
-    `upcoming` is what has **not fallen due yet** — deliberately not "unpaid".
-    Nothing can be confirmed yet, so a charge whose day has passed is one this
-    app cannot see either way.
+    `outstanding` is what nobody has answered for yet. It was called
+    `upcoming` and meant "has not fallen due", which was all this could say
+    before charges could be confirmed; now that they can, it means unpaid and
+    is named for it. A paid charge stays in `expected` — it is exactly what
+    the month cost — and a skipped one leaves both.
     """
 
     currency: Currency
     expected: str
-    upcoming: str
+    outstanding: str
 
 
 class BillsResponse(BaseModel):
@@ -3086,12 +3149,37 @@ def build_bills() -> DynamoDBScheduledBillRepository:
 
 @functools.lru_cache(maxsize=1)
 def _build_manage_bills() -> ManageBillsUseCase:
-    return ManageBillsUseCase(bills=build_bills(), accounts=build_accounts())
+    return ManageBillsUseCase(
+        bills=build_bills(),
+        accounts=build_accounts(),
+        charges=build_ledger(),
+    )
 
 
 @functools.lru_cache(maxsize=1)
 def _build_list_bills() -> ListBillsUseCase:
-    return ListBillsUseCase(bills=build_bills(), accounts=build_accounts())
+    return ListBillsUseCase(
+        bills=build_bills(),
+        accounts=build_accounts(),
+        charges=build_ledger(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_settle_charge() -> SettleBillChargeUseCase:
+    """The one bills use case wired to something that can move money.
+
+    `build_manage_transactions` is the very object behind `POST
+    /financial/transactions`, handed over whole rather than re-created: a
+    second instance would be a second set of rules about what happens when a
+    movement lands, and they would drift.
+    """
+    return SettleBillChargeUseCase(
+        bills=build_bills(),
+        accounts=build_accounts(),
+        charges=build_ledger(),
+        transactions=_build_manage_transactions(),
+    )
 
 
 def get_manage_bills_use_case() -> ManageBillsUseCase:
@@ -3102,7 +3190,15 @@ def get_list_bills_use_case() -> ListBillsUseCase:
     return _build_list_bills()
 
 
+def get_settle_charge_use_case() -> SettleBillChargeUseCase:
+    return _build_settle_charge()
+
+
 ManageBills = Annotated[ManageBillsUseCase, Depends(get_manage_bills_use_case)]
+SettleCharge = Annotated[
+    SettleBillChargeUseCase,
+    Depends(get_settle_charge_use_case),
+]
 
 
 @router.get("/bills", response_model=BillsResponse)
@@ -3140,13 +3236,22 @@ def declare_bill(
     user_id: CurrentUser,
     payload: DeclareBillPayload,
     use_case: ManageBills,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
 ) -> BillResponse:
     """Declare a charge that is going to happen.
 
     Nothing is recorded as spent. This is the half that works from the first
     day and needs no history — the detector, which needs three months of it,
     comes later and only ever proposes.
+
+    The category is checked against this user's own vocabulary, like every
+    other place one is accepted. It is not decoration: a confirmed charge is
+    filed under it, and a bill carrying a category nobody has would produce
+    charges that sit outside every breakdown — silently, because filing a
+    merchant is an enrichment that may not fail a movement.
     """
+    category = _known_category(payload.category, merchants, user_id=user_id)
+
     with _domain_errors():
         summary = use_case.declare(
             DeclareBillCommand(
@@ -3161,7 +3266,7 @@ def declare_bill(
                     if payload.account_id is None
                     else _account_id(payload.account_id)
                 ),
-                category=payload.category,
+                category=category,
             ),
         )
 
@@ -3174,6 +3279,7 @@ def amend_bill(
     bill_id: str,
     payload: AmendBillPayload,
     use_case: ManageBills,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
 ) -> BillResponse:
     """Correct what the bill says.
 
@@ -3182,6 +3288,8 @@ def amend_bill(
     the 6th. What cannot be corrected is its identity — that is what deleting
     is for.
     """
+    category = _known_category(payload.category, merchants, user_id=user_id)
+
     with _domain_errors():
         summary = use_case.amend(
             AmendBillCommand(
@@ -3201,7 +3309,7 @@ def amend_bill(
                     if payload.account_id is None
                     else _account_id(payload.account_id)
                 ),
-                category=payload.category,
+                category=category,
                 clear_account=payload.clear_account,
                 clear_category=payload.clear_category,
             ),
@@ -3236,6 +3344,148 @@ def resume_bill(
         summary = use_case.resume(user_id=user_id, bill_id=_bill_id(bill_id))
 
     return _bill_summary_response(summary)
+
+
+@router.post(
+    "/bills/{bill_id}/occurrences/{period}/pay", response_model=BillChargeResponse
+)
+def confirm_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    payload: ConfirmChargePayload,
+    use_case: SettleCharge,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> BillChargeResponse:
+    """Say this charge happened, and write it into the ledger.
+
+    The first thing under `/bills` that moves money. From here the charge is
+    an ordinary movement: it moves the bill's account, it counts as spending,
+    it is attributed to a merchant, and whoever connected Telegram hears about
+    it — all of which was already built, which is the whole reason a bill is
+    an aggregate inside Financial rather than a context of its own.
+
+    The **period is in the path**, not the body, because what is being paid is
+    one charge and not the bill: without it, "paid" in September and "paid" in
+    October would be the same request. It has to be a day this bill is
+    actually charged on — the amount and the account come off the bill, so an
+    invented period would be money moving for a charge that does not exist.
+
+    Pressing it twice is one charge, and not because anything counts: the
+    row's id comes from the bill and the period, so the second attempt finds
+    the row already there and answers with it. 200, never 201, for the same
+    reason — the honest answer is "this charge is settled", which is as true
+    the second time as the first.
+    """
+    with _domain_errors():
+        settled = use_case.confirm(
+            ConfirmChargeCommand(
+                user_id=user_id,
+                bill_id=_bill_id(bill_id),
+                period=period,
+                amount=(
+                    None
+                    if payload.amount is None
+                    else Money(
+                        amount=payload.amount,
+                        currency=payload.currency or Currency.COP,
+                    )
+                ),
+                occurred_at=(
+                    None
+                    if payload.occurred_at is None
+                    else PosixTime.from_epoch_seconds(payload.occurred_at)
+                ),
+                note=payload.note,
+            ),
+        )
+
+    _file_charge_merchant(settled, merchants, user_id=user_id)
+
+    return _bill_charge_response(settled)
+
+
+@router.delete(
+    "/bills/{bill_id}/occurrences/{period}/pay",
+    response_model=BillChargeResponse,
+)
+def undo_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Erase the movement this charge's confirmation wrote.
+
+    The account gets back exactly what the charge took, because that is what
+    erasing a movement already does. Nothing else is undone: "paid" is never
+    written down — it is read back off this very row — so removing the row is
+    the whole of removing the answer.
+
+    Silent when there is nothing to erase. This is the undo behind a button
+    somebody presses because they are not sure, and a 404 on the second press
+    is a worse answer than nothing.
+    """
+    with _domain_errors():
+        settled = use_case.undo_confirmation(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+        )
+
+    return _bill_charge_response(settled)
+
+
+@router.post(
+    "/bills/{bill_id}/occurrences/{period}/skip",
+    response_model=BillChargeResponse,
+)
+def skip_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Say this charge is not going to happen.
+
+    The month the gym did not bill, the subscription cancelled before its
+    renewal. It writes nothing to the ledger — that is the difference from
+    confirming — and takes the charge out of both of the month's figures: a
+    charge nobody is going to be asked for is not what the month costs and not
+    what is left to pay.
+
+    Unlike "paid", this **is** stored, on the bill. No money moves, so there
+    is no ledger row to read the answer back off.
+    """
+    with _domain_errors():
+        settled = use_case.skip(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+        )
+
+    return _bill_charge_response(settled)
+
+
+@router.delete(
+    "/bills/{bill_id}/occurrences/{period}/skip",
+    response_model=BillChargeResponse,
+)
+def undo_bill_skip(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Let a skipped charge be expected again."""
+    with _domain_errors():
+        settled = use_case.undo_skip(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+        )
+
+    return _bill_charge_response(settled)
 
 
 @router.delete("/bills/{bill_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -3273,7 +3523,7 @@ def _bills_response(view: BillsView) -> BillsResponse:
             BillTotalResponse(
                 currency=total.currency,
                 expected=str(total.expected),
-                upcoming=str(total.upcoming),
+                outstanding=str(total.outstanding),
             )
             for total in view.totals
         ],
@@ -3306,6 +3556,8 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
 
 
 def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
+    payment = occurrence.payment
+
     return BillOccurrenceResponse(
         bill_id=str(occurrence.bill_id.value),
         due_on=occurrence.due_on,
@@ -3313,4 +3565,48 @@ def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
         currency=occurrence.amount.currency,
         direction=occurrence.direction,
         state=occurrence.state,
+        movement_id=None if payment is None else payment.movement_id,
+        settled_amount=None if payment is None else str(payment.amount.amount),
+        settled_at=None if payment is None else payment.occurred_at.as_epoch_seconds(),
     )
+
+
+def _bill_charge_response(settled: SettledCharge) -> BillChargeResponse:
+    return BillChargeResponse(
+        bill=_bill_summary_response(settled.bill),
+        occurrence=_occurrence_response(settled.occurrence),
+    )
+
+
+def _file_charge_merchant(
+    settled: SettledCharge,
+    merchants: MerchantDirectory,
+    *,
+    user_id: UserId,
+) -> None:
+    """File the charge's counterparty under the bill's category.
+
+    After the movement and never before it, exactly as the hand-entered path
+    does: naming a merchant is an enrichment, and losing it to a hiccup must
+    not lose money that has already been recorded. The `except` is broad for
+    the same reason — a 500 raised past this point is answered for a charge
+    that *was* written, and whoever reads it confirms it a second time.
+
+    Without this a confirmed charge would sit outside every breakdown by
+    category, which is most of what the charge was declared for.
+    """
+    movement = settled.movement
+    category = settled.bill.bill.category
+
+    if movement is None or category is None:
+        return
+
+    try:
+        merchants.classify(
+            user_id=user_id,
+            counterparty=movement.counterparty,
+            category=category,
+            occurred_at=movement.occurred_at,
+        )
+    except Exception:
+        _logger.exception("could not file a confirmed bill charge's merchant")

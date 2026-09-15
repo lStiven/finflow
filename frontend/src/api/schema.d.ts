@@ -524,6 +524,90 @@ export interface paths {
         patch: operations["amend_bill_financial_bills__bill_id__patch"];
         trace?: never;
     };
+    "/financial/bills/{bill_id}/occurrences/{period}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Bill Charge
+         * @description Say this charge happened, and write it into the ledger.
+         *
+         *     The first thing under `/bills` that moves money. From here the charge is
+         *     an ordinary movement: it moves the bill's account, it counts as spending,
+         *     it is attributed to a merchant, and whoever connected Telegram hears about
+         *     it — all of which was already built, which is the whole reason a bill is
+         *     an aggregate inside Financial rather than a context of its own.
+         *
+         *     The **period is in the path**, not the body, because what is being paid is
+         *     one charge and not the bill: without it, "paid" in September and "paid" in
+         *     October would be the same request. It has to be a day this bill is
+         *     actually charged on — the amount and the account come off the bill, so an
+         *     invented period would be money moving for a charge that does not exist.
+         *
+         *     Pressing it twice is one charge, and not because anything counts: the
+         *     row's id comes from the bill and the period, so the second attempt finds
+         *     the row already there and answers with it. 200, never 201, for the same
+         *     reason — the honest answer is "this charge is settled", which is as true
+         *     the second time as the first.
+         */
+        post: operations["confirm_bill_charge_financial_bills__bill_id__occurrences__period__pay_post"];
+        /**
+         * Undo Bill Charge
+         * @description Erase the movement this charge's confirmation wrote.
+         *
+         *     The account gets back exactly what the charge took, because that is what
+         *     erasing a movement already does. Nothing else is undone: "paid" is never
+         *     written down — it is read back off this very row — so removing the row is
+         *     the whole of removing the answer.
+         *
+         *     Silent when there is nothing to erase. This is the undo behind a button
+         *     somebody presses because they are not sure, and a 404 on the second press
+         *     is a worse answer than nothing.
+         */
+        delete: operations["undo_bill_charge_financial_bills__bill_id__occurrences__period__pay_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/occurrences/{period}/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Skip Bill Charge
+         * @description Say this charge is not going to happen.
+         *
+         *     The month the gym did not bill, the subscription cancelled before its
+         *     renewal. It writes nothing to the ledger — that is the difference from
+         *     confirming — and takes the charge out of both of the month's figures: a
+         *     charge nobody is going to be asked for is not what the month costs and not
+         *     what is left to pay.
+         *
+         *     Unlike "paid", this **is** stored, on the bill. No money moves, so there
+         *     is no ledger row to read the answer back off.
+         */
+        post: operations["skip_bill_charge_financial_bills__bill_id__occurrences__period__skip_post"];
+        /**
+         * Undo Bill Skip
+         * @description Let a skipped charge be expected again.
+         */
+        delete: operations["undo_bill_skip_financial_bills__bill_id__occurrences__period__skip_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/bills/{bill_id}/pause": {
         parameters: {
             query?: never;
@@ -1618,12 +1702,29 @@ export interface components {
          */
         BillCadence: "weekly" | "biweekly" | "monthly" | "bimonthly" | "quarterly" | "annual";
         /**
-         * BillOccurrenceResponse
-         * @description One expected charge.
+         * BillChargeResponse
+         * @description One charge after somebody answered for it, and its bill.
          *
-         *     `due_on` is the calendar day the bill anchors on, not a day money moved:
-         *     nothing here can know that yet. `state` says `overdue` only once the grace
-         *     has passed as well, and even then it is a statement about the calendar.
+         *     Both, because both change. The charge gains a state; the bill's "next
+         *     charge" moves past it. Answering with only the first would leave the card
+         *     on screen still saying the charge is due today.
+         */
+        BillChargeResponse: {
+            bill: components["schemas"]["BillResponse"];
+            occurrence: components["schemas"]["BillOccurrenceResponse"];
+        };
+        /**
+         * BillOccurrenceResponse
+         * @description One charge of one period.
+         *
+         *     `due_on` is the calendar day the bill anchors on, and the charge's own
+         *     identity — it is what a confirmation is keyed on and what goes in the path
+         *     of the endpoints below. It is **not** the day money moved: that is
+         *     `settled_at`, and the two differ whenever the 4th falls on a Saturday.
+         *
+         *     `amount` stays what the bill projects even once it is paid. What actually
+         *     left is `settled_amount`, and keeping both is what makes "120 000
+         *     expected, 130 000 charged" visible instead of silently overwritten.
          */
         BillOccurrenceResponse: {
             /** Amount */
@@ -1637,6 +1738,12 @@ export interface components {
              * Format: date
              */
             due_on: string;
+            /** Movement Id */
+            movement_id?: string | null;
+            /** Settled Amount */
+            settled_amount?: string | null;
+            /** Settled At */
+            settled_at?: number | null;
             state: components["schemas"]["OccurrenceState"];
         };
         /** BillResponse */
@@ -1680,20 +1787,22 @@ export interface components {
          * BillTotalResponse
          * @description The two figures, for one currency.
          *
-         *     Two and not one, because "what this month costs" and "what has not fallen
-         *     due yet" are different questions and a reader takes whichever is on screen
-         *     to be the answer to both.
+         *     Two and not one, because "what this month costs" and "what is still to
+         *     pay" are different questions and a reader takes whichever is on screen to
+         *     be the answer to both.
          *
-         *     `upcoming` is what has **not fallen due yet** — deliberately not "unpaid".
-         *     Nothing can be confirmed yet, so a charge whose day has passed is one this
-         *     app cannot see either way.
+         *     `outstanding` is what nobody has answered for yet. It was called
+         *     `upcoming` and meant "has not fallen due", which was all this could say
+         *     before charges could be confirmed; now that they can, it means unpaid and
+         *     is named for it. A paid charge stays in `expected` — it is exactly what
+         *     the month cost — and a skipped one leaves both.
          */
         BillTotalResponse: {
             currency: components["schemas"]["Currency"];
             /** Expected */
             expected: string;
-            /** Upcoming */
-            upcoming: string;
+            /** Outstanding */
+            outstanding: string;
         };
         /** BillsResponse */
         BillsResponse: {
@@ -1879,6 +1988,29 @@ export interface components {
             name: string;
             /** Rate */
             rate: string | null;
+        };
+        /**
+         * ConfirmChargePayload
+         * @description What actually happened, where it differs from what the bill projected.
+         *
+         *     Every field is optional and the empty body is the ordinary case: the gym
+         *     charged what it always charges, on the day it always charges it. What this
+         *     exists for is the month it did not — a price that went up, and the 4th
+         *     that fell on a Saturday so the money left on the 6th.
+         *
+         *     None of it takes part in the charge's identity, which is the bill and the
+         *     period. So a figure corrected by confirming again does not write a second
+         *     row; it is answered with the row already there, and correcting it is
+         *     editing that movement, where every other correction in this app is made.
+         */
+        ConfirmChargePayload: {
+            /** Amount */
+            amount?: number | string | null;
+            currency?: components["schemas"]["Currency"] | null;
+            /** Note */
+            note?: string | null;
+            /** Occurred At */
+            occurred_at?: number | null;
         };
         /** CreateChannelPayload */
         CreateChannelPayload: {
@@ -2556,14 +2688,15 @@ export interface components {
         };
         /**
          * OccurrenceState
-         * @description What can be said about one expected charge, today.
+         * @description What can be said about one charge, today.
          *
-         *     Only two members while nothing can be confirmed. Paying and skipping are
-         *     the next delivery, and they add their own — which is why this is an enum
-         *     from the start rather than a boolean that would have to be widened.
+         *     Settled first, calendar second, and the order is the rule: a charge that
+         *     was paid on the 9th is paid, not overdue, however far past its day it is.
+         *     Only a charge nobody has answered for falls back on what the calendar can
+         *     say about it.
          * @enum {string}
          */
-        OccurrenceState: "expected" | "overdue";
+        OccurrenceState: "paid" | "skipped" | "expected" | "overdue";
         /**
          * OpenAccountPayload
          * @description Declare an account.
@@ -2979,9 +3112,18 @@ export interface components {
          *     but it is the only movement in the ledger whose authority is an
          *     arithmetic rather than a fact, so a wrong rate is corrected by restating
          *     the terms rather than by arguing with the bank.
+         *
+         *     A **scheduled** charge is a declared bill somebody confirmed: the owner
+         *     said the gym would be charged on the 4th, and then said it was. Deliberately
+         *     not `MANUAL`, which it otherwise resembles, because two later pieces of
+         *     this feature need to tell them apart — the detector must not propose
+         *     declaring a bill it is looking at the charges of, and an automatic charge
+         *     has to be distinguishable from money its owner typed. And deliberately not
+         *     `ACCRUAL`, which is excluded from alerts on purpose: a charge landing on a
+         *     bill's due date is exactly the moment its owner wants to hear about it.
          * @enum {string}
          */
-        TransactionOrigin: "bank_alert" | "manual" | "accrual";
+        TransactionOrigin: "bank_alert" | "manual" | "accrual" | "scheduled";
         /** TransactionResponse */
         TransactionResponse: {
             /** Account Id */
@@ -4084,6 +4226,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_bill_charge_financial_bills__bill_id__occurrences__period__pay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmChargePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undo_bill_charge_financial_bills__bill_id__occurrences__period__pay_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skip_bill_charge_financial_bills__bill_id__occurrences__period__skip_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undo_bill_skip_financial_bills__bill_id__occurrences__period__skip_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
                 };
             };
             /** @description Validation Error */

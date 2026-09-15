@@ -20,6 +20,7 @@ import {
   merchantsForFilterQuery,
   type Transaction,
   type TransactionFilters,
+  type TransactionOrigin,
   transactionsQuery,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
@@ -66,7 +67,7 @@ export type TransactionSearch = {
   account?: string;
   category?: string;
   merchant?: string;
-  origin?: "bank_alert" | "manual";
+  origin?: TransactionOrigin;
   direction?: "incoming" | "outgoing";
   unassigned?: boolean;
   /**
@@ -88,6 +89,25 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
+/**
+ * Every origin the API knows, and the guard the URL is read through.
+ *
+ * Listed once here rather than inline at each of the two places that used to
+ * spell out two of them: the dropdown is built from the catalog, so a value it
+ * offers and this refuses is an option that silently does nothing. Adding a
+ * member to the Python enum breaks this build, which is the point.
+ */
+const ORIGINS: readonly TransactionOrigin[] = [
+  "bank_alert",
+  "manual",
+  "accrual",
+  "scheduled",
+];
+
+function asOrigin(value: unknown): TransactionOrigin | undefined {
+  return ORIGINS.find((origin) => origin === value);
+}
+
 export const Route = createFileRoute("/transacciones/")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
@@ -97,8 +117,7 @@ export const Route = createFileRoute("/transacciones/")({
     account: text(raw.account),
     category: text(raw.category),
     merchant: text(raw.merchant),
-    origin:
-      raw.origin === "manual" || raw.origin === "bank_alert" ? raw.origin : undefined,
+    origin: asOrigin(raw.origin),
     direction:
       raw.direction === "incoming" || raw.direction === "outgoing"
         ? raw.direction
@@ -319,15 +338,7 @@ function TransactionsScreen() {
               label="Origen"
               placeholder="Cualquiera"
               value={search.origin ?? ""}
-              onChange={(event) =>
-                apply({
-                  origin:
-                    event.target.value === "manual" ||
-                    event.target.value === "bank_alert"
-                      ? event.target.value
-                      : undefined,
-                })
-              }
+              onChange={(event) => apply({ origin: asOrigin(event.target.value) })}
               options={catalog.transaction_origins.map((option) => ({
                 value: option.value,
                 label: originLabel(option.value, option.label),

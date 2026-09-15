@@ -2930,4 +2930,5 @@ def test_the_catalog_publishes_the_vocabularies_a_loan_form_needs(
         "bank_alert",
         "manual",
         "accrual",
+        "scheduled",
     }

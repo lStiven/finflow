@@ -4,6 +4,7 @@ from collections.abc import Sequence
 import dataclasses
 import datetime as dt
 from decimal import Decimal
+import uuid
 
 from personal_finance.contexts.financial.domain.financing import (
     AmortizationStyle,
@@ -209,6 +210,32 @@ class EnterTransactionCommand:
     counterparty: str
     account_id: AccountId | None = None
     bank: str = ""
+    note: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ConfirmScheduledChargeCommand:
+    """One charge of a declared bill, the moment its owner says it happened.
+
+    Deliberately close to `EnterTransactionCommand` — it *is* a movement
+    somebody is asserting — and different in the one way that matters: the
+    identity comes from `bill_id` and `period` rather than being fresh, so
+    confirming the same period twice is one charge and not two.
+
+    `amount` and `occurred_at` are what actually happened, which need not be
+    what the bill projected: the gym raised its price, and the 4th was a
+    Saturday. Neither takes part in the identity, so correcting either by
+    confirming again cannot write a second row.
+    """
+
+    user_id: UserId
+    bill_id: uuid.UUID
+    period: dt.date
+    direction: MovementDirection
+    amount: Money
+    occurred_at: PosixTime
+    counterparty: str
+    account_id: AccountId | None = None
     note: str | None = None
 
 

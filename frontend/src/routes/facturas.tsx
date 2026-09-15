@@ -6,19 +6,24 @@
  * what stops the balance this app shows from drifting away from the real one,
  * month after month, on the most predictable money a person spends.
  *
- * **Nothing on this screen is money that moved.** No balance changes, no
- * movement is recorded, and the figures at the top are a forecast, not a total
- * from the ledger. Confirming a charge — which is what would make it real — is
- * the next deliverable and deliberately not here yet, so nothing here can be
- * mistaken for it.
+ * **Declaring a bill is not money.** No balance changes and no movement is
+ * recorded: the cards and the figure at the top are a forecast.
+ *
+ * **Confirming a charge is.** That is the one control on this screen that
+ * moves money, and it lives on the timeline rather than on the cards for a
+ * reason: what gets paid is one charge of one month, not the bill. A button on
+ * the card would have nothing to say about *which* month, and the two the
+ * owner is most likely to mean — this one and the one they forgot — are
+ * exactly the two a card cannot tell apart.
  *
  * Three pieces, in the order somebody actually reads them: **what is the month
  * going to cost**, then **what do I have declared**, then **when does each one
- * land**. The first is one card with a bar, because "what this month costs"
- * and "what has not fallen due yet" are two numbers that only mean something
- * against each other. The second is a grid of cards, each carrying its own
- * state. The third is a dated rail — the one shape that makes "the 1st, the
- * 4th, the 18th" read as a month passing rather than as three unrelated rows.
+ * land, and is it paid**. The first is one card with a bar, because "what this
+ * month costs" and "what is still to pay" are two numbers that only mean
+ * something against each other. The second is a grid of cards, each carrying
+ * its own state. The third is a dated rail — the one shape that makes "the
+ * 1st, the 4th, the 18th" read as a month passing rather than as three
+ * unrelated rows — and now the place where each of those days is answered for.
  */
 
 import { useSuspenseQuery } from "@tanstack/react-query";
@@ -26,12 +31,14 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import {
   CalendarClock,
   Check,
+  CircleSlash,
   Loader2,
   Pause,
   Pencil,
   Play,
   Plus,
   Receipt,
+  RotateCcw,
   Snowflake,
   Trash2,
   Wallet,
@@ -50,6 +57,7 @@ import {
   useDeclareBill,
   useForgetBill,
   usePauseBill,
+  useSettleCharge,
 } from "@/api/queries";
 import { lookOf } from "@/bills/look";
 import {
@@ -57,10 +65,14 @@ import {
   billState,
   CADENCES,
   cadenceLabel,
-  dueShare,
+  chargedAmount,
+  chargeLabel,
+  chargeVerbs,
   formatAmountInput,
   groupByDay,
+  isSettled,
   parseAmount,
+  settledShare,
   whenLabel,
 } from "@/bills/schedule";
 import { AppShell } from "@/components/AppShell";
@@ -105,9 +117,9 @@ function BillsScreen() {
           <h1 className="font-semibold text-2xl tracking-tight">Facturas</h1>
           <p className="max-w-prose text-muted text-sm leading-relaxed">
             Los cobros que ya sabes que vienen y de los que el banco no te avisa por
-            correo. Se declaran aquí y{" "}
-            <strong className="text-text">no mueven ningún saldo</strong> hasta que
-            confirmes el pago.
+            correo. Declararlos{" "}
+            <strong className="text-text">no mueve ningún saldo</strong>: el dinero sale
+            cuando marcas el cobro como pagado, abajo.
           </p>
         </header>
 
@@ -161,9 +173,12 @@ function SectionTitle({ children, count }: { children: string; count?: number })
  *
  * The bar is the point. Two figures side by side make a reader do the
  * arithmetic — is 310.000 out of 2.008.900 most of it or hardly any? — and the
- * proportion answers that before either number is read. The filled part is
- * what has already fallen due, so a month nearly over looks nearly full, which
- * is the thing somebody is actually checking.
+ * proportion answers that before either number is read.
+ *
+ * What the filled part *means* changed with this delivery, and for the better:
+ * it used to be days gone past, which nobody can act on. Now it is money that
+ * has actually left. A month nearly over with an empty bar is somebody who has
+ * paid none of their bills, which is exactly the thing worth seeing.
  */
 function Forecast({ totals }: { totals: readonly BillTotal[] }) {
   if (totals.length === 0) return null;
@@ -199,28 +214,30 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
             <div
               className="h-full rounded-full bg-accent/70"
               style={{
-                width: `${Math.round(dueShare(total.expected, total.upcoming) * 100)}%`,
+                width: `${Math.round(
+                  settledShare(total.expected, total.outstanding) * 100,
+                )}%`,
               }}
             />
           </div>
 
           <figure className="flex items-baseline justify-between gap-3">
             <figcaption className="text-faint text-xs uppercase tracking-wider">
-              Aún no vence
+              Falta por pagar
             </figcaption>
             <Money
-              amount={total.upcoming}
+              amount={total.outstanding}
               currency={total.currency}
               size="sm"
-              tone="neutral"
+              tone={total.outstanding === "0" ? "neutral" : "plain"}
             />
           </figure>
         </div>
       ))}
 
       <p className="text-faint text-xs leading-relaxed">
-        Una previsión, no un gasto registrado. La barra es lo que ya pasó su fecha
-        dentro del mes.
+        La barra es lo que ya confirmaste que salió. Lo que falta sigue siendo una
+        previsión hasta que lo marques.
       </p>
     </Card>
   );
@@ -602,12 +619,17 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
 }
 
 /**
- * The month as a dated rail.
+ * The month as a dated rail, and where each charge is answered for.
  *
  * A flat list makes "the 1st, the 4th, the 18th" read as unrelated rows. A
  * rail with a node per day reads as time passing, which is what "when does
  * this land" is actually asking. Today's node is marked, so the split between
  * what has gone and what is coming is visible without reading a date.
+ *
+ * The buttons live here rather than on the cards because **what gets paid is
+ * one charge of one month, not the bill**. A card knows nothing about which
+ * month somebody means, and the two they are most likely to mean — this one
+ * and the one they forgot — are exactly the two it cannot tell apart.
  */
 function Timeline({
   occurrences,
@@ -650,7 +672,7 @@ function Timeline({
                 )}
               />
 
-              <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <div className="flex min-w-0 flex-1 flex-col gap-3">
                 <span
                   className={cn(
                     "text-xs uppercase tracking-wider",
@@ -662,31 +684,12 @@ function Timeline({
                 </span>
 
                 {group.occurrences.map((occurrence) => (
-                  <div
+                  <Charge
                     key={`${occurrence.bill_id}-${occurrence.due_on}`}
-                    className="flex items-baseline justify-between gap-3"
-                  >
-                    <span
-                      className={cn(
-                        "min-w-0 truncate text-sm",
-                        past ? "text-muted" : "text-text",
-                      )}
-                    >
-                      {names.get(occurrence.bill_id) ?? "Factura"}
-                    </span>
-                    <Money
-                      amount={occurrence.amount}
-                      currency={occurrence.currency}
-                      size="sm"
-                      tone={
-                        occurrence.direction === "incoming"
-                          ? "positive"
-                          : past
-                            ? "neutral"
-                            : "plain"
-                      }
-                    />
-                  </div>
+                    occurrence={occurrence}
+                    name={names.get(occurrence.bill_id) ?? "Factura"}
+                    past={past}
+                  />
                 ))}
               </div>
             </div>
@@ -694,5 +697,243 @@ function Timeline({
         })}
       </Card>
     </section>
+  );
+}
+
+/**
+ * One charge of one day: what it is, what it costs, and what happened to it.
+ *
+ * Three shapes, one per answer. Unanswered it offers **Pagar** and **Saltar**;
+ * paid or skipped it says so and offers to undo. Undo is not a nicety here —
+ * "Pagar" moves a balance, and a tap that cannot be taken back on a money
+ * screen is how somebody stops trusting the screen.
+ *
+ * The figure shown once it is paid is what actually moved, not what the bill
+ * projects. The two differ whenever a price went up, and showing the
+ * projection back at somebody after the money left would put the screen and
+ * their bank statement in disagreement.
+ */
+function Charge({
+  occurrence,
+  name,
+  past,
+}: {
+  occurrence: BillOccurrence;
+  name: string;
+  past: boolean;
+}) {
+  const [paying, setPaying] = useState(false);
+  const settle = useSettleCharge();
+  const settled = isSettled(occurrence);
+  const label = chargeLabel(occurrence);
+  const paid = occurrence.state === "paid";
+  const verbs = chargeVerbs(occurrence);
+
+  const run = (action: "pay" | "unpay" | "skip" | "unskip", amount?: string) =>
+    settle.mutate(
+      {
+        billId: occurrence.bill_id,
+        period: occurrence.due_on,
+        action,
+        amount,
+        // The charge's own currency, never a constant: the server refuses an
+        // amount in a currency the bill is not in rather than converting it.
+        currency: occurrence.currency,
+      },
+      { onSuccess: () => setPaying(false) },
+    );
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span
+            className={cn(
+              "min-w-0 truncate text-sm",
+              settled || past ? "text-muted" : "text-text",
+              occurrence.state === "skipped" && "line-through",
+            )}
+          >
+            {name}
+          </span>
+          {label ? (
+            <span
+              className={cn(
+                "shrink-0 text-[0.6875rem] uppercase tracking-wide",
+                paid ? "text-accent" : "",
+                occurrence.state === "overdue" ? "text-outgoing" : "",
+                occurrence.state === "skipped" ? "text-faint" : "",
+              )}
+            >
+              {label}
+            </span>
+          ) : null}
+        </span>
+        <Money
+          amount={chargedAmount(occurrence)}
+          currency={occurrence.currency}
+          size="sm"
+          tone={
+            occurrence.direction === "incoming"
+              ? "positive"
+              : settled || past
+                ? "neutral"
+                : "plain"
+          }
+        />
+      </div>
+
+      {settle.isError ? (
+        <span className="text-outgoing text-xs">{settle.error.message}</span>
+      ) : null}
+
+      {paying ? (
+        <PayForm
+          occurrence={occurrence}
+          pending={settle.isPending}
+          onCancel={() => setPaying(false)}
+          onConfirm={(amount) => run("pay", amount)}
+        />
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {settled ? (
+            <ChargeAction
+              label={paid ? verbs.undo : "Ya no saltarlo"}
+              on={name}
+              icon={RotateCcw}
+              disabled={settle.isPending}
+              onClick={() => run(paid ? "unpay" : "unskip")}
+            />
+          ) : (
+            <>
+              <ChargeAction
+                label={verbs.settle}
+                on={name}
+                icon={Check}
+                tone="accent"
+                disabled={settle.isPending}
+                onClick={() => setPaying(true)}
+              />
+              <ChargeAction
+                label="Saltar"
+                on={name}
+                icon={CircleSlash}
+                disabled={settle.isPending}
+                onClick={() => run("skip")}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Confirming, with the chance to correct the figure.
+ *
+ * Prefilled with what the bill says, because that is right most months. The
+ * field exists for the month it is not — and it is the *amount* and not the
+ * date, because the date is the charge's identity and correcting that would
+ * be a different charge. When the money moved is recorded as the charge's own
+ * day; somebody who needs to move it edits the movement, where every other
+ * correction in this app is made.
+ */
+function PayForm({
+  occurrence,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  occurrence: BillOccurrence;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (amount: string | undefined) => void;
+}) {
+  const [amount, setAmount] = useState(formatAmountInput(occurrence.amount));
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const parsed = parseAmount(amount);
+
+    if (parsed === null) {
+      setError("El monto tiene que ser un número mayor que cero.");
+
+      return;
+    }
+
+    setError(null);
+    onConfirm(parsed === occurrence.amount ? undefined : parsed);
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg bg-surface-raised/60 p-3">
+      <label className="flex items-center gap-2 text-faint text-xs">
+        <span className="shrink-0">{chargeVerbs(occurrence).amount}</span>
+        <input
+          inputMode="decimal"
+          value={amount}
+          aria-label={`Monto cobrado el ${occurrence.due_on}`}
+          onChange={(event) => setAmount(event.target.value)}
+          className="w-full min-w-0 rounded-md border border-line bg-surface px-2 py-1 text-sm text-text tabular-nums"
+        />
+      </label>
+
+      {error ? <span className="text-outgoing text-xs">{error}</span> : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={submit} disabled={pending} className="px-3 py-1.5 text-xs">
+          {pending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Check className="size-3.5" />
+          )}
+          Confirmar
+        </Button>
+        <Button variant="ghost" className="px-3 py-1.5 text-xs" onClick={onCancel}>
+          Cancelar
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One action on one charge.
+ *
+ * The accessible name carries the bill, like the card's own buttons: a month
+ * of charges is a dozen buttons called "Pagar" to anybody reading with a
+ * screen reader, and that is exactly how the wrong one gets pressed.
+ */
+function ChargeAction({
+  label,
+  on,
+  icon: Icon,
+  onClick,
+  disabled = false,
+  tone = "plain",
+}: {
+  label: string;
+  on: string;
+  icon: typeof Check;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: "plain" | "accent";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`${label} ${on}`}
+      className={cn(
+        "flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors",
+        "hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-45",
+        tone === "accent" ? "text-accent" : "text-muted hover:text-text",
+      )}
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </button>
   );
 }

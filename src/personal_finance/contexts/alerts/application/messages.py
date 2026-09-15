@@ -33,11 +33,24 @@ class MovementOrigin(enum.Enum):
     while their owner is watching them appear on screen is the kind of noise
     that gets alerts switched off altogether — taking the useful ones with
     them.
+
+    A scheduled charge — a declared bill, confirmed — is news, and that is
+    why it is not folded into `ACCRUAL` however much the two resemble each
+    other. Both are money this app wrote without a bank announcing it; the
+    difference is that nobody is watching a bill get charged, and the moment
+    it does is exactly when its owner wants to hear about it.
+
+    **This member has to exist here before Financial starts publishing it.**
+    An origin this cannot read is a message refused as malformed, retried
+    five times and sent to the dead-letter queue within minutes — the same
+    family as the bug of 14 September, where two contexts quietly stopped
+    agreeing about a payload.
     """
 
     BANK_ALERT = "bank_alert"
     MANUAL = "manual"
     ACCRUAL = "accrual"
+    SCHEDULED = "scheduled"
 
     @property
     def is_news_to_the_owner(self) -> bool:

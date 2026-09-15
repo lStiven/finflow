@@ -8,6 +8,7 @@ import logging
 
 from personal_finance.contexts.financial.application.commands import (
     CloseAccountCommand,
+    ConfirmScheduledChargeCommand,
     DeleteTransactionCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
@@ -670,6 +671,70 @@ class ManageTransactionsUseCase:
             # Written unconditionally: a manual entry's identity is random, so
             # there is nothing it could collide with.
             self._ledger.record(transaction=transaction, balance_delta=None)
+            self._events.publish(transaction.pull_events())
+
+            return transaction
+
+        return self._record_on(account, transaction)
+
+    def confirm_scheduled(self, command: ConfirmScheduledChargeCommand) -> Transaction:
+        """Record one charge of a declared bill as money that moved.
+
+        The same bookkeeping as a hand-entered movement, down to the method
+        that does it — which is the whole argument for bills living inside
+        this context. Everything downstream comes free and already works: the
+        balance moves, the merchant is attributed, the month's spending counts
+        it, the integration event goes out and the alert reaches a phone.
+
+        What differs is the identity, and one consequence of it. A repeat is
+        the ordinary case here, not a race: a screen retries, somebody presses
+        twice, two tabs are open. So the row is looked for first and returned
+        when it is there — the same shape `enter_transfer_leg` uses, and for
+        the same reason. The conditional write underneath is what makes it
+        *safe*; this read is what makes it read as "already paid" rather than
+        as an error somebody has to interpret.
+        """
+        account = (
+            None
+            if command.account_id is None
+            else self._load_account(command.user_id, command.account_id)
+        )
+        transaction = Transaction.confirm_scheduled(
+            user_id=command.user_id,
+            bill_id=command.bill_id,
+            period=command.period,
+            direction=command.direction,
+            amount=command.amount,
+            occurred_at=command.occurred_at,
+            counterparty=command.counterparty,
+            account_id=None if account is None else account.id,
+            note=command.note,
+        )
+        already = self._ledger.find(
+            user_id=command.user_id,
+            transaction_id=transaction.id.value,
+        )
+
+        if already is not None:
+            transaction.pull_events()
+
+            return already
+
+        if account is None:
+            # Unassigned, so no balance moves and there is nothing to keep in
+            # step with the row. The write is still conditional underneath, so
+            # two requests racing past the read above leave one row.
+            written = self._ledger.record(transaction=transaction, balance_delta=None)
+
+            if not written:
+                transaction.pull_events()
+                stored = self._ledger.find(
+                    user_id=command.user_id,
+                    transaction_id=transaction.id.value,
+                )
+
+                return transaction if stored is None else stored
+
             self._events.publish(transaction.pull_events())
 
             return transaction

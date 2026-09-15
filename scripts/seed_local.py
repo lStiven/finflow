@@ -179,6 +179,10 @@ class SeedBill:
     category: str | None = None
     #: Declared and then paused, so the screen has one of those to show.
     paused: bool = False
+    #: What to do with this month's charge, so the screen has every state on
+    #: it at once rather than a column of identical rows. `"pay"` writes a real
+    #: movement and moves a balance — the only thing under `BILLS` that does.
+    settle: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -432,6 +436,9 @@ BILLS: tuple[SeedBill, ...] = (
         starts_on="2026-01-04",
         account_name="Ahorros Bancolombia",
         category="health",
+        # Confirmed, so the local screen shows what a paid charge looks like —
+        # and so the one movement bills can write is there to be looked at.
+        settle="pay",
     ),
     # Anchored on the 31st, which is the rule most easily got wrong: it lands
     # on the 28th in February and is back on the 31st in March.
@@ -443,6 +450,9 @@ BILLS: tuple[SeedBill, ...] = (
         starts_on="2026-01-31",
         account_name="Ahorros Bancolombia",
         category="fees",
+        # The month it was not charged. Writes nothing and leaves both of the
+        # month's figures.
+        settle="skip",
     ),
     # Another currency, so the screen has to show the totals apart instead of
     # adding pesos to dollars.
@@ -800,9 +810,16 @@ def _declare_bills(
     are: a bill's identity is random, so nothing in the domain would stop a
     second run from declaring the rent twice.
 
-    Nothing here touches the ledger. After this the balances are exactly what
-    they were before it, which is the rule the feature rests on and the reason
-    it can be seeded last without disturbing anything above.
+    Declaring touches nothing: after the declarations the balances are exactly
+    what they were before them, which is the rule the feature rests on.
+
+    **Confirming a charge does**, and one bill is confirmed on purpose — the
+    gym, which is the case the whole feature was asked for. Without it the
+    local screen would only ever show unpaid charges, and the state most worth
+    looking at while building this would be the one nobody ever sees. It is
+    re-runnable like everything else here, and not because this checks: the
+    charge's id comes from the bill and the period, so the table refuses the
+    second write on its own.
     """
     headers = _authorization(token)
     listed = _expect(
@@ -845,9 +862,65 @@ def _declare_bills(
 
         declared += 1
 
-    skipped = len(BILLS) - declared
-    note = f", {skipped} already there" if skipped else ""
+    already = len(BILLS) - declared
+    note = f", {already} already there" if already else ""
     print(f"  bills     {declared} declared{note}")
+
+    settled = _settle_this_months_charges(client, headers=headers)
+    print(f"  cobros    {settled} of this month's charges answered for")
+
+
+def _settle_this_months_charges(
+    client: TestClient,
+    *,
+    headers: dict[str, str],
+) -> int:
+    """Answer for this month's charge on every bill that asks for one.
+
+    A pass of its own rather than a step inside the declaration loop, so it
+    runs on **every** seed and not only the first: the bills survive a re-run,
+    and a confirmation that only happened once would leave every later local
+    database showing nothing but unpaid charges.
+
+    Re-running is safe without checking anything. A confirmation's id comes
+    from the bill and the period, so the table refuses the second write; a skip
+    is the same answer written twice.
+
+    The period is read back from the listing rather than computed here. The
+    calendar is the server's — a bill anchored on the 31st lands on the 28th in
+    February — and a second implementation of it in a seed script would be a
+    second answer, drifting from the first.
+    """
+    wanted = {bill.name: bill.settle for bill in BILLS if bill.settle is not None}
+    view = _expect(
+        client.get("/financial/bills", headers=headers),
+        status.HTTP_200_OK,
+    ).json()
+    ids = {
+        str(bill["id"]): wanted[str(bill["name"])]
+        for bill in view["bills"]
+        if str(bill["name"]) in wanted
+    }
+    done = 0
+
+    for charge in view["occurrences"]:
+        action = ids.pop(str(charge["bill_id"]), None)
+
+        if action is None:
+            continue
+
+        _expect(
+            client.post(
+                f"/financial/bills/{charge['bill_id']}"
+                f"/occurrences/{charge['due_on']}/{action}",
+                json={} if action == "pay" else None,
+                headers=headers,
+            ),
+            status.HTTP_200_OK,
+        )
+        done += 1
+
+    return done
 
 
 def _enter_transfer_legs(
@@ -971,12 +1044,16 @@ def _summarize(client: TestClient, *, token: str, email: str, password: str) -> 
         status.HTTP_200_OK,
     ).json()
 
-    print(f"\nBills       {len(bills['bills'])} declared, none of them in the ledger")
+    confirmed = sum(1 for charge in bills["occurrences"] if charge["state"] == "paid")
+    print(
+        f"\nBills       {len(bills['bills'])} declared, "
+        f"{confirmed} of this month's charges confirmed",
+    )
 
     for total in bills["totals"]:
         print(
             f"  this month {total['expected']!s:>14} {total['currency']!s}"
-            f"  (still to fall due {total['upcoming']})",
+            f"  (still to pay {total['outstanding']})",
         )
 
     print("\nSpending by category")
