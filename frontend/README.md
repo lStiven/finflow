@@ -11,9 +11,16 @@ see **Frontend** in [`docs/decisions.md`](../docs/decisions.md).
 ```bash
 just web-install                      # once
 cp .env.example .env.development      # points at http://localhost:8000
-just up                               # emulator, seed data, API and the four workers
+just up --api-host 0.0.0.0            # emulator, seed data, API and the four workers
 just web                              # this, on http://localhost:5173
 ```
+
+**`--api-host 0.0.0.0` is not optional here.** `just up` binds the container's
+loopback by default, which the host's browser cannot reach: the page loads on
+5173 and every call it makes fails, because the fetch happens in your browser
+and not in the container. `just dev` binds every interface on its own, so the
+same URL works there and not here — that asymmetry is what usually costs the
+hour. The full reason is in [docs/running.md](../docs/running.md#4-los-seis-procesos).
 
 `just dev` alone is enough if you only need the API. Log in with the seeded
 account: `demo@finflow.local` / `una frase larga de verdad`.
@@ -136,8 +143,8 @@ says will happen (`lib/deletion.ts`), and the two transfer roles
 (`lib/transfers.ts`). Add to them before changing any of those files.
 
 A screen itself is checked by looking at it: `just shot` drives a headless
-Chromium over the running app (`just up` in one terminal, `just web` in
-another) and writes PNGs to `.screenshots/`, which git ignores.
+Chromium over the running app (`just up --api-host 0.0.0.0` in one terminal,
+`just web` in another) and writes PNGs to `.screenshots/`, which git ignores.
 
 ## Layout
 

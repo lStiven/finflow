@@ -25,12 +25,18 @@ Todo se ejecuta dentro del DevContainer, en `/workspaces/finflow_v2`.
 ## Empezar: dos comandos
 
 ```bash
-cp .env.example .env       # y edita dos valores — ver "Configurar .env"
-just up                    # emulador, recursos, datos demo y los procesos
+cp .env.example .env                  # y edita dos valores — ver "Configurar .env"
+just up --api-host 0.0.0.0            # emulador, recursos, datos demo y los procesos
 ```
 
 `just up` hace por sí solo lo que antes eran cuatro comandos y cinco
 terminales. La API queda en http://localhost:8000/docs.
+
+> **El `--api-host 0.0.0.0` no es opcional si vas a abrir el navegador.**
+> `just up` escucha en el loopback del contenedor por defecto, y eso es
+> invisible desde el navegador del host: http://localhost:8000/docs no
+> responde. El porqué y cuándo omitirlo están en
+> [Los seis procesos](#4-los-seis-procesos).
 
 El resto de esta guía explica cada paso y los otros dos entornos.
 
@@ -224,7 +230,7 @@ suyo.
 Todos a la vez, en una sola terminal:
 
 ```bash
-just up   # emulador + recursos + datos demo + los procesos
+just up --api-host 0.0.0.0   # emulador + recursos + datos demo + los procesos
 ```
 
 Cada línea va etiquetada con el servicio que la escribió, y un solo Ctrl+C
@@ -236,6 +242,27 @@ tres entornos y el poller marca como leído lo que lee, así que un run local
 contra un emulador en memoria se comería el correo que development iba a
 procesar — sin que nada lo reporte. En local la entrada es el webhook que la
 API monta justo para eso. Si de verdad lo quieres: `just up --with-ingest`.
+
+**`just up` escucha en el loopback por defecto, y por eso hace falta
+`--api-host 0.0.0.0` para abrirlo en el navegador.** Sin ese flag la API queda
+en `127.0.0.1:8000` *dentro del contenedor*, que es una interfaz distinta de
+aquella a la que Docker entrega el puerto publicado: `curl` funciona desde
+dentro y http://localhost:8000/docs no responde desde Windows o macOS. El
+síntoma se reconoce con `ss -ltn`: si dice `127.0.0.1:8000` en vez de
+`0.0.0.0:8000`, es esto.
+
+El default es loopback a propósito, y no es un descuido: la misma receta la
+usa `just up-dev` contra los recursos `dev-` reales, y ahí abrir todas las
+interfaces publicaría datos de verdad en la red local sin que nadie lo haya
+pedido. Decirlo en voz alta es el flag.
+
+Omítelo cuando no vayas a abrir el navegador — una sesión de `pytest`, un
+worker que estás mirando en el log — o cuando estés en una red en la que
+prefieras no publicar nada.
+
+> `just dev` **sí** bindea `0.0.0.0` por su cuenta, igual que `run-dev` y
+> `run-prod`. La asimetría es la que confunde: la misma URL funciona con
+> `just dev` y no con `just up`.
 
 Dos stacks a la vez (local y development) necesitan puertos distintos:
 `just up --api-port 8001`.
@@ -536,6 +563,12 @@ navegador del host.** Es la dirección del contenedor en la red interna de
 Docker. Abre siempre `http://localhost:5173`. Está explicado, con el orden de
 diagnóstico, en [`frontend/README.md`](../frontend/README.md).
 
+**Y si la página carga pero todas sus llamadas fallan, mira cómo arrancaste la
+API.** Vite escucha en todas las interfaces, así que 5173 suele responder
+aunque 8000 no: con `just up` sin `--api-host 0.0.0.0` la pantalla se pinta y
+cada petición muere en la pestaña **Network**. Son dos puertos y solo uno está
+publicado de verdad — ver [Los seis procesos](#4-los-seis-procesos).
+
 ### Verlo de verdad: `just shot`
 
 En este DevContainer no hay navegador, así que una pantalla que solo compila
@@ -543,7 +576,7 @@ En este DevContainer no hay navegador, así que una pantalla que solo compila
 que ya está corriendo y escribe PNGs que sí se pueden abrir.
 
 ```bash
-just up                       # emulador, datos de prueba y la API
+just up --api-host 0.0.0.0    # emulador, datos de prueba y la API
 just web                      # el frontend, en otra terminal
 
 just shot                     # las pantallas principales, tamaño teléfono
