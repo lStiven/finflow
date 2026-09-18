@@ -74,6 +74,20 @@ export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
  * is the same call the form makes — a heuristic does not get to create the
  * thing that can charge money.
  */
+/** A ceiling its owner put on one category. */
+export type Budget = components["schemas"]["BudgetResponse"];
+/** One cap and what the month has done to it — flat, so the ceiling and the
+ * traffic light cannot be rendered out of step. */
+export type BudgetProgress = components["schemas"]["BudgetProgressResponse"];
+export type BudgetsView = components["schemas"]["BudgetsResponse"];
+/** `ok` | `warning` | `over`, decided by the server so that two screens
+ * cannot say different things about the same category on the same day. */
+export type BudgetState = components["schemas"]["BudgetState"];
+/** Per currency, and never summed across them. */
+export type BudgetTotal = components["schemas"]["BudgetTotalsResponse"];
+/** Somewhere a cap is missing, ranked by what actually goes out there. */
+export type UncappedCategory = components["schemas"]["UncappedCategoryResponse"];
+export type SetBudgetBody = components["schemas"]["SetBudgetPayload"];
 /** What the month is supposed to look like, as its owner declared it. */
 export type MonthlyPlan = components["schemas"]["PlanResponse"];
 export type PlanBody = components["schemas"]["DeclarePlanPayload"];
@@ -123,6 +137,12 @@ export const queryKeys = {
   // key. What it also needs — the declared bills — is added by hand in the
   // few mutations that change those.
   allowance: [...["summary"], "allowance"] as const,
+  // Under `summary` for the same reason the allowance is: what a cap is
+  // compared against *is* the month's spending, so every mutation that already
+  // invalidates the totals carries the budgets along by prefix. The month a
+  // screen is looking at is appended per query, so paging back through months
+  // does not fight over one cache entry.
+  budgets: [...["summary"], "budgets"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -1552,6 +1572,79 @@ export function useSettleCharge(): UseMutationResult<
       void client.invalidateQueries({ queryKey: queryKeys.summary });
       void client.invalidateQueries({ queryKey: queryKeys.trends });
       void client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+/* --------------------------------------------------------------- budgets */
+
+/**
+ * The caps that govern a month, and what the ledger did to them.
+ *
+ * `month` left out asks for the calendar month in `DISPLAY_TIMEZONE`, which is
+ * the only month the dashboard ever wants. The budgets screen names one so it
+ * can page back, and the key carries it — two months are two answers and must
+ * not overwrite each other in the cache.
+ *
+ * Never 404: an empty list of ceilings is an ordinary state, unlike an
+ * undeclared month. So there is no `orAbsent` here and no `retry: false` —
+ * a failure is a failure.
+ */
+export function budgetsQuery(month?: string | null) {
+  return queryOptions({
+    queryKey: [...queryKeys.budgets, month ?? "current"],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/budgets", {
+          params: {
+            query: {
+              timezone: DISPLAY_TIMEZONE,
+              ...(month ? { month } : {}),
+            },
+          },
+        }),
+      ),
+  });
+}
+
+export function useSetBudget(): UseMutationResult<Budget, Error, SetBudgetBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SetBudgetBody) =>
+      unwrap(api.PUT("/financial/budgets", { body })),
+    onSuccess: () => {
+      // Every month, not just the one on screen: a recurring cap changes what
+      // every month reads, and the key carries the month as its last segment.
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
+    },
+  });
+}
+
+/**
+ * Drop one cap.
+ *
+ * `month` picks which of the two a category can have: absent drops the
+ * recurring one and leaves this month's exception standing, and naming a month
+ * drops the exception and leaves the recurring cap where it was.
+ */
+export function useForgetBudget(): UseMutationResult<
+  unknown,
+  Error,
+  { category: string; month?: string | null }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ category, month }: { category: string; month?: string | null }) =>
+      unwrap(
+        api.DELETE("/financial/budgets/{category}", {
+          params: {
+            path: { category },
+            query: month ? { month } : {},
+          },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
     },
   });
 }

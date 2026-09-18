@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
+from personal_finance.contexts.financial.domain.budgets import BudgetId, CategoryBudget
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -413,6 +414,57 @@ class MonthlyPlanRepository(Protocol):
 
     def remove(self, *, user_id: UserId) -> bool:
         """Forget the plan. False when there was nothing to forget."""
+        ...
+
+
+class CategoryBudgetRepository(Protocol):
+    """Persistence port for `CategoryBudget`.
+
+    Keyed by the cap's own identity rather than a generated id, which is what
+    the aggregate's identity already is: the category and, when it governs only
+    one, the month. Two caps on the same pair are one cap, so there is nothing
+    a caller could ask for twice.
+
+    There is no `list_by_user`. A month is what a screen reads, and reading
+    every cap anybody ever declared for a single month would grow with the
+    months rather than with the categories — a year of December exceptions is
+    twelve times the rows for one answer.
+    """
+
+    def list_for_month(
+        self,
+        *,
+        user_id: UserId,
+        month: str,
+    ) -> Sequence[CategoryBudget]:
+        """Every cap that could govern this month: the recurring ones and that
+        month's own.
+
+        Both kinds, unresolved. Which of the two wins for a category is a
+        domain rule and it is applied above this line — a repository that
+        already resolved it could not tell a screen that the ceiling it is
+        showing is this month's exception rather than the usual one.
+        """
+        ...
+
+    def save(self, budget: CategoryBudget) -> None:
+        """Store a cap, new or restated.
+
+        A plain put, like a bill and like the plan: nothing else writes these
+        rows and none of their fields is a running total, so there is no half
+        of the record a write could quietly discard. What is spent against the
+        cap is not here at all — it is read off the ledger.
+        """
+        ...
+
+    def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:
+        """Forget a cap. False when there was nothing to forget.
+
+        Deleting is right here for the reason it is right on a bill: a cap
+        never wrote anything, so there is nothing left behind to explain.
+        Removing this month's exception does not touch the recurring cap, which
+        is the point of the two being separate rows.
+        """
         ...
 
 

@@ -2,9 +2,12 @@
 
 One table, partitioned by user, with the sort key carrying the record type:
 
-    ACCOUNT#<id>        the account, its balance a signed running total
-    FINGERPRINT#<print> a bank/instrument pair -> the account it reaches
-    MOVEMENT#<id>       one ledger row, assigned or not
+    ACCOUNT#<id>         the account, its balance a signed running total
+    FINGERPRINT#<print>  a bank/instrument pair -> the account it reaches
+    MOVEMENT#<id>        one ledger row, assigned or not
+    BILL#<id>            a charge its owner declared, never a ledger row
+    BUDGET#<month>#<cat> a spending cap; the month is `EVERY` or `2026-09`
+    PLAN                 the one declared month, at a fixed place
 
 Two things here are load-bearing and neither is incidental.
 
@@ -40,6 +43,11 @@ from personal_finance.contexts.financial.domain.bills import (
     BillId,
     BillStatus,
     ScheduledBill,
+)
+from personal_finance.contexts.financial.domain.budgets import (
+    EVERY_MONTH,
+    BudgetId,
+    CategoryBudget,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.financing import (
@@ -89,6 +97,11 @@ ACCOUNT_PREFIX = "ACCOUNT#"
 FINGERPRINT_PREFIX = "FINGERPRINT#"
 MOVEMENT_PREFIX = "MOVEMENT#"
 BILL_PREFIX = "BILL#"
+# The month comes before the category, which is the whole reason a month of
+# budgets is one query: `_query_prefix` can only do `begins_with`, so keying
+# the other way round would make "every cap of September" a read of every cap
+# ever declared.
+BUDGET_PREFIX = "BUDGET#"
 # Not a prefix: the whole sort key. There is exactly one plan per person, so
 # its row sits at a fixed place in their partition rather than under a
 # generated id — which also means no listing, no paging and no key to guess.
@@ -1599,6 +1612,139 @@ class DynamoDBMonthlyPlanRepository:
         response = self._client.delete_item(
             TableName=self._table_name,
             Key=_key(user_id, PLAN_KEY),
+            ReturnValues="ALL_OLD",
+        )
+
+        return bool(response.get("Attributes"))
+
+
+# ----------------------------------------------------------------------
+# Category budgets
+# ----------------------------------------------------------------------
+
+
+def budget_sort_value(budget_id: BudgetId) -> str:
+    """Where one cap lives inside its owner's partition.
+
+    The month first, so the caps of one month are a `begins_with` away, and the
+    category last because it is the part that varies. `EVERY` stands where a
+    month key would go for a cap that governs all of them, and it cannot
+    collide with one: a month key is only ever digits and a dash.
+    """
+    return f"{BUDGET_PREFIX}{budget_id.month_key}#{budget_id.category}"
+
+
+def budget_to_item(budget: CategoryBudget) -> dict[str, AttributeValueTypeDef]:
+    """One row per cap.
+
+    The category and the month are written as attributes as well as being in
+    the sort key. Reading them back out of the key would mean splitting a
+    string a category could itself contain a separator of — the domain refuses
+    a `#` for exactly that reason, and this makes the refusal something the
+    reader does not have to depend on.
+    """
+    return {
+        PARTITION_KEY: {"S": str(budget.user_id.value)},
+        SORT_KEY: {"S": budget_sort_value(budget.id)},
+        "category": {"S": budget.category},
+        # `EVERY` rather than a missing attribute: a row whose shape depends on
+        # whether the cap recurs is a row two readers can disagree about.
+        "month": {"S": budget.id.month_key},
+        # A string, like money everywhere else that leaves this process: a JSON
+        # float rounds a cent away and a cap is compared to the cent.
+        "limit": {"N": str(budget.limit.amount)},
+        "currency": {"S": budget.currency.value},
+        "warn_at": {"N": str(budget.warn_at)},
+        "updated_at": {"N": str(budget.updated_at.as_epoch_seconds())},
+    }
+
+
+def budget_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> CategoryBudget:
+    user_id = _string(item, PARTITION_KEY)
+    category = _string(item, "category")
+    month = _string(item, "month")
+
+    # `_number` answers 0 for an attribute that is not there, and a cap of zero
+    # is one the domain refuses — it would read back as an ordinary budget that
+    # is already over on the first peso rather than as the corrupt row it is.
+    if (
+        user_id is None
+        or category is None
+        or month is None
+        or "limit" not in item
+        or "warn_at" not in item
+        or "updated_at" not in item
+    ):
+        raise CorruptFinancialItemError("Stored budget is missing part of itself")
+
+    return CategoryBudget(
+        id=BudgetId(
+            category=category,
+            month=None if month == EVERY_MONTH else month,
+        ),
+        user_id=UserId.from_string(user_id),
+        limit=Money(
+            amount=_number(item, "limit"),
+            currency=_enum(Currency, _string(item, "currency") or "", "currency"),
+        ),
+        warn_at=int(_number(item, "warn_at")),
+        updated_at=PosixTime.from_epoch_seconds(int(_number(item, "updated_at"))),
+    )
+
+
+class DynamoDBCategoryBudgetRepository:
+    """`CategoryBudgetRepository` over the same table as everything else here.
+
+    A whole-item put, like the bills and plan repositories and safe for the same
+    reason: no field of a cap is a running total another writer moves. What is
+    *spent* against it is not a field at all — it is read off the ledger every
+    time, so there is no figure here to drift.
+    """
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def list_for_month(
+        self,
+        *,
+        user_id: UserId,
+        month: str,
+    ) -> Sequence[CategoryBudget]:
+        """Two queries, one per kind of cap, and never a read of all of them.
+
+        The alternative is one query on `BUDGET#` and a filter in memory, which
+        reads every month anybody ever made an exception for to answer about
+        one. Two bounded prefixes cost two round trips and stay the same size
+        as the number of categories rather than growing with the months.
+        """
+        return [
+            budget_to_entity(item)
+            for prefix in (
+                f"{BUDGET_PREFIX}{EVERY_MONTH}#",
+                f"{BUDGET_PREFIX}{month}#",
+            )
+            for item in _query_prefix(
+                self._client,
+                table_name=self._table_name,
+                user_id=user_id,
+                prefix=prefix,
+            )
+        ]
+
+    def save(self, budget: CategoryBudget) -> None:
+        self._client.put_item(TableName=self._table_name, Item=budget_to_item(budget))
+
+    def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:
+        """Delete, and say whether there was anything there.
+
+        `ReturnValues="ALL_OLD"` rather than a read followed by a delete, for
+        the reason the bills repository gives: two calls would report "deleted"
+        for a row somebody else removed in between.
+        """
+        response = self._client.delete_item(
+            TableName=self._table_name,
+            Key=_key(user_id, budget_sort_value(budget_id)),
             ReturnValues="ALL_OLD",
         )
 

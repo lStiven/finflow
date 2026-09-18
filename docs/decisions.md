@@ -1389,6 +1389,62 @@ way out, and still stores nothing.
   re-runnable without checking anything, because the charge's id makes the
   second write DynamoDB's problem.
 
+### Spending caps by category (2026-09-18)
+
+- **The Telegram alert at 80 % is deferred, and not for the reason the plan
+  gave** (2026-09-18). The build plan had it waiting on E1, the notification
+  channel; E1 shipped on 2026-09-14 and the alert still cannot be built. What
+  actually blocks it is that **a movement has no category at the moment it is
+  recorded**: Financial stores the counterparty text the bank wrote and joins
+  it to a merchant when the answer is *read*, which is precisely what makes
+  renaming a merchant correct every past movement for free. So nothing on the
+  write path knows which cap a purchase belongs to — and the financial worker
+  has neither the Merchant adapter wired nor IAM to reach its table.
+  Considered and rejected: evaluating the crossing lazily when the budgets are
+  read, which works and would have shipped in an hour. It was rejected because
+  this project already made that call once, against itself — accrued interest
+  is deliberately **not** announced because it arrives four at a time when
+  somebody opens the credit screen, and announcing things that only happen
+  when you open the app is what makes people turn alerts off. An alert that
+  fires while you are already looking at the screen that says it is not an
+  alert. What unblocks it is the same thing that has the monthly credit
+  accrual blocked: a way to walk every user from a scheduled trigger.
+
+- **The crossing is derived, never stored and never published** (2026-09-18).
+  Following from the above, `CategoryBudget` records no domain event and there
+  is no `BudgetThresholdCrossed` anywhere. Considered and rejected: recording
+  the event now and leaving it unpublished for later, which is how a dead code
+  path gets mistaken for a working one. The state is computed in
+  `CategoryBudget.progress` on the way out, the same shape as "paid" being
+  read off the ledger row — and for the same reason: a stored answer would be
+  the copy that survives somebody editing the movement underneath it. Whoever
+  builds the alert will need an announced-once marker at that point, and *not
+  before*: without a trigger there is nothing to make idempotent.
+
+- **A cap is two rows, not one row with an override** (2026-09-18). A category
+  can carry a recurring cap (`BUDGET#EVERY#<cat>`) and a cap for one month
+  (`BUDGET#<YYYY-MM>#<cat>`), and the month's own shadows the recurring one
+  while it lasts. Considered and rejected: one row with an optional per-month
+  exception inside it, which is fewer rows and makes "stop treating December
+  specially" a partial update of a record two writers can disagree about.
+  Separate rows make dropping the exception a delete that leaves the ordinary
+  ceiling untouched — the thing somebody actually wants — and they are why the
+  month comes *before* the category in the sort key: `_query_prefix` can only
+  do `begins_with`, so a month is two bounded queries rather than a read of
+  every cap ever declared.
+
+- **The screen is its own, against the build plan** (2026-09-18). The plan
+  said the traffic light belonged "inside the breakdown by category the
+  summary screen already draws, and the editable cap where the spending is
+  seen, not in a separate settings screen". The second half of that is
+  honoured — `/presupuestos` shows every cap *against that month's spending*
+  and is not a settings panel — but it is a screen rather than a section,
+  because Resumen is asked four plainer questions first (what do I have, what
+  came in, what went out, what do I owe) and a second per-category table under
+  them buries all four. Resumen gets a one-line summary and a link. Decided by
+  the owner, who also moved E3's allowance card below the accounts on the same
+  argument.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

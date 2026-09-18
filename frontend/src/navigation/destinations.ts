@@ -16,6 +16,7 @@ import {
   Receipt,
   Settings,
   Store,
+  Target,
   Wallet,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -29,6 +30,7 @@ export type Destination = {
     | "/transacciones"
     | "/cuentas"
     | "/facturas"
+    | "/presupuestos"
     | "/comercios"
     | "/reportes"
     | "/perfil"
@@ -44,6 +46,10 @@ export const DESTINATIONS: Destination[] = [
   // Con las pantallas del dinero y no al final: una factura es un gasto que
   // todavía no ocurrió, y se busca donde se buscan los gastos.
   { label: "Facturas", icon: Receipt, to: "/facturas" },
+  // Junto a Facturas por el mismo argumento: un tope es una decisión sobre
+  // gasto, y se busca donde se buscan los gastos. No en Configuración — lo que
+  // se mira todos los meses no vive en un panel de ajustes.
+  { label: "Presupuestos", icon: Target, to: "/presupuestos" },
   { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },

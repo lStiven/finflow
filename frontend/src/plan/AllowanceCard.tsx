@@ -64,7 +64,10 @@ import {
 
 const TONES: Record<AllowanceTone, { number: "plain" | "negative"; bar: string }> = {
   healthy: { number: "plain", bar: "bg-accent/70" },
-  tight: { number: "plain", bar: "bg-mid" },
+  // `warn`, not `mid`: there is no `mid` token, so this bar has been drawing
+  // nothing at all since this card shipped — the one state where the bar is
+  // the whole message.
+  tight: { number: "plain", bar: "bg-warn" },
   over: { number: "negative", bar: "bg-outgoing/80" },
 };
 

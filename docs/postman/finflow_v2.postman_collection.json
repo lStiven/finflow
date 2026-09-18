@@ -2844,6 +2844,113 @@
             "description": "The detector half of bills: what looks like it comes back every so often and is nobody's declared bill yet, read off thirteen months of movements. A proposal and nothing more — this writes nothing, and accepting one is `POST /financial/bills` with these figures, the same call anybody declares a bill with, so whatever ends up able to charge money is always something a person stated.\n\nThe window (`since`, `until`, `months`) comes back so a screen can say what \"nothing found\" was looked for in: an empty list is the ordinary answer for somebody two weeks in, and it means \"not enough history yet\", not \"you have no subscriptions\".\n\nLeft out on purpose: charges this app wrote itself — the interest a credit accrues every cut is perfectly monthly and would head the ranking, and a confirmed bill charge would be the detector reading its own handwriting — and transfers, because paying the card from savings every month is the most regular charge anybody has and it is not a subscription. Dormant series (two expected charges missed) are dropped rather than proposed; a list that suggests declaring a cancelled subscription is one nobody reads twice.\n\n`bill_id` is the mark that matters: non-null means this series is already declared, and the screen should not offer it again. `amount` is what the *next* charge is expected to cost, a median when `variable` is true, so \"about $90.000\" and \"$90.000\" stay different promises. Ordered by `confidence` (0 to 1) — it ranks a list read top-down and decides nothing, which is why there is no threshold anywhere in this feature. At most 40 series, a bound rather than a page."
           },
           "response": []
+        },
+        {
+          "name": "Set a budget",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"category\": \"restaurants\",\n  \"limit\": \"600000\",\n  \"currency\": \"COP\",\n  \"month\": null,\n  \"warn_at\": 80\n}"
+            },
+            "description": "A ceiling on one category. `month` null caps **every** month, which is the ordinary answer — a cap that has to be re-declared every 1st is a cap that is gone by March. A key like `2026-09` caps that month only and **shadows** the recurring one while it lasts, which is what makes «este diciembre sí gasto más» an exception rather than an edit that outlives its reason. `warn_at` is where the bar turns amber, strictly between 1 and 99: at 100 there is no amber band at all and at 0 the bar is never once green.\n\nA `PUT` and not a `PATCH` on purpose: the ceiling and the warning point are one statement, and half an update leaves a warning standing against a ceiling it was never set against. Declaring the same category and month twice leaves one cap.\n\n`category` is checked against **this caller's** vocabulary — half of it is whatever they wrote for themselves — and an unknown one answers 422 rather than storing a ceiling nothing will ever be attributed to.\n\n**Nothing is recorded as spent.** This writes a number, a currency and a month: no ledger row, no balance, and nothing is blocked when the cap is passed."
+          },
+          "response": []
+        },
+        {
+          "name": "Budgets of a month",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets?timezone=America/Bogota&month={{budget_month}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Decides which month 'this month' is when none is named."
+                },
+                {
+                  "key": "month",
+                  "value": "{{budget_month}}",
+                  "description": "`2026-09`. Omit it for the month today falls in."
+                }
+              ]
+            },
+            "description": "Every cap that governs a month and what the ledger did to it. **200 with empty lists when nothing is capped**, never a 404: unlike an undeclared month, no ceilings is an ordinary state and reads as exactly what it is.\n\nEach row carries the whole comparison — `limit`, `spent`, `remaining` (negative when it was passed, never floored) and `state` (`ok` | `warning` | `over`, decided by the server so two screens cannot disagree). `spent` is the category's **outgoing** and never its net: a refund inside it would make the net read as under budget while the money did leave and came back. Transfers are excluded, so paying a card from savings never eats a cap.\n\n`retired` marks a cap whose category its owner has since deleted. It is still reported rather than hidden — it is the record of a decision, and hiding it would leave a row nothing could reach. Merchant publishes nothing on a delete that Financial could listen for, so degrading here is the only place it can be handled.\n\n`suggestions` is where money goes with no cap watching, biggest first. It offers and never creates.\n\n**The caps are not a partition of the month.** `/financial/summary` buckets movements no merchant owns yet under a null key — unknown, which is not the `uncategorized` category — so the caps do not add up to the month's outgoing, and a client that presents them as a whole is presenting a lie."
+          },
+          "response": []
+        },
+        {
+          "name": "Forget a budget",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets/:category?month={{budget_month}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets",
+                ":category"
+              ],
+              "query": [
+                {
+                  "key": "month",
+                  "value": "{{budget_month}}",
+                  "description": "Drops that month's exception. Omit it to drop the recurring cap."
+                }
+              ],
+              "variable": [
+                {
+                  "key": "category",
+                  "value": "{{budget_category}}",
+                  "description": "`restaurants`, or `custom:<hex>` for one of their own."
+                }
+              ]
+            },
+            "description": "Drop one cap: 204, and silent when there was nothing to drop — a 404 on the second press of a button somebody is unsure about is a worse answer than nothing. A cap never wrote anything, so there is nothing left behind to explain.\n\n`month` picks which of the two a category can have: absent drops the recurring cap and leaves this month's exception standing, and naming a month drops the exception and leaves the recurring cap where it was. That is the point of the two being separate rows.\n\n**Not validated against the vocabulary**, unlike the `PUT`, and that is the point rather than an omission: a cap whose category was deleted is exactly the one somebody most needs to be able to remove."
+          },
+          "response": []
         }
       ]
     },

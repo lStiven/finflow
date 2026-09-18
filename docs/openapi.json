@@ -814,6 +814,221 @@
         "title": "BillsResponse",
         "type": "object"
       },
+      "BudgetProgressResponse": {
+        "description": "One cap and what the month has done to it.\n\nFlat rather than a cap nested inside a reading, so a client cannot render\nthe ceiling and the state out of step. `state` is the enum itself, not its\nstring, so the generated TypeScript is a union a screen cannot invent a\nmember of.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "string"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "recurring": {
+            "title": "Recurring",
+            "type": "boolean"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "string"
+          },
+          "retired": {
+            "title": "Retired",
+            "type": "boolean"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "warn_at": {
+            "title": "Warn At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "currency",
+          "limit",
+          "spent",
+          "remaining",
+          "warn_at",
+          "state",
+          "month",
+          "recurring",
+          "retired"
+        ],
+        "title": "BudgetProgressResponse",
+        "type": "object"
+      },
+      "BudgetResponse": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "string"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "recurring": {
+            "title": "Recurring",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "integer"
+          },
+          "warn_at": {
+            "title": "Warn At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "currency",
+          "limit",
+          "month",
+          "recurring",
+          "warn_at",
+          "updated_at"
+        ],
+        "title": "BudgetResponse",
+        "type": "object"
+      },
+      "BudgetState": {
+        "description": "How a month is doing against one cap.\n\nThe three the screen draws, decided here and not there, so the card on the\ndashboard and the row on the budgets screen can never disagree about the\nsame category.\n\nExplicit string values: they cross the HTTP boundary as the enum itself,\nso reordering the members must not change what a client reads.",
+        "enum": [
+          "ok",
+          "warning",
+          "over"
+        ],
+        "title": "BudgetState",
+        "type": "string"
+      },
+      "BudgetTotalsResponse": {
+        "description": "Every cap of one currency, added up, and how the three states split.\n\nOne entry per currency and never summed across them: there is no exchange\nrate anywhere in this app. The counts are what a summary says out loud\n(«3 de 5 en verde»), computed once so two screens cannot tally differently.",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "integer"
+          },
+          "over": {
+            "title": "Over",
+            "type": "integer"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "string"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "warning": {
+            "title": "Warning",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "limit",
+          "spent",
+          "remaining",
+          "ok",
+          "warning",
+          "over"
+        ],
+        "title": "BudgetTotalsResponse",
+        "type": "object"
+      },
+      "BudgetsResponse": {
+        "properties": {
+          "budgets": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetProgressResponse"
+            },
+            "title": "Budgets",
+            "type": "array"
+          },
+          "month": {
+            "title": "Month",
+            "type": "string"
+          },
+          "since": {
+            "format": "date",
+            "title": "Since",
+            "type": "string"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/UncappedCategoryResponse"
+            },
+            "title": "Suggestions",
+            "type": "array"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetTotalsResponse"
+            },
+            "title": "Totals",
+            "type": "array"
+          },
+          "until": {
+            "format": "date",
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "month",
+          "since",
+          "until",
+          "budgets",
+          "totals",
+          "suggestions"
+        ],
+        "title": "BudgetsResponse",
+        "type": "object"
+      },
       "CatalogOption": {
         "description": "One admissible value, and something to put beside it in a dropdown.",
         "properties": {
@@ -3814,6 +4029,60 @@
         "title": "SeriesState",
         "type": "string"
       },
+      "SetBudgetPayload": {
+        "description": "A ceiling, the category it is on, and which months it governs.\n\n`month` absent caps every month, which is the ordinary answer: a cap that\nhas to be re-declared every 1st is a cap that is gone by March. A key like\n`2026-09` caps that month only and shadows the recurring one while it\nlasts — December, when the rules are different.",
+        "properties": {
+          "category": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency",
+            "default": "COP"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              }
+            ],
+            "title": "Limit"
+          },
+          "month": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Month"
+          },
+          "warn_at": {
+            "default": 80,
+            "maximum": 99.0,
+            "minimum": 1.0,
+            "title": "Warn At",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "category",
+          "limit"
+        ],
+        "title": "SetBudgetPayload",
+        "type": "object"
+      },
       "SetCreditLimitPayload": {
         "description": "State or restate what a card may owe. `null` clears it.",
         "properties": {
@@ -4563,6 +4832,29 @@
           "movements"
         ],
         "title": "TrendSeriesResponse",
+        "type": "object"
+      },
+      "UncappedCategoryResponse": {
+        "description": "Somewhere a cap is missing, ranked by what actually goes out there.\n\nOffered, never created — the same rule the recurring detector follows. The\nfigure lands in an editable field and nothing here declares anything.",
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "currency",
+          "spent"
+        ],
+        "title": "UncappedCategoryResponse",
         "type": "object"
       },
       "UpdateProfilePayload": {
@@ -6555,6 +6847,176 @@
           }
         ],
         "summary": "Resume Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/budgets": {
+      "get": {
+        "description": "Every cap that governs a month, and what the ledger did to it.\n\n200 with empty lists when nothing is capped, never a 404: unlike the\nmonthly plan, an empty list of ceilings is a real and ordinary state and\nreads as exactly what it is.\n\nThe month is the calendar month in `timezone` unless one is named, read\nthere and not in UTC — a Bogotá month starting five hours early would count\nthe last evening of the previous one, and being wrong on the 1st is being\nwrong on the day this is most likely to be looked at.\n\nA cap whose category its owner has since deleted comes back `retired`\nrather than taking the screen down with it. Merchant publishes nothing on a\ndelete that this context could listen for, so degrading on read is the only\nplace it can be handled.",
+        "operationId": "read_budgets_financial_budgets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "America/Bogota",
+              "maxLength": 64,
+              "title": "Timezone",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Budgets",
+        "tags": [
+          "financial"
+        ]
+      },
+      "put": {
+        "description": "Put a ceiling on a category, or restate the one that is there.\n\nA `PUT` and not a `PATCH`, deliberately: a cap and the point it warns at\nare one statement, and half an update leaves a warning standing against a\nceiling it was never set against. Declaring the same category and month\ntwice leaves one cap, because two caps on that pair are not two caps.\n\nNothing is recorded as spent. This writes a number, a currency and a\nmonth, and no balance moves.",
+        "operationId": "set_budget_financial_budgets_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBudgetPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Budget",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/budgets/{category}": {
+      "delete": {
+        "description": "Drop one cap. The card disappears and nothing else changes.\n\n**Not validated against the vocabulary**, unlike the `PUT`, and that is the\npoint rather than an omission: a cap whose category was deleted is exactly\nthe one somebody most needs to be able to remove, and refusing it because\nthe category no longer exists would leave a row nothing could reach.\n\n`month` picks which of the two possible caps: absent drops the recurring\none and leaves this month's exception, and naming a month drops the\nexception and leaves the recurring cap exactly where it was.\n\nSilent when there was nothing to drop, like every other undo here: a 404 on\nthe second press of a button somebody is unsure about is a worse answer\nthan nothing. A cap never wrote anything, so there is nothing left behind\nto explain.",
+        "operationId": "forget_budget_financial_budgets__category__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "category",
+            "required": true,
+            "schema": {
+              "title": "Category",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Forget Budget",
         "tags": [
           "financial"
         ]

@@ -691,8 +691,17 @@ e2e-bills *args:
 e2e-allowance *args:
     cd {{frontend_dir}} && node scripts/e2e-allowance.mjs {{args}}
 
-# Both browser suites, in order.
-e2e: e2e-bills e2e-allowance
+# The budgets screen, in a real browser and against the real stack.
+# Puts a ceiling on a category from the page, and reads every balance, the net
+# worth and the ledger's row count before and after to refuse to pass if doing
+# so moved a peso. Then checks the traffic light against `/summary` rather than
+# against the budgets endpoint's own figures, and that this month's cap shadows
+# the recurring one. Needs `just up` and `just web`.
+e2e-budgets *args:
+    cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
+
+# The three browser suites, in order.
+e2e: e2e-bills e2e-allowance e2e-budgets
 
 # Format check, lint and typecheck the frontend.
 web-check:

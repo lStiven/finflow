@@ -38,6 +38,11 @@ describe("las secciones del teléfono", () => {
     expect(facturas?.to).toBe("/facturas");
   });
 
+  it("deja Presupuestos al alcance", () => {
+    const presupuestos = DESTINATIONS.find((d) => d.label === "Presupuestos");
+    expect(presupuestos?.to).toBe("/presupuestos");
+  });
+
   it("deja Reportes y Comercios al alcance", () => {
     const labels = [...BAR, ...OVERFLOW].map((d) => d.label);
     expect(labels).toContain("Reportes");

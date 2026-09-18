@@ -47,6 +47,15 @@ from personal_finance.contexts.financial.application.bills import (
     SettleBillChargeUseCase,
     SettledCharge,
 )
+from personal_finance.contexts.financial.application.budgets import (
+    BudgetLine,
+    BudgetsView,
+    BudgetTotals,
+    ManageBudgetsUseCase,
+    ReadBudgetsQuery,
+    ReadBudgetsUseCase,
+    SetBudgetCommand,
+)
 from personal_finance.contexts.financial.application.commands import (
     AccrueFinancingCommand,
     ChargeDraft,
@@ -142,6 +151,15 @@ from personal_finance.contexts.financial.domain.bills import (
     BillStatus,
     OccurrenceState,
 )
+from personal_finance.contexts.financial.domain.budgets import (
+    DEFAULT_WARN_PERCENT,
+    MAX_CATEGORY_LENGTH,
+    MAX_WARN_PERCENT,
+    MIN_WARN_PERCENT,
+    MONTH_KEY,
+    BudgetState,
+    CategoryBudget,
+)
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
@@ -191,6 +209,7 @@ from personal_finance.contexts.financial.infrastructure.merchant.merchant_direct
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
+    DynamoDBCategoryBudgetRepository,
     DynamoDBMonthlyPlanRepository,
     DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
@@ -4025,4 +4044,358 @@ def _allowance_response(allowance: MonthlyAllowance) -> AllowanceResponse:
         since=allowance.since,
         until=allowance.until,
         days_left=allowance.days_left,
+    )
+
+
+# --------------------------------------------------------------- budgets
+#
+# A ceiling on one category, and a traffic light against it. Deliberately not
+# the method of assigning every peso somewhere: that asks somebody to allocate
+# a whole income before the app is worth anything, which is the entry curve
+# this app is trying not to have.
+#
+# Declared, never discovered — like an account and like the month. And what is
+# *spent* against a cap is never stored: it is read off the ledger through the
+# very use case that draws the breakdown on the summary screen, so the budgets
+# screen and Reportes cannot disagree about the same category on the same day.
+#
+# Two things the build plan expected and this does not do, both on purpose.
+#
+# There is no `BudgetThresholdCrossed` on the bus and no Telegram message. A
+# movement has **no category at the moment it is recorded**: Financial stores
+# the counterparty text the bank wrote and joins it to a merchant when the
+# answer is read, which is what makes a correction retroactive and is also why
+# nothing at write time knows which cap a purchase belongs to. Announcing a
+# crossing needs a trigger that walks users, which this deployment does not
+# have — the same thing that has the monthly credit accrual blocked.
+#
+# And a cap is not a partition of the month. `/summary` buckets movements no
+# merchant owns yet under a key of `null` — unknown, which is not the
+# `uncategorized` category — so the caps do not add up to the month's outgoing.
+# The screen says so; folding one bucket into the other to make the arithmetic
+# look tidy would file spending under a category nobody chose.
+
+
+class SetBudgetPayload(BaseModel):
+    """A ceiling, the category it is on, and which months it governs.
+
+    `month` absent caps every month, which is the ordinary answer: a cap that
+    has to be re-declared every 1st is a cap that is gone by March. A key like
+    `2026-09` caps that month only and shadows the recurring one while it
+    lasts — December, when the rules are different.
+    """
+
+    category: str = Field(min_length=1, max_length=MAX_CATEGORY_LENGTH)
+    limit: Decimal = Field(gt=0, le=MAX_MONEY)
+    currency: Currency = Currency.COP
+    month: str | None = Field(default=None, pattern=MONTH_KEY.pattern)
+    #: Where the bar turns amber. Strictly inside the cap: at 100 there is no
+    #: amber band at all and at 0 the bar is never once green.
+    warn_at: int = Field(
+        default=DEFAULT_WARN_PERCENT,
+        ge=MIN_WARN_PERCENT,
+        le=MAX_WARN_PERCENT,
+    )
+
+
+class BudgetResponse(BaseModel):
+    category: str
+    currency: Currency
+    limit: str
+    #: None when it governs every month.
+    month: str | None
+    recurring: bool
+    warn_at: int
+    #: When it was last stated, in epoch seconds. A cap is a guess that gets
+    #: corrected, so how old it is matters.
+    updated_at: int
+
+
+class BudgetProgressResponse(BaseModel):
+    """One cap and what the month has done to it.
+
+    Flat rather than a cap nested inside a reading, so a client cannot render
+    the ceiling and the state out of step. `state` is the enum itself, not its
+    string, so the generated TypeScript is a union a screen cannot invent a
+    member of.
+    """
+
+    category: str
+    currency: Currency
+    limit: str
+    #: What went out of this category this month, transfers excluded.
+    spent: str
+    #: Can be negative, and is reported negative rather than floored at zero —
+    #: somebody who went over needs to see by how much.
+    remaining: str
+    warn_at: int
+    state: BudgetState
+    month: str | None
+    recurring: bool
+    #: True when the category this caps is no longer in its owner's vocabulary.
+    #: The cap is still reported — it is the record of a decision — but nothing
+    #: will ever be spent against it, so the screen offers to drop it.
+    retired: bool
+
+
+class BudgetTotalsResponse(BaseModel):
+    """Every cap of one currency, added up, and how the three states split.
+
+    One entry per currency and never summed across them: there is no exchange
+    rate anywhere in this app. The counts are what a summary says out loud
+    («3 de 5 en verde»), computed once so two screens cannot tally differently.
+    """
+
+    currency: Currency
+    limit: str
+    spent: str
+    remaining: str
+    ok: int
+    warning: int
+    over: int
+
+
+class UncappedCategoryResponse(BaseModel):
+    """Somewhere a cap is missing, ranked by what actually goes out there.
+
+    Offered, never created — the same rule the recurring detector follows. The
+    figure lands in an editable field and nothing here declares anything.
+    """
+
+    category: str
+    currency: Currency
+    spent: str
+
+
+class BudgetsResponse(BaseModel):
+    month: str
+    since: dt.date
+    until: dt.date
+    #: Worst first: the closest to its ceiling leads, because it is the only
+    #: one with something to do about it.
+    budgets: list[BudgetProgressResponse]
+    totals: list[BudgetTotalsResponse]
+    suggestions: list[UncappedCategoryResponse]
+
+
+@functools.lru_cache(maxsize=1)
+def build_budgets() -> DynamoDBCategoryBudgetRepository:
+    return DynamoDBCategoryBudgetRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_budgets() -> ManageBudgetsUseCase:
+    return ManageBudgetsUseCase(budgets=build_budgets())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_read_budgets() -> ReadBudgetsUseCase:
+    """Wired to the very object behind `/summary`.
+
+    Handed over whole rather than re-created, for the reason the allowance
+    gives: a second instance would be a second set of rules about what counts
+    as spending, and this screen would quietly disagree with the one it is
+    made of.
+    """
+    return ReadBudgetsUseCase(
+        budgets=build_budgets(),
+        spending=_build_summarize_spending(),
+        merchants=build_merchant_directory(),
+    )
+
+
+def get_manage_budgets_use_case() -> ManageBudgetsUseCase:
+    return _build_manage_budgets()
+
+
+def get_read_budgets_use_case() -> ReadBudgetsUseCase:
+    return _build_read_budgets()
+
+
+ManageBudgets = Annotated[
+    ManageBudgetsUseCase,
+    Depends(get_manage_budgets_use_case),
+]
+
+
+@router.put("/budgets", response_model=BudgetResponse)
+def set_budget(
+    user_id: CurrentUser,
+    payload: SetBudgetPayload,
+    use_case: ManageBudgets,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> BudgetResponse:
+    """Put a ceiling on a category, or restate the one that is there.
+
+    A `PUT` and not a `PATCH`, deliberately: a cap and the point it warns at
+    are one statement, and half an update leaves a warning standing against a
+    ceiling it was never set against. Declaring the same category and month
+    twice leaves one cap, because two caps on that pair are not two caps.
+
+    Nothing is recorded as spent. This writes a number, a currency and a
+    month, and no balance moves.
+    """
+    category = _known_category(payload.category, merchants, user_id=user_id)
+
+    with _domain_errors():
+        budget = use_case.declare(
+            SetBudgetCommand(
+                user_id=user_id,
+                # `_known_category` answers None only for a None it was given,
+                # and the payload refuses an empty one.
+                category=category or payload.category,
+                limit=Money(amount=payload.limit, currency=payload.currency),
+                month=payload.month,
+                warn_at=payload.warn_at,
+            ),
+        )
+
+    return _budget_response(budget)
+
+
+@router.get("/budgets", response_model=BudgetsResponse)
+def read_budgets(
+    user_id: CurrentUser,
+    use_case: Annotated[ReadBudgetsUseCase, Depends(get_read_budgets_use_case)],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+    month: Annotated[str | None, Query(pattern=MONTH_KEY.pattern)] = None,
+) -> BudgetsResponse:
+    """Every cap that governs a month, and what the ledger did to it.
+
+    200 with empty lists when nothing is capped, never a 404: unlike the
+    monthly plan, an empty list of ceilings is a real and ordinary state and
+    reads as exactly what it is.
+
+    The month is the calendar month in `timezone` unless one is named, read
+    there and not in UTC — a Bogotá month starting five hours early would count
+    the last evening of the previous one, and being wrong on the 1st is being
+    wrong on the day this is most likely to be looked at.
+
+    A cap whose category its owner has since deleted comes back `retired`
+    rather than taking the screen down with it. Merchant publishes nothing on a
+    delete that this context could listen for, so degrading on read is the only
+    place it can be handled.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            ReadBudgetsQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+                month=month,
+            ),
+        )
+
+    return _budgets_response(view)
+
+
+@router.delete("/budgets/{category}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_budget(
+    user_id: CurrentUser,
+    category: str,
+    use_case: ManageBudgets,
+    month: Annotated[str | None, Query(pattern=MONTH_KEY.pattern)] = None,
+) -> None:
+    """Drop one cap. The card disappears and nothing else changes.
+
+    **Not validated against the vocabulary**, unlike the `PUT`, and that is the
+    point rather than an omission: a cap whose category was deleted is exactly
+    the one somebody most needs to be able to remove, and refusing it because
+    the category no longer exists would leave a row nothing could reach.
+
+    `month` picks which of the two possible caps: absent drops the recurring
+    one and leaves this month's exception, and naming a month drops the
+    exception and leaves the recurring cap exactly where it was.
+
+    Silent when there was nothing to drop, like every other undo here: a 404 on
+    the second press of a button somebody is unsure about is a worse answer
+    than nothing. A cap never wrote anything, so there is nothing left behind
+    to explain.
+    """
+    with _domain_errors():
+        use_case.forget(
+            user_id=user_id,
+            category=_budget_category(category),
+            month=month,
+        )
+
+
+def _budget_category(value: str) -> str:
+    """A category read out of a URL path.
+
+    Refused on shape alone and never on whether it names anything — see the
+    `DELETE` above for why that distinction matters. What is refused is a value
+    that could not be a cap's key in the first place, which the domain would
+    refuse anyway: this turns it into the 422 it is rather than a 400 from
+    underneath.
+    """
+    stripped = value.strip()
+
+    if not stripped or len(stripped) > MAX_CATEGORY_LENGTH or "#" in stripped:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Not a category a budget could be on: {value!r}",
+        )
+
+    return stripped
+
+
+def _budget_response(budget: CategoryBudget) -> BudgetResponse:
+    return BudgetResponse(
+        category=budget.category,
+        currency=budget.currency,
+        limit=str(budget.limit.amount),
+        month=budget.month,
+        recurring=budget.recurring,
+        warn_at=budget.warn_at,
+        updated_at=budget.updated_at.as_epoch_seconds(),
+    )
+
+
+def _budgets_response(view: BudgetsView) -> BudgetsResponse:
+    return BudgetsResponse(
+        month=view.month,
+        since=view.since,
+        until=view.until,
+        budgets=[_budget_progress_response(line) for line in view.budgets],
+        totals=[_budget_totals_response(total) for total in view.totals],
+        suggestions=[
+            UncappedCategoryResponse(
+                category=offer.category,
+                currency=offer.currency,
+                spent=str(offer.spent),
+            )
+            for offer in view.suggestions
+        ],
+    )
+
+
+def _budget_progress_response(line: BudgetLine) -> BudgetProgressResponse:
+    progress = line.progress
+
+    return BudgetProgressResponse(
+        category=progress.category,
+        currency=progress.currency,
+        limit=str(progress.limit),
+        spent=str(progress.spent),
+        remaining=str(progress.remaining),
+        warn_at=progress.warn_at,
+        state=progress.state,
+        month=progress.month,
+        recurring=progress.recurring,
+        retired=line.retired,
+    )
+
+
+def _budget_totals_response(total: BudgetTotals) -> BudgetTotalsResponse:
+    return BudgetTotalsResponse(
+        currency=total.currency,
+        limit=str(total.limit),
+        spent=str(total.spent),
+        remaining=str(total.remaining),
+        ok=total.ok,
+        warning=total.warning,
+        over=total.over,
     )

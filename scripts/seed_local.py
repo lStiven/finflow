@@ -38,6 +38,7 @@ import argparse
 from collections import Counter
 import dataclasses
 from datetime import datetime
+from decimal import Decimal
 import os
 from typing import Protocol
 from zoneinfo import ZoneInfo
@@ -1094,6 +1095,310 @@ def _enter_transfer_legs(
     print(f"  traslados {entered} entered{note}")
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class SeedSpend:
+    """A purchase in the month being read, filed under a category at entry.
+
+    The only movements in this seed dated **relative to today** rather than
+    fixed, and they have to be: everything a spending cap says is about the
+    month somebody is looking at, and the fixed August instants the rest of
+    this file uses would leave every bar at zero. The balances they move are
+    still predictable — the day varies, the figures do not.
+    """
+
+    day: int
+    amount: str
+    counterparty: str
+    category: str
+    account_name: str | None = None
+
+
+# This month's spending, sized so the three seeded caps land on three different
+# colours. The order is what decides which: `_cap_categories` walks the
+# categories by what went out of them, biggest first, and `CAP_RATIOS` hands the
+# biggest the roomiest ceiling.
+#
+# Filed at entry rather than afterwards, which is a path worth exercising: a
+# manual movement with a category **creates the merchant** as well, so these
+# are the only merchants in the local database that were never a bank email.
+SPENDS_THIS_MONTH: tuple[SeedSpend, ...] = (
+    # Biggest, and comfortably inside its cap: the green one.
+    SeedSpend(
+        day=3,
+        amount="215000",
+        counterparty="MERCADO D1 CHAPINERO",
+        category="groceries",
+        account_name="Ahorros Bancolombia",
+    ),
+    SeedSpend(
+        day=14,
+        amount="165000",
+        counterparty="MERCADO D1 CHAPINERO",
+        category="groceries",
+        account_name="Ahorros Bancolombia",
+    ),
+    # Past the warning point and short of the ceiling: the amber one.
+    SeedSpend(
+        day=6,
+        amount="148000",
+        counterparty="WOK 93",
+        category="restaurants",
+        account_name="Tarjeta Bancolombia",
+    ),
+    SeedSpend(
+        day=17,
+        amount="92000",
+        counterparty="WOK 93",
+        category="restaurants",
+        account_name="Tarjeta Bancolombia",
+    ),
+    # Over: the one state with something to say.
+    SeedSpend(
+        day=9,
+        amount="160000",
+        counterparty="ESTACION TERPEL 127",
+        category="fuel",
+        account_name="Tarjeta Bancolombia",
+    ),
+)
+
+
+def _spend_this_month(
+    client: TestClient,
+    *,
+    token: str,
+    accounts: dict[str, str],
+) -> None:
+    """Enter this month's purchases, so a cap has something to be read against.
+
+    Looked up before writing like every other entry here: a manual movement's
+    id comes from its content, so a second run would be refused by the ledger
+    anyway — this only keeps the count honest.
+    """
+    headers = _authorization(token)
+    listed = _expect(
+        client.get(
+            "/financial/transactions",
+            params={"origin": "manual", "limit": 200},
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
+    already_there = {
+        (str(movement["counterparty"]), int(movement["occurred_at"]))
+        for movement in listed["transactions"]
+    }
+    entered = 0
+
+    # Never past today: seeded on the 2nd, a purchase pinned to the 17th would
+    # be money spent in the future — which the ledger accepts and no screen
+    # should ever have to explain.
+    today = datetime.now(tz=BOGOTA).day
+
+    for spend in SPENDS_THIS_MONTH:
+        occurred_at = int(_months_back(min(spend.day, today), months=0).timestamp())
+
+        if (spend.counterparty, occurred_at) in already_there:
+            continue
+
+        payload: dict[str, str | int] = {
+            "direction": "outgoing",
+            "amount": spend.amount,
+            "currency": "COP",
+            "occurred_at": occurred_at,
+            "counterparty": spend.counterparty,
+            "category": spend.category,
+            "note": "compra del mes, para ver los topes",
+        }
+
+        if spend.account_name is not None:
+            payload["account_id"] = accounts[spend.account_name]
+
+        _expect(
+            client.post("/financial/transactions", json=payload, headers=headers),
+            status.HTTP_201_CREATED,
+        )
+        entered += 1
+
+    already = len(SPENDS_THIS_MONTH) - entered
+    note = f", {already} already there" if already else ""
+    print(f"  del mes   {entered} entered{note}")
+
+
+# What a few of the seeded merchants plainly are, filed the way their owner
+# would file them from the Comercios screen.
+#
+# Only here because without it the local database has almost no categories at
+# all: with no model configured the deterministic rules leave nearly every
+# merchant `uncategorized`, and a breakdown by category, a report and a
+# spending cap are then all the same single grey bucket. These are the names a
+# person would recognise at a glance — nothing is being guessed on their behalf
+# that they would not have done themselves in three clicks.
+MERCHANT_CATEGORIES: dict[str, str] = {
+    "Crepes Waffles 45": "restaurants",
+    "Rappi Colombia": "restaurants",
+    "Exito Superinter Cali": "groceries",
+    "Estacion Texaco Norte": "fuel",
+    "Drogueria La Rebaja": "health",
+    "Omnipro Colombia": "shopping",
+    "Acme Sas": "income",
+}
+
+
+def _file_merchants(client: TestClient, *, token: str) -> None:
+    """File the merchants whose names say what they are.
+
+    Through the same endpoint the Comercios screen uses, so this is the demo
+    user having reviewed their own merchants and nothing more. Filing one counts
+    as reviewing it, which is why the review queue shrinks with it.
+
+    Re-runnable: a merchant already in the right category is skipped, so a
+    second seed writes nothing rather than re-reviewing everything.
+    """
+    headers = _authorization(token)
+    listed = _expect(
+        client.get("/merchants", params={"limit": 100}, headers=headers),
+        status.HTTP_200_OK,
+    ).json()
+    filed = 0
+
+    for merchant in listed["merchants"]:
+        wanted = MERCHANT_CATEGORIES.get(str(merchant["display_name"]))
+
+        if wanted is None or merchant["category"] == wanted:
+            continue
+
+        _expect(
+            client.patch(
+                f"/merchants/{merchant['id']}",
+                json={"category": wanted},
+                headers=headers,
+            ),
+            status.HTTP_200_OK,
+        )
+        filed += 1
+
+    print(f"  comercios {filed} filed under a category")
+
+
+# How each seeded cap is sized against what the demo user actually spent in the
+# category, so the local screen always shows all three states of the traffic
+# light. Ratios rather than figures: the seeded spending is a handful of fixed
+# alerts, and a hardcoded ceiling would drift into the wrong colour the day one
+# of them changed — which is exactly the kind of quiet rot a seed exists to not
+# have.
+CAP_RATIOS: tuple[tuple[float, int], ...] = (
+    # Comfortably under: green, with the notch visible ahead of the bar.
+    (2.5, 80),
+    # Past the warning and short of the ceiling: amber.
+    (1.15, 80),
+    # Passed: red, and the one state that has something to say.
+    (0.8, 80),
+)
+
+
+def _cap_categories(client: TestClient, *, token: str) -> None:
+    """Put a ceiling on the three categories this user spends most in.
+
+    Sized from what the ledger already says **about this month** rather than
+    from figures written here, so the local screen shows one green cap, one
+    amber and one passed however the seeded spending changes. A screen where
+    every bar is the same colour is a screen that cannot be looked at while
+    building the thing.
+
+    Re-runnable without checking anything: a cap's identity is its category and
+    its month, so a second run restates the same three rows rather than adding
+    three more. Nothing here writes to the ledger — a cap is a statement, and a
+    seed that moved a balance by declaring one would be hiding the bug.
+    """
+    headers = _authorization(token)
+    since, until = _this_months_window()
+    by_category = _expect(
+        client.get(
+            "/financial/summary",
+            params={
+                "group_by": "category",
+                # The same window and the same view of transfers the budgets
+                # endpoint reads. Sized against all of history instead, a cap
+                # would be a ceiling over years of spending compared to one
+                # month of it — every bar green, every time.
+                "transfers": "exclude",
+                "from": since,
+                "to": until,
+            },
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
+    spent = sorted(
+        (
+            (str(group["key"]), figure["outgoing"], str(figure["currency"]))
+            for group in by_category["groups"]
+            # Two buckets are skipped and for different reasons. The one
+            # with no key is the movements no merchant owns yet: unknown, not
+            # a category, and nothing a cap can be put on. `uncategorized` is
+            # a real category the API would accept, but the form's picker
+            # leaves it out on purpose — a seed that created a cap the screen
+            # cannot create is a seed that teaches the wrong thing.
+            if group["key"] is not None and group["key"] != "uncategorized"
+            for figure in group["totals"]
+            if Decimal(str(figure["outgoing"])) > 0
+        ),
+        key=lambda row: Decimal(str(row[1])),
+        reverse=True,
+    )
+    capped = 0
+
+    for (category, outgoing, currency), (ratio, warn_at) in zip(
+        spent,
+        CAP_RATIOS,
+        strict=False,
+    ):
+        limit = (Decimal(str(outgoing)) * Decimal(str(ratio))).quantize(Decimal(1))
+
+        if limit <= 0:
+            continue
+
+        _expect(
+            client.put(
+                "/financial/budgets",
+                json={
+                    "category": category,
+                    "limit": str(limit),
+                    "currency": currency,
+                    "month": None,
+                    "warn_at": warn_at,
+                },
+                headers=headers,
+            ),
+            status.HTTP_200_OK,
+        )
+        capped += 1
+
+    print(f"  topes     {capped} categories capped")
+
+
+def _this_months_window() -> tuple[int, int]:
+    """The calendar month in Bogotá, half-open, as epoch seconds.
+
+    Half-open at the far end like every window in this project: the first
+    instant of the next month is excluded, so a purchase at ten to midnight on
+    the last day is still this month.
+    """
+    today = datetime.now(tz=BOGOTA).date()
+    first = today.replace(day=1)
+    following = (
+        first.replace(year=first.year + 1, month=1)
+        if first.month == 12
+        else first.replace(month=first.month + 1)
+    )
+
+    return (
+        int(_local(first.year, first.month, 1, 0, 0).timestamp()),
+        int(_local(following.year, following.month, 1, 0, 0).timestamp()),
+    )
+
+
 def _summarize(client: TestClient, *, token: str, email: str, password: str) -> None:
     headers = _authorization(token)
     accounts = _expect(
@@ -1231,6 +1536,9 @@ def main() -> None:
     _enter_transfer_legs(client, token=token, accounts=accounts)
     _enter_series(client, token=token, accounts=accounts)
     _declare_bills(client, token=token, accounts=accounts)
+    _file_merchants(client, token=token)
+    _spend_this_month(client, token=token, accounts=accounts)
+    _cap_categories(client, token=token)
     _summarize(client, token=token, email=args.email, password=args.password)
 
 

@@ -683,6 +683,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Budgets
+         * @description Every cap that governs a month, and what the ledger did to it.
+         *
+         *     200 with empty lists when nothing is capped, never a 404: unlike the
+         *     monthly plan, an empty list of ceilings is a real and ordinary state and
+         *     reads as exactly what it is.
+         *
+         *     The month is the calendar month in `timezone` unless one is named, read
+         *     there and not in UTC — a Bogotá month starting five hours early would count
+         *     the last evening of the previous one, and being wrong on the 1st is being
+         *     wrong on the day this is most likely to be looked at.
+         *
+         *     A cap whose category its owner has since deleted comes back `retired`
+         *     rather than taking the screen down with it. Merchant publishes nothing on a
+         *     delete that this context could listen for, so degrading on read is the only
+         *     place it can be handled.
+         */
+        get: operations["read_budgets_financial_budgets_get"];
+        /**
+         * Set Budget
+         * @description Put a ceiling on a category, or restate the one that is there.
+         *
+         *     A `PUT` and not a `PATCH`, deliberately: a cap and the point it warns at
+         *     are one statement, and half an update leaves a warning standing against a
+         *     ceiling it was never set against. Declaring the same category and month
+         *     twice leaves one cap, because two caps on that pair are not two caps.
+         *
+         *     Nothing is recorded as spent. This writes a number, a currency and a
+         *     month, and no balance moves.
+         */
+        put: operations["set_budget_financial_budgets_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/budgets/{category}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Forget Budget
+         * @description Drop one cap. The card disappears and nothing else changes.
+         *
+         *     **Not validated against the vocabulary**, unlike the `PUT`, and that is the
+         *     point rather than an omission: a cap whose category was deleted is exactly
+         *     the one somebody most needs to be able to remove, and refusing it because
+         *     the category no longer exists would leave a row nothing could reach.
+         *
+         *     `month` picks which of the two possible caps: absent drops the recurring
+         *     one and leaves this month's exception, and naming a month drops the
+         *     exception and leaves the recurring cap exactly where it was.
+         *
+         *     Silent when there was nothing to drop, like every other undo here: a 404 on
+         *     the second press of a button somebody is unsure about is a worse answer
+         *     than nothing. A cap never wrote anything, so there is nothing left behind
+         *     to explain.
+         */
+        delete: operations["forget_budget_financial_budgets__category__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/catalog": {
         parameters: {
             query?: never;
@@ -1976,6 +2056,108 @@ export interface components {
             until: string;
         };
         /**
+         * BudgetProgressResponse
+         * @description One cap and what the month has done to it.
+         *
+         *     Flat rather than a cap nested inside a reading, so a client cannot render
+         *     the ceiling and the state out of step. `state` is the enum itself, not its
+         *     string, so the generated TypeScript is a union a screen cannot invent a
+         *     member of.
+         */
+        BudgetProgressResponse: {
+            /** Category */
+            category: string;
+            currency: components["schemas"]["Currency"];
+            /** Limit */
+            limit: string;
+            /** Month */
+            month: string | null;
+            /** Recurring */
+            recurring: boolean;
+            /** Remaining */
+            remaining: string;
+            /** Retired */
+            retired: boolean;
+            /** Spent */
+            spent: string;
+            state: components["schemas"]["BudgetState"];
+            /** Warn At */
+            warn_at: number;
+        };
+        /** BudgetResponse */
+        BudgetResponse: {
+            /** Category */
+            category: string;
+            currency: components["schemas"]["Currency"];
+            /** Limit */
+            limit: string;
+            /** Month */
+            month: string | null;
+            /** Recurring */
+            recurring: boolean;
+            /** Updated At */
+            updated_at: number;
+            /** Warn At */
+            warn_at: number;
+        };
+        /**
+         * BudgetState
+         * @description How a month is doing against one cap.
+         *
+         *     The three the screen draws, decided here and not there, so the card on the
+         *     dashboard and the row on the budgets screen can never disagree about the
+         *     same category.
+         *
+         *     Explicit string values: they cross the HTTP boundary as the enum itself,
+         *     so reordering the members must not change what a client reads.
+         * @enum {string}
+         */
+        BudgetState: "ok" | "warning" | "over";
+        /**
+         * BudgetTotalsResponse
+         * @description Every cap of one currency, added up, and how the three states split.
+         *
+         *     One entry per currency and never summed across them: there is no exchange
+         *     rate anywhere in this app. The counts are what a summary says out loud
+         *     («3 de 5 en verde»), computed once so two screens cannot tally differently.
+         */
+        BudgetTotalsResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Limit */
+            limit: string;
+            /** Ok */
+            ok: number;
+            /** Over */
+            over: number;
+            /** Remaining */
+            remaining: string;
+            /** Spent */
+            spent: string;
+            /** Warning */
+            warning: number;
+        };
+        /** BudgetsResponse */
+        BudgetsResponse: {
+            /** Budgets */
+            budgets: components["schemas"]["BudgetProgressResponse"][];
+            /** Month */
+            month: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /** Suggestions */
+            suggestions: components["schemas"]["UncappedCategoryResponse"][];
+            /** Totals */
+            totals: components["schemas"]["BudgetTotalsResponse"][];
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
+        /**
          * CatalogOption
          * @description One admissible value, and something to put beside it in a dropdown.
          */
@@ -3209,6 +3391,30 @@ export interface components {
          */
         SeriesState: "active" | "late" | "dormant";
         /**
+         * SetBudgetPayload
+         * @description A ceiling, the category it is on, and which months it governs.
+         *
+         *     `month` absent caps every month, which is the ordinary answer: a cap that
+         *     has to be re-declared every 1st is a cap that is gone by March. A key like
+         *     `2026-09` caps that month only and shadows the recurring one while it
+         *     lasts — December, when the rules are different.
+         */
+        SetBudgetPayload: {
+            /** Category */
+            category: string;
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /** Limit */
+            limit: number | string;
+            /** Month */
+            month?: string | null;
+            /**
+             * Warn At
+             * @default 80
+             */
+            warn_at: number;
+        };
+        /**
          * SetCreditLimitPayload
          * @description State or restate what a card may owe. `null` clears it.
          */
@@ -3555,6 +3761,20 @@ export interface components {
             points: components["schemas"]["TrendPointResponse"][];
             /** Totals */
             totals: components["schemas"]["SpendingTotalsResponse"][];
+        };
+        /**
+         * UncappedCategoryResponse
+         * @description Somewhere a cap is missing, ranked by what actually goes out there.
+         *
+         *     Offered, never created — the same rule the recurring detector follows. The
+         *     figure lands in an editable field and nothing here declares anything.
+         */
+        UncappedCategoryResponse: {
+            /** Category */
+            category: string;
+            currency: components["schemas"]["Currency"];
+            /** Spent */
+            spent: string;
         };
         /**
          * UpdateProfilePayload
@@ -4726,6 +4946,102 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["BillResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_budgets_financial_budgets_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+                month?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_budget_financial_budgets_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetBudgetPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_budget_financial_budgets__category__delete: {
+        parameters: {
+            query?: {
+                month?: string | null;
+            };
+            header?: never;
+            path: {
+                category: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

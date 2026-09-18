@@ -12,6 +12,7 @@ import {
   type Account,
   accountsQuery,
   allowanceQuery,
+  budgetsQuery,
   categoriesQuery,
   planQuery,
   type SpendingTotals,
@@ -20,6 +21,7 @@ import {
   type Transaction,
   transactionsQuery,
 } from "@/api/queries";
+import { BudgetSummaryCard } from "@/budgets/BudgetSummaryCard";
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
 import { Donut, type Slice } from "@/components/charts/Donut";
@@ -118,6 +120,10 @@ export const Route = createFileRoute("/")({
       // failing should only be a missing card.
       context.queryClient.query(planQuery).catch(() => null),
       context.queryClient.query(allowanceQuery).catch(() => null),
+      // Caught for the same reason, though this one never 404s: the budgets
+      // card is optional, and a 5xx behind it must cost a card rather than the
+      // dashboard.
+      context.queryClient.query(budgetsQuery()).catch(() => null),
     ]);
   },
   component: Dashboard,
@@ -174,11 +180,6 @@ function Dashboard() {
             {formatMonthKey(month)}
           </p>
         </header>
-
-        {/* Above the tiles on purpose: «qué me queda» is the question
-            somebody opens this screen with, and the tiles are what it is made
-            of. It draws nothing until the month is declared. */}
-        <AllowanceCard />
 
         <section
           aria-label="Cifras del mes"
@@ -309,6 +310,17 @@ function Dashboard() {
         </div>
 
         <AccountList accounts={accounts.accounts} currency={currency} />
+
+        {/* Below the accounts, and that is a correction rather than a tidy-up.
+            This card used to sit above the tiles, on the argument that «qué me
+            queda» is the question somebody opens this screen with. Watching it
+            get used said otherwise: what this screen is first asked is the four
+            plain facts — cuánto tengo, cuánto entró, cuánto gasté, cuánto debo —
+            and a card that starts as a form asking for two figures nobody has
+            typed yet is a wall in front of them. Both of these draw nothing
+            until something is declared. */}
+        <AllowanceCard />
+        <BudgetSummaryCard />
       </div>
     </AppShell>
   );

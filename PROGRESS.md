@@ -9,6 +9,8 @@ arrancar: se busca dentro cuando hay una duda concreta).
 
 Última verificación contra el código y contra AWS: **2026-09-04**.
 La verificación local de los avisos por Telegram: **2026-09-14**.
+Los presupuestos se comprobaron contra la pila local el **2026-09-18**, con
+`just e2e-budgets` y en el navegador.
 
 ## Qué hace hoy la aplicación
 
@@ -99,25 +101,38 @@ Todo el backend de la versión 1 está terminado y probado:
   son cosas distintas. La nómina que el detector ya reconoció se ofrece para
   rellenar el ingreso de un toque.
 
+- **Y se le puede poner tope a una categoría.** En `/presupuestos` se dice
+  «restaurantes, $600.000» y la pantalla enseña una barra contra lo que
+  llevas gastado: verde, ámbar al 80 % —el punto lo eliges tú— y rojo al
+  pasarlo. **Poner un tope no mueve ningún saldo y no bloquea nada**: informa,
+  y decides tú. Cada tope se repite todos los meses o vale solo para uno
+  concreto, y el del mes **tapa** al de siempre mientras dura, así que «este
+  diciembre sí gasto más» no se come el tope normal. Un tope contra una
+  categoría que después se borró no rompe la pantalla: sale marcado y se
+  puede quitar. Y donde más se te va sin tope, la pantalla lo ofrece. En
+  Resumen queda un resumen —«3 de 5 en verde»— debajo de las cuentas.
+
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 75 operaciones de API en cinco contextos, seis procesos en
-la nube, 1984 pruebas de Python y 382 del frontend, todas en verde.
+**Estado técnico:** 78 operaciones de API en cinco contextos, seis procesos en
+la nube, 2103 pruebas de Python y 404 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
 contexto `alerts` entero).
 
-**Pantallas:** veinte, y están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-cuatro guías, más **Facturas** desde el 2026-09-14. La única entrada del menú
-anunciada sin pantalla es **Configuración**.
+cuatro guías, más **Facturas** desde el 2026-09-14 y **Presupuestos** desde el
+2026-09-18. La única entrada del menú anunciada sin pantalla es
+**Configuración**.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
 revisó el 2026-09-14. Facturas se revisó en el navegador el 2026-09-14, con
-`just e2e-bills` y a ojo.
+`just e2e-bills` y a ojo. Presupuestos, el 2026-09-18, con `just e2e-budgets`
+y a 320, 390 y 1280 px.
 
 **En cualquier pantalla, del teléfono más pequeño al monitor.** Comprobado a
 320, 360, 390, 430, 768, 1024 y 1440 px, y con el teléfono acostado: ninguna
@@ -133,9 +148,9 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 75 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
-| API desarrollo | 75 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas | ninguna |
+| API producción | 78 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
+| API desarrollo | 78 operaciones | 43 — igual que producción |
+| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas, presupuestos | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
 verificación de correo y la recuperación de contraseña. Las dos webs
@@ -187,11 +202,15 @@ AWS (ver Trabas).
    último, vincular parece funcionar y no pasa nada. Todo en
    [docs/alerts.md](docs/alerts.md).
 
-6. **Lo que queda de los dos features en curso.** De las facturas (E2) están
+6. **Lo que queda de los features en curso.** De las facturas (E2) están
    A, B y D —declarar, confirmar o saltar a mano, y que el detector proponga—;
    faltan **C** (que se cargue solo, con ventana de conciliación) y **E**
    (avisar antes del cobro), esta última **aplazada a propósito**. El tercer
-   feature (E3, el disponible del mes) está entregado.
+   feature (E3, el disponible del mes) está entregado, y el cuarto (E4, los
+   presupuestos) también salvo su aviso por Telegram — que **no depende de
+   E1**, como el plan creía, sino del punto 3 de esta misma lista: un
+   movimiento no tiene categoría cuando se registra, así que anunciar que se
+   cruzó un tope necesita el recorrido de usuarios que hoy no existe.
    El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
    se parecen— está en el artefacto, no aquí.
    **Al desplegar esto, `alerts` va primero:** Financial ya publica
@@ -248,6 +267,28 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-18 — **Ya se le puede poner tope a una categoría.**
+  Cuarto feature (E4), en su propia pantalla `/presupuestos` y no dentro de
+  Resumen: el plan pedía el semáforo en el desglose de Resumen, y esa pantalla
+  responde otras cuatro preguntas primero. En Resumen quedó solo un resumen,
+  después de las cuentas — y el disponible de E3 bajó ahí también, que era lo
+  que se pedía. **El tope se repite o vale para un mes**, y el del mes tapa al
+  de siempre: son dos filas y no una con una excepción encima, así que quitar
+  la de diciembre deja la de siempre intacta. Lo que **no** se entregó es el
+  aviso por Telegram, y el porqué es lo que hay que llevarse: un movimiento
+  **no tiene categoría cuando se registra** —Financial guarda el texto del
+  banco y lo resuelve al leer, que es lo que hace que corregir un comercio
+  arregle el pasado—, así que nada en la escritura sabe a qué tope pertenece
+  una compra. Calcularlo al abrir la app es justo lo que este proyecto ya
+  decidió que no se avisa, con los devengos. Por eso el cruce **no se guarda
+  ni se anuncia: se deriva**, como «pagado» se deriva de la fila del ledger.
+  Las dos revisiones encontraron ocho cosas, la peor de ellas que el
+  interruptor «se repite cada mes» dejaba mover la identidad del tope al
+  editarlo: guardar parecía no hacer nada y dejaba una fila inalcanzable
+  detrás. Y mirar la pantalla encontró lo que el código no podía: el semáforo
+  tenía un solo color —`accent` es magenta y `outgoing` es rojo— bajo una
+  tarjeta que dice «1 de 3 en verde», y `bg-mid` no existe, así que la barra
+  ámbar del disponible llevaba sin pintarse desde E3.
 - 2026-09-15 — **La app ya dice cuánto queda para gastar.**
   Tercer feature (E3). Se declara el mes —cuánto esperas que entre, cuánto
   quieres guardar— y arriba del Resumen aparece un número con su resta a la
@@ -312,12 +353,3 @@ AWS (ver Trabas).
   que el servidor guardó. Lee saldos y patrimonio antes y después, y no pasa si
   declarar movió alguno. `just seed` deja seis facturas declaradas con su
   categoría, así que el entorno local arranca con el flujo completo.
-- 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
-  `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
-  el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se
-  descartaba en silencio con un «malformed payload» que no decía qué campo. El
-  mensaje ya decía «Tu banco» para ese caso; solo la validación de entrada no
-  se había enterado. La verificación contra moto del 2026-09-14 no lo vio
-  porque solo ejerció el camino de la alerta bancaria. Y ese descarte ya
-  nombra el campo que lo causó —`refused='bank:string_too_short'`— sin el
-  valor: lo que faltaba para que el próximo se vea el mismo día.
