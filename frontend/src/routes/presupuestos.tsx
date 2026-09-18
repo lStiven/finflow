@@ -4,26 +4,28 @@
  * Its own screen rather than a row inside Resumen, which is a decision worth
  * writing down because the build plan said the opposite. The plan's argument
  * was sound — a ceiling belongs where the spending is visible, not in a
- * settings panel — and this screen satisfies it: the caps *are* shown against
- * the month's spending, category by category. What it does not do is pile a
- * second breakdown onto a dashboard whose job is «cuánto tengo, cuánto gasté,
- * cuánto debo, cuánto entró». That screen gets a summary and a link.
+ * settings panel — and this screen satisfies it: the budgets *are* shown
+ * against the month's spending. What it does not do is pile a second breakdown
+ * onto a dashboard whose job is «cuánto tengo, cuánto gasté, cuánto debo,
+ * cuánto entró». That screen gets a summary and a link.
  *
- * **Nothing here moves money.** A cap is a statement, not a transaction: no
- * balance changes, no movement is written, and nothing is blocked when a
- * ceiling is passed. The app is not the one spending.
+ * **Nothing here moves money.** A ceiling is a statement, not a transaction: no
+ * balance changes, no movement is written, and nothing is blocked when one is
+ * passed. The app is not the one spending.
  *
  * **And nothing here rings a phone.** The traffic light is on this screen and
  * only on this screen. A movement has no category at the moment it is
  * recorded — Financial keeps the bank's text and joins it to a merchant when
  * the answer is read, which is what makes correcting a merchant fix the past —
- * so nothing at write time knows which cap a purchase belongs to. That is why
- * the copy says «te avisa aquí» rather than promising Telegram.
+ * so nothing at write time knows which budget a purchase belongs to. The one
+ * exception is a budget over *everything*, which needs no category to be
+ * judged; that is what makes an alert possible at all, and it is not built yet.
  *
- * Three pieces, in the order somebody reads them: **how the month is going in
- * total**, then **each cap with its bar**, then **where the money actually
- * goes and nothing is watching** — which is the part that makes the screen
- * useful on the first visit, when there is nothing declared at all.
+ * **A budget is a scope, not a category.** It carries a name, it may gather
+ * several categories or none at all, and two of them may overlap on purpose.
+ * That is why every budget has an id and why editing one changes everything
+ * about it — the previous version could only ever change the ceiling, because
+ * the category and the month *were* the cap's identity.
  */
 
 import { useSuspenseQuery } from "@tanstack/react-query";
@@ -42,14 +44,16 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import {
+  type BudgetBody,
   type BudgetProgress,
   type BudgetState,
   type BudgetTotal,
   budgetsQuery,
   categoriesQuery,
   type UncappedCategory,
+  useAmendBudget,
+  useDeclareBudget,
   useForgetBudget,
-  useSetBudget,
 } from "@/api/queries";
 // Imported rather than copied: its own docstring warns that a second table of
 // sixteen categories is how a gym ends up with a plane on it. The folder is
@@ -62,6 +66,7 @@ import {
   leftOf,
   monthLabel,
   overBy,
+  scopeLabel,
   shiftMonth,
   tallyOf,
   usedShare,
@@ -73,7 +78,6 @@ import { Money } from "@/components/Money";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
-import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
 
@@ -95,6 +99,9 @@ const TONES: Record<BudgetState, { bar: string; text: string; ring: string }> = 
   over: { bar: "bg-outgoing/80", text: "text-outgoing", ring: "border-outgoing/30" },
 };
 
+/** How many categories one budget may gather. The API refuses more. */
+const MAX_SCOPE_CATEGORIES = 20;
+
 export const Route = createFileRoute("/presupuestos")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
@@ -104,8 +111,8 @@ export const Route = createFileRoute("/presupuestos")({
       // The current month, which is what the screen opens on. Paging to
       // another one is a fetch the month bar pays for.
       context.queryClient.query(budgetsQuery()),
-      // The picker needs them, and so does every label on this screen: a cap
-      // is stored as a category *value* and only this list knows its name.
+      // The picker needs them, and so does every label on this screen: a
+      // scope holds category *values* and only this list knows their names.
       context.queryClient.query({ ...categoriesQuery, staleTime: "static" }),
     ]),
   component: BudgetsScreen,
@@ -130,9 +137,10 @@ function BudgetsScreen() {
         <header className="flex flex-col gap-2">
           <h1 className="font-semibold text-2xl tracking-tight">Presupuestos</h1>
           <p className="max-w-prose text-muted text-sm leading-relaxed">
-            Un tope por categoría y un semáforo contra lo que llevas gastado. Poner un
-            tope <strong className="text-text">no mueve ningún saldo</strong> y no
-            bloquea nada: te avisa aquí, y decides tú.
+            Un tope sobre lo que tú elijas —todo el mes, una categoría o varias— y un
+            semáforo contra lo que llevas gastado. Poner un tope{" "}
+            <strong className="text-text">no mueve ningún saldo</strong> y no bloquea
+            nada: te avisa aquí, y decides tú.
           </p>
         </header>
 
@@ -147,11 +155,7 @@ function BudgetsScreen() {
         <Overview totals={view.totals} />
 
         {declaring ? (
-          <BudgetForm
-            month={view.month}
-            taken={view.budgets.map((budget) => budget.category)}
-            onClose={() => setDeclaring(false)}
-          />
+          <BudgetForm month={view.month} onClose={() => setDeclaring(false)} />
         ) : (
           <Button onClick={() => setDeclaring(true)} full>
             <Plus className="size-4" />
@@ -167,9 +171,9 @@ function BudgetsScreen() {
             <div className="grid gap-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
               {view.budgets.map((budget) => (
                 <BudgetCard
-                  key={`${budget.category}:${budget.month ?? "every"}`}
+                  key={budget.id}
                   budget={budget}
-                  label={labels[budget.category]}
+                  labels={labels}
                   month={view.month}
                 />
               ))}
@@ -186,9 +190,9 @@ function BudgetsScreen() {
         ) : null}
 
         <p className="text-faint text-xs leading-relaxed">
-          Los topes no suman el gasto del mes: un movimiento cuyo comercio todavía no
-          está reconocido no cae en ninguna categoría, así que la suma de tus topes y lo
-          que dice Resumen no tienen por qué coincidir.
+          Los topes no reparten el gasto del mes: pueden solaparse entre ellos y pueden
+          dejar huecos, así que la suma de tus topes y lo que dice Resumen no tienen por
+          qué coincidir.
         </p>
       </div>
     </AppShell>
@@ -211,8 +215,8 @@ function SectionTitle({ children, count }: { children: string; count?: number })
 /**
  * Which month is on screen, and the two arrows that change it.
  *
- * Worth having because a cap can be declared for one month only: without a way
- * to get to December, «este diciembre sí gasto más» would be a ceiling nobody
+ * Worth having because a budget can govern one month only: without a way to
+ * get to December, «este diciembre sí gasto más» would be a ceiling nobody
  * could ever see again.
  */
 function MonthBar({
@@ -264,11 +268,15 @@ function StepButton({
 }
 
 /**
- * The month against every cap at once, per currency.
+ * The month against every budget at once, per currency.
  *
  * The bar first and the figures after it, for the reason the bills forecast
  * gives: two numbers side by side make a reader do the arithmetic, and the
  * proportion answers «¿voy bien?» before either one is read.
+ *
+ * The added-up ceiling is **not** what the month allows, because budgets may
+ * overlap and two of them can count the same peso. It is a tally of what has
+ * been declared, and the note at the foot of the screen says so.
  */
 function Overview({ totals }: { totals: readonly BudgetTotal[] }) {
   if (totals.length === 0) return null;
@@ -316,7 +324,7 @@ function Overview({ totals }: { totals: readonly BudgetTotal[] }) {
 
             <figure className="flex items-baseline justify-between gap-3">
               <figcaption className="text-faint text-xs uppercase tracking-wider">
-                De un tope de
+                De topes que suman
               </figcaption>
               <Money amount={total.limit} currency={total.currency} size="sm" />
             </figure>
@@ -334,39 +342,75 @@ function Empty() {
         <Target className="size-5 text-faint" />
       </span>
       <p className="max-w-xs text-muted text-sm leading-relaxed">
-        Todavía no has puesto ningún tope. Empieza por donde más se te va: restaurantes,
-        mercado, domicilios.
+        Todavía no has puesto ningún tope. El más fácil de empezar es uno sobre todo el
+        mes: no hay que elegir ninguna categoría.
       </p>
     </Card>
   );
 }
 
 /**
- * One cap, its bar and what is left.
+ * The drawing a budget gets, without a second table of categories.
+ *
+ * The icon slug is a *category value* — «usa el dibujo de esta categoría» —
+ * so the one table in `look.ts` answers for both. A budget that named no icon
+ * falls back to the first category it watches, and one over everything falls
+ * back to the default, which is what `lookOf` already answers for `null`.
+ */
+function lookOfBudget(budget: BudgetProgress) {
+  const source = budget.icon || budget.scope.categories[0] || null;
+
+  return lookOf({ category: source, direction: "outgoing" });
+}
+
+/**
+ * The line under a budget's name: what it watches, and for how long.
+ *
+ * The scope is dropped when it only repeats the name — a budget over
+ * everything that its owner called «Todo el mes» would otherwise say it twice,
+ * which reads like a rendering bug rather than emphasis. What is never dropped
+ * is «solo este mes», because that one is not derivable from anything else on
+ * the card.
+ */
+function subtitleOf(
+  budget: BudgetProgress,
+  labels: Record<string, string>,
+  month: string,
+): string {
+  const scope = scopeLabel(budget.scope, labels);
+  const parts = scope.toLowerCase() === budget.name.trim().toLowerCase() ? [] : [scope];
+
+  if (!budget.recurring) parts.push(`solo ${monthLabel(month)}`);
+
+  return parts.join(" · ");
+}
+
+/**
+ * One budget, its bar and what is left.
  *
  * The notch on the track is the point somebody chose to be warned at. Without
  * it the bar turns amber for no visible reason, which reads as the app
  * deciding for them — and this is a screen that informs rather than scolds.
  *
- * A cap whose category has since been deleted is not hidden: it is the record
- * of a decision, and hiding it would leave a row nothing could reach. It says
- * so and offers the only thing still worth doing with it.
+ * A budget whose categories have since been deleted is not hidden: it is the
+ * record of a decision, and hiding it would leave a row nothing could reach.
+ * Losing *one* of several is a different thing and says so differently — the
+ * ceiling is still a live decision about the ones that remain.
  */
 function BudgetCard({
   budget,
-  label,
+  labels,
   month,
 }: {
   budget: BudgetProgress;
-  label: string | undefined;
+  labels: Record<string, string>;
   month: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const forget = useForgetBudget();
   const tone = TONES[budget.state];
-  const look = lookOf({ category: budget.category, direction: "outgoing" });
-  const name = label ?? (budget.retired ? "Categoría eliminada" : budget.category);
+  const look = lookOfBudget(budget);
   const left = leftOf(budget);
   const over = overBy(budget);
 
@@ -382,17 +426,15 @@ function BudgetCard({
     return (
       <Card lift={false} className={cn("flex flex-col justify-between gap-3 p-4")}>
         <span className="text-muted text-sm leading-relaxed">
-          ¿Quitar el tope de «{name}»? No borra ningún movimiento.
+          ¿Quitar «{budget.name}»? No borra ningún movimiento.
         </span>
         <div className="flex flex-wrap gap-2">
           <Button
             variant="ghost"
             className="px-3 py-1.5 text-outgoing text-xs"
             disabled={forget.isPending}
-            aria-label={`Sí, quitar el tope de ${name}`}
-            onClick={() =>
-              forget.mutate({ category: budget.category, month: budget.month })
-            }
+            aria-label={`Sí, quitar ${budget.name}`}
+            onClick={() => forget.mutate(budget.id)}
           >
             Sí, quitar
           </Button>
@@ -430,27 +472,25 @@ function BudgetCard({
             <look.icon className="size-4" />
           </span>
           <span className="flex min-w-0 flex-col">
-            <span className="truncate font-medium text-sm" title={name}>
-              {name}
+            <span className="truncate font-medium text-sm" title={budget.name}>
+              {budget.name}
             </span>
-            {budget.recurring ? null : (
-              <span className="truncate text-faint text-xs">Solo este mes</span>
-            )}
+            <span className="truncate text-faint text-xs">
+              {subtitleOf(budget, labels, month)}
+            </span>
           </span>
         </span>
 
         <div className="-mr-1 flex shrink-0 gap-0.5 opacity-60 transition-opacity duration-200 group-focus-within:opacity-100 group-hover:opacity-100">
-          {budget.retired ? null : (
-            <IconAction
-              label="Cambiar el tope de"
-              on={name}
-              icon={Target}
-              onClick={() => setEditing(true)}
-            />
-          )}
           <IconAction
-            label="Quitar el tope de"
-            on={name}
+            label="Cambiar"
+            on={budget.name}
+            icon={Target}
+            onClick={() => setEditing(true)}
+          />
+          <IconAction
+            label="Quitar"
+            on={budget.name}
             icon={Trash2}
             tone="danger"
             onClick={() => setConfirming(true)}
@@ -460,10 +500,21 @@ function BudgetCard({
 
       {budget.retired ? (
         <p className="text-faint text-xs leading-relaxed">
-          Esta categoría ya no existe, así que nada va a contar contra este tope.
+          {budget.scope.categories.length === 1
+            ? "Esa categoría ya no existe, así que nada va a contar contra este tope."
+            : "Ninguna de sus categorías existe ya, así que nada va a contar contra este tope."}
         </p>
       ) : (
         <>
+          {budget.missing.length > 0 ? (
+            <p className="text-warn text-xs leading-relaxed">
+              {budget.missing.length === 1
+                ? "Una de sus categorías ya no existe."
+                : `${budget.missing.length} de sus categorías ya no existen.`}{" "}
+              El tope sigue contando las demás.
+            </p>
+          ) : null}
+
           <div className="flex items-baseline justify-between gap-2">
             <Money amount={budget.spent} currency={budget.currency} size="sm" />
             <span className="shrink-0 text-faint text-xs">
@@ -548,7 +599,7 @@ function IconAction({
  * Offered, never created — the same rule the recurring detector follows. It is
  * also what makes this screen worth opening the first time, when there is
  * nothing declared: an empty state that only says «no hay nada» wastes the one
- * moment somebody is looking at the place a cap would go.
+ * moment somebody is looking at the place a budget would go.
  */
 function Suggestions({
   suggestions,
@@ -562,14 +613,7 @@ function Suggestions({
   const [chosen, setChosen] = useState<UncappedCategory | null>(null);
 
   if (chosen) {
-    return (
-      <BudgetForm
-        month={month}
-        preset={chosen}
-        taken={[]}
-        onClose={() => setChosen(null)}
-      />
-    );
+    return <BudgetForm month={month} preset={chosen} onClose={() => setChosen(null)} />;
   }
 
   return (
@@ -601,74 +645,107 @@ function Suggestions({
 /**
  * Declaring and correcting, in one form.
  *
- * Three fields visible and two behind «Opciones», which is the whole design
- * of it: a cap has to be worth declaring without being a form somebody
- * abandons. The category and the ceiling are the answer; the month and the
- * warning point have defaults that are right almost every time.
+ * **Everything is editable now**, and that is the change this iteration paid
+ * for. The previous form could only ever move the ceiling: a cap's identity
+ * *was* its category and its month, so touching either would have declared a
+ * second cap and left the first standing — a save that looked like it had done
+ * nothing, with an unreachable row behind it. A budget has an id, so correcting
+ * one is one request that keeps it.
  *
- * Correcting a cap moves neither the category nor the months it governs, and
- * that is one rule rather than two: a cap's identity **is** the pair, so
- * changing either half would not correct this cap — it would declare a second
- * one and leave the first standing. Worse than useless on the month, because
- * the exception it left behind goes on shadowing the recurring cap: the save
- * would look like it had done nothing at all, with an unreachable row behind
- * it. Both are changed by removing the cap and putting the other.
+ * The scope is a list of checkboxes and **none ticked is the default**, which
+ * is «todo el mes» and the budget most people want first. It is not an empty
+ * selection waiting to be filled: the line under the boxes says what it means,
+ * because a form whose valid state looks unfinished is one people abandon.
  */
 function BudgetForm({
   budget,
   preset,
   month,
-  taken = [],
   onClose,
 }: {
   budget?: BudgetProgress;
   preset?: UncappedCategory;
   month: string;
-  taken?: readonly string[];
   onClose: () => void;
 }) {
   const { data: categories } = useSuspenseQuery(categoriesQuery);
-  const save = useSetBudget();
+  const declare = useDeclareBudget();
+  const amend = useAmendBudget();
+  const editing = budget !== undefined;
+  const save = editing ? amend : declare;
 
-  const [category, setCategory] = useState(budget?.category ?? preset?.category ?? "");
+  const [name, setName] = useState(
+    budget?.name ?? (preset ? categoryNameOf(preset, categories) : ""),
+  );
+  const [chosen, setChosen] = useState<readonly string[]>(
+    budget?.scope.categories ?? (preset ? [preset.category] : []),
+  );
+  // Carried, not dropped. `PUT` restates the budget whole, so an edit that
+  // sent `[]` here would silently widen a card-scoped ceiling to every
+  // account — the save looks like it changed nothing and changes the most
+  // important thing about it. The screen cannot yet pick accounts; what it
+  // can do is not lose the ones that are there.
+  const accounts = budget?.scope.accounts ?? [];
+  const icon = budget?.icon ?? "";
   const [limit, setLimit] = useState(budget ? formatAmountInput(budget.limit) : "");
-  // Only ever moved while declaring. On a correction it is fixed to what the
-  // cap already is, because it is half of the cap's identity.
   const [recurring, setRecurring] = useState(budget ? budget.recurring : true);
   const [warnAt, setWarnAt] = useState(String(budget?.warn_at ?? 80));
   const [error, setError] = useState<string | null>(null);
   const [options, setOptions] = useState(false);
 
   const currency = budget?.currency ?? preset?.currency ?? "COP";
-  const editing = budget !== undefined;
+
+  const toggle = (value: string) => {
+    setChosen((current) =>
+      current.includes(value)
+        ? current.filter((each) => each !== value)
+        : [...current, value],
+    );
+  };
 
   const submit = () => {
     const parsed = parseAmount(limit);
     const warn = Number(warnAt);
 
-    if (category === "") return setError("Elige una categoría.");
+    if (name.trim() === "") return setError("Ponle un nombre.");
     if (parsed === null) {
       return setError("El tope tiene que ser un número mayor que cero.");
+    }
+    if (chosen.length > MAX_SCOPE_CATEGORIES) {
+      return setError(
+        `Un tope cubre hasta ${MAX_SCOPE_CATEGORIES} categorías. Déjalo sin ninguna para cubrir todo el mes.`,
+      );
     }
     if (!Number.isInteger(warn) || warn < 1 || warn > 99) {
       return setError("El aviso va entre 1 y 99 por ciento del tope.");
     }
 
     setError(null);
-    save.mutate(
-      {
-        category,
-        limit: parsed,
-        currency: currency as "COP" | "USD",
-        // The cap's own month when correcting one, never the month the screen
-        // happens to be showing: they are the same today and are not the
-        // moment somebody pages back to look at November.
-        month: editing ? (budget.month ?? null) : recurring ? null : month,
-        warn_at: warn,
-      },
-      { onSuccess: () => onClose() },
-    );
+
+    const body: BudgetBody = {
+      name: name.trim(),
+      limit: parsed,
+      currency: currency as "COP" | "USD",
+      categories: [...chosen],
+      accounts: [...accounts],
+      icon,
+      // The budget's own month when correcting one, never the month the screen
+      // happens to be showing: they are the same today and are not the moment
+      // somebody pages back to look at November.
+      month: recurring ? null : editing ? (budget.month ?? month) : month,
+      warn_at: warn,
+    };
+
+    if (editing) {
+      amend.mutate({ id: budget.id, body }, { onSuccess: () => onClose() });
+    } else {
+      declare.mutate(body, { onSuccess: () => onClose() });
+    }
   };
+
+  const pickable = categories.categories.filter(
+    (option) => option.value !== UNCATEGORIZED,
+  );
 
   return (
     <Card glow="cyan" lift={false} className="flex flex-col gap-4">
@@ -684,28 +761,13 @@ function BudgetForm({
         </button>
       </div>
 
-      {editing ? (
-        <p className="text-faint text-xs leading-relaxed">
-          Aquí solo se cambian el tope y el aviso. La categoría y los meses que cubre
-          son lo que <em>es</em> este tope: para moverlos, quítalo y pon el otro.
-        </p>
-      ) : (
-        <Select
-          label="Categoría"
-          value={category}
-          onChange={(event) => setCategory(event.target.value)}
-          placeholder="Elige una"
-          options={categories.categories
-            .filter(
-              (option) =>
-                option.value !== UNCATEGORIZED && !taken.includes(option.value),
-            )
-            .map((option) => ({
-              value: option.value,
-              label: categoryLabel(option.value, option.label),
-            }))}
-        />
-      )}
+      <Field
+        label="Nombre"
+        icon={Target}
+        value={name}
+        placeholder="Salidas"
+        onChange={(event) => setName(event.target.value)}
+      />
 
       <Field
         label="Tope"
@@ -716,23 +778,52 @@ function BudgetForm({
         onChange={(event) => setLimit(event.target.value)}
       />
 
-      {editing ? null : (
-        <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
-          <span className="min-w-0">
-            <span className="block font-medium text-sm">Se repite cada mes</span>
-            <span className="block text-faint text-xs">
-              Apágalo para que valga solo en {monthLabel(month)}, sin tocar el tope de
-              siempre.
-            </span>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1 font-medium text-sm">Qué vigila</legend>
+        <p className="text-faint text-xs leading-relaxed">
+          {chosen.length === 0
+            ? "Sin marcar ninguna, vigila todo lo que gastes este mes."
+            : `Vigila ${chosen.length} ${chosen.length === 1 ? "categoría" : "categorías"}.`}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {pickable.map((option) => {
+            const active = chosen.includes(option.value);
+
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggle(option.value)}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs transition-colors",
+                  active
+                    ? "border-accent bg-accent/12 text-accent"
+                    : "border-line text-muted hover:border-accent/40 hover:text-text",
+                )}
+              >
+                {categoryLabel(option.value, option.label)}
+              </button>
+            );
+          })}
+        </div>
+      </fieldset>
+
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
+        <span className="min-w-0">
+          <span className="block font-medium text-sm">Se repite cada mes</span>
+          <span className="block text-faint text-xs">
+            Apágalo para que valga solo en {monthLabel(month)}. El tope de siempre se
+            queda donde está.
           </span>
-          <input
-            type="checkbox"
-            className="size-5 shrink-0 accent-violet"
-            checked={recurring}
-            onChange={(event) => setRecurring(event.target.checked)}
-          />
-        </label>
-      )}
+        </span>
+        <input
+          type="checkbox"
+          className="size-5 shrink-0 accent-violet"
+          checked={recurring}
+          onChange={(event) => setRecurring(event.target.checked)}
+        />
+      </label>
 
       <details
         open={options}
@@ -776,4 +867,16 @@ function BudgetForm({
       </Button>
     </Card>
   );
+}
+
+/** The name a suggestion arrives with, so the form opens already filled. */
+function categoryNameOf(
+  preset: UncappedCategory,
+  categories: { categories: readonly { value: string; label: string }[] },
+): string {
+  const found = categories.categories.find(
+    (option) => option.value === preset.category,
+  );
+
+  return found ? categoryLabel(found.value, found.label) : preset.category;
 }

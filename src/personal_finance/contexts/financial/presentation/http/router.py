@@ -22,6 +22,7 @@ from decimal import Decimal
 import functools
 import logging
 from typing import Annotated
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -48,13 +49,15 @@ from personal_finance.contexts.financial.application.bills import (
     SettledCharge,
 )
 from personal_finance.contexts.financial.application.budgets import (
+    AmendBudgetCommand,
     BudgetLine,
+    BudgetNotFoundError,
     BudgetsView,
     BudgetTotals,
+    DeclareBudgetCommand,
     ManageBudgetsUseCase,
     ReadBudgetsQuery,
     ReadBudgetsUseCase,
-    SetBudgetCommand,
 )
 from personal_finance.contexts.financial.application.commands import (
     AccrueFinancingCommand,
@@ -96,7 +99,10 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageTransactionsUseCase,
     TransactionNotFoundError,
 )
-from personal_finance.contexts.financial.application.ports import MerchantDirectory
+from personal_finance.contexts.financial.application.ports import (
+    AccountRepository,
+    MerchantDirectory,
+)
 from personal_finance.contexts.financial.application.queries import (
     DEFAULT_HISTORY_MONTHS,
     DEFAULT_PAGE_SIZE,
@@ -153,12 +159,18 @@ from personal_finance.contexts.financial.domain.bills import (
 )
 from personal_finance.contexts.financial.domain.budgets import (
     DEFAULT_WARN_PERCENT,
-    MAX_CATEGORY_LENGTH,
+    MAX_ICON_LENGTH,
+    # Aliased: this module already has a `MAX_NAME_LENGTH`, for names that are
+    # not a budget's and are twice as long.
+    MAX_NAME_LENGTH as MAX_BUDGET_NAME_LENGTH,
+    MAX_SCOPE_CATEGORIES,
     MAX_WARN_PERCENT,
     MIN_WARN_PERCENT,
     MONTH_KEY,
+    Budget,
+    BudgetId,
+    BudgetScope,
     BudgetState,
-    CategoryBudget,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -209,7 +221,7 @@ from personal_finance.contexts.financial.infrastructure.merchant.merchant_direct
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
-    DynamoDBCategoryBudgetRepository,
+    DynamoDBBudgetRepository,
     DynamoDBMonthlyPlanRepository,
     DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
@@ -4076,21 +4088,38 @@ def _allowance_response(allowance: MonthlyAllowance) -> AllowanceResponse:
 # look tidy would file spending under a category nobody chose.
 
 
-class SetBudgetPayload(BaseModel):
-    """A ceiling, the category it is on, and which months it governs.
+class BudgetPayload(BaseModel):
+    """A ceiling, what it watches, and which months it governs.
 
-    `month` absent caps every month, which is the ordinary answer: a cap that
-    has to be re-declared every 1st is a cap that is gone by March. A key like
-    `2026-09` caps that month only and shadows the recurring one while it
-    lasts — December, when the rules are different.
+    **Empty lists mean every one**, on both axes, which is the domain's rule
+    and not a convenience here: `categories: []` is «todo el mes», and that is
+    the budget somebody declares first, before they have looked at a single
+    category.
+
+    `month` absent governs every month, which is the ordinary answer: a ceiling
+    that has to be re-declared every 1st is one that is gone by March. A key
+    like `2026-09` governs that month only, **beside** the recurring ones
+    rather than instead of them — there is no shadowing any more, because
+    scopes that overlap on purpose give no honest answer about which hides
+    which.
     """
 
-    category: str = Field(min_length=1, max_length=MAX_CATEGORY_LENGTH)
+    name: str = Field(min_length=1, max_length=MAX_BUDGET_NAME_LENGTH)
     limit: Decimal = Field(gt=0, le=MAX_MONEY)
     currency: Currency = Currency.COP
+    #: Empty watches every category, including spending no merchant owns yet.
+    categories: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_SCOPE_CATEGORIES,
+    )
+    #: Empty watches every account.
+    accounts: list[uuid.UUID] = Field(default_factory=list[uuid.UUID])
+    #: A slug the app maps to a drawing. Empty means «pick one for me», which
+    #: is a question about drawings and is answered in the browser.
+    icon: str = Field(default="", max_length=MAX_ICON_LENGTH)
     month: str | None = Field(default=None, pattern=MONTH_KEY.pattern)
-    #: Where the bar turns amber. Strictly inside the cap: at 100 there is no
-    #: amber band at all and at 0 the bar is never once green.
+    #: Where the bar turns amber. Strictly inside the ceiling: at 100 there is
+    #: no amber band at all and at 0 the bar is never once green.
     warn_at: int = Field(
         default=DEFAULT_WARN_PERCENT,
         ge=MIN_WARN_PERCENT,
@@ -4098,32 +4127,54 @@ class SetBudgetPayload(BaseModel):
     )
 
 
+class BudgetScopeResponse(BaseModel):
+    """What a budget watches, as the screen needs to draw it.
+
+    `total` is sent rather than left to the client to infer from an empty list.
+    Two clients inferring the same thing is two places for it to be inferred
+    differently, and this one decides whether a card says «todo el mes».
+    """
+
+    categories: list[str]
+    accounts: list[uuid.UUID]
+    #: True when it watches every category — the kind that needs no category to
+    #: be judged, and therefore the only kind an alert could ever reach.
+    total: bool
+    every_account: bool
+
+
 class BudgetResponse(BaseModel):
-    category: str
+    id: uuid.UUID
+    name: str
+    icon: str
+    scope: BudgetScopeResponse
     currency: Currency
     limit: str
     #: None when it governs every month.
     month: str | None
     recurring: bool
     warn_at: int
-    #: When it was last stated, in epoch seconds. A cap is a guess that gets
-    #: corrected, so how old it is matters.
+    #: When it was last stated, in epoch seconds. A ceiling is a guess that
+    #: gets corrected, so how old it is matters.
     updated_at: int
 
 
 class BudgetProgressResponse(BaseModel):
-    """One cap and what the month has done to it.
+    """One budget and what the month has done to it.
 
-    Flat rather than a cap nested inside a reading, so a client cannot render
-    the ceiling and the state out of step. `state` is the enum itself, not its
-    string, so the generated TypeScript is a union a screen cannot invent a
-    member of.
+    Flat rather than a budget nested inside a reading, so a client cannot
+    render the ceiling and the state out of step. `state` is the enum itself,
+    not its string, so the generated TypeScript is a union a screen cannot
+    invent a member of.
     """
 
-    category: str
+    id: uuid.UUID
+    name: str
+    icon: str
+    scope: BudgetScopeResponse
     currency: Currency
     limit: str
-    #: What went out of this category this month, transfers excluded.
+    #: What went out of this scope this month, transfers excluded.
     spent: str
     #: Can be negative, and is reported negative rather than floored at zero —
     #: somebody who went over needs to see by how much.
@@ -4132,18 +4183,26 @@ class BudgetProgressResponse(BaseModel):
     state: BudgetState
     month: str | None
     recurring: bool
-    #: True when the category this caps is no longer in its owner's vocabulary.
-    #: The cap is still reported — it is the record of a decision — but nothing
-    #: will ever be spent against it, so the screen offers to drop it.
+    #: True when **every** category this names is gone from its owner's
+    #: vocabulary. The budget is still reported — it is the record of a
+    #: decision — but nothing will ever be spent against it, so the screen
+    #: offers to drop it. A budget over everything can never be retired.
     retired: bool
+    #: The categories it names that no longer exist. Non-empty without
+    #: `retired` is the partial case, where the screen marks the category
+    #: rather than the budget.
+    missing: list[str]
 
 
 class BudgetTotalsResponse(BaseModel):
-    """Every cap of one currency, added up, and how the three states split.
+    """Every budget of one currency, added up, and how the three states split.
 
     One entry per currency and never summed across them: there is no exchange
     rate anywhere in this app. The counts are what a summary says out loud
     («3 de 5 en verde»), computed once so two screens cannot tally differently.
+
+    **The added-up ceiling is not what the month allows**: budgets may overlap,
+    so two of them can count the same peso.
     """
 
     currency: Currency
@@ -4156,7 +4215,7 @@ class BudgetTotalsResponse(BaseModel):
 
 
 class UncappedCategoryResponse(BaseModel):
-    """Somewhere a cap is missing, ranked by what actually goes out there.
+    """Somewhere a budget is missing, ranked by what actually goes out there.
 
     Offered, never created — the same rule the recurring detector follows. The
     figure lands in an editable field and nothing here declares anything.
@@ -4179,8 +4238,8 @@ class BudgetsResponse(BaseModel):
 
 
 @functools.lru_cache(maxsize=1)
-def build_budgets() -> DynamoDBCategoryBudgetRepository:
-    return DynamoDBCategoryBudgetRepository(
+def build_budgets() -> DynamoDBBudgetRepository:
+    return DynamoDBBudgetRepository(
         client=get_dynamodb_client(),
         table_name=get_financial_settings().accounts_table,
     )
@@ -4221,37 +4280,83 @@ ManageBudgets = Annotated[
 ]
 
 
-@router.put("/budgets", response_model=BudgetResponse)
-def set_budget(
+@router.post(
+    "/budgets",
+    response_model=BudgetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def declare_budget(
     user_id: CurrentUser,
-    payload: SetBudgetPayload,
+    payload: BudgetPayload,
     use_case: ManageBudgets,
     merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    accounts: Annotated[AccountRepository, Depends(build_accounts)],
 ) -> BudgetResponse:
-    """Put a ceiling on a category, or restate the one that is there.
+    """Put a ceiling on part of somebody's spending.
 
-    A `PUT` and not a `PATCH`, deliberately: a cap and the point it warns at
-    are one statement, and half an update leaves a warning standing against a
-    ceiling it was never set against. Declaring the same category and month
-    twice leaves one cap, because two caps on that pair are not two caps.
+    A `POST` and not a `PUT`, which is this iteration's change and not a
+    stylistic one: a budget has a generated id now, so declaring the same
+    scope twice creates two budgets. That is the point — «Salidas» and
+    «Restaurantes» overlap because somebody meant them to — and a `PUT` with
+    no id in the path could not say it.
 
-    Nothing is recorded as spent. This writes a number, a currency and a
-    month, and no balance moves.
+    Nothing is recorded as spent. This writes a number, a scope and a month,
+    and no balance moves.
     """
-    category = _known_category(payload.category, merchants, user_id=user_id)
-
     with _domain_errors():
         budget = use_case.declare(
-            SetBudgetCommand(
+            DeclareBudgetCommand(
                 user_id=user_id,
-                # `_known_category` answers None only for a None it was given,
-                # and the payload refuses an empty one.
-                category=category or payload.category,
+                name=payload.name,
                 limit=Money(amount=payload.limit, currency=payload.currency),
+                scope=_budget_scope(payload, merchants, accounts, user_id=user_id),
+                icon=payload.icon,
                 month=payload.month,
                 warn_at=payload.warn_at,
             ),
         )
+
+    return _budget_response(budget)
+
+
+@router.put("/budgets/{budget_id}", response_model=BudgetResponse)
+def amend_budget(
+    user_id: CurrentUser,
+    budget_id: uuid.UUID,
+    payload: BudgetPayload,
+    use_case: ManageBudgets,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    accounts: Annotated[AccountRepository, Depends(build_accounts)],
+) -> BudgetResponse:
+    """Restate one budget whole.
+
+    Every field, never a subset, which is why this is a `PUT`: a ceiling and
+    the point it warns at are one statement, and half an update leaves a
+    warning standing against a ceiling it was never set against.
+
+    404 when it is not this person's budget, which is the same answer as one
+    that does not exist — a uuid is something somebody could paste, and a
+    different code here would confirm that somebody else's budget is real.
+    """
+    with _domain_errors():
+        try:
+            budget = use_case.amend(
+                AmendBudgetCommand(
+                    user_id=user_id,
+                    budget_id=BudgetId(value=budget_id),
+                    name=payload.name,
+                    limit=Money(amount=payload.limit, currency=payload.currency),
+                    scope=_budget_scope(payload, merchants, accounts, user_id=user_id),
+                    icon=payload.icon,
+                    month=payload.month,
+                    warn_at=payload.warn_at,
+                ),
+            )
+        except BudgetNotFoundError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No such budget",
+            ) from None
 
     return _budget_response(budget)
 
@@ -4263,7 +4368,7 @@ def read_budgets(
     timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
     month: Annotated[str | None, Query(pattern=MONTH_KEY.pattern)] = None,
 ) -> BudgetsResponse:
-    """Every cap that governs a month, and what the ledger did to it.
+    """Every budget that governs a month, and what the ledger did to each.
 
     200 with empty lists when nothing is capped, never a 404: unlike the
     monthly plan, an empty list of ceilings is a real and ordinary state and
@@ -4274,7 +4379,7 @@ def read_budgets(
     the last evening of the previous one, and being wrong on the 1st is being
     wrong on the day this is most likely to be looked at.
 
-    A cap whose category its owner has since deleted comes back `retired`
+    A budget whose categories its owner has since deleted comes back `retired`
     rather than taking the screen down with it. Merchant publishes nothing on a
     delete that this context could listen for, so degrading on read is the only
     place it can be handled.
@@ -4291,60 +4396,93 @@ def read_budgets(
     return _budgets_response(view)
 
 
-@router.delete("/budgets/{category}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/budgets/{budget_id}", status_code=status.HTTP_204_NO_CONTENT)
 def forget_budget(
     user_id: CurrentUser,
-    category: str,
+    budget_id: uuid.UUID,
     use_case: ManageBudgets,
-    month: Annotated[str | None, Query(pattern=MONTH_KEY.pattern)] = None,
 ) -> None:
-    """Drop one cap. The card disappears and nothing else changes.
-
-    **Not validated against the vocabulary**, unlike the `PUT`, and that is the
-    point rather than an omission: a cap whose category was deleted is exactly
-    the one somebody most needs to be able to remove, and refusing it because
-    the category no longer exists would leave a row nothing could reach.
-
-    `month` picks which of the two possible caps: absent drops the recurring
-    one and leaves this month's exception, and naming a month drops the
-    exception and leaves the recurring cap exactly where it was.
+    """Drop one budget. The card disappears and nothing else changes.
 
     Silent when there was nothing to drop, like every other undo here: a 404 on
     the second press of a button somebody is unsure about is a worse answer
-    than nothing. A cap never wrote anything, so there is nothing left behind
-    to explain.
+    than nothing. A budget never wrote anything, so there is nothing left
+    behind to explain.
     """
     with _domain_errors():
-        use_case.forget(
-            user_id=user_id,
-            category=_budget_category(category),
-            month=month,
-        )
+        use_case.forget(user_id=user_id, budget_id=BudgetId(value=budget_id))
 
 
-def _budget_category(value: str) -> str:
-    """A category read out of a URL path.
+def _budget_scope(
+    payload: BudgetPayload,
+    merchants: MerchantDirectory,
+    accounts: AccountRepository,
+    *,
+    user_id: UserId,
+) -> BudgetScope:
+    """The scope a payload asks for, with everything in it checked to exist.
 
-    Refused on shape alone and never on whether it names anything — see the
-    `DELETE` above for why that distinction matters. What is refused is a value
-    that could not be a cap's key in the first place, which the domain would
-    refuse anyway: this turns it into the 422 it is rather than a 400 from
-    underneath.
+    Checked here and not in the domain, because neither list is the domain's to
+    know: the vocabulary is Merchant's and half of it is whatever this person
+    wrote, and the accounts are rows. A value that names nothing would store a
+    budget no spending is ever attributed to — a ceiling that reads as «no has
+    gastado nada aquí», which on a money screen is the one wrong answer worse
+    than an error.
+
+    **The vocabulary is read once**, not once per category: `_known_category`
+    asks the Merchant adapter every time it is called, and a scope of twenty
+    would be twenty identical queries. `ReadBudgetsUseCase` hoists the same
+    call for the same reason.
+
+    An account is checked against its owner, so a uuid somebody pasted is a
+    422 rather than a budget quietly scoped to nothing.
+
+    Empty lists are not checked against anything: they mean every one, so there
+    is nothing to look up.
     """
-    stripped = value.strip()
+    if payload.categories:
+        vocabulary = merchants.categories(user_id=user_id)
 
-    if not stripped or len(stripped) > MAX_CATEGORY_LENGTH or "#" in stripped:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Not a category a budget could be on: {value!r}",
-        )
+        for category in payload.categories:
+            if category not in vocabulary:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Unknown category: {category!r}",
+                )
 
-    return stripped
+    watched = frozenset(AccountId(value=value) for value in payload.accounts)
+
+    for account in watched:
+        if accounts.find(user_id=user_id, account_id=account) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unknown account: {account.value}",
+            )
+
+    return BudgetScope.of(
+        categories=frozenset(payload.categories),
+        accounts=watched,
+    )
 
 
-def _budget_response(budget: CategoryBudget) -> BudgetResponse:
+def _budget_scope_response(scope: BudgetScope) -> BudgetScopeResponse:
+    return BudgetScopeResponse(
+        # Sorted so two reads of an unchanged budget are the same bytes: a
+        # frozenset has no order, and a list that reshuffles between requests
+        # is a diff in a client's cache for a budget nobody touched.
+        categories=sorted(scope.categories),
+        accounts=sorted((account.value for account in scope.accounts), key=str),
+        total=scope.total,
+        every_account=scope.every_account,
+    )
+
+
+def _budget_response(budget: Budget) -> BudgetResponse:
     return BudgetResponse(
-        category=budget.category,
+        id=budget.id.value,
+        name=budget.name,
+        icon=budget.icon,
+        scope=_budget_scope_response(budget.scope),
         currency=budget.currency,
         limit=str(budget.limit.amount),
         month=budget.month,
@@ -4376,7 +4514,10 @@ def _budget_progress_response(line: BudgetLine) -> BudgetProgressResponse:
     progress = line.progress
 
     return BudgetProgressResponse(
-        category=progress.category,
+        id=progress.budget_id.value,
+        name=progress.name,
+        icon=progress.icon,
+        scope=_budget_scope_response(progress.scope),
         currency=progress.currency,
         limit=str(progress.limit),
         spent=str(progress.spent),
@@ -4386,6 +4527,7 @@ def _budget_progress_response(line: BudgetLine) -> BudgetProgressResponse:
         month=progress.month,
         recurring=progress.recurring,
         retired=line.retired,
+        missing=sorted(line.missing),
     )
 
 

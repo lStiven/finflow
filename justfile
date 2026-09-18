@@ -692,11 +692,13 @@ e2e-allowance *args:
     cd {{frontend_dir}} && node scripts/e2e-allowance.mjs {{args}}
 
 # The budgets screen, in a real browser and against the real stack.
-# Puts a ceiling on a category from the page, and reads every balance, the net
-# worth and the ledger's row count before and after to refuse to pass if doing
-# so moved a peso. Then checks the traffic light against `/summary` rather than
-# against the budgets endpoint's own figures, and that this month's cap shadows
-# the recurring one. Needs `just up` and `just web`.
+# Declares a budget from the page, and reads every balance, the net worth and
+# the ledger's row count before and after to refuse to pass if doing so moved a
+# peso. Then checks the traffic light against `/summary` rather than against
+# the budgets endpoint's own figures, that a budget for one month is read
+# *beside* the recurring one rather than instead of it — there is no shadowing
+# any more — and that one over every category counts every category.
+# Needs `just up` and `just web`.
 e2e-budgets *args:
     cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
 

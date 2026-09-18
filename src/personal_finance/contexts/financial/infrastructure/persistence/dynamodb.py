@@ -6,7 +6,7 @@ One table, partitioned by user, with the sort key carrying the record type:
     FINGERPRINT#<print>  a bank/instrument pair -> the account it reaches
     MOVEMENT#<id>        one ledger row, assigned or not
     BILL#<id>            a charge its owner declared, never a ledger row
-    BUDGET#<month>#<cat> a spending cap; the month is `EVERY` or `2026-09`
+    BUDGET#<id>          a spending cap over a scope; months are a field
     PLAN                 the one declared month, at a fixed place
 
 Two things here are load-bearing and neither is incidental.
@@ -45,9 +45,9 @@ from personal_finance.contexts.financial.domain.bills import (
     ScheduledBill,
 )
 from personal_finance.contexts.financial.domain.budgets import (
-    EVERY_MONTH,
+    Budget,
     BudgetId,
-    CategoryBudget,
+    BudgetScope,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.financing import (
@@ -1623,53 +1623,79 @@ class DynamoDBMonthlyPlanRepository:
 # ----------------------------------------------------------------------
 
 
+#: Stands where a month key goes for a budget that governs all of them. A
+#: storage encoding and nothing more — it cannot collide with a real month,
+#: which is only ever digits and a dash. It lives here rather than in the
+#: domain because the domain says `None` and only this file needs a string.
+EVERY_MONTH = "EVERY"
+
+
 def budget_sort_value(budget_id: BudgetId) -> str:
-    """Where one cap lives inside its owner's partition.
+    """Where one budget lives inside its owner's partition.
 
-    The month first, so the caps of one month are a `begins_with` away, and the
-    category last because it is the part that varies. `EVERY` stands where a
-    month key would go for a cap that governs all of them, and it cannot
-    collide with one: a month key is only ever digits and a dash.
+    Just the id now. The month used to lead this key so that one month's caps
+    were a `begins_with` away, and the category closed it because a cap *was*
+    its category — neither is true any more. A budget names a scope that can
+    hold twenty categories and governs months by a field, so the only thing
+    left that identifies one is its id.
     """
-    return f"{BUDGET_PREFIX}{budget_id.month_key}#{budget_id.category}"
+    return f"{BUDGET_PREFIX}{budget_id}"
 
 
-def budget_to_item(budget: CategoryBudget) -> dict[str, AttributeValueTypeDef]:
-    """One row per cap.
+def budget_to_item(budget: Budget) -> dict[str, AttributeValueTypeDef]:
+    """One row per budget.
 
-    The category and the month are written as attributes as well as being in
-    the sort key. Reading them back out of the key would mean splitting a
-    string a category could itself contain a separator of — the domain refuses
-    a `#` for exactly that reason, and this makes the refusal something the
-    reader does not have to depend on.
+    **An empty scope writes no attribute at all.** DynamoDB refuses an empty
+    string set, so «every category» cannot be stored as `SS: []` — and the
+    absence reads back as exactly what the domain means by an empty scope. The
+    alternative, a sentinel member like `ALL`, would be a category value that
+    somebody could also type.
     """
-    return {
+    item: dict[str, AttributeValueTypeDef] = {
         PARTITION_KEY: {"S": str(budget.user_id.value)},
         SORT_KEY: {"S": budget_sort_value(budget.id)},
-        "category": {"S": budget.category},
+        "name": {"S": budget.name},
         # `EVERY` rather than a missing attribute: a row whose shape depends on
-        # whether the cap recurs is a row two readers can disagree about.
-        "month": {"S": budget.id.month_key},
+        # whether the budget recurs is a row two readers can disagree about.
+        "month": {"S": budget.month or EVERY_MONTH},
         # A string, like money everywhere else that leaves this process: a JSON
-        # float rounds a cent away and a cap is compared to the cent.
+        # float rounds a cent away and a ceiling is compared to the cent.
         "limit": {"N": str(budget.limit.amount)},
         "currency": {"S": budget.currency.value},
         "warn_at": {"N": str(budget.warn_at)},
         "updated_at": {"N": str(budget.updated_at.as_epoch_seconds())},
     }
 
+    if budget.icon:
+        item["icon"] = {"S": budget.icon}
 
-def budget_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> CategoryBudget:
+    if budget.scope.categories:
+        item["categories"] = {"SS": sorted(budget.scope.categories)}
+
+    if budget.scope.accounts:
+        item["accounts"] = {
+            # `str(account.value)`, never `str(account)`: `AccountId` has no
+            # `__str__`, so the latter stores the dataclass repr and the row
+            # reads back as an id nothing can parse.
+            "SS": sorted(str(account.value) for account in budget.scope.accounts),
+        }
+
+    return item
+
+
+def budget_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Budget:
     user_id = _string(item, PARTITION_KEY)
-    category = _string(item, "category")
+    sort_key = _string(item, SORT_KEY)
+    name = _string(item, "name")
     month = _string(item, "month")
 
-    # `_number` answers 0 for an attribute that is not there, and a cap of zero
-    # is one the domain refuses — it would read back as an ordinary budget that
-    # is already over on the first peso rather than as the corrupt row it is.
+    # `_number` answers 0 for an attribute that is not there, and a ceiling of
+    # zero is one the domain refuses — it would read back as an ordinary budget
+    # already over on the first peso rather than as the corrupt row it is.
     if (
         user_id is None
-        or category is None
+        or sort_key is None
+        or name is None
         or month is None
         or "limit" not in item
         or "warn_at" not in item
@@ -1677,62 +1703,91 @@ def budget_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> CategoryBudge
     ):
         raise CorruptFinancialItemError("Stored budget is missing part of itself")
 
-    return CategoryBudget(
-        id=BudgetId(
-            category=category,
-            month=None if month == EVERY_MONTH else month,
-        ),
+    return Budget(
+        id=BudgetId.from_string(sort_key.removeprefix(BUDGET_PREFIX)),
         user_id=UserId.from_string(user_id),
+        name=name,
         limit=Money(
             amount=_number(item, "limit"),
             currency=_enum(Currency, _string(item, "currency") or "", "currency"),
         ),
+        scope=BudgetScope(
+            categories=frozenset(_string_set(item, "categories")),
+            accounts=frozenset(
+                AccountId.from_string(value) for value in _string_set(item, "accounts")
+            ),
+        ),
+        icon=_string(item, "icon") or "",
         warn_at=int(_number(item, "warn_at")),
+        month=None if month == EVERY_MONTH else month,
         updated_at=PosixTime.from_epoch_seconds(int(_number(item, "updated_at"))),
     )
 
 
-class DynamoDBCategoryBudgetRepository:
-    """`CategoryBudgetRepository` over the same table as everything else here.
+def _string_set(
+    item: Mapping[str, AttributeValueTypeDef],
+    key: str,
+) -> Sequence[str]:
+    """A stored string set, or nothing when the attribute is absent.
 
-    A whole-item put, like the bills and plan repositories and safe for the same
-    reason: no field of a cap is a running total another writer moves. What is
-    *spent* against it is not a field at all — it is read off the ledger every
-    time, so there is no figure here to drift.
+    Absent is the ordinary case and not a defect: an empty scope writes no
+    attribute, because DynamoDB has no empty string set to write.
+    """
+    value = item.get(key)
+
+    if value is None:
+        return ()
+
+    return tuple(value.get("SS", ()))
+
+
+class DynamoDBBudgetRepository:
+    """`BudgetRepository` over the same table as everything else here.
+
+    A whole-item put, like the bills and plan repositories and safe for the
+    same reason: no field of a budget is a running total another writer moves.
+    What is *spent* against it is not a field at all — it is read off the
+    ledger every time, so there is no figure here to drift.
     """
 
     def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
         self._client = client
         self._table_name = table_name
 
-    def list_for_month(
-        self,
-        *,
-        user_id: UserId,
-        month: str,
-    ) -> Sequence[CategoryBudget]:
-        """Two queries, one per kind of cap, and never a read of all of them.
+    def list_for_user(self, *, user_id: UserId) -> Sequence[Budget]:
+        """One query on the whole prefix.
 
-        The alternative is one query on `BUDGET#` and a filter in memory, which
-        reads every month anybody ever made an exception for to answer about
-        one. Two bounded prefixes cost two round trips and stay the same size
-        as the number of categories rather than growing with the months.
+        This used to be two `begins_with` queries, one per kind of cap, to
+        avoid reading every month anybody ever made an exception for. That
+        optimisation died with the sort key it depended on — and it was pricing
+        a risk that is not there: budgets are a handful of rows somebody typed
+        by hand, not a log that grows on its own.
         """
         return [
             budget_to_entity(item)
-            for prefix in (
-                f"{BUDGET_PREFIX}{EVERY_MONTH}#",
-                f"{BUDGET_PREFIX}{month}#",
-            )
             for item in _query_prefix(
                 self._client,
                 table_name=self._table_name,
                 user_id=user_id,
-                prefix=prefix,
+                prefix=BUDGET_PREFIX,
             )
         ]
 
-    def save(self, budget: CategoryBudget) -> None:
+    def get(self, *, user_id: UserId, budget_id: BudgetId) -> Budget | None:
+        """One budget, keyed by its owner *and* its id.
+
+        Both halves of the key, always: a budget id is a uuid somebody could
+        paste, and a read on the id alone would hand one person another's row.
+        """
+        response = self._client.get_item(
+            TableName=self._table_name,
+            Key=_key(user_id, budget_sort_value(budget_id)),
+        )
+        item = response.get("Item")
+
+        return budget_to_entity(item) if item else None
+
+    def save(self, budget: Budget) -> None:
         self._client.put_item(TableName=self._table_name, Item=budget_to_item(budget))
 
     def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:

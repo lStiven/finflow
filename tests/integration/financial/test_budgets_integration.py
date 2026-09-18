@@ -1,24 +1,28 @@
-"""Spending caps against a real table.
+"""Spending budgets against a real table.
 
-Four things a fake cannot answer, and each one decides whether the traffic
+Five things a fake cannot answer, and each one decides whether the traffic
 light on somebody's screen is about their own money.
 
-**Where the row lands.** A cap has no generated id: its sort key is built from
-the month and the category, and a key that collided with another record type
-would overwrite it silently. `BILL#` and `BUDGET#` share a letter, and
-`_query_prefix` is a raw `begins_with` with no type attribute to fall back on.
+**Where the row lands.** The sort key is `BUDGET#<id>` now, and a key that
+collided with another record type would overwrite it silently. `BILL#` and
+`BUDGET#` share a letter, and `_query_prefix` is a raw `begins_with` with no
+type attribute to fall back on.
 
-**That the month comes first.** Reading one month is two bounded `begins_with`
-queries, and that only works because the month is the segment before the
-category. Keyed the other way round, "every cap of September" would be a read
-of every cap ever declared.
+**That the scope survives storage.** DynamoDB has no empty string set, so «every
+category» is stored as an *absent attribute* rather than as `SS: []`. That is
+the one encoding a unit test would never catch: an in-memory double happily
+holds an empty set, and the real client refuses to write one.
 
 **Whose it is.** The scoping is the partition key, and a key is only real once
 something writes it.
 
-**And the round trip.** A cap stored as a DynamoDB number and read back as a
-`Decimal` has to come back the same money, cents included — a cap compared to
-the cent is the whole point of never letting a float near it.
+**That amending moves nothing.** With a generated id, restating a budget has to
+land on the same row — the failure it replaced was writing a second row under a
+new identity and leaving the first unreachable.
+
+**And the round trip.** A ceiling stored as a DynamoDB number and read back as a
+`Decimal` has to come back the same money, cents included — a ceiling compared
+to the cent is the whole point of never letting a float near it.
 """
 
 from __future__ import annotations
@@ -29,16 +33,22 @@ from mypy_boto3_dynamodb.client import DynamoDBClient
 import pytest
 
 from personal_finance.contexts.financial.application.budgets import (
+    AmendBudgetCommand,
+    DeclareBudgetCommand,
     ManageBudgetsUseCase,
-    SetBudgetCommand,
 )
-from personal_finance.contexts.financial.domain.budgets import BudgetId
+from personal_finance.contexts.financial.domain.budgets import (
+    Budget,
+    BudgetId,
+    BudgetScope,
+)
+from personal_finance.contexts.financial.domain.value_objects import AccountId
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     BILL_PREFIX,
     BUDGET_PREFIX,
     PARTITION_KEY,
     SORT_KEY,
-    DynamoDBCategoryBudgetRepository,
+    DynamoDBBudgetRepository,
     budget_sort_value,
 )
 from personal_finance.shared.domain.value_objects import Currency, Money, UserId
@@ -69,12 +79,12 @@ def table(dynamodb_client: DynamoDBClient) -> str:
 def budgets(
     dynamodb_client: DynamoDBClient,
     table: str,
-) -> DynamoDBCategoryBudgetRepository:
-    return DynamoDBCategoryBudgetRepository(client=dynamodb_client, table_name=table)
+) -> DynamoDBBudgetRepository:
+    return DynamoDBBudgetRepository(client=dynamodb_client, table_name=table)
 
 
 @pytest.fixture
-def manage(budgets: DynamoDBCategoryBudgetRepository) -> ManageBudgetsUseCase:
+def manage(budgets: DynamoDBBudgetRepository) -> ManageBudgetsUseCase:
     return ManageBudgetsUseCase(budgets=budgets)
 
 
@@ -86,208 +96,270 @@ def declare(
     manage: ManageBudgetsUseCase,
     *,
     user_id: UserId = OWNER,
-    category: str = "groceries",
+    name: str = "Mercado",
+    categories: frozenset[str] | None = frozenset({"groceries"}),
+    accounts: frozenset[AccountId] | None = None,
     limit: str = "600000",
     currency: Currency = Currency.COP,
+    icon: str = "",
     month: str | None = None,
     warn_at: int = 80,
-) -> None:
-    manage.declare(
-        SetBudgetCommand(
+) -> Budget:
+    return manage.declare(
+        DeclareBudgetCommand(
             user_id=user_id,
-            category=category,
+            name=name,
             limit=money(limit, currency),
+            scope=BudgetScope.of(categories=categories, accounts=accounts),
+            icon=icon,
             month=month,
             warn_at=warn_at,
         ),
     )
 
 
-def test_a_cap_survives_the_round_trip_to_the_cent(
+def test_a_budget_survives_the_round_trip_to_the_cent(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, limit="600000.55", warn_at=65)
+    declare(manage, limit="600000.45", warn_at=65, icon="shopping-bag")
 
-    stored = budgets.list_for_month(user_id=OWNER, month="2026-09")
+    stored = budgets.list_for_user(user_id=OWNER)
 
     assert len(stored) == 1
-    assert stored[0].limit.amount == Decimal("600000.55")
+    assert stored[0].limit == money("600000.45")
     assert stored[0].warn_at == 65
-    assert stored[0].currency is Currency.COP
-    assert stored[0].category == "groceries"
-    assert stored[0].month is None
-    assert stored[0].recurring is True
-    assert stored[0].updated_at.as_epoch_seconds() > 0
+    assert stored[0].icon == "shopping-bag"
+    assert stored[0].name == "Mercado"
 
 
-def test_it_lands_under_the_month_and_then_the_category(
+def test_it_lands_under_the_budget_prefix_and_its_id(
     manage: ManageBudgetsUseCase,
     dynamodb_client: DynamoDBClient,
     table: str,
 ) -> None:
-    """The order of the two segments is what makes reading one month cheap."""
-    declare(manage, category="restaurants", month="2026-12", limit="900000")
+    budget = declare(manage)
 
     item = dynamodb_client.get_item(
         TableName=table,
         Key={
             PARTITION_KEY: {"S": str(OWNER.value)},
-            SORT_KEY: {"S": "BUDGET#2026-12#restaurants"},
+            SORT_KEY: {"S": f"{BUDGET_PREFIX}{budget.id}"},
         },
-    ).get("Item")
+    )
 
-    assert item is not None
-    assert item.get("limit", {}).get("N") == "900000"
-    # Written as attributes as well as into the key, so reading a cap back never
-    # means splitting a string on a separator.
-    assert item.get("category", {}).get("S") == "restaurants"
-    assert item.get("month", {}).get("S") == "2026-12"
+    assert "Item" in item
 
 
-def test_a_recurring_cap_lands_under_every_rather_than_a_month(
+def test_the_budget_prefix_cannot_be_reached_by_the_bills_one() -> None:
+    """`BILL#` and `BUDGET#` share a letter, and the query is a raw
+    `begins_with` with no type attribute to fall back on."""
+    key = budget_sort_value(BudgetId.new())
+
+    assert not key.startswith(BILL_PREFIX)
+    assert key.startswith(BUDGET_PREFIX)
+
+
+def test_every_category_is_stored_as_an_absent_attribute(
     manage: ManageBudgetsUseCase,
     dynamodb_client: DynamoDBClient,
     table: str,
 ) -> None:
-    declare(manage, category="groceries")
+    """The encoding a unit test cannot catch: DynamoDB refuses an empty string
+    set, so «todo el mes» cannot be written as `SS: []`."""
+    budget = declare(manage, name="Todo el mes", categories=None, limit="3000000")
 
-    item = dynamodb_client.get_item(
+    response = dynamodb_client.get_item(
         TableName=table,
         Key={
             PARTITION_KEY: {"S": str(OWNER.value)},
-            SORT_KEY: {"S": "BUDGET#EVERY#groceries"},
+            SORT_KEY: {"S": f"{BUDGET_PREFIX}{budget.id}"},
         },
-    ).get("Item")
+    )
 
-    assert item is not None
-    assert item.get("month", {}).get("S") == "EVERY"
+    assert "Item" in response
+    assert "categories" not in response["Item"]
+    assert "accounts" not in response["Item"]
 
 
-def test_the_budget_prefix_cannot_be_reached_by_the_bills_one(
+def test_a_budget_over_everything_reads_back_as_such(
     manage: ManageBudgetsUseCase,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    """`BILL#` and `BUDGET#` share a letter and the listing is a raw
-    `begins_with` with no record type to filter on."""
-    assert not budget_sort_value(BudgetId(category="groceries")).startswith(BILL_PREFIX)
-    assert budget_sort_value(BudgetId(category="groceries")).startswith(BUDGET_PREFIX)
+    declare(manage, categories=None)
+
+    stored = budgets.list_for_user(user_id=OWNER)
+
+    assert stored[0].scope.total is True
+    assert stored[0].scope.every_account is True
 
 
-def test_reading_a_month_brings_the_recurring_caps_and_that_months_own(
+def test_a_scope_of_several_categories_round_trips(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="groceries", limit="600000")
-    declare(manage, category="groceries", limit="900000", month="2026-12")
-    declare(manage, category="travel", limit="2000000", month="2026-07")
+    declare(manage, name="Salidas", categories=frozenset({"restaurants", "bars"}))
 
-    december = budgets.list_for_month(user_id=OWNER, month="2026-12")
+    stored = budgets.list_for_user(user_id=OWNER)
 
-    assert sorted((cap.category, cap.month or "") for cap in december) == [
-        ("groceries", ""),
-        ("groceries", "2026-12"),
-    ]
+    assert stored[0].scope.categories == frozenset({"restaurants", "bars"})
 
 
-def test_another_months_exception_stays_out_of_this_one(
+def test_an_account_scope_round_trips(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="travel", limit="2000000", month="2026-07")
+    card = AccountId.new()
+    declare(manage, accounts=frozenset({card}))
 
-    assert budgets.list_for_month(user_id=OWNER, month="2026-08") == []
+    stored = budgets.list_for_user(user_id=OWNER)
+
+    assert stored[0].scope.accounts == frozenset({card})
+    assert stored[0].scope.every_account is False
 
 
-def test_restating_a_cap_leaves_one_row_and_not_two(
+def test_a_recurring_budget_and_a_months_own_are_two_rows(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="groceries", limit="600000", warn_at=50)
-    declare(manage, category="groceries", limit="900000")
+    declare(manage, name="Restaurantes", limit="600000")
+    declare(manage, name="Diciembre", limit="900000", month="2026-12")
 
-    stored = budgets.list_for_month(user_id=OWNER, month="2026-09")
+    stored = budgets.list_for_user(user_id=OWNER)
 
+    assert len(stored) == 2
+    assert {budget.month for budget in stored} == {None, "2026-12"}
+
+
+def test_declaring_twice_leaves_two_rows(
+    manage: ManageBudgetsUseCase,
+    budgets: DynamoDBBudgetRepository,
+) -> None:
+    """The reversal, against the table. Two budgets over the same category
+    used to be one row overwriting itself."""
+    declare(manage, name="Uno")
+    declare(manage, name="Otro")
+
+    assert len(budgets.list_for_user(user_id=OWNER)) == 2
+
+
+def test_amending_lands_on_the_same_row(
+    manage: ManageBudgetsUseCase,
+    budgets: DynamoDBBudgetRepository,
+) -> None:
+    """The failure this replaced: writing a second row under a new identity
+    and leaving the first one unreachable."""
+    budget = declare(manage, name="Mercado", limit="600000")
+
+    manage.amend(
+        AmendBudgetCommand(
+            user_id=OWNER,
+            budget_id=budget.id,
+            name="Mercado y aseo",
+            limit=money("900000"),
+            scope=BudgetScope.of(categories=frozenset({"groceries"})),
+        ),
+    )
+
+    stored = budgets.list_for_user(user_id=OWNER)
     assert len(stored) == 1
-    assert stored[0].limit.amount == Decimal("900000")
-    # The whole-item put replaced the row rather than merging into it, so the
-    # old warning point is gone rather than standing against a ceiling it was
-    # never set against.
-    assert stored[0].warn_at == 80
+    assert stored[0].name == "Mercado y aseo"
+    assert stored[0].limit == money("900000")
 
 
-def test_a_recurring_cap_and_an_exception_are_two_rows(
+def test_amending_can_widen_a_scope_to_everything(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="groceries", limit="600000")
-    declare(manage, category="groceries", limit="900000", month="2026-12")
+    """Going from a named category to none has to *remove* the stored
+    attribute, not leave the old one behind — a whole-item put is what makes
+    that true, and only the table can prove it."""
+    budget = declare(manage, categories=frozenset({"groceries"}))
 
-    assert len(budgets.list_for_month(user_id=OWNER, month="2026-12")) == 2
+    manage.amend(
+        AmendBudgetCommand(
+            user_id=OWNER,
+            budget_id=budget.id,
+            name="Todo el mes",
+            limit=money("3000000"),
+            scope=BudgetScope.everything(),
+        ),
+    )
+
+    assert budgets.list_for_user(user_id=OWNER)[0].scope.total is True
 
 
 def test_another_currency_round_trips_as_itself(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="travel", limit="400", currency=Currency.USD)
+    declare(manage, limit="500", currency=Currency.USD)
 
-    stored = budgets.list_for_month(user_id=OWNER, month="2026-09")
+    stored = budgets.list_for_user(user_id=OWNER)
 
     assert stored[0].currency is Currency.USD
-    assert stored[0].limit.amount == Decimal("400")
 
 
 def test_a_users_own_category_survives_its_colon(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    """A `custom:` key is Merchant's spelling and Financial stores it whole."""
-    key = "custom:9f1e4b2c8a7d6e5f4a3b2c1d0e9f8a7b"
-    declare(manage, category=key, limit="200000")
+    declare(manage, categories=frozenset({"custom:gatos"}))
 
-    stored = budgets.list_for_month(user_id=OWNER, month="2026-09")
+    stored = budgets.list_for_user(user_id=OWNER)
 
-    assert stored[0].category == key
+    assert stored[0].scope.categories == frozenset({"custom:gatos"})
 
 
-def test_one_persons_caps_are_unreachable_from_another(
+def test_one_persons_budgets_are_unreachable_from_another(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, user_id=OWNER, category="groceries", limit="600000")
+    declare(manage, user_id=OWNER)
 
-    assert budgets.list_for_month(user_id=STRANGER, month="2026-09") == []
+    assert budgets.list_for_user(user_id=STRANGER) == []
 
 
-def test_one_persons_cap_is_not_anothers_to_drop(
+def test_one_persons_budget_is_not_anothers_to_read(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, user_id=OWNER, category="groceries", limit="600000")
+    """A budget id is a uuid somebody could paste. Both halves of the key,
+    always."""
+    budget = declare(manage, user_id=OWNER)
 
-    assert manage.forget(user_id=STRANGER, category="groceries") is False
-    assert len(budgets.list_for_month(user_id=OWNER, month="2026-09")) == 1
+    assert budgets.get(user_id=STRANGER, budget_id=budget.id) is None
+    assert budgets.get(user_id=OWNER, budget_id=budget.id) is not None
+
+
+def test_one_persons_budget_is_not_anothers_to_drop(
+    manage: ManageBudgetsUseCase,
+    budgets: DynamoDBBudgetRepository,
+) -> None:
+    budget = declare(manage, user_id=OWNER)
+
+    assert budgets.remove(user_id=STRANGER, budget_id=budget.id) is False
+    assert len(budgets.list_for_user(user_id=OWNER)) == 1
 
 
 def test_forgetting_says_whether_there_was_anything_there(
     manage: ManageBudgetsUseCase,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="groceries")
+    budget = declare(manage)
 
-    assert manage.forget(user_id=OWNER, category="groceries") is True
-    assert manage.forget(user_id=OWNER, category="groceries") is False
+    assert manage.forget(user_id=OWNER, budget_id=budget.id) is True
+    assert manage.forget(user_id=OWNER, budget_id=budget.id) is False
 
 
-def test_dropping_an_exception_leaves_the_recurring_cap_on_the_table(
+def test_dropping_one_leaves_the_others_on_the_table(
     manage: ManageBudgetsUseCase,
-    budgets: DynamoDBCategoryBudgetRepository,
+    budgets: DynamoDBBudgetRepository,
 ) -> None:
-    declare(manage, category="groceries", limit="600000")
-    declare(manage, category="groceries", limit="900000", month="2026-12")
+    usual = declare(manage, name="Restaurantes", limit="600000")
+    december = declare(manage, name="Diciembre", limit="900000", month="2026-12")
 
-    assert manage.forget(user_id=OWNER, category="groceries", month="2026-12") is True
+    manage.forget(user_id=OWNER, budget_id=december.id)
 
-    stored = budgets.list_for_month(user_id=OWNER, month="2026-12")
-    assert [(cap.month, cap.limit.amount) for cap in stored] == [
-        (None, Decimal("600000")),
-    ]
+    stored = budgets.list_for_user(user_id=OWNER)
+    assert [budget.id for budget in stored] == [usual.id]

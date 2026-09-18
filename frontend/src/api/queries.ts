@@ -87,7 +87,9 @@ export type BudgetState = components["schemas"]["BudgetState"];
 export type BudgetTotal = components["schemas"]["BudgetTotalsResponse"];
 /** Somewhere a cap is missing, ranked by what actually goes out there. */
 export type UncappedCategory = components["schemas"]["UncappedCategoryResponse"];
-export type SetBudgetBody = components["schemas"]["SetBudgetPayload"];
+export type BudgetBody = components["schemas"]["BudgetPayload"];
+/** What a budget watches: categories and accounts, empty meaning every one. */
+export type BudgetScope = components["schemas"]["BudgetScopeResponse"];
 /** What the month is supposed to look like, as its owner declared it. */
 export type MonthlyPlan = components["schemas"]["PlanResponse"];
 export type PlanBody = components["schemas"]["DeclarePlanPayload"];
@@ -1607,40 +1609,59 @@ export function budgetsQuery(month?: string | null) {
   });
 }
 
-export function useSetBudget(): UseMutationResult<Budget, Error, SetBudgetBody> {
+export function useDeclareBudget(): UseMutationResult<Budget, Error, BudgetBody> {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body: SetBudgetBody) =>
-      unwrap(api.PUT("/financial/budgets", { body })),
+    mutationFn: (body: BudgetBody) => unwrap(api.POST("/financial/budgets", { body })),
     onSuccess: () => {
-      // Every month, not just the one on screen: a recurring cap changes what
-      // every month reads, and the key carries the month as its last segment.
+      // Every month, not just the one on screen: a recurring budget changes
+      // what every month reads, and the key carries the month as its last
+      // segment.
       void client.invalidateQueries({ queryKey: queryKeys.budgets });
     },
   });
 }
 
 /**
- * Drop one cap.
+ * Restate one budget whole.
  *
- * `month` picks which of the two a category can have: absent drops the
- * recurring one and leaves this month's exception standing, and naming a month
- * drops the exception and leaves the recurring cap where it was.
+ * Every field, never a subset — the same shape the endpoint demands, because a
+ * ceiling and the point it warns at are one statement.
  */
-export function useForgetBudget(): UseMutationResult<
-  unknown,
+export function useAmendBudget(): UseMutationResult<
+  Budget,
   Error,
-  { category: string; month?: string | null }
+  { id: string; body: BudgetBody }
 > {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: ({ category, month }: { category: string; month?: string | null }) =>
+    mutationFn: ({ id, body }: { id: string; body: BudgetBody }) =>
       unwrap(
-        api.DELETE("/financial/budgets/{category}", {
-          params: {
-            path: { category },
-            query: month ? { month } : {},
-          },
+        api.PUT("/financial/budgets/{budget_id}", {
+          params: { path: { budget_id: id } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
+    },
+  });
+}
+
+/**
+ * Drop one budget, by its id.
+ *
+ * There is nothing to disambiguate any more: December's exception and the
+ * usual ceiling are two budgets with two ids, so dropping one cannot reach
+ * the other.
+ */
+export function useForgetBudget(): UseMutationResult<unknown, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      unwrap(
+        api.DELETE("/financial/budgets/{budget_id}", {
+          params: { path: { budget_id: id } },
         }),
       ),
     onSuccess: () => {

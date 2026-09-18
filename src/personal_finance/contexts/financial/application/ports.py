@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
-from personal_finance.contexts.financial.domain.budgets import BudgetId, CategoryBudget
+from personal_finance.contexts.financial.domain.budgets import Budget, BudgetId
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
@@ -417,53 +417,53 @@ class MonthlyPlanRepository(Protocol):
         ...
 
 
-class CategoryBudgetRepository(Protocol):
-    """Persistence port for `CategoryBudget`.
+class BudgetRepository(Protocol):
+    """Persistence port for `Budget`.
 
-    Keyed by the cap's own identity rather than a generated id, which is what
-    the aggregate's identity already is: the category and, when it governs only
-    one, the month. Two caps on the same pair are one cap, so there is nothing
-    a caller could ask for twice.
+    Keyed by a generated id, which reverses what this port used to say. A
+    budget's identity used to *be* its category and its month, on the argument
+    that two caps on the same pair are one cap declared twice — an argument
+    that only held while a cap watched exactly one category. Scopes overlap on
+    purpose now, so two budgets over restaurants are two budgets.
 
-    There is no `list_by_user`. A month is what a screen reads, and reading
-    every cap anybody ever declared for a single month would grow with the
-    months rather than with the categories — a year of December exceptions is
-    twelve times the rows for one answer.
+    `list_for_user` replaces `list_for_month` because of the same change. A
+    month can no longer be a key: a budget names a scope, and which months it
+    governs is a field on it rather than a segment of where it is stored.
+    Somebody's budgets are a handful of rows — the screen reads them all and
+    the domain decides which ones the month concerns.
     """
 
-    def list_for_month(
-        self,
-        *,
-        user_id: UserId,
-        month: str,
-    ) -> Sequence[CategoryBudget]:
-        """Every cap that could govern this month: the recurring ones and that
-        month's own.
+    def list_for_user(self, *, user_id: UserId) -> Sequence[Budget]:
+        """Every budget this person declared, whichever month it governs.
 
-        Both kinds, unresolved. Which of the two wins for a category is a
-        domain rule and it is applied above this line — a repository that
-        already resolved it could not tell a screen that the ceiling it is
-        showing is this month's exception rather than the usual one.
+        Unfiltered on purpose. Which of them a month concerns is
+        `Budget.governs`, applied above this line — a repository that already
+        resolved it could not tell a screen that the ceiling it is showing is
+        this month's exception rather than the usual one.
         """
         ...
 
-    def save(self, budget: CategoryBudget) -> None:
-        """Store a cap, new or restated.
+    def get(self, *, user_id: UserId, budget_id: BudgetId) -> Budget | None:
+        """One budget, or None. Scoped to its owner and never to the id alone:
+        a uuid is something somebody could paste, and loading by id would let
+        one person amend another's ceiling."""
+        ...
+
+    def save(self, budget: Budget) -> None:
+        """Store a budget, new or restated.
 
         A plain put, like a bill and like the plan: nothing else writes these
         rows and none of their fields is a running total, so there is no half
         of the record a write could quietly discard. What is spent against the
-        cap is not here at all — it is read off the ledger.
+        budget is not here at all — it is read off the ledger.
         """
         ...
 
     def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:
-        """Forget a cap. False when there was nothing to forget.
+        """Forget a budget. False when there was nothing to forget.
 
-        Deleting is right here for the reason it is right on a bill: a cap
+        Deleting is right here for the reason it is right on a bill: a budget
         never wrote anything, so there is nothing left behind to explain.
-        Removing this month's exception does not touch the recurring cap, which
-        is the point of the two being separate rows.
         """
         ...
 

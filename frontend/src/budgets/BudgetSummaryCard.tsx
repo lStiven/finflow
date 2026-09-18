@@ -103,9 +103,12 @@ function CurrencyRow({
         />
       </div>
 
+      {/* «de topes que suman», not «presupuestado»: budgets may overlap, so
+          two of them can count the same peso and the added-up ceiling is a
+          tally of what was declared rather than what the month allows. */}
       <span className="text-faint text-xs">
-        <Money amount={total.spent} currency={total.currency} size="sm" /> de{" "}
-        <Money amount={total.limit} currency={total.currency} size="sm" /> presupuestado
+        <Money amount={total.spent} currency={total.currency} size="sm" /> de topes que
+        suman <Money amount={total.limit} currency={total.currency} size="sm" />
       </span>
     </div>
   );

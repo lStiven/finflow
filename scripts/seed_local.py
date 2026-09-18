@@ -1297,6 +1297,34 @@ CAP_RATIOS: tuple[tuple[float, int], ...] = (
 )
 
 
+# What the seeded budgets are called, in the language the app is written in.
+#
+# A budget carries its own name now, and it has to come from somewhere. The
+# obvious source — the label `GET /merchants/categories` answers — is in
+# English: the server owns the vocabulary and the browser translates the
+# sixteen shipped ones in `CATEGORY_COPY`, which Python cannot read. Seeding
+# the API's label would put «Fuel» above a card whose own subtitle says
+# «Combustible», which reads as a bug rather than as two languages.
+#
+# So this is a **fixture mirror**, deliberately partial and deliberately here
+# rather than anywhere reusable: it names what this seed happens to cap, and a
+# category it has not heard of falls back to the API's label. It is not a
+# second vocabulary — nothing reads it but the line below.
+SEED_BUDGET_NAMES: dict[str, str] = {
+    "groceries": "Mercado",
+    "restaurants": "Restaurantes",
+    "transport": "Transporte",
+    "fuel": "Combustible",
+    "health": "Salud",
+    "entertainment": "Entretenimiento",
+    "utilities": "Servicios",
+    "shopping": "Compras",
+    "education": "Educación",
+    "housing": "Vivienda",
+    "subscriptions": "Suscripciones",
+}
+
+
 def _cap_categories(client: TestClient, *, token: str) -> None:
     """Put a ceiling on the three categories this user spends most in.
 
@@ -1347,6 +1375,33 @@ def _cap_categories(client: TestClient, *, token: str) -> None:
         key=lambda row: Decimal(str(row[1])),
         reverse=True,
     )
+    # Looked up by name before writing, for the same reason `_declare_bills`
+    # does it: a budget's identity is random now, so nothing in the domain
+    # stops a second `just seed` from declaring the same four again — and
+    # eight overlapping budgets double-count themselves in the Overview.
+    # Re-runnability used to be free here, back when a cap *was* its category.
+    declared = {
+        str(row["name"])
+        for row in _expect(
+            client.get(
+                "/financial/budgets",
+                params={"timezone": "America/Bogota"},
+                headers=headers,
+            ),
+            status.HTTP_200_OK,
+        ).json()["budgets"]
+    }
+
+    # The names the app shows. A budget carries its own name now, and seeding
+    # «restaurants» where every other screen says «Restaurantes» makes the
+    # local stack teach a spelling the app never uses.
+    vocabulary = {
+        str(row["value"]): str(row["label"])
+        for row in _expect(
+            client.get("/merchants/categories", headers=headers),
+            status.HTTP_200_OK,
+        ).json()["categories"]
+    }
     capped = 0
 
     for (category, outgoing, currency), (ratio, warn_at) in zip(
@@ -1355,27 +1410,60 @@ def _cap_categories(client: TestClient, *, token: str) -> None:
         strict=False,
     ):
         limit = (Decimal(str(outgoing)) * Decimal(str(ratio))).quantize(Decimal(1))
+        name = SEED_BUDGET_NAMES.get(
+            category,
+            vocabulary.get(category, category),
+        )[:40]
 
-        if limit <= 0:
+        if limit <= 0 or name in declared:
             continue
 
         _expect(
-            client.put(
+            client.post(
                 "/financial/budgets",
                 json={
-                    "category": category,
+                    "name": name,
                     "limit": str(limit),
                     "currency": currency,
+                    "categories": [category],
+                    "accounts": [],
+                    "icon": "",
                     "month": None,
                     "warn_at": warn_at,
                 },
                 headers=headers,
             ),
-            status.HTTP_200_OK,
+            status.HTTP_201_CREATED,
         )
         capped += 1
 
-    print(f"  topes     {capped} categories capped")
+    # And one over the whole month, which is the budget somebody declares
+    # before they have looked at a single category — and the only kind that
+    # could ever be judged at write time. A local stack that never has one is
+    # a local stack where that case is only ever seen in a test.
+    whole = sum((Decimal(str(row[1])) for row in spent), Decimal(0))
+
+    if whole > 0 and "Todo el mes" not in declared:
+        _expect(
+            client.post(
+                "/financial/budgets",
+                json={
+                    "name": "Todo el mes",
+                    "limit": str((whole * Decimal("1.2")).quantize(Decimal(1))),
+                    "currency": spent[0][2],
+                    "categories": [],
+                    "accounts": [],
+                    "icon": "",
+                    "month": None,
+                    "warn_at": 85,
+                },
+                headers=headers,
+            ),
+            status.HTTP_201_CREATED,
+        )
+        capped += 1
+
+    print(f"  topes     {capped} budgets declared")
 
 
 def _this_months_window() -> tuple[int, int]:

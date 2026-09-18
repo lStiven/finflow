@@ -1389,7 +1389,7 @@ way out, and still stores nothing.
   re-runnable without checking anything, because the charge's id makes the
   second write DynamoDB's problem.
 
-### Spending caps by category (2026-09-18)
+### Spending budgets (2026-09-18)
 
 - **The Telegram alert at 80 % is deferred, and not for the reason the plan
   gave** (2026-09-18). The build plan had it waiting on E1, the notification
@@ -1411,7 +1411,7 @@ way out, and still stores nothing.
   accrual blocked: a way to walk every user from a scheduled trigger.
 
 - **The crossing is derived, never stored and never published** (2026-09-18).
-  Following from the above, `CategoryBudget` records no domain event and there
+  Following from the above, `Budget` records no domain event and there
   is no `BudgetThresholdCrossed` anywhere. Considered and rejected: recording
   the event now and leaving it unpublished for later, which is how a dead code
   path gets mistaken for a working one. The state is computed in
@@ -1420,18 +1420,44 @@ way out, and still stores nothing.
   the copy that survives somebody editing the movement underneath it. Whoever
   builds the alert will need an announced-once marker at that point, and *not
   before*: without a trigger there is nothing to make idempotent.
+  **Revised 2026-09-18:** the scope rework opened one door the entry above
+  closes for everything else. A budget that watches *every* category needs no
+  category to be judged, so that kind — and only that kind — can be evaluated
+  on the write path, without the user walk. The category-scoped ones still
+  wait for it.
 
-- **A cap is two rows, not one row with an override** (2026-09-18). A category
-  can carry a recurring cap (`BUDGET#EVERY#<cat>`) and a cap for one month
-  (`BUDGET#<YYYY-MM>#<cat>`), and the month's own shadows the recurring one
-  while it lasts. Considered and rejected: one row with an optional per-month
-  exception inside it, which is fewer rows and makes "stop treating December
-  specially" a partial update of a record two writers can disagree about.
-  Separate rows make dropping the exception a delete that leaves the ordinary
-  ceiling untouched — the thing somebody actually wants — and they are why the
-  month comes *before* the category in the sort key: `_query_prefix` can only
-  do `begins_with`, so a month is two bounded queries rather than a read of
-  every cap ever declared.
+- **A budget is a scope with a generated id, and that reverses what came
+  first** (2026-09-18, revised the same day). The first version had no
+  generated id: a cap *was* its category and its month
+  (`BUDGET#<month>#<cat>`), on the argument that two caps on the same pair are
+  one cap declared twice, and a month's own cap **shadowed** the recurring one.
+  Both were rewritten when budgets grew a scope. The argument only held while a
+  cap watched exactly one category — once «Salidas» (restaurants, bars,
+  delivery) and «Restaurantes» can both exist, overlapping deliberately, two
+  budgets over restaurants are two budgets, and there is no honest answer to
+  which of two partly-overlapping scopes hides the other. So: `BUDGET#<id>`,
+  every budget that governs a month applies, and December's exception is read
+  *beside* the usual ceiling rather than instead of it. What the reversal
+  bought is `amend`: while the identity was the content, correcting a cap
+  meant writing a second row under a new identity and leaving the first
+  unreachable — a save that looked like it had done nothing. What it cost is
+  the two bounded `begins_with` queries the old sort key allowed; the read is
+  now one query over the whole `BUDGET#` prefix, which is fine because budgets
+  are a handful of rows somebody typed rather than a log that grows on its own.
+  **No migration was needed, and only by luck**: the endpoints had never been
+  deployed, so not one `BUDGET#` row existed outside a local emulator.
+
+- **An empty scope means *every* one, and is stored as an absent attribute**
+  (2026-09-18). `BudgetScope` holds categories and accounts, and empty means
+  all of them on both axes. Considered and rejected: a boolean beside each set
+  (`all_categories` next to `categories`), which stores two ways to say the
+  same thing and lets them contradict each other. The storage side is forced
+  rather than chosen — DynamoDB has no empty string set, so «todo el mes»
+  cannot be written as `SS: []` and the attribute is simply omitted; the
+  absence reads back as exactly what the domain means. A sentinel member like
+  `ALL` was rejected because it is a category value somebody could also type.
+  This is checked against the real table, not a double: an in-memory fake
+  holds an empty set happily and the client refuses to write one.
 
 - **The screen is its own, against the build plan** (2026-09-18). The plan
   said the traffic light belonged "inside the breakdown by category the

@@ -13,10 +13,12 @@ import type { BudgetProgress, BudgetTotal } from "@/api/queries";
 import {
   captionOf,
   hasCaps,
+  isNarrowed,
   leftOf,
   monthLabel,
   overBy,
   percentUsed,
+  scopeLabel,
   shiftMonth,
   tallyOf,
   usedShare,
@@ -26,7 +28,15 @@ import {
 
 function budget(overrides: Partial<BudgetProgress> = {}): BudgetProgress {
   return {
-    category: "restaurants",
+    id: "11111111-1111-1111-1111-111111111111",
+    name: "Restaurantes",
+    icon: "",
+    scope: {
+      categories: ["restaurants"],
+      accounts: [],
+      total: false,
+      every_account: true,
+    },
     currency: "COP",
     limit: "600000",
     spent: "150000",
@@ -36,6 +46,7 @@ function budget(overrides: Partial<BudgetProgress> = {}): BudgetProgress {
     month: null,
     recurring: true,
     retired: false,
+    missing: [],
     ...overrides,
   };
 }
@@ -165,5 +176,72 @@ describe("el mes", () => {
   it("escribe el mes siempre con dos dígitos", () => {
     expect(shiftMonth("2026-08", 1)).toBe("2026-09");
     expect(shiftMonth("2025-12", 1)).toBe("2026-01");
+  });
+});
+
+describe("lo que un tope vigila", () => {
+  const labels = { restaurants: "Restaurantes", bars: "Bares" };
+
+  it("sin categorías dice que vigila todo el mes", () => {
+    const scope = {
+      categories: [],
+      accounts: [],
+      total: true,
+      every_account: true,
+    };
+
+    expect(scopeLabel(scope, labels)).toBe("Todo el mes");
+  });
+
+  it("nunca devuelve una cadena vacía", () => {
+    const scope = {
+      categories: [],
+      accounts: [],
+      total: true,
+      every_account: true,
+    };
+
+    expect(scopeLabel(scope, {})).not.toBe("");
+  });
+
+  it("junta varias categorías con sus nombres", () => {
+    const scope = {
+      categories: ["restaurants", "bars"],
+      accounts: [],
+      total: false,
+      every_account: true,
+    };
+
+    expect(scopeLabel(scope, labels)).toBe("Restaurantes · Bares");
+  });
+
+  it("una categoría sin nombre cae en su propio valor en vez de desaparecer", () => {
+    const scope = {
+      categories: ["restaurants", "custom:gatos"],
+      accounts: [],
+      total: false,
+      every_account: true,
+    };
+
+    expect(scopeLabel(scope, labels)).toBe("Restaurantes · custom:gatos");
+  });
+
+  it("sabe cuándo está limitado a unas cuentas", () => {
+    expect(
+      isNarrowed({
+        categories: [],
+        accounts: ["22222222-2222-2222-2222-222222222222"],
+        total: true,
+        every_account: false,
+      }),
+    ).toBe(true);
+    expect(
+      isNarrowed({
+        categories: [],
+        accounts: [],
+        total: true,
+        every_account: true,
+      }),
+    ).toBe(false);
   });
 });

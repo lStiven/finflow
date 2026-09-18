@@ -25,9 +25,12 @@
  *    against what it was computed from proves only that the server can
  *    subtract.
  * 4. **Spending moves the bar, and by exactly what was spent.**
- * 5. **This month's cap shadows the recurring one**, and dropping the exception
- *    leaves the recurring cap standing. Two rows, and the screen has to read
- *    the right one.
+ * 5. **A budget for one month is read beside the recurring one**, not instead
+ *    of it: there is no shadowing any more, because two scopes may overlap on
+ *    purpose and there is no honest answer to which hides which.
+ * 6. **A budget over everything counts every category**, including spending no
+ *    merchant owns yet — the kind that needs no category and is therefore the
+ *    only kind an alert could ever reach.
  *
  * Exits non-zero on the first mismatch. It cleans up after itself — the caps
  * and the movement it creates are removed at the end, including when an
@@ -52,6 +55,9 @@ const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de v
  */
 const CATEGORY = "education";
 const CATEGORY_LABEL = "Educación";
+/** What this suite names its budgets, so cleanup can find its own and no others. */
+const NAME = "E2E Educación";
+const WHOLE_NAME = "E2E Todo el mes";
 const LIMIT = "400.000";
 const LIMIT_RAW = "400000";
 /** Unmistakable in a seeded database, and never a real merchant's name. */
@@ -172,6 +178,24 @@ async function untouchable(call) {
   };
 }
 
+/**
+ * Remove every budget this suite declared, and only those.
+ *
+ * By name, never «all of them»: `just seed` declares its own and a sweep that
+ * took those too would leave the local stack emptier after every run — the
+ * next person to open the screen would find it bare and think the feature
+ * broke.
+ */
+async function dropOurs(call) {
+  const view = await call("/financial/budgets?timezone=America/Bogota");
+
+  for (const budget of view.budgets ?? []) {
+    if (!budget.name.startsWith(NAME) && budget.name !== WHOLE_NAME) continue;
+
+    await call(`/financial/budgets/${budget.id}`, { method: "DELETE" });
+  }
+}
+
 /** What the ledger says went out of one category this month, in its own words. */
 async function spentOn(call, category, currency = "COP") {
   const summary = await call(
@@ -277,12 +301,10 @@ async function main() {
     call = client(token);
     await dismissOnboarding(page);
 
-    // Caps left behind by an earlier run would make the first assertion pass
-    // for the wrong reason.
-    await call(`/financial/budgets/${CATEGORY}`, { method: "DELETE" });
-    await call(`/financial/budgets/${CATEGORY}?month=${thisMonth()}`, {
-      method: "DELETE",
-    });
+    // Budgets left behind by an earlier run would make the first assertion
+    // pass for the wrong reason. By name, and only this suite's own: the seed
+    // declares its own budgets and they are not ours to remove.
+    await dropOurs(call);
 
     // ------------------------------------ an uncapped category is 200, not 404
     // A month far in the future, so the only caps in it are the recurring ones
@@ -307,7 +329,7 @@ async function main() {
     );
     check(
       "y sin el tope que este suite aún no ha puesto",
-      farBody.budgets.some((budget) => budget.category === CATEGORY),
+      farBody.budgets.some((budget) => budget.name === NAME),
       false,
     );
 
@@ -317,14 +339,15 @@ async function main() {
 
     await page.goto(`${WEB}/presupuestos`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Poner un tope" }).click();
-    await page.getByLabel("Categoría").selectOption(CATEGORY);
+    await page.getByRole("textbox", { name: "Nombre", exact: true }).fill(NAME);
     // By role and exact: `getByLabel("Tope")` also matches every card's
-    // «Cambiar el tope de X» and «Quitar el tope de X», which are accessible
-    // names and not fields.
+    // «Cambiar X» and «Quitar X», which are accessible names and not fields.
     await page.getByRole("textbox", { name: "Tope", exact: true }).fill(LIMIT);
+    // The scope is a row of toggles now, and none pressed means «todo el mes».
+    await page.getByRole("button", { name: CATEGORY_LABEL, exact: true }).click();
     await page.getByRole("button", { name: "Poner el tope" }).click();
 
-    const card = page.getByText(CATEGORY_LABEL, { exact: true });
+    const card = page.getByText(NAME, { exact: true });
     await card.waitFor({ timeout: 10_000 });
     check(
       "poner un tope desde la pantalla lo deja a la vista",
@@ -333,7 +356,10 @@ async function main() {
     );
 
     const stored = await call("/financial/budgets?timezone=America/Bogota");
-    const mine = stored.budgets.find((budget) => budget.category === CATEGORY);
+    const mine = stored.budgets.find((budget) => budget.name === NAME);
+    check("vigilando exactamente la categoría que se marcó", mine?.scope.categories, [
+      CATEGORY,
+    ]);
     check("el servidor guardó el tope que se tecleó", mine?.limit, LIMIT_RAW);
     check(
       "y se repite cada mes, que es lo que el interruptor decía",
@@ -366,7 +392,7 @@ async function main() {
     spentId = entered.id;
 
     const after = await call("/financial/budgets?timezone=America/Bogota");
-    const spent = after.budgets.find((budget) => budget.category === CATEGORY);
+    const spent = after.budgets.find((budget) => budget.name === NAME);
     check(
       "gastar sube lo gastado por exactamente lo gastado",
       Number(spent?.spent),
@@ -386,47 +412,79 @@ async function main() {
       true,
     );
 
-    // ------------------------------------- this month's cap shadows the other
-    await call("/financial/budgets", {
-      method: "PUT",
+    // ------------- a month's own budget is read beside the recurring one
+    // No shadowing: both govern this month, so both come back. Overlapping is
+    // the feature, not a collision to resolve.
+    const exception = await call("/financial/budgets", {
+      method: "POST",
       body: JSON.stringify({
-        category: CATEGORY,
+        name: `${NAME} diciembre`,
         limit: "1000000",
         currency: "COP",
+        categories: [CATEGORY],
+        accounts: [],
+        icon: "",
         month: thisMonth(),
         warn_at: 80,
       }),
     });
 
-    const shadowed = await call("/financial/budgets?timezone=America/Bogota");
-    const exception = shadowed.budgets.filter((budget) => budget.category === CATEGORY);
-    check("la excepción del mes tapa al tope de siempre", exception.length, 1);
-    check("y es la que la pantalla lee", exception[0]?.limit, "1000000");
-    check("con el gasto reasignado, vuelve a verde", exception[0]?.state, "ok");
-
-    await page.reload({ waitUntil: "networkidle" });
+    const both = await call("/financial/budgets?timezone=America/Bogota");
+    const ours = both.budgets.filter((budget) => budget.name.startsWith(NAME));
+    check("el tope del mes se lee junto al de siempre, no en su lugar", ours.length, 2);
     check(
-      "la pantalla dice que ese tope es solo de este mes",
-      await page.getByText("Solo este mes").isVisible(),
+      "y los dos cuentan el mismo gasto, cada uno contra su propio techo",
+      ours.map((budget) => budget.spent),
+      [String(Number(SPENT_AMOUNT)), String(Number(SPENT_AMOUNT))],
+    );
+
+    // ---------------------------- dropping one leaves the other untouched
+    await call(`/financial/budgets/${exception.id}`, { method: "DELETE" });
+
+    const back = await call("/financial/budgets?timezone=America/Bogota");
+    const recurring = back.budgets.find((budget) => budget.name === NAME);
+    check(
+      "quitar uno deja el otro donde estaba",
+      [recurring?.limit, recurring?.recurring],
+      [LIMIT_RAW, true],
+    );
+
+    // ------------------------------- a budget over everything counts it all
+    const whole = await call("/financial/budgets", {
+      method: "POST",
+      body: JSON.stringify({
+        name: WHOLE_NAME,
+        limit: "999999999",
+        currency: "COP",
+        categories: [],
+        accounts: [],
+        icon: "",
+        month: null,
+        warn_at: 80,
+      }),
+    });
+    check("un tope sin categorías se declara igual", Boolean(whole.id), true);
+    check("y se reporta como total", whole.scope.total, true);
+
+    const everything = await call("/financial/budgets?timezone=America/Bogota");
+    const total = everything.budgets.find((budget) => budget.name === WHOLE_NAME);
+    check(
+      "contando todo lo que salió este mes, no solo una categoría",
+      Number(total?.spent) >= Number(SPENT_AMOUNT),
       true,
     );
 
-    // ------------------------- dropping the exception leaves the other alone
-    await call(`/financial/budgets/${CATEGORY}?month=${thisMonth()}`, {
-      method: "DELETE",
-    });
-
-    const back = await call("/financial/budgets?timezone=America/Bogota");
-    const recurring = back.budgets.find((budget) => budget.category === CATEGORY);
+    await page.reload({ waitUntil: "networkidle" });
     check(
-      "quitar la excepción deja el tope de siempre donde estaba",
-      [recurring?.limit, recurring?.recurring],
-      [LIMIT_RAW, true],
+      "y la pantalla lo dice en vez de dejar el subtítulo en blanco",
+      await page.getByText("Todo el mes", { exact: true }).first().isVisible(),
+      true,
     );
 
     // --------------------------------------------- and none of it moved money
     await call(`/financial/transactions/${spentId}`, { method: "DELETE" });
     spentId = null;
+    await dropOurs(call);
     check(
       "borrado el movimiento de prueba, todo está como al principio",
       await untouchable(call),
@@ -441,10 +499,7 @@ async function main() {
     // Whatever happened, the seeded database goes back as it was.
     if (call) {
       try {
-        await call(`/financial/budgets/${CATEGORY}`, { method: "DELETE" });
-        await call(`/financial/budgets/${CATEGORY}?month=${thisMonth()}`, {
-          method: "DELETE",
-        });
+        await dropOurs(call);
 
         if (spentId) {
           await call(`/financial/transactions/${spentId}`, { method: "DELETE" });

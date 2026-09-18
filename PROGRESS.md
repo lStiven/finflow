@@ -10,7 +10,8 @@ arrancar: se busca dentro cuando hay una duda concreta).
 Última verificación contra el código y contra AWS: **2026-09-04**.
 La verificación local de los avisos por Telegram: **2026-09-14**.
 Los presupuestos se comprobaron contra la pila local el **2026-09-18**, con
-`just e2e-budgets` y en el navegador.
+`just e2e-budgets`, `just check-all` y en el navegador, después de rehacerlos
+sobre el modelo de alcance.
 
 ## Qué hace hoy la aplicación
 
@@ -101,22 +102,27 @@ Todo el backend de la versión 1 está terminado y probado:
   son cosas distintas. La nómina que el detector ya reconoció se ofrece para
   rellenar el ingreso de un toque.
 
-- **Y se le puede poner tope a una categoría.** En `/presupuestos` se dice
-  «restaurantes, $600.000» y la pantalla enseña una barra contra lo que
-  llevas gastado: verde, ámbar al 80 % —el punto lo eliges tú— y rojo al
-  pasarlo. **Poner un tope no mueve ningún saldo y no bloquea nada**: informa,
-  y decides tú. Cada tope se repite todos los meses o vale solo para uno
-  concreto, y el del mes **tapa** al de siempre mientras dura, así que «este
-  diciembre sí gasto más» no se come el tope normal. Un tope contra una
-  categoría que después se borró no rompe la pantalla: sale marcado y se
-  puede quitar. Y donde más se te va sin tope, la pantalla lo ofrece. En
-  Resumen queda un resumen —«3 de 5 en verde»— debajo de las cuentas.
+- **Y se le puede poner tope a lo que quieras.** En `/presupuestos` se declara
+  un tope con su nombre y lo que vigila: **todo el mes** (sin elegir ninguna
+  categoría, que es el más fácil de empezar), una categoría, o varias juntas
+  —«Salidas» son restaurantes y bares y domicilios—. La pantalla enseña una
+  barra contra lo que llevas gastado: verde, ámbar al 80 % —el punto lo eliges
+  tú— y rojo al pasarlo. **Poner un tope no mueve ningún saldo y no bloquea
+  nada**: informa, y decides tú. Cada tope se repite todos los meses o vale
+  solo para uno concreto, y los dos **conviven**: el de diciembre se lee al
+  lado del de siempre, no en su lugar, porque dos topes pueden solaparse a
+  propósito. Un tope se corrige entero —nombre, techo, alcance, aviso— sin
+  perder su identidad. Un tope cuyas categorías se borraron después no rompe
+  la pantalla: sale marcado y se puede quitar, y si solo desapareció una de
+  varias lo dice sin retirar el tope. Y donde más se te va sin tope, la
+  pantalla lo ofrece. En Resumen queda un resumen —«2 de 4 en verde»— debajo
+  de las cuentas.
 
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 78 operaciones de API en cinco contextos, seis procesos en
-la nube, 2103 pruebas de Python y 404 del frontend, todas en verde.
+**Estado técnico:** 79 operaciones de API en cinco contextos, seis procesos en
+la nube, 2136 pruebas de Python y 409 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -148,8 +154,8 @@ Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, per
 
 | | Repositorio | Publicado |
 |---|---|---|
-| API producción | 78 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
-| API desarrollo | 78 operaciones | 43 — igual que producción |
+| API producción | 79 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
+| API desarrollo | 79 operaciones | 43 — igual que producción |
 | Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas, presupuestos | ninguna |
 
 Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
@@ -211,6 +217,14 @@ AWS (ver Trabas).
    E1**, como el plan creía, sino del punto 3 de esta misma lista: un
    movimiento no tiene categoría cuando se registra, así que anunciar que se
    cruzó un tope necesita el recorrido de usuarios que hoy no existe.
+   **El cuarto (E4) se rehízo el 2026-09-18**: un presupuesto pasó de ser una
+   categoría a ser un *alcance* con id propio, siguiendo el modelo de
+   TimelyBills. Quedan tres iteraciones de eso: periodos libres (semanal,
+   anual, un rango para un viaje), arrastre del sobrante al mes siguiente, y
+   las alertas. La de alertas tiene un atajo que este archivo no había visto:
+   **un tope sobre todo el mes no necesita categoría**, así que ese sí se
+   puede evaluar al escribir el movimiento, sin el recorrido de usuarios del
+   punto 3. Los de categoría siguen esperándolo.
    El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
    se parecen— está en el artefacto, no aquí.
    **Al desplegar esto, `alerts` va primero:** Financial ya publica
@@ -267,6 +281,29 @@ AWS (ver Trabas).
   resto al desplegar, no adivinando.
 
 ## Últimos trabajos terminados
+- 2026-09-18 — **Un presupuesto ya no es una categoría: es un alcance.**
+  Rehecho el módulo entero sobre el modelo de TimelyBills, primera de cuatro
+  iteraciones. Un tope tiene **id propio, nombre e icono**, y vigila lo que se
+  le diga: todo el mes sin elegir nada, una categoría o hasta veinte, y
+  opcionalmente solo unas cuentas. Vacío significa *todas* en los dos ejes —un
+  campo en vez de dos banderas que pueden contradecirse—. Eso **revierte a
+  propósito** la identidad anterior («dos topes sobre la misma categoría son
+  uno declarado dos veces»), que solo se sostenía mientras un tope vigilaba una
+  categoría: «Salidas» y «Restaurantes» se solapan porque alguien lo quiso. Con
+  ella se cae el **tapado**: el tope de diciembre ya no esconde al de siempre,
+  los dos gobiernan el mes y los dos se muestran. A cambio aparece lo que antes
+  era imposible: **corregir un tope entero** sin perder su fila. El endpoint
+  pasó de `PUT /budgets` a `POST /budgets` + `PUT|DELETE /budgets/{id}`, y no
+  hizo falta migrar nada porque los presupuestos **nunca se publicaron** — el
+  atraso de despliegue que este archivo llama el problema más grande es lo
+  único que abarató esto. La prueba de integración se ganó el sueldo: cazó que
+  `AccountId` no define `__str__`, así que el alcance por cuenta se guardaba
+  como el `repr` del dataclass; un doble en memoria no lo ve nunca. Y mirar la
+  pantalla encontró lo que ningún test vio: la tarjeta «Todo el mes» repetía el
+  mismo texto como título y subtítulo. Lo que **no** cambió: un tope sigue sin
+  mover un peso, y lo comprueba el mismo e2e. Faltan las otras tres
+  iteraciones —periodos libres, rollover, y alertas con nombre e icono por
+  cuenta—.
 - 2026-09-18 — **Ya se le puede poner tope a una categoría.**
   Cuarto feature (E4), en su propia pantalla `/presupuestos` y no dentro de
   Resumen: el plan pedía el semáforo en el desglose de Resumen, y esa pantalla
@@ -336,20 +373,3 @@ AWS (ver Trabas).
   pagar». Comprobado de punta a punta contra la pila real: el e2e confirma por
   el navegador, comprueba que la cuenta se movió por exactamente lo confirmado,
   y manda una segunda confirmación por la API para ver que no se mueve nada.
-- 2026-09-14 — **Se pueden declarar facturas y ver lo que viene.**
-  Entrega A del segundo feature: un gasto domiciliado que el banco ya no
-  anuncia por correo se declara, y la app lo proyecta sobre el calendario con
-  seis cadencias —la mensual conserva el día del ancla, así que una del 31 pide
-  prestado el fin de febrero y en marzo vuelve al 31—. **No escribe nada en el
-  ledger**, y hay una prueba de integración que lo comprueba contra la tabla
-  real. Dos cifras por moneda y nunca una: lo que cuesta el mes y lo que aún no
-  vence. Una factura cuya cuenta se cerró se lee congelada, derivado de la
-  cuenta y no guardado, así que reabrirla la descongela sola. La pantalla
-  `/facturas` ya está —la barra del mes arriba, un mosaico de fichas donde el
-  icono y el color salen de la categoría de cada factura, y los cobros en una
-  línea de tiempo con el día de hoy marcado—, y con ella una
-  prueba de punta a punta que el proyecto no tenía (`just e2e-bills`): conduce
-  el navegador, y después de cada paso compara lo que la pantalla enseña con lo
-  que el servidor guardó. Lee saldos y patrimonio antes y después, y no pasa si
-  declarar movió alguno. `just seed` deja seis facturas declaradas con su
-  categoría, así que el entorno local arranca con el flujo completo.

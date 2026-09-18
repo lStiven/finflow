@@ -692,7 +692,7 @@ export interface paths {
         };
         /**
          * Read Budgets
-         * @description Every cap that governs a month, and what the ledger did to it.
+         * @description Every budget that governs a month, and what the ledger did to each.
          *
          *     200 with empty lists when nothing is capped, never a 404: unlike the
          *     monthly plan, an empty list of ceilings is a real and ordinary state and
@@ -703,33 +703,34 @@ export interface paths {
          *     the last evening of the previous one, and being wrong on the 1st is being
          *     wrong on the day this is most likely to be looked at.
          *
-         *     A cap whose category its owner has since deleted comes back `retired`
+         *     A budget whose categories its owner has since deleted comes back `retired`
          *     rather than taking the screen down with it. Merchant publishes nothing on a
          *     delete that this context could listen for, so degrading on read is the only
          *     place it can be handled.
          */
         get: operations["read_budgets_financial_budgets_get"];
+        put?: never;
         /**
-         * Set Budget
-         * @description Put a ceiling on a category, or restate the one that is there.
+         * Declare Budget
+         * @description Put a ceiling on part of somebody's spending.
          *
-         *     A `PUT` and not a `PATCH`, deliberately: a cap and the point it warns at
-         *     are one statement, and half an update leaves a warning standing against a
-         *     ceiling it was never set against. Declaring the same category and month
-         *     twice leaves one cap, because two caps on that pair are not two caps.
+         *     A `POST` and not a `PUT`, which is this iteration's change and not a
+         *     stylistic one: a budget has a generated id now, so declaring the same
+         *     scope twice creates two budgets. That is the point — «Salidas» and
+         *     «Restaurantes» overlap because somebody meant them to — and a `PUT` with
+         *     no id in the path could not say it.
          *
-         *     Nothing is recorded as spent. This writes a number, a currency and a
-         *     month, and no balance moves.
+         *     Nothing is recorded as spent. This writes a number, a scope and a month,
+         *     and no balance moves.
          */
-        put: operations["set_budget_financial_budgets_put"];
-        post?: never;
+        post: operations["declare_budget_financial_budgets_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/financial/budgets/{category}": {
+    "/financial/budgets/{budget_id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -737,27 +738,30 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        /**
+         * Amend Budget
+         * @description Restate one budget whole.
+         *
+         *     Every field, never a subset, which is why this is a `PUT`: a ceiling and
+         *     the point it warns at are one statement, and half an update leaves a
+         *     warning standing against a ceiling it was never set against.
+         *
+         *     404 when it is not this person's budget, which is the same answer as one
+         *     that does not exist — a uuid is something somebody could paste, and a
+         *     different code here would confirm that somebody else's budget is real.
+         */
+        put: operations["amend_budget_financial_budgets__budget_id__put"];
         post?: never;
         /**
          * Forget Budget
-         * @description Drop one cap. The card disappears and nothing else changes.
-         *
-         *     **Not validated against the vocabulary**, unlike the `PUT`, and that is the
-         *     point rather than an omission: a cap whose category was deleted is exactly
-         *     the one somebody most needs to be able to remove, and refusing it because
-         *     the category no longer exists would leave a row nothing could reach.
-         *
-         *     `month` picks which of the two possible caps: absent drops the recurring
-         *     one and leaves this month's exception, and naming a month drops the
-         *     exception and leaves the recurring cap exactly where it was.
+         * @description Drop one budget. The card disappears and nothing else changes.
          *
          *     Silent when there was nothing to drop, like every other undo here: a 404 on
          *     the second press of a button somebody is unsure about is a worse answer
-         *     than nothing. A cap never wrote anything, so there is nothing left behind
-         *     to explain.
+         *     than nothing. A budget never wrote anything, so there is nothing left
+         *     behind to explain.
          */
-        delete: operations["forget_budget_financial_budgets__category__delete"];
+        delete: operations["forget_budget_financial_budgets__budget_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2056,28 +2060,78 @@ export interface components {
             until: string;
         };
         /**
-         * BudgetProgressResponse
-         * @description One cap and what the month has done to it.
+         * BudgetPayload
+         * @description A ceiling, what it watches, and which months it governs.
          *
-         *     Flat rather than a cap nested inside a reading, so a client cannot render
-         *     the ceiling and the state out of step. `state` is the enum itself, not its
-         *     string, so the generated TypeScript is a union a screen cannot invent a
-         *     member of.
+         *     **Empty lists mean every one**, on both axes, which is the domain's rule
+         *     and not a convenience here: `categories: []` is «todo el mes», and that is
+         *     the budget somebody declares first, before they have looked at a single
+         *     category.
+         *
+         *     `month` absent governs every month, which is the ordinary answer: a ceiling
+         *     that has to be re-declared every 1st is one that is gone by March. A key
+         *     like `2026-09` governs that month only, **beside** the recurring ones
+         *     rather than instead of them — there is no shadowing any more, because
+         *     scopes that overlap on purpose give no honest answer about which hides
+         *     which.
+         */
+        BudgetPayload: {
+            /** Accounts */
+            accounts?: string[];
+            /** Categories */
+            categories?: string[];
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /**
+             * Icon
+             * @default
+             */
+            icon: string;
+            /** Limit */
+            limit: number | string;
+            /** Month */
+            month?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Warn At
+             * @default 80
+             */
+            warn_at: number;
+        };
+        /**
+         * BudgetProgressResponse
+         * @description One budget and what the month has done to it.
+         *
+         *     Flat rather than a budget nested inside a reading, so a client cannot
+         *     render the ceiling and the state out of step. `state` is the enum itself,
+         *     not its string, so the generated TypeScript is a union a screen cannot
+         *     invent a member of.
          */
         BudgetProgressResponse: {
-            /** Category */
-            category: string;
             currency: components["schemas"]["Currency"];
+            /** Icon */
+            icon: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Limit */
             limit: string;
+            /** Missing */
+            missing: string[];
             /** Month */
             month: string | null;
+            /** Name */
+            name: string;
             /** Recurring */
             recurring: boolean;
             /** Remaining */
             remaining: string;
             /** Retired */
             retired: boolean;
+            scope: components["schemas"]["BudgetScopeResponse"];
             /** Spent */
             spent: string;
             state: components["schemas"]["BudgetState"];
@@ -2086,27 +2140,52 @@ export interface components {
         };
         /** BudgetResponse */
         BudgetResponse: {
-            /** Category */
-            category: string;
             currency: components["schemas"]["Currency"];
+            /** Icon */
+            icon: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Limit */
             limit: string;
             /** Month */
             month: string | null;
+            /** Name */
+            name: string;
             /** Recurring */
             recurring: boolean;
+            scope: components["schemas"]["BudgetScopeResponse"];
             /** Updated At */
             updated_at: number;
             /** Warn At */
             warn_at: number;
         };
         /**
+         * BudgetScopeResponse
+         * @description What a budget watches, as the screen needs to draw it.
+         *
+         *     `total` is sent rather than left to the client to infer from an empty list.
+         *     Two clients inferring the same thing is two places for it to be inferred
+         *     differently, and this one decides whether a card says «todo el mes».
+         */
+        BudgetScopeResponse: {
+            /** Accounts */
+            accounts: string[];
+            /** Categories */
+            categories: string[];
+            /** Every Account */
+            every_account: boolean;
+            /** Total */
+            total: boolean;
+        };
+        /**
          * BudgetState
-         * @description How a month is doing against one cap.
+         * @description How a period is doing against one cap.
          *
          *     The three the screen draws, decided here and not there, so the card on the
-         *     dashboard and the row on the budgets screen can never disagree about the
-         *     same category.
+         *     dashboard and the row on the budgets screen can never disagree.
          *
          *     Explicit string values: they cross the HTTP boundary as the enum itself,
          *     so reordering the members must not change what a client reads.
@@ -2115,11 +2194,14 @@ export interface components {
         BudgetState: "ok" | "warning" | "over";
         /**
          * BudgetTotalsResponse
-         * @description Every cap of one currency, added up, and how the three states split.
+         * @description Every budget of one currency, added up, and how the three states split.
          *
          *     One entry per currency and never summed across them: there is no exchange
          *     rate anywhere in this app. The counts are what a summary says out loud
          *     («3 de 5 en verde»), computed once so two screens cannot tally differently.
+         *
+         *     **The added-up ceiling is not what the month allows**: budgets may overlap,
+         *     so two of them can count the same peso.
          */
         BudgetTotalsResponse: {
             currency: components["schemas"]["Currency"];
@@ -3391,30 +3473,6 @@ export interface components {
          */
         SeriesState: "active" | "late" | "dormant";
         /**
-         * SetBudgetPayload
-         * @description A ceiling, the category it is on, and which months it governs.
-         *
-         *     `month` absent caps every month, which is the ordinary answer: a cap that
-         *     has to be re-declared every 1st is a cap that is gone by March. A key like
-         *     `2026-09` caps that month only and shadows the recurring one while it
-         *     lasts — December, when the rules are different.
-         */
-        SetBudgetPayload: {
-            /** Category */
-            category: string;
-            /** @default COP */
-            currency: components["schemas"]["Currency"];
-            /** Limit */
-            limit: number | string;
-            /** Month */
-            month?: string | null;
-            /**
-             * Warn At
-             * @default 80
-             */
-            warn_at: number;
-        };
-        /**
          * SetCreditLimitPayload
          * @description State or restate what a card may owe. `null` clears it.
          */
@@ -3764,7 +3822,7 @@ export interface components {
         };
         /**
          * UncappedCategoryResponse
-         * @description Somewhere a cap is missing, ranked by what actually goes out there.
+         * @description Somewhere a budget is missing, ranked by what actually goes out there.
          *
          *     Offered, never created — the same rule the recurring detector follows. The
          *     figure lands in an editable field and nothing here declares anything.
@@ -4990,7 +5048,7 @@ export interface operations {
             };
         };
     };
-    set_budget_financial_budgets_put: {
+    declare_budget_financial_budgets_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -4999,7 +5057,42 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SetBudgetPayload"];
+                "application/json": components["schemas"]["BudgetPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_budget_financial_budgets__budget_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetPayload"];
             };
         };
         responses: {
@@ -5023,14 +5116,12 @@ export interface operations {
             };
         };
     };
-    forget_budget_financial_budgets__category__delete: {
+    forget_budget_financial_budgets__budget_id__delete: {
         parameters: {
-            query?: {
-                month?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
-                category: string;
+                budget_id: string;
             };
             cookie?: never;
         };

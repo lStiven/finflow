@@ -13,7 +13,12 @@
  * client.
  */
 
-import type { BudgetProgress, BudgetState, BudgetTotal } from "@/api/queries";
+import type {
+  BudgetProgress,
+  BudgetScope,
+  BudgetState,
+  BudgetTotal,
+} from "@/api/queries";
 
 /**
  * How much of a cap is used, from 0 to 1.
@@ -146,4 +151,44 @@ export function shiftMonth(month: string, steps: number): string {
   return `${String(Math.floor(zeroBased / 12)).padStart(4, "0")}-${String(
     (zeroBased % 12) + 1,
   ).padStart(2, "0")}`;
+}
+
+/**
+ * What a budget watches, in the words the card shows under its name.
+ *
+ * Three cases, and the first is the one that matters: an empty scope is «todo
+ * el mes», never an empty string. A card whose subtitle is blank reads as a
+ * budget that watches nothing, which is the opposite of what it means.
+ *
+ * `labels` maps a category value to its name, because half of somebody's
+ * vocabulary is whatever they wrote and only that list knows it. A value with
+ * no label falls back to itself rather than disappearing: a category the
+ * server still reports and this map has not heard of is a real budget, and a
+ * gap in the subtitle would hide it.
+ */
+export function scopeLabel(scope: BudgetScope, labels: Record<string, string>): string {
+  const what = scope.total
+    ? "Todo el mes"
+    : scope.categories.map((value) => labels[value] ?? value).join(" · ");
+
+  // A budget over every category *in one account* is not «todo el mes», and
+  // saying so beside a bar that measures one card is the kind of subtitle that
+  // makes somebody stop believing the bar.
+  if (!isNarrowed(scope)) return what;
+
+  const many =
+    scope.accounts.length === 1 ? "una cuenta" : `${scope.accounts.length} cuentas`;
+
+  return `${what} · ${many}`;
+}
+
+/**
+ * Whether a budget is narrowed to particular accounts.
+ *
+ * Its own helper rather than a check inlined in the card, because the card
+ * draws a badge for it and the budgets screen draws a line: two spellings of
+ * «solo estas cuentas» is how the two end up disagreeing.
+ */
+export function isNarrowed(scope: BudgetScope): boolean {
+  return !scope.every_account;
 }
