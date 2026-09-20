@@ -104,22 +104,32 @@ dirección. Abajo de 1024 px la barra inferior lleva Resumen, Transacciones,
 Cuentas y **Más**, que abre el resto —Reportes, Comercios, Guías, la cuenta y
 cerrar sesión—; de 1024 para arriba, la columna de la izquierda de siempre.
 
-## Lo publicado va atrasado respecto al repositorio
+## Lo publicado, medido el 2026-09-20
 
-Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, pero
-**lo que está en internet es más viejo**:
+Medido contra AWS y contra el `openapi.json` que sirve cada API, no recordado:
 
-| | Repositorio | Publicado |
+| | Operaciones | Estado |
 |---|---|---|
-| API producción | 70 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos y las facturas |
-| API desarrollo | 70 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas | ninguna |
+| Contrato de la rama `dev` | 79 | — |
+| API desarrollo (`finflow-dev`) | 75 | `UPDATE_COMPLETE` 2026-09-15 |
+| API producción (`finflow`) | 70 | `UPDATE_COMPLETE` 2026-09-15 |
+| Web producción (`finflow-apk.pages.dev`) | — | responde 200 |
+| Web desarrollo (`finflow-dev-2tc.pages.dev`) | — | responde 200 |
 
-Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
-verificación de correo y la recuperación de contraseña. Las dos webs
-(`finflow-apk.pages.dev` y `finflow-dev-2tc.pages.dev`) responden, pero su
-paquete es anterior al 2026-09-02: el trabajo de traslados, borrado y créditos
-nunca se publicó en ningún lado.
+El despliegue del 2026-09-15 sí entró: las seis funciones están en pie en
+producción, `AlertsFunction` incluida, así que **el hueco de
+`lambda:PutFunctionConcurrency` está resuelto** y ya no es una traba.
+
+Lo que le falta a producción son las nueve operaciones de lo último: la
+mesada (`/financial/allowance`), los presupuestos (`/financial/budgets`), el
+plan (`/financial/plan`) y las facturas propuestas (`/financial/recurring`).
+Son exactamente los commits que `dev` tiene y esta rama no.
+
+**Publicar la web sí está trabado**, y por el contenedor, no por Cloudflare:
+`wrangler` no tiene credenciales aquí (`wrangler whoami` dice que no), y
+`wrangler login` no puede terminar porque su callback OAuth escucha en
+`localhost:8976` y el DevContainer sólo publica 5173 y 8000. Se resuelve con
+un API token de Cloudflare en `CLOUDFLARE_API_TOKEN`, que no abre navegador.
 
 | | Nombre | Buzón | Revisa cada |
 |---|---|---|---|
@@ -222,14 +232,14 @@ AWS (ver Trabas).
   suscriptores y las alarmas; lo que hoy se comprobó que **no** puede es leer los
   atributos de una suscripción (`sns:GetSubscriptionAttributes`), que es por qué
   `just alerts-prod` mira la lista del tema y no la suscripción. Se descubre el
-  resto al desplegar, no adivinando. El 2026-09-15 salió otro:
-  `lambda:PutFunctionConcurrency`, que producción no tiene y desarrollo sí, así
-  que el mismo despliegue que pasó en dev se fue entero a `ROLLBACK` en prod al
-  crear `AlertsFunction`. Ninguno de los dos usuarios puede leer IAM, ni
-  siquiera sobre sí mismo, así que esto se arregla desde la consola con una
-  identidad administradora. Se comprueba sin desplegar, pidiendo la acción
-  sobre una función que no existe: `ResourceNotFound` es permiso, `AccessDenied`
-  es que falta.
+  resto al desplegar, no adivinando. El 2026-09-15 salió
+  `lambda:PutFunctionConcurrency`, que faltaba en producción y mandó el
+  despliegue entero a `ROLLBACK` al crear `AlertsFunction`; **se concedió, y el
+  2026-09-20 se comprobó que la función está creada y el stack en
+  `UPDATE_COMPLETE`**. Queda la lección, no la traba: un permiso que falta no
+  se ve hasta que CloudFormation llama a esa API a mitad del despliegue. Se
+  comprueba sin desplegar, pidiendo la acción sobre una función que no existe:
+  `ResourceNotFound` es permiso, `AccessDenied` es que falta.
 - **`infra/iam/finflow-deploy-policy.json` no es lo que hay adjunto.** Medido el
   2026-09-15: los dos usuarios pueden `lambda:ListFunctions`, que el archivo no
   concede en ninguna parte, y producción no puede algo que el archivo sí. Es una
@@ -237,6 +247,37 @@ AWS (ver Trabas).
   cuenta.
 
 ## Últimos trabajos terminados
+- 2026-09-21 — **Desplegar sin cambios de backend ya no es un error.**
+  `fail_on_empty_changeset = false` en los dos entornos de
+  `infra/samconfig.toml`. La imagen solo lleva `pyproject.toml`, `uv.lock` y
+  `src/personal_finance`, así que una rama de frontend construye la imagen que
+  ya está desplegada y SAM lo reportaba como avería. Medido: las seis imágenes
+  de esta rama y las que corre producción comparten id `86fb2af2a950`.
+- 2026-09-20 — **`sam build` ya no muere por el ayudante de credenciales.**
+  `deploy-dev` y `deploy-prod` construyen con `DOCKER_CONFIG` propio
+  (`.aws-sam/docker-config`), sin el `credsStore` que la extensión Dev
+  Containers escribe en `~/.docker/config.json`: ese ayudante no implementa
+  `list`, que es lo que el SDK de Docker llama antes de construir, así que
+  `docker build` a mano funcionaba y `sam build` no. Comprobado: las seis
+  imágenes construyen. El error y su explicación quedaron en `docs/deploy.md`,
+  que es donde se busca el texto que escupe.
+- 2026-09-20 — **La barra del teléfono ya dice en qué pantalla estás.** No era
+  un descuido de diseño: el marcado existía y no se veía. El router *concatena*
+  la clase de `activeProps` en vez de fusionarla, así que `text-muted` y
+  `text-accent` acababan las dos en el elemento y ganaba la que Tailwind
+  emitiera después — la muted. Ahora el color apagado va en `inactiveProps`,
+  donde no puede chocar, y la entrada activa lleva además una pastilla teñida
+  detrás del icono, el mismo lenguaje del riel en la forma que cabe abajo. Y
+  **«Más» se enciende por lo que tapa**: cuatro de las siete secciones viven
+  detrás de ese botón, así que estar en Reportes ya no dejaba la barra
+  entera apagada. La regla (`inSheet`) es dato comprobable en
+  `navigation/destinations.ts`, con cinco pruebas.
+- 2026-09-20 — **Dos arreglos de pantalla.** El card del login ya no crece
+  hacia arriba al pasar a «Crear cuenta»: el borde de arriba queda anclado y
+  el campo nuevo aparece debajo de los que ya estaban. Y ningún overlay deja
+  seguir moviendo la página de atrás —la hoja «Más» del teléfono y los dos
+  diálogos de la guía—, con `lib/useScrollLock.ts` como el único sitio donde
+  eso se decide. Comprobado en el navegador a 390 y 1280 px.
 - 2026-09-14 — **Una factura ya se puede pagar, y eso sí es plata.**
   Entrega B del segundo feature. «Pagado» escribe el movimiento por el mismo
   caso de uso que respalda el movimiento a mano, así que el saldo, el comercio,
@@ -253,45 +294,3 @@ AWS (ver Trabas).
   pagar». Comprobado de punta a punta contra la pila real: el e2e confirma por
   el navegador, comprueba que la cuenta se movió por exactamente lo confirmado,
   y manda una segunda confirmación por la API para ver que no se mueve nada.
-- 2026-09-14 — **Se pueden declarar facturas y ver lo que viene.**
-  Entrega A del segundo feature: un gasto domiciliado que el banco ya no
-  anuncia por correo se declara, y la app lo proyecta sobre el calendario con
-  seis cadencias —la mensual conserva el día del ancla, así que una del 31 pide
-  prestado el fin de febrero y en marzo vuelve al 31—. **No escribe nada en el
-  ledger**, y hay una prueba de integración que lo comprueba contra la tabla
-  real. Dos cifras por moneda y nunca una: lo que cuesta el mes y lo que aún no
-  vence. Una factura cuya cuenta se cerró se lee congelada, derivado de la
-  cuenta y no guardado, así que reabrirla la descongela sola. La pantalla
-  `/facturas` ya está —la barra del mes arriba, un mosaico de fichas donde el
-  icono y el color salen de la categoría de cada factura, y los cobros en una
-  línea de tiempo con el día de hoy marcado—, y con ella una
-  prueba de punta a punta que el proyecto no tenía (`just e2e-bills`): conduce
-  el navegador, y después de cada paso compara lo que la pantalla enseña con lo
-  que el servidor guardó. Lee saldos y patrimonio antes y después, y no pasa si
-  declarar movió alguno. `just seed` deja seis facturas declaradas con su
-  categoría, así que el entorno local arranca con el flujo completo.
-- 2026-09-14 — **Un movimiento escrito a mano ya avisa.** Financial publica
-  `bank: ""` cuando no hay banco que nombrar —lo normal en un gasto a mano— y
-  el consumidor de avisos lo exigía no vacío: cada uno de esos movimientos se
-  descartaba en silencio con un «malformed payload» que no decía qué campo. El
-  mensaje ya decía «Tu banco» para ese caso; solo la validación de entrada no
-  se había enterado. La verificación contra moto del 2026-09-14 no lo vio
-  porque solo ejerció el camino de la alerta bancaria. Y ese descarte ya
-  nombra el campo que lo causó —`refused='bank:string_too_short'`— sin el
-  valor: lo que faltaba para que el próximo se vea el mismo día.
-- 2026-09-14 — **La app ya le habla a alguien fuera de su propia pantalla.**
-  Contexto nuevo `alerts`: se conecta Telegram con un toque desde Perfil y cada
-  movimiento llega al teléfono. Vincular es un enlace profundo con un token de
-  un solo uso, no un código tecleado — 256 bits en vez de un millón de
-  combinaciones, y nadie tiene que averiguar su `chat_id`. El mensaje dice solo
-  lo que trae el evento; el total del mes es de E3 y el nombre bonito del
-  comercio es de Merchant. La marca de entrega se escribe *después* de mandar,
-  al revés que en Merchant: repetir un aviso molesta, perderlo es una compra de
-  la que nadie se enteró. Verificado de punta a punta contra moto.
-- 2026-09-12 — **Financial ya habla hacia afuera.** Era el único contexto sin
-  traductor ni publicador: sus eventos iban a un log que ni siquiera llevaba el
-  monto. Ahora salen dos hechos a `finflow.financial` —que se movió plata y que
-  un saldo cambió por ello—, campo por campo y con el dinero como string. Todo
-  lo demás (abrir, renombrar, cerrar, reconstruir, editar, borrar) se queda
-  dentro: es cómo lleva sus libros, no un contrato. Sigue faltando el canal que
-  le hable al usuario, así que todavía no se nota desde la app.

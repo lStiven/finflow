@@ -354,18 +354,41 @@ infra-check:
 # table does not have yet answers 500 to every user until it catches up. It is
 # idempotent, so paying for it on every deploy costs a few describes.
 
-# Build the image and deploy. Authenticate first, e.g. `aws sso login`.
-deploy-dev: provision-dev
-    sam build --config-env development \
-        --config-file {{sam_config}} \
-        --template {{sam_dir}}/template.yaml
-    sam deploy --config-env development --config-file {{sam_config}}
+# A Docker config of the deploys' own, with no credential helper in it.
+#
+# The Dev Containers extension points Docker at a helper it injects
+# (`credsStore: dev-containers-<uuid>` in `~/.docker/config.json`) to forward
+# the host's registry logins. That helper answers `get`, `store` and `erase`
+# and **does not implement `list`** — and `list` is precisely what the Docker
+# SDK calls before an image build, to collect the auth headers. The Docker CLI
+# never takes that path, which is why `docker build` by hand works and
+# `sam build` dies with `Credentials store ... exited with ""`, a StoreError
+# from inside the SDK with no mention of the DevContainer anywhere in it.
+#
+# Nothing is lost by dropping the helper here: both base images are public
+# (`public.ecr.aws/lambda/python` and `ghcr.io/astral-sh/uv`). A fixed
+# directory rather than a temporary one, because `sam deploy` writes its own
+# ECR login into it and reusing that login is the point.
+docker_config := justfile_directory() / ".aws-sam" / "docker-config"
 
-deploy-prod: provision-prod
-    sam build --config-env production \
+_docker-config:
+    @mkdir -p {{docker_config}}
+    @[ -f {{docker_config}}/config.json ] || echo '{}' > {{docker_config}}/config.json
+
+# Build the image and deploy. Authenticate first, e.g. `aws sso login`.
+deploy-dev: provision-dev _docker-config
+    DOCKER_CONFIG={{docker_config}} sam build --config-env development \
         --config-file {{sam_config}} \
         --template {{sam_dir}}/template.yaml
-    sam deploy --config-env production --config-file {{sam_config}}
+    DOCKER_CONFIG={{docker_config}} sam deploy --config-env development \
+        --config-file {{sam_config}}
+
+deploy-prod: provision-prod _docker-config
+    DOCKER_CONFIG={{docker_config}} sam build --config-env production \
+        --config-file {{sam_config}} \
+        --template {{sam_dir}}/template.yaml
+    DOCKER_CONFIG={{docker_config}} sam deploy --config-env production \
+        --config-file {{sam_config}}
 
 # Split per environment on purpose: the two live in different AWS accounts, so
 # a single recipe with a default profile would read the wrong account whenever

@@ -2,6 +2,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Ban, Mail } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/Button";
+import { useScrollLock } from "@/lib/useScrollLock";
 import { STAGE_COPY } from "@/onboarding/copy";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
@@ -24,6 +25,10 @@ import { useOnboarding } from "@/onboarding/useOnboarding";
 export function WelcomeDialog() {
   const { state, acknowledge } = useOnboarding();
   const navigate = useNavigate();
+
+  // Before the early return, so the condition is an argument rather than a
+  // hook that sometimes runs.
+  useScrollLock(Boolean(state?.welcome));
 
   if (!state?.welcome) return null;
 

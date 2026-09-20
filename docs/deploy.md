@@ -37,6 +37,50 @@ docker info      # el DevContainer usa el daemon del host, no levanta uno propio
 sam --version    # lo instala postCreateCommand con `uv tool install aws-sam-cli`
 ```
 
+**`sam build` y el ayudante de credenciales del DevContainer.** Si alguna vez
+lo ves morir así:
+
+```
+Error: Credentials store docker-credential-dev-containers-<uuid> exited with "".
+... StoreError
+```
+
+no es Docker ni AWS. La extensión Dev Containers escribe
+`credsStore: dev-containers-<uuid>` en `~/.docker/config.json` para reenviar
+al host los logins de registro que tengas allí. Ese ayudante implementa `get`,
+`store` y `erase`, pero **no `list`** — y `list` es justo lo que el SDK de
+Docker llama antes de construir una imagen, para juntar las cabeceras de
+autenticación. El CLI de Docker no pasa por ahí, y por eso `docker build` a
+mano funciona y `sam build` no.
+
+`just deploy-dev` y `just deploy-prod` ya lo esquivan: construyen con
+`DOCKER_CONFIG` apuntando a `.aws-sam/docker-config`, una configuración sin
+ayudante. No se pierde nada, porque las dos imágenes base son públicas. Si
+llamas a `sam build` a mano, pásale lo mismo:
+
+```bash
+DOCKER_CONFIG=.aws-sam/docker-config sam build --config-env production \
+    --config-file infra/samconfig.toml --template infra/template.yaml
+```
+
+**«No changes to deploy» no es un fallo.** La imagen del backend lleva
+`pyproject.toml`, `uv.lock` y `src/personal_finance`, y nada más: una rama que
+solo toca el frontend, la documentación o el `justfile` construye una imagen
+idéntica a la que ya está desplegada. Los dos entornos llevan
+`fail_on_empty_changeset = false` en `infra/samconfig.toml` para que eso
+termine en éxito y no en un error que parece una avería. Si necesitas
+comprobar si de verdad cambiaría algo, compara el id de la imagen construida
+con la etiqueta que corre la función:
+
+```bash
+docker images --format '{{.Repository}} {{.ID}}' | grep function
+aws lambda get-function --function-name <nombre> --profile finflow-production \
+    --query 'Code.ImageUri' --output text
+```
+
+El id va dentro de la etiqueta (`apifunction-<id>-api`). Si coinciden, no hay
+despliegue que hacer: lo que cambió no viaja en la imagen.
+
 ### 2. Los perfiles de AWS
 
 ```bash

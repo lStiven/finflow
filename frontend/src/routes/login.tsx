@@ -203,7 +203,19 @@ function LoginScreen() {
     <>
       <NeonBackdrop />
 
-      <main className="relative mx-auto grid min-h-dvh w-full max-w-6xl items-center gap-12 px-5 py-12 lg:grid-cols-[1.05fr_minmax(24rem,26rem)] lg:gap-16 lg:px-10">
+      {/*
+       * `items-start`, not `items-center`: registering asks for one field
+       * more than signing in, and a card centred in the viewport grows half
+       * of that upwards — the top edge slides out from under the cursor on
+       * the very control that was just clicked. Anchored, the extra field
+       * appears below the ones already on screen, which is where somebody
+       * filling a form is looking.
+       *
+       * The offset scales with the viewport so the anchoring does not read as
+       * glued to the top on a tall monitor, and stays a thumb's width down on
+       * a phone.
+       */}
+      <main className="relative mx-auto grid min-h-dvh w-full max-w-6xl items-start gap-12 px-5 py-[clamp(2.5rem,9vh,7rem)] lg:grid-cols-[1.05fr_minmax(24rem,26rem)] lg:gap-16 lg:px-10">
         <Panel mode={mode} />
 
         <section className="w-full">
