@@ -40,6 +40,15 @@ capabilities = "CAPABILITY_IAM"
 resolve_image_repos = true
 resolve_s3 = true
 confirm_changeset = true
+# A deploy that changes nothing is not a failure.
+#
+# SAM's default is to exit non-zero on an empty changeset, and the backend
+# image only carries `pyproject.toml`, `uv.lock` and `src/personal_finance` —
+# so every branch that touches only the frontend, the docs or the justfile
+# builds an image byte-identical to the one already deployed and then reports
+# a failure for it. What actually happened is "nothing to do", and that is
+# what this makes it say.
+fail_on_empty_changeset = false
 parameter_overrides = [
     "EnvironmentName=development",
     "ResourcePrefix=dev-",
@@ -104,6 +113,15 @@ capabilities = "CAPABILITY_IAM"
 resolve_image_repos = true
 resolve_s3 = true
 confirm_changeset = true
+# A deploy that changes nothing is not a failure.
+#
+# SAM's default is to exit non-zero on an empty changeset, and the backend
+# image only carries `pyproject.toml`, `uv.lock` and `src/personal_finance` —
+# so every branch that touches only the frontend, the docs or the justfile
+# builds an image byte-identical to the one already deployed and then reports
+# a failure for it. What actually happened is "nothing to do", and that is
+# what this makes it say.
+fail_on_empty_changeset = false
 parameter_overrides = [
     "EnvironmentName=production",
     # Quoted, and it has to be: SAM's override parser accepts an empty value

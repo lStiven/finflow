@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BAR, BAR_SIZE, DESTINATIONS, OVERFLOW } from "./destinations";
+import { BAR, BAR_SIZE, DESTINATIONS, inSheet, OVERFLOW } from "./destinations";
 
 describe("las secciones del teléfono", () => {
   it("reparte todas las secciones entre la barra y la hoja", () => {
@@ -47,5 +47,35 @@ describe("las secciones del teléfono", () => {
     const labels = [...BAR, ...OVERFLOW].map((d) => d.label);
     expect(labels).toContain("Reportes");
     expect(labels).toContain("Comercios");
+  });
+});
+
+describe("dónde estoy, según la barra", () => {
+  it("da por suya cada sección que la barra no muestra", () => {
+    for (const destination of OVERFLOW) {
+      if (destination.to) expect(inSheet(destination.to)).toBe(true);
+    }
+  });
+
+  it("da por suyas la cuenta y las guías, que tampoco están en la barra", () => {
+    expect(inSheet("/perfil")).toBe(true);
+    expect(inSheet("/guias")).toBe(true);
+    expect(inSheet("/conectar")).toBe(true);
+  });
+
+  it("no reclama lo que la barra sí muestra", () => {
+    // Si «Más» se encendiera aquí, dos entradas dirían a la vez que son la
+    // pantalla actual, que es la misma confusión que no encender ninguna.
+    for (const destination of BAR) {
+      if (destination.to) expect(inSheet(destination.to)).toBe(false);
+    }
+  });
+
+  it("cuenta la pantalla de un comercio como estar en Comercios", () => {
+    expect(inSheet("/comercios/abc-123")).toBe(true);
+  });
+
+  it("no confunde una ruta que solo empieza igual", () => {
+    expect(inSheet("/comercios-de-alguien")).toBe(false);
   });
 });

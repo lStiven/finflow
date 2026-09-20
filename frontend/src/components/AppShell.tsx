@@ -15,7 +15,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { BookOpen, ChevronRight, LogOut, Menu, Plug, Plus, X } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -28,8 +28,9 @@ import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { cn } from "@/lib/cn";
+import { useScrollLock } from "@/lib/useScrollLock";
 import type { Destination } from "@/navigation/destinations";
-import { BAR, DESTINATIONS, OVERFLOW } from "@/navigation/destinations";
+import { BAR, DESTINATIONS, inSheet, OVERFLOW } from "@/navigation/destinations";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -70,7 +71,8 @@ function ConnectLink({ onNavigate }: { onNavigate?: () => void }) {
     <Link
       to={to}
       onClick={onNavigate}
-      className="relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-muted text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
+      className="relative flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
+      inactiveProps={{ className: "text-muted" }}
       activeProps={{
         className:
           "border-accent/25 bg-gradient-to-r from-accent/18 via-violet/12 to-transparent font-medium text-text",
@@ -120,7 +122,8 @@ function Rail() {
               key={label}
               to={to}
               activeOptions={{ exact: to === "/" }}
-              className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-muted text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
+              className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
+              inactiveProps={{ className: "text-muted" }}
               activeProps={{
                 className:
                   "border-accent/25 bg-gradient-to-r from-accent/18 via-violet/12 to-transparent font-medium text-text",
@@ -294,6 +297,43 @@ function Bar() {
 const BAR_ITEM =
   "flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-[0.5625rem] transition-colors min-[360px]:px-0.5 min-[360px]:text-[0.625rem]";
 
+/** Lit and unlit, as a pair — see `BarItem` for why they are not one class. */
+const BAR_ON = "font-medium text-accent";
+const BAR_OFF = "text-muted";
+
+/**
+ * The tint that says "this one".
+ *
+ * The rail marks the entry you are on by filling its whole row; the bar has
+ * no row to fill, so the same border and gradient go behind the icon as a
+ * pill. Same vocabulary, the shape the bar has room for. The transparent
+ * border is carried when unlit as well, so nothing shifts by a pixel on the
+ * way in or out.
+ */
+function BarPill({ active, children }: { active: boolean; children: ReactNode }) {
+  return (
+    <span
+      className={cn(
+        "grid place-items-center rounded-lg border border-transparent px-3 py-0.5 transition-colors",
+        active && "border-accent/25 bg-gradient-to-b from-accent/20 to-violet/12",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * One bar entry, lit when it is the screen you are on.
+ *
+ * The lit and unlit colours are `activeProps`/`inactiveProps` rather than a
+ * base class with an override, because the router **concatenates**
+ * `activeProps.className` onto `className` instead of merging it: written the
+ * other way, `text-muted` and `text-accent` both land on the element and the
+ * winner is whichever Tailwind happened to emit last. That is not a style
+ * question, it is why the bar marked nothing at all until now — the rail got
+ * away with the same mistake only because its border and fill said it too.
+ */
 function BarItem({ item }: { item: Destination }) {
   const { label, icon: Icon, to } = item;
   if (!to) return <Pending label={label} icon={Icon} compact />;
@@ -302,11 +342,18 @@ function BarItem({ item }: { item: Destination }) {
     <Link
       to={to}
       activeOptions={{ exact: to === "/" }}
-      className={cn(BAR_ITEM, "text-muted")}
-      activeProps={{ className: "text-accent", "aria-current": "page" }}
+      className={BAR_ITEM}
+      activeProps={{ className: BAR_ON, "aria-current": "page" }}
+      inactiveProps={{ className: BAR_OFF }}
     >
-      <Icon className="size-5 shrink-0" />
-      <span className="max-w-full truncate">{label}</span>
+      {({ isActive }) => (
+        <>
+          <BarPill active={isActive}>
+            <Icon className="size-5 shrink-0" />
+          </BarPill>
+          <span className="max-w-full truncate">{label}</span>
+        </>
+      )}
     </Link>
   );
 }
@@ -321,6 +368,11 @@ function BarItem({ item }: { item: Destination }) {
 function MoreButton({ open, onOpen }: { open: boolean; onOpen: () => void }) {
   const { state } = useOnboarding();
   const pending = state !== null && !state.complete;
+  // Lit on behalf of whatever is behind it. Four of the app's seven sections
+  // are in there, so a bar that only marks its own three tells somebody on
+  // Reportes that they are nowhere. `aria-current="true"`, not `"page"`: this
+  // is the current *item*, and the page is one tap further in.
+  const here = useRouterState({ select: (s) => inSheet(s.location.pathname) });
 
   return (
     <button
@@ -328,9 +380,12 @@ function MoreButton({ open, onOpen }: { open: boolean; onOpen: () => void }) {
       onClick={onOpen}
       aria-expanded={open}
       aria-haspopup="dialog"
-      className={cn(BAR_ITEM, "relative text-muted")}
+      aria-current={here ? "true" : undefined}
+      className={cn(BAR_ITEM, "relative", here ? BAR_ON : BAR_OFF)}
     >
-      <Menu className="size-5 shrink-0" />
+      <BarPill active={here}>
+        <Menu className="size-5 shrink-0" />
+      </BarPill>
       <span className="max-w-full truncate">Más</span>
       {pending ? <Dot className="top-1.5 right-1/2 mr-2" /> : null}
     </button>
@@ -350,6 +405,8 @@ function MoreButton({ open, onOpen }: { open: boolean; onOpen: () => void }) {
 function MoreSheet({ onClose }: { onClose: () => void }) {
   const { data: profile } = useQuery(profileQuery);
   const { logout } = useAuth();
+
+  useScrollLock();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -376,8 +433,10 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
       />
 
       {/* `max-h`/`overflow-y` for the phone held sideways, where the whole
-          sheet is taller than the screen it opens on. */}
-      <div className="rise relative flex max-h-[85dvh] flex-col gap-1 overflow-y-auto rounded-t-card border-line border-t bg-surface px-3 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+          sheet is taller than the screen it opens on. `overscroll-contain`
+          so reaching the end of it stops there instead of handing the swipe
+          on to the page behind. */}
+      <div className="rise relative flex max-h-[85dvh] flex-col gap-1 overflow-y-auto overscroll-contain rounded-t-card border-line border-t bg-surface px-3 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
         {/* The sheet covers the bar it opened from, so the way back has to be
             on the sheet itself — the backdrop and Escape are not affordances
             anybody can see. */}
@@ -425,7 +484,8 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
               key={label}
               to={to}
               onClick={onClose}
-              className="flex items-center gap-3 rounded-xl px-3 py-3 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text"
+              className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-colors hover:bg-surface-raised hover:text-text"
+              inactiveProps={{ className: "text-muted" }}
               activeProps={{
                 className: "bg-surface-raised font-medium text-text",
                 "aria-current": "page",

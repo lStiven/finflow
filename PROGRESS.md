@@ -147,22 +147,35 @@ dirección. Abajo de 1024 px la barra inferior lleva Resumen, Transacciones,
 Cuentas y **Más**, que abre el resto —Reportes, Comercios, Guías, la cuenta y
 cerrar sesión—; de 1024 para arriba, la columna de la izquierda de siempre.
 
-## Lo publicado va atrasado respecto al repositorio
+## Lo publicado, medido el 2026-09-20
 
-Esto es lo más importante hoy. Todo lo de arriba funciona en el computador, pero
-**lo que está en internet es más viejo**:
+Medido contra AWS y contra el `openapi.json` que sirve cada API, no recordado:
 
-| | Repositorio | Publicado |
+| | Operaciones | Estado |
 |---|---|---|
 | API producción | 79 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
 | API desarrollo | 79 operaciones | 43 — igual que producción |
 | Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas, presupuestos | ninguna |
+| Contrato de la rama `dev` | 79 | — |
+| API desarrollo (`finflow-dev`) | 75 | `UPDATE_COMPLETE` 2026-09-15 |
+| API producción (`finflow`) | 70 | `UPDATE_COMPLETE` 2026-09-15 |
+| Web producción (`finflow-apk.pages.dev`) | — | responde 200 |
+| Web desarrollo (`finflow-dev-2tc.pages.dev`) | — | responde 200 |
 
-Las dos APIs se actualizaron por última vez el 2026-09-02 y sí tienen la
-verificación de correo y la recuperación de contraseña. Las dos webs
-(`finflow-apk.pages.dev` y `finflow-dev-2tc.pages.dev`) responden, pero su
-paquete es anterior al 2026-09-02: el trabajo de traslados, borrado y créditos
-nunca se publicó en ningún lado.
+El despliegue del 2026-09-15 sí entró: las seis funciones están en pie en
+producción, `AlertsFunction` incluida, así que **el hueco de
+`lambda:PutFunctionConcurrency` está resuelto** y ya no es una traba.
+
+Lo que le falta a producción son las nueve operaciones de lo último: la
+mesada (`/financial/allowance`), los presupuestos (`/financial/budgets`), el
+plan (`/financial/plan`) y las facturas propuestas (`/financial/recurring`).
+Son exactamente los commits que `dev` tiene y esta rama no.
+
+**Publicar la web sí está trabado**, y por el contenedor, no por Cloudflare:
+`wrangler` no tiene credenciales aquí (`wrangler whoami` dice que no), y
+`wrangler login` no puede terminar porque su callback OAuth escucha en
+`localhost:8976` y el DevContainer sólo publica 5173 y 8000. Se resuelve con
+un API token de Cloudflare en `CLOUDFLARE_API_TOKEN`, que no abre navegador.
 
 | | Nombre | Buzón | Revisa cada |
 |---|---|---|---|
@@ -278,14 +291,14 @@ AWS (ver Trabas).
   suscriptores y las alarmas; lo que hoy se comprobó que **no** puede es leer los
   atributos de una suscripción (`sns:GetSubscriptionAttributes`), que es por qué
   `just alerts-prod` mira la lista del tema y no la suscripción. Se descubre el
-  resto al desplegar, no adivinando. El 2026-09-15 salió otro:
-  `lambda:PutFunctionConcurrency`, que producción no tiene y desarrollo sí, así
-  que el mismo despliegue que pasó en dev se fue entero a `ROLLBACK` en prod al
-  crear `AlertsFunction`. Ninguno de los dos usuarios puede leer IAM, ni
-  siquiera sobre sí mismo, así que esto se arregla desde la consola con una
-  identidad administradora. Se comprueba sin desplegar, pidiendo la acción
-  sobre una función que no existe: `ResourceNotFound` es permiso, `AccessDenied`
-  es que falta.
+  resto al desplegar, no adivinando. El 2026-09-15 salió
+  `lambda:PutFunctionConcurrency`, que faltaba en producción y mandó el
+  despliegue entero a `ROLLBACK` al crear `AlertsFunction`; **se concedió, y el
+  2026-09-20 se comprobó que la función está creada y el stack en
+  `UPDATE_COMPLETE`**. Queda la lección, no la traba: un permiso que falta no
+  se ve hasta que CloudFormation llama a esa API a mitad del despliegue. Se
+  comprueba sin desplegar, pidiendo la acción sobre una función que no existe:
+  `ResourceNotFound` es permiso, `AccessDenied` es que falta.
 - **`infra/iam/finflow-deploy-policy.json` no es lo que hay adjunto.** Medido el
   2026-09-15: los dos usuarios pueden `lambda:ListFunctions`, que el archivo no
   concede en ninguna parte, y producción no puede algo que el archivo sí. Es una
@@ -293,6 +306,7 @@ AWS (ver Trabas).
   cuenta.
 
 ## Últimos trabajos terminados
+
 - 2026-09-18 — **Un presupuesto ya no es una categoría: es un alcance.**
   Rehecho el módulo entero sobre el modelo de TimelyBills, primera de cuatro
   iteraciones. Un tope tiene **id propio, nombre e icono**, y vigila lo que se
