@@ -252,6 +252,13 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
+- **Una prueba de la mesada se cae cinco horas al día.**
+  `test_it_answers_for_the_calendar_month_and_counts_today` compara
+  `days_left` contra un `today()` que el propio test calcula en UTC, mientras
+  `allowance.py` lo calcula en `America/Bogota` (`today_in(zone)`). Entre las
+  00:00 y las 05:00 UTC —19:00 a 24:00 en Bogotá— las dos fechas no coinciden
+  y `just prepare` se pone rojo sin que nada esté mal en la aplicación. El
+  arreglo es una línea en el helper del test.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
@@ -307,6 +314,15 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-21 — **`just up` ya abre en el navegador, en cualquier entorno y sin
+  flags.** `DEFAULT_API_HOST` pasa a `0.0.0.0` en `scripts/run_stack.py`:
+  dentro de un DevContainer el loopback es una interfaz distinta de aquella a
+  la que Docker entrega el puerto publicado, así que el default anterior hacía
+  que `http://localhost:8000/docs` no respondiera desde Windows. Era un flag
+  que había que recordar y se olvidaba. Quien quiera lo de antes,
+  `--api-host 127.0.0.1`; y si preocupa la red local, lo que se estrecha es el
+  *publish* del `devcontainer.json`, no el bind. Los dos guías que mandaban
+  escribir el flag ya no lo hacen.
 - 2026-09-18 — **Un presupuesto ya no es una categoría: es un alcance.**
   Rehecho el módulo entero sobre el modelo de TimelyBills, primera de cuatro
   iteraciones. Un tope tiene **id propio, nombre e icono**, y vigila lo que se
@@ -383,19 +399,3 @@ AWS (ver Trabas).
   emparejamiento que fallaba justo para las facturas que esta pantalla crea.
   `just seed` deja dos series para mirarlas, y `just e2e-bills` acepta una en
   el navegador y comprueba que no movió un peso.
-- 2026-09-14 — **Una factura ya se puede pagar, y eso sí es plata.**
-  Entrega B del segundo feature. «Pagado» escribe el movimiento por el mismo
-  caso de uso que respalda el movimiento a mano, así que el saldo, el comercio,
-  el gasto del mes y el aviso por Telegram vienen puestos. **Pagar dos veces
-  cobra una:** la identidad del cobro sale de la factura y del periodo —nunca
-  del monto ni del día—, así que el segundo intento lo rechaza la escritura
-  condicional de la tabla y no un `if`. «Pagado» **no se guarda en ninguna
-  parte**: se lee de la fila del ledger, de modo que borrar el movimiento
-  despaga el cobro sin que nada tenga que acordarse de deshacer nada. Saltar sí
-  se guarda, porque no hay fila que leer. Las dos cosas se deshacen. Origen
-  nuevo `scheduled` —ni `manual` ni `accrual`— que `alerts` aprendió en el
-  mismo cambio y que **debe desplegarse primero**. `upcoming` pasó a
-  `outstanding` porque cambió de significado: ya no es «aún no vence», es «sin
-  pagar». Comprobado de punta a punta contra la pila real: el e2e confirma por
-  el navegador, comprueba que la cuenta se movió por exactamente lo confirmado,
-  y manda una segunda confirmación por la API para ver que no se mueve nada.
