@@ -90,8 +90,10 @@ contexto `alerts` entero).
 **Pantallas:** veinte, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-cuatro guías, más **Facturas** desde el 2026-09-14. La única entrada del menú
-anunciada sin pantalla es **Configuración**.
+cuatro guías, más **Facturas** desde el 2026-09-14. Las entradas del menú
+anunciadas sin pantalla son dos: **Presupuestos** —que existe en `dev` y aquí
+sale deshabilitada, con su «Pronto», para que se vea que viene— y
+**Configuración**, que no existe en ninguna rama.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
 revisó el 2026-09-14. Facturas se revisó en el navegador el 2026-09-14, con
@@ -164,7 +166,9 @@ AWS (ver Trabas).
    un usuario de una vez; falta el disparador diario en la nube, que necesita algo
    que hoy no existe: una forma de recorrer todos los usuarios.
 
-4. **La pantalla de Configuración**, la última que falta.
+4. **La pantalla de Configuración**, la única anunciada sin existir en ninguna
+   rama. La otra que el menú anuncia aquí, Presupuestos, ya está construida en
+   `dev` y llega con la mezcla.
 
 5. **Terminar de conectar los avisos en producción.** En desarrollo ya está
    cerrado y comprobado el 2026-09-14: los dos secretos están en SSM, el

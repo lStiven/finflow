@@ -28,9 +28,19 @@ describe("las secciones del teléfono", () => {
     }
   });
 
-  it("solo deja Configuración anunciada sin pantalla", () => {
+  it("anuncia sin pantalla Presupuestos y Configuración, y nada más", () => {
+    // Las dos que están en construcción. Esta lista es la que hay que mover
+    // el día que una de ellas exista — si crece sola, el menú se llenó de
+    // promesas.
     const pending = DESTINATIONS.filter((d) => d.to === undefined).map((d) => d.label);
-    expect(pending).toEqual(["Configuración"]);
+    expect(pending).toEqual(["Presupuestos", "Configuración"]);
+  });
+
+  it("deja Presupuestos donde va a quedarse, junto a Facturas", () => {
+    // El orden es la mitad del mensaje: si al llegar la pantalla la entrada
+    // salta de sitio, quien ya se había acostumbrado la busca donde no está.
+    const labels = DESTINATIONS.map((d) => d.label);
+    expect(labels.indexOf("Presupuestos")).toBe(labels.indexOf("Facturas") + 1);
   });
 
   it("deja Facturas al alcance", () => {

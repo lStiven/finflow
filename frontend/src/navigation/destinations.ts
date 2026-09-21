@@ -16,6 +16,7 @@ import {
   Receipt,
   Settings,
   Store,
+  Target,
   Wallet,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -44,6 +45,12 @@ export const DESTINATIONS: Destination[] = [
   // Con las pantallas del dinero y no al final: una factura es un gasto que
   // todavía no ocurrió, y se busca donde se buscan los gastos.
   { label: "Facturas", icon: Receipt, to: "/facturas" },
+  // Anunciada sin pantalla, a propósito, y en el sitio que va a ocupar cuando
+  // la tenga: un tope es una decisión sobre gasto y se busca donde se buscan
+  // los gastos. Sale deshabilitada, con su «Pronto» — que es lo que distingue
+  // «se está construyendo» de «esta app no hace eso», y lo que evita que el
+  // menú se reordene el día que la pantalla llegue.
+  { label: "Presupuestos", icon: Target },
   { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
   { label: "Configuración", icon: Settings },
