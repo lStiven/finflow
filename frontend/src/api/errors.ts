@@ -14,10 +14,43 @@
  * Query needs a rejected promise to mark something as failed, so every call
  * goes through here.
  */
+/**
+ * The status an `ApiError` carries when the request never got an answer.
+ *
+ * Not a status the API can send — it is the absence of one. Zero rather than
+ * a made-up 5xx so nothing that branches on a real code can confuse the two,
+ * and so a screen offline is never reported as the server having failed.
+ */
+export const NO_RESPONSE = 0;
+
 export async function unwrap<T>(
   result: Promise<{ data?: T; error?: unknown; response: Response }>,
 ): Promise<T> {
-  const { data, error, response } = await result;
+  let settled: { data?: T; error?: unknown; response: Response };
+
+  try {
+    settled = await result;
+  } catch (cause) {
+    // `fetch` rejects with a `TypeError` before there is a response at all:
+    // no network, the tab offline, DNS gone, the API down. That one used to
+    // arrive as the browser's own `TypeError: Failed to fetch` and be
+    // rendered verbatim — English, technical, and shown at exactly the moment
+    // somebody is on a bad connection. The original is kept as the cause, for
+    // a console that still needs it.
+    //
+    // **Only that one.** `openapi-fetch` also rejects when a 2xx body fails
+    // to parse — a proxy's HTML error page, a truncated response — and
+    // telling somebody to check their connection over a server-side fault
+    // sends them to restart a router that is working. Anything else is
+    // re-thrown as it came.
+    if (cause instanceof TypeError) {
+      throw new ApiError(NO_RESPONSE, null, undefined, { cause });
+    }
+
+    throw cause;
+  }
+
+  const { data, error, response } = settled;
   if (error !== undefined || !response.ok) {
     throw new ApiError(response.status, error, retryAfterOf(response));
   }
@@ -46,8 +79,13 @@ export class ApiError extends Error {
   /** Set only on a 429, and only when the API said how long. */
   readonly retryAfterSeconds: number | undefined;
 
-  constructor(status: number, detail: unknown, retryAfterSeconds?: number) {
-    super(messageFor(status, detail));
+  constructor(
+    status: number,
+    detail: unknown,
+    retryAfterSeconds?: number,
+    options?: ErrorOptions,
+  ) {
+    super(messageFor(status, detail), options);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
@@ -62,6 +100,13 @@ export class ApiError extends Error {
  * Object]`.
  */
 function messageFor(status: number, detail: unknown): string {
+  // Before anything reads `detail`: there is no body to read. Worded without
+  // blaming either side, because from here the two are indistinguishable —
+  // the phone may be on the underground, or the API may be down.
+  if (status === NO_RESPONSE) {
+    return "No pudimos conectar con Finflow. Revisa tu conexión e inténtalo de nuevo.";
+  }
+
   // 401 is answered before the body is read, and deliberately so. The API
   // returns an identical 401 for an unknown email, a wrong password and a
   // malformed one — the guide requires the interface not to tell them apart,

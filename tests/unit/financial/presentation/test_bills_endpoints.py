@@ -1175,3 +1175,35 @@ def test_arming_today_leaves_a_charge_that_already_fell_due_alone(
 
     assert body["settled"] == []
     assert wired.ledger.rows == {}
+
+
+def test_a_bill_cannot_be_for_a_figure_the_table_cannot_hold(
+    client: TestClient,
+) -> None:
+    """The same ceiling the rest of the router keeps, on the three money
+    fields under `/bills`. Unbounded, confirming such a charge writes a
+    movement whose magnitude DynamoDB refuses — a 500 where a 422 belongs."""
+    absurd = "1e400"
+    declared = client.post(
+        "/financial/bills",
+        json={
+            "name": "Gimnasio",
+            "amount": absurd,
+            "currency": "COP",
+            "cadence": "monthly",
+            "starts_on": "2026-09-04",
+        },
+    )
+    bill = _declare(client, starts_on="2026-09-04")
+    amended = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"amount": absurd, "currency": "COP"},
+    )
+    confirmed = client.post(
+        _charge_url(bill, "2026-09-04"),
+        json={"amount": absurd, "currency": "COP"},
+    )
+
+    assert declared.status_code == 422
+    assert amended.status_code == 422
+    assert confirmed.status_code == 422

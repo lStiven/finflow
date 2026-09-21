@@ -76,11 +76,18 @@ function TransactionScreen() {
         </Button>
 
         <header className="flex flex-col items-start gap-2">
-          <p className="text-muted text-sm">
+          {/*
+           * El título de la pantalla, y por eso un `h1` y no un párrafo:
+           * visualmente manda el monto, pero quien navega por encabezados
+           * necesita saber de quién es este movimiento antes de llegar a
+           * «Lo que dijo el banco». Era la única de las diecisiete pantallas
+           * sin encabezado de nivel uno.
+           */}
+          <h1 className="text-muted text-sm">
             {transfer
               ? transferTitle(transfer, movement.counterparty)
               : (movement.merchant?.display_name ?? movement.counterparty)}
-          </p>
+          </h1>
           <Money
             amount={incoming ? movement.amount : `-${movement.amount}`}
             currency={movement.currency}

@@ -841,8 +841,8 @@ class OpenAccountPayload(BaseModel):
     # On a liability this is what has been spent so far, not the limit. The
     # two are separate fields because conflating them is the mistake that
     # makes a card read as fully drawn on the day it is declared.
-    opening_balance: Decimal | None = Field(default=None, ge=0)
-    credit_limit: Decimal | None = Field(default=None, ge=0)
+    opening_balance: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
+    credit_limit: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
     bank: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
     instrument_kind: InstrumentKind | None = None
     last_four: str | None = Field(default=None, pattern=r"^\d{4,}$")
@@ -899,7 +899,7 @@ class RenameAccountPayload(BaseModel):
 class SetCreditLimitPayload(BaseModel):
     """State or restate what a card may owe. `null` clears it."""
 
-    credit_limit: Decimal | None = Field(default=None, ge=0)
+    credit_limit: Decimal | None = Field(default=None, ge=0, le=MAX_MONEY)
 
 
 class RestateBalancePayload(BaseModel):
@@ -1055,7 +1055,7 @@ class EnterTransactionPayload(BaseModel):
     """Money that moved without an alert to announce it."""
 
     direction: MovementDirection
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, le=MAX_MONEY)
     currency: Currency = Currency.COP
     occurred_at: int
     counterparty: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
@@ -1084,7 +1084,7 @@ class EnterTransferLegPayload(BaseModel):
     """
 
     role: TransferRole
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, le=MAX_MONEY)
     currency: Currency = Currency.COP
     occurred_at: int
     # What the owner calls the other side: "Nequi", "efectivo", "PSE". Free
@@ -1104,7 +1104,7 @@ class EditTransactionPayload(BaseModel):
     apart afterwards.
     """
 
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, le=MAX_MONEY)
     currency: Currency | None = None
     occurred_at: int | None = None
     counterparty: str | None = Field(
@@ -3015,7 +3015,7 @@ class DeclareBillPayload(BaseModel):
     #: What the owner reads in the list, and what a confirmed charge will
     #: carry into the ledger as its counterparty.
     name: str = Field(min_length=1, max_length=MAX_BILL_NAME_LENGTH)
-    amount: Decimal = Field(gt=0)
+    amount: Decimal = Field(gt=0, le=MAX_MONEY)
     currency: Currency = Currency.COP
     cadence: BillCadence
     #: The first expected charge. Every later one is derived from this day,
@@ -3039,7 +3039,7 @@ class AmendBillPayload(BaseModel):
     name: str | None = Field(
         default=None, min_length=1, max_length=MAX_BILL_NAME_LENGTH
     )
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, le=MAX_MONEY)
     currency: Currency | None = None
     cadence: BillCadence | None = None
     starts_on: dt.date | None = None
@@ -3094,7 +3094,7 @@ class ConfirmChargePayload(BaseModel):
     editing that movement, where every other correction in this app is made.
     """
 
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: Decimal | None = Field(default=None, gt=0, le=MAX_MONEY)
     currency: Currency | None = None
     #: When the money actually moved, in epoch seconds. Absent, the period's
     #: own day is used — at noon UTC, which is the same calendar day in every

@@ -2932,3 +2932,123 @@ def test_the_catalog_publishes_the_vocabularies_a_loan_form_needs(
         "accrual",
         "scheduled",
     }
+
+
+# ----------------------------------------------------------------------
+# Money the table could not hold
+# ----------------------------------------------------------------------
+
+
+def test_an_amount_past_what_the_table_can_hold_is_refused(client: TestClient) -> None:
+    """A 422 rather than a 500 with a stack trace.
+
+    `MAX_MONEY` already guards the balances and the financing figures; these
+    are the fields it had been left off. Unbounded, `1e400` is accepted, the
+    account's balance becomes `-1E+400`, and net worth and the month's summary
+    read it back in scientific notation — locally. Against DynamoDB, whose `N`
+    tops out around `1e125`, the same request is refused deep inside boto3 and
+    comes back as a 500, which is the failure this test exists to keep out of
+    production.
+    """
+    refused = client.post(
+        "/financial/transactions",
+        json={
+            "direction": "outgoing",
+            "amount": "1e400",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Absurdo",
+        },
+    )
+
+    assert refused.status_code == 422
+    assert client.get("/financial/transactions").json()["total"] == 0
+
+
+def test_the_bound_leaves_a_real_figure_alone(client: TestClient) -> None:
+    """The ceiling is far past any balance this app is for: a thousand million
+    million pesos is still accepted, so nothing anybody would type is."""
+    accepted = client.post(
+        "/financial/transactions",
+        json={
+            "direction": "outgoing",
+            "amount": "1000000000",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Una casa",
+        },
+    )
+
+    assert accepted.status_code == 201
+
+
+def test_every_money_field_refuses_a_magnitude_the_table_cannot_store(
+    client: TestClient,
+) -> None:
+    """One case per surface, because the bound is per field and a field that
+    was missed reads exactly like one that was not."""
+    absurd = "1e400"
+    account = client.post(
+        "/financial/accounts",
+        json={
+            "name": "Ahorros",
+            "kind": "savings",
+            "currency": "COP",
+            "opening_balance": "1000",
+        },
+    ).json()
+    entered = client.post(
+        "/financial/transactions",
+        json={
+            "direction": "outgoing",
+            "amount": "1000",
+            "currency": "COP",
+            "occurred_at": WHEN,
+            "counterparty": "Algo",
+            "account_id": account["id"],
+        },
+    ).json()
+
+    refusals = {
+        "cuenta nueva": client.post(
+            "/financial/accounts",
+            json={
+                "name": "Otra",
+                "kind": "savings",
+                "currency": "COP",
+                "opening_balance": absurd,
+            },
+        ),
+        "cupo al abrir": client.post(
+            "/financial/accounts",
+            json={
+                "name": "Tarjeta",
+                "kind": "credit_card",
+                "currency": "COP",
+                "credit_limit": absurd,
+            },
+        ),
+        "cupo aparte": client.put(
+            f"/financial/accounts/{account['id']}/credit-limit",
+            json={"credit_limit": absurd},
+        ),
+        "traslado": client.post(
+            "/financial/transactions/transfer",
+            json={
+                "amount": absurd,
+                "currency": "COP",
+                "occurred_at": WHEN,
+                "counterparty": "Pago",
+                "account_id": account["id"],
+                "role": "source",
+            },
+        ),
+        "corregir": client.patch(
+            f"/financial/transactions/{entered['id']}",
+            json={"amount": absurd, "currency": "COP"},
+        ),
+    }
+
+    answered = {name: response.status_code for name, response in refusals.items()}
+
+    assert answered == dict.fromkeys(refusals, 422)
