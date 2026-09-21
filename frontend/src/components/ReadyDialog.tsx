@@ -1,6 +1,8 @@
 import { useNavigate } from "@tanstack/react-router";
 import { PartyPopper } from "lucide-react";
+import { useCallback } from "react";
 import { Button } from "@/components/ui/Button";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useScrollLock } from "@/lib/useScrollLock";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
@@ -21,6 +23,10 @@ export function ReadyDialog() {
   // See `WelcomeDialog`: the condition is passed in because the hook cannot
   // sit after the early return.
   useScrollLock(Boolean(state?.celebrate));
+  useDismissOnEscape(
+    useCallback(() => acknowledge("readyCelebrated"), [acknowledge]),
+    Boolean(state?.celebrate),
+  );
 
   if (!state?.celebrate) return null;
 

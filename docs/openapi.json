@@ -395,6 +395,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1141,6 +1142,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1278,6 +1280,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1429,6 +1432,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1530,6 +1534,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -1607,6 +1612,7 @@
             "anyOf": [
               {
                 "exclusiveMinimum": 0.0,
+                "maximum": 1000000000000000.0,
                 "type": "number"
               },
               {
@@ -2937,6 +2943,7 @@
           "credit_limit": {
             "anyOf": [
               {
+                "maximum": 1000000000000000.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -2988,6 +2995,7 @@
           "opening_balance": {
             "anyOf": [
               {
+                "maximum": 1000000000000000.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -3525,6 +3533,7 @@
           "credit_limit": {
             "anyOf": [
               {
+                "maximum": 1000000000000000.0,
                 "minimum": 0.0,
                 "type": "number"
               },
@@ -5740,7 +5749,7 @@
         ]
       },
       "post": {
-        "description": "Declare a charge that is going to happen.\n\nNothing is recorded as spent. This is the half that works from the first\nday and needs no history — the detector, which needs three months of it,\ncomes later and only ever proposes.",
+        "description": "Declare a charge that is going to happen.\n\nNothing is recorded as spent. This is the half that works from the first\nday and needs no history — the detector, which needs three months of it,\ncomes later and only ever proposes.\n\nThe category is checked against this user's own vocabulary, like every\nother place one is accepted. It is not decoration: a confirmed charge is\nfiled under it, and a bill carrying a category nobody has would produce\ncharges that sit outside every breakdown — silently, because filing a\nmerchant is an enrichment that may not fail a movement.",
         "operationId": "declare_bill_financial_bills_post",
         "requestBody": {
           "content": {

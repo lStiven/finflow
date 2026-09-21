@@ -18,7 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { BookOpen, ChevronRight, LogOut, Menu, Plug, Plus, X } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
 import { BetaMark } from "@/components/BetaMark";
@@ -28,6 +28,7 @@ import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
 import { WelcomeDialog } from "@/components/WelcomeDialog";
 import { cn } from "@/lib/cn";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useScrollLock } from "@/lib/useScrollLock";
 import type { Destination } from "@/navigation/destinations";
 import { BAR, DESTINATIONS, inSheet, OVERFLOW } from "@/navigation/destinations";
@@ -407,14 +408,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
   const { logout } = useAuth();
 
   useScrollLock();
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDismissOnEscape(onClose);
 
   return (
     <div

@@ -482,6 +482,12 @@ export interface paths {
          *     Nothing is recorded as spent. This is the half that works from the first
          *     day and needs no history — the detector, which needs three months of it,
          *     comes later and only ever proposes.
+         *
+         *     The category is checked against this user's own vocabulary, like every
+         *     other place one is accepted. It is not decoration: a confirmed charge is
+         *     filed under it, and a bill carrying a category nobody has would produce
+         *     charges that sit outside every breakdown — silently, because filing a
+         *     merchant is an enrichment that may not fail a movement.
          */
         post: operations["declare_bill_financial_bills_post"];
         delete?: never;
