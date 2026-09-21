@@ -10,6 +10,7 @@ import {
   formatAmountInput,
   groupByDay,
   initialOf,
+  isMatched,
   isSettled,
   parseAmount,
   settledShare,
@@ -29,6 +30,8 @@ function bill(overrides: Partial<Bill> = {}): Bill {
     account_id: null,
     category: null,
     status: "active",
+    autopay: false,
+    autopay_from: null,
     frozen: false,
     next_occurrence: null,
     ...overrides,
@@ -254,5 +257,23 @@ describe("la letra de la tarjeta", () => {
 
   it("no revienta con un nombre vacío", () => {
     expect(initialOf("   ")).toBe("·");
+  });
+});
+
+describe("un cobro respondido por un movimiento que ya estaba", () => {
+  const paid = { state: "paid" } as const;
+
+  it("se distingue del que escribió la app", () => {
+    expect(isMatched(occurrence({ ...paid, settled_by: "matched" }))).toBe(true);
+    expect(isMatched(occurrence({ ...paid, settled_by: "confirmed" }))).toBe(false);
+    expect(isMatched(occurrence())).toBe(false);
+  });
+
+  it("no ofrece «deshacer el pago», porque no hay nada que borrar", () => {
+    const linked = occurrence({ ...paid, settled_by: "matched" });
+    const written = occurrence({ ...paid, settled_by: "confirmed" });
+
+    expect(chargeVerbs(linked).undo).toBe("No es este");
+    expect(chargeVerbs(written).undo).toBe("Deshacer el pago");
   });
 });

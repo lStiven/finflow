@@ -1389,6 +1389,88 @@ way out, and still stores nothing.
   re-runnable without checking anything, because the charge's id makes the
   second write DynamoDB's problem.
 
+### A bill that charges itself, and the movement that answers one (2026-09-21)
+
+- **The match window closes *before* anything is written, and it is wider
+  than the grace** (2026-09-21). `GRACE_DAYS` (3) answers "is this late?",
+  which is a question about the owner; `MATCH_WINDOW_DAYS` (5) answers "is
+  that the gym?", which is a question about a bank — a domiciled charge is
+  presented by one business and posted by another, so a long weekend plus a
+  holiday is ordinary. An automatic charge therefore waits until day + 5, not
+  day + 3: for two days the screen says "sin pagar" and nothing acts, on
+  purpose. Writing on the grace boundary would take money for a charge whose
+  own bank movement arrives on the fourth day, and there is no undo for an
+  expense the bank also reported.
+
+- **Only a movement that is unambiguous is linked without asking**
+  (2026-09-21). `CERTAIN` is the bill's merchant *and* an amount within a
+  tenth; anything else is `LIKELY` and only ever proposed. Two `CERTAIN`
+  candidates link nothing: picking one would be guessing which of somebody's
+  movements paid for what, and being wrong files a real charge as another.
+  Considered and rejected: nearest-date wins, which reads well until a weekly
+  bill — charges seven days apart, window five each side — has one movement
+  inside two windows and the loser gets charged automatically for money that
+  already left. A contested movement is `LIKELY` for **both** periods
+  (`ScheduledBill.charges_around`), so neither acts.
+
+- **Recognising a movement happens for every active bill; writing one happens
+  only for an armed bill** (2026-09-21). The switch is about this app
+  *creating* money, and reading what the ledger already holds creates nothing
+  — it is also what keeps somebody from confirming a charge the bank had
+  already reported, which is the same double count from the other side. So
+  reconciliation is unconditional and posting is opt-in, bill by bill.
+
+- **The link is stored; "paid" still is not** (2026-09-21). The derived-id
+  trick only works for a row this app wrote — a bank's movement is keyed on
+  the bank's fingerprint, which nothing here can derive — so the (period →
+  movement) map lives on the bill, bounded like `skipped`. What is *not*
+  stored is whether that movement still exists: the map is read against the
+  ledger on every listing, so erasing the movement un-pays the charge exactly
+  as erasing a confirmed row does, and a stale link answers nothing rather
+  than blocking a confirmation for ever.
+
+- **Arming is not retroactive** (2026-09-21). `autopay_from` is the day the
+  switch was flipped, and nothing due before it is ever charged
+  automatically. A charge that has been on screen as overdue for a week may
+  already have been paid in a way this app cannot see, and taking the money
+  now would be the app inventing an expense out of a setting. The cost is
+  that turning it on does nothing visible until the next charge, which is the
+  honest reading of what was agreed to. A second bound,
+  `AUTOPAY_LOOKBACK_DAYS` (35), stops an app opened after three months from
+  posting a quarter of charges in one go.
+
+- **Undoing an automatic charge marks the period skipped — but only a charge
+  this app wrote** (2026-09-21). With autopay on, "expected" means "will be
+  charged", so an undo that left the charge expected would be a button that
+  undoes nothing: the next visit writes it straight back. Skipping is what
+  taking the charge back *means* here, it is visible on the card, and it is
+  one tap to reverse. A **linked** charge is undone by unlinking instead, and
+  a skip there would leave the bill at once linked and skipped for one period
+  — the state `link` clears on purpose — so the charge would vanish from the
+  month the moment somebody unlinked it. Found by the review.
+
+- **Confirming is refused when a movement already answers the charge**
+  (2026-09-21). Not symmetry with `link`: the two rows are keyed in different
+  spaces, so the ledger's conditional write — the thing that makes pressing
+  "Pagar" twice safe — cannot see the collision at all. Without the check the
+  feature produces exactly the double count it exists to remove. Found by the
+  review, reproduced against the repo's own fakes.
+
+- **Lazy, at `POST /financial/bills/settle`, not scheduled** (2026-09-21).
+  The same shape as `POST /financial/accrue` and for the same reason: nothing
+  in this deployment can walk every user yet. It also means the charge lands
+  while its owner is looking at the screen, which is the only moment an undo
+  is worth anything. The sweep catches every refusal per charge and leaves
+  that one alone — it runs on every visit, so one unlucky charge must not be
+  able to fail the page — while letting anything that is not a refusal
+  through: a table that is not answering must not read as "nothing was due".
+
+- **The confirmation dialog says what confirming *does*, and names
+  Presupuestos** (2026-09-21). Asked for by the owner. The difference between
+  "I wrote down what this will cost me" and "my money moved" is the thing
+  somebody gets wrong the first time they press Pagar, and the answer to
+  wanting the first is a screen that already exists.
+
 ### Spending budgets (2026-09-18)
 
 - **The Telegram alert at 80 % is deferred, and not for the reason the plan

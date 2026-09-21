@@ -524,6 +524,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/bills/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Settle Due Charges
+         * @description Answer for the charges nobody has answered for, as far as is safe.
+         *
+         *     What the bills screen calls when it opens, the same shape `POST
+         *     /financial/accrue` has and for the same reason: nothing in this
+         *     deployment can walk every user yet, so the work happens when its owner is
+         *     there — which is also the moment an undo is worth anything.
+         *
+         *     Three outcomes, and evidence decides which:
+         *
+         *     * a movement already in the ledger is recognised as the charge, and
+         *       **nothing is written** — this happens for any active bill, armed or
+         *       not, because recognising money that is already recorded is not acting
+         *       on somebody's behalf;
+         *     * a bill that charges itself, whose charge nothing matched and whose
+         *       match window has closed, writes the charge exactly as the button does;
+         *     * anything less clear comes back as a proposal and is left alone.
+         *
+         *     Safe to call again: a charge already answered for is not answered twice,
+         *     and a charge written by a previous run is found by its own id rather than
+         *     written a second time.
+         */
+        post: operations["settle_due_charges_financial_bills_settle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/bills/{bill_id}": {
         parameters: {
             query?: never;
@@ -556,6 +595,84 @@ export interface paths {
          *     is for.
          */
         patch: operations["amend_bill_financial_bills__bill_id__patch"];
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/autopay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Bill Autopay
+         * @description Let this bill charge itself, or stop it.
+         *
+         *     **Off until this is called**, bill by bill, and that is the whole design:
+         *     every other write in this feature happens because somebody pressed
+         *     something, and this is the one that happens because a clock said so. An
+         *     automatic charge is not a confirmation — in the manual path the owner
+         *     knows the money moved, here it is the calendar that assumes it — so the
+         *     app waits until the charge's **match window has closed** before writing
+         *     anything, and answers the charge with a movement instead whenever one in
+         *     the ledger looks like it.
+         *
+         *     Turning it on is not retroactive. The day it was turned on is remembered,
+         *     and nothing due before it is ever charged automatically: a switch flipped
+         *     today must not take money for a charge somebody has been looking at as
+         *     overdue for a week, and may already have paid in a way this app cannot
+         *     see.
+         */
+        post: operations["set_bill_autopay_financial_bills__bill_id__autopay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/occurrences/{period}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link Bill Charge
+         * @description Say a movement already in the ledger is what this charge cost.
+         *
+         *     The month the bank *did* send the email. The money is recorded, the
+         *     balance already moved, and the only thing missing was that nobody had
+         *     said which charge it answers for. **It writes nothing**: confirming
+         *     instead would record the same money twice, which is the exact drift this
+         *     feature exists to remove.
+         *
+         *     Refused when the charge is already confirmed — two answers pointing at
+         *     different money — and for a movement this app wrote itself, a transfer
+         *     between the owner's own accounts, the opposite direction, another
+         *     currency, or one already answering for some other charge. One payment
+         *     settles one thing.
+         */
+        post: operations["link_bill_charge_financial_bills__bill_id__occurrences__period__link_post"];
+        /**
+         * Unlink Bill Charge
+         * @description Take back the claim that a movement answered for this charge.
+         *
+         *     **Erases nothing**, which is the whole difference from undoing a
+         *     confirmation: the movement is the bank's own fact and stays where it is,
+         *     spent and counted. What goes away is only this app's claim about which
+         *     charge it paid.
+         *
+         *     Silent when nothing was linked, like every undo here.
+         */
+        delete: operations["unlink_bill_charge_financial_bills__bill_id__occurrences__period__link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/financial/bills/{bill_id}/occurrences/{period}/pay": {
@@ -1929,6 +2046,38 @@ export interface components {
          */
         AmortizationStyle: "french" | "constant_principal" | "interest_only";
         /**
+         * AutomaticSettlementResponse
+         * @description One charge this run answered for, and how.
+         *
+         *     `matched` means a movement the ledger already held was recognised as this
+         *     charge: **nothing was written**, and taking it back only forgets the link.
+         *     `charged` means the bill charged itself and a real movement now exists,
+         *     which an undo erases.
+         */
+        AutomaticSettlementResponse: {
+            action: components["schemas"]["SettlementAction"];
+            bill: components["schemas"]["BillResponse"];
+            occurrence: components["schemas"]["BillOccurrenceResponse"];
+        };
+        /**
+         * AutopayPayload
+         * @description Arm this bill to charge itself, or disarm it.
+         *
+         *     The timezone is not decoration: turning it on writes down the day it was
+         *     turned on, and that day is the earliest charge it may ever reach. Read in
+         *     UTC it would already be tomorrow for the whole Bogotá evening, and a
+         *     charge due today would fall outside a permission granted a minute ago.
+         */
+        AutopayPayload: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Timezone
+             * @default America/Bogota
+             */
+            timezone: string;
+        };
+        /**
          * BillCadence
          * @description How often the charge comes back.
          *
@@ -1980,6 +2129,7 @@ export interface components {
             settled_amount?: string | null;
             /** Settled At */
             settled_at?: number | null;
+            settled_by?: components["schemas"]["ChargeSource"] | null;
             state: components["schemas"]["OccurrenceState"];
         };
         /** BillResponse */
@@ -1988,6 +2138,10 @@ export interface components {
             account_id: string | null;
             /** Amount */
             amount: string;
+            /** Autopay */
+            autopay: boolean;
+            /** Autopay From */
+            autopay_from: string | null;
             cadence: components["schemas"]["BillCadence"];
             /** Category */
             category: string | null;
@@ -2058,6 +2212,18 @@ export interface components {
              * Format: date
              */
             until: string;
+        };
+        /** BillsSettlementResponse */
+        BillsSettlementResponse: {
+            /** Proposals */
+            proposals: components["schemas"]["ChargeProposalResponse"][];
+            /** Settled */
+            settled: components["schemas"]["AutomaticSettlementResponse"][];
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
         };
         /**
          * BudgetPayload
@@ -2356,6 +2522,29 @@ export interface components {
          */
         ChargeBasis: "fixed" | "outstanding_balance" | "original_principal" | "insured_value" | "earnings";
         /**
+         * ChargeCandidateResponse
+         * @description A movement that could be answering for a charge.
+         *
+         *     Carries what a person needs in order to recognise it — who it was with,
+         *     how much and when — because "is this the gym?" is not a question an id
+         *     can answer.
+         */
+        ChargeCandidateResponse: {
+            /** Amount */
+            amount: string;
+            /** Counterparty */
+            counterparty: string;
+            currency: components["schemas"]["Currency"];
+            /** Movement Id */
+            movement_id: string;
+            /**
+             * Occurred On
+             * Format: date
+             */
+            occurred_on: string;
+            quality: components["schemas"]["MatchQuality"];
+        };
+        /**
          * ChargePayload
          * @description One thing charged every period besides the interest.
          *
@@ -2389,6 +2578,23 @@ export interface components {
             rate?: number | string | null;
         };
         /**
+         * ChargeProposalResponse
+         * @description A charge with movements that could be it, and no clear answer.
+         *
+         *     What the app refuses to decide on its own: two plausible movements, or
+         *     one whose figure is nowhere near the bill's. Linking it is one tap and
+         *     ignoring it is none.
+         */
+        ChargeProposalResponse: {
+            /** Bill Id */
+            bill_id: string;
+            /** Bill Name */
+            bill_name: string;
+            /** Candidates */
+            candidates: components["schemas"]["ChargeCandidateResponse"][];
+            occurrence: components["schemas"]["BillOccurrenceResponse"];
+        };
+        /**
          * ChargeResponse
          * @description One thing charged every period besides the interest.
          */
@@ -2405,6 +2611,19 @@ export interface components {
             /** Rate */
             rate: string | null;
         };
+        /**
+         * ChargeSource
+         * @description Which kind of ledger row is answering for this charge.
+         *
+         *     The difference is not decoration: it decides what undoing means. A
+         *     `CONFIRMED` row exists because this feature wrote it — by hand or by the
+         *     automatic charge — so taking the answer back means erasing money that only
+         *     this app ever recorded. A `MATCHED` row is the bank's own movement, which
+         *     was going to be there either way; taking that answer back only forgets the
+         *     link, and erasing the movement would throw away a fact.
+         * @enum {string}
+         */
+        ChargeSource: "confirmed" | "matched";
         /**
          * ConfirmChargePayload
          * @description What actually happened, where it differs from what the bill projected.
@@ -2862,6 +3081,14 @@ export interface components {
             statement_day: number;
         };
         /**
+         * LinkChargePayload
+         * @description The movement that already paid this charge.
+         */
+        LinkChargePayload: {
+            /** Movement Id */
+            movement_id: string;
+        };
+        /**
          * LinkInstrumentPayload
          * @description Teach an account another of the names its alerts arrive under.
          *
@@ -2970,6 +3197,16 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * MatchQuality
+         * @description How much this movement looks like the charge.
+         *
+         *     Explicit strings: it crosses the API to a screen that renders the two
+         *     differently, so reordering the members must not change what a client
+         *     reads.
+         * @enum {string}
+         */
+        MatchQuality: "certain" | "likely";
         /**
          * MerchantCatalogResponse
          * @description Every vocabulary this context's endpoints accept or return.
@@ -3480,6 +3717,23 @@ export interface components {
             /** Credit Limit */
             credit_limit?: number | string | null;
         };
+        /**
+         * SettleChargesPayload
+         * @description Nothing but where the caller is, because everything else is derived.
+         */
+        SettleChargesPayload: {
+            /**
+             * Timezone
+             * @default America/Bogota
+             */
+            timezone: string;
+        };
+        /**
+         * SettlementAction
+         * @description What this run did about one charge.
+         * @enum {string}
+         */
+        SettlementAction: "matched" | "charged";
         /**
          * SetupStepResponse
          * @description One step of connecting a bank.
@@ -4758,6 +5012,39 @@ export interface operations {
             };
         };
     };
+    settle_due_charges_financial_bills_settle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettleChargesPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillsSettlementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forget_bill_financial_bills__bill_id__delete: {
         parameters: {
             query?: never;
@@ -4809,6 +5096,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_bill_autopay_financial_bills__bill_id__autopay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutopayPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_bill_charge_financial_bills__bill_id__occurrences__period__link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkChargePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unlink_bill_charge_financial_bills__bill_id__occurrences__period__link_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
                 };
             };
             /** @description Validation Error */

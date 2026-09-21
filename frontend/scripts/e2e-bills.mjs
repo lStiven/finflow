@@ -53,6 +53,9 @@ const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de v
 /** Unmistakable in a seeded database, and never a real merchant's name. */
 const PREFIX = "E2E Gimnasio";
 const NAME = `${PREFIX} ${Date.now()}`;
+/** The bill used for the reconciliation half, kept apart so the cleanup can
+ * find both by their shared prefix. */
+const MATCHED_NAME = `${PREFIX} conciliado ${Date.now()}`;
 const AMOUNT = "120.000";
 /** What `just seed` leaves four months of, and declares no bill for. */
 const DETECTED = "SPOTIFY COL";
@@ -418,6 +421,115 @@ async function main() {
     billId = null;
     check("borrar tampoco movió saldos", await moneyState(call), before);
 
+    // ------------------------------------------------ reconciliation, UI
+    // The safety net under the automatic charge, and the one property no
+    // unit test can prove: when a movement that *is* the charge is already
+    // in the ledger, opening the screen has to answer the charge **with that
+    // movement** and write nothing. A second row here is the double count
+    // this whole feature exists to remove, produced by the feature itself.
+    const period = firstOfThisMonth();
+    const matched = await call("/financial/bills", {
+      method: "POST",
+      body: JSON.stringify({
+        name: MATCHED_NAME,
+        amount: "120000",
+        currency: "COP",
+        cadence: "monthly",
+        starts_on: period,
+      }),
+    });
+    billId = matched.id;
+    const alreadyPaid = await call("/financial/transactions", {
+      method: "POST",
+      body: JSON.stringify({
+        direction: "outgoing",
+        amount: "120000",
+        currency: "COP",
+        // Noon UTC on the charge's own day: the same instant the confirmed
+        // charge would carry, and the same calendar day in every zone this
+        // is read in.
+        occurred_at: Math.floor(Date.parse(`${period}T12:00:00Z`) / 1000),
+        counterparty: MATCHED_NAME,
+      }),
+    });
+
+    // Taken *after* the movement exists: what must not change from here is
+    // the number of rows, which is the whole question.
+    const withMovement = await moneyState(call);
+
+    await page.goto(`${WEB}/facturas`, { waitUntil: "networkidle" });
+    const settled = await untilCharge(
+      call,
+      "conciliar el cobro",
+      (charge) => charge?.state === "paid",
+      15_000,
+      MATCHED_NAME,
+    );
+    check(
+      "el cobro queda pagado por el movimiento que ya estaba",
+      settled?.state,
+      "paid",
+    );
+    check("y la pantalla dice que no escribió nada", settled?.settled_by, "matched");
+    check(
+      "conciliar no escribió ningún movimiento",
+      await moneyState(call),
+      withMovement,
+    );
+    check(
+      "y la pantalla lo cuenta",
+      await page
+        .getByText("Ya estaba pagada por un movimiento tuyo", { exact: false })
+        .first()
+        .isVisible()
+        .catch(() => false),
+      true,
+    );
+
+    // And the way back, which is not the same undo: forgetting the link must
+    // leave the bank's own movement exactly where it is.
+    await page
+      .getByRole("button", { name: `No es este ${MATCHED_NAME}` })
+      .first()
+      .click();
+    const unlinked = await untilCharge(
+      call,
+      "desenlazar el cobro",
+      (charge) => charge?.state !== "paid",
+      10_000,
+      MATCHED_NAME,
+    );
+    check("desenlazar deja el cobro sin pagar", unlinked?.state !== "paid", true);
+    check("y no borra el movimiento", await moneyState(call), withMovement);
+
+    // ------------------------------------------------------- autopay, UI
+    await page.getByRole("button", { name: `Cobrar sola ${MATCHED_NAME}` }).click();
+    check(
+      "armar el cobro automático avisa antes de que escriba plata",
+      await page
+        .getByText("escribirá un movimiento", { exact: false })
+        .first()
+        .isVisible(),
+      true,
+    );
+    await page.getByRole("button", { name: `Sí, cobrar sola ${MATCHED_NAME}` }).click();
+    const armed = await until(
+      call,
+      "armar el cobro automático",
+      (bill) => bill?.autopay === true,
+      10_000,
+      MATCHED_NAME,
+    );
+    check("queda armada en el servidor", armed?.autopay, true);
+    check("y guarda desde cuándo", typeof armed?.autopay_from, "string");
+    check("armarla no cobró nada", await moneyState(call), withMovement);
+
+    await call(`/financial/bills/${matched.id}`, { method: "DELETE" });
+    await call(`/financial/transactions/${alreadyPaid.id}`, {
+      method: "DELETE",
+    });
+    billId = null;
+
     // ------------------------------------------------- suggestions, UI
     // The detector's half. `just seed` leaves four months of SPOTIFY COL in
     // the ledger and declares no bill for it, so the section has to be
@@ -545,13 +657,13 @@ async function find(call, name) {
 }
 
 /** `until`, but watching one charge of the window rather than the bill. */
-async function untilCharge(call, describe, predicate, timeoutMs = 10_000) {
+async function untilCharge(call, describe, predicate, timeoutMs = 10_000, name = NAME) {
   const deadline = Date.now() + timeoutMs;
   let last;
 
   while (Date.now() < deadline) {
     const view = await call("/financial/bills");
-    const bill = view.bills.find((each) => each.name === NAME);
+    const bill = view.bills.find((each) => each.name === name);
     last = view.occurrences.find((charge) => charge.bill_id === bill?.id);
 
     if (predicate(last)) return last;

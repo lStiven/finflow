@@ -366,6 +366,21 @@ class TransactionOrigin(enum.Enum):
     ACCRUAL = "accrual"
     SCHEDULED = "scheduled"
 
+    @property
+    def is_self_written(self) -> bool:
+        """Whether this app is the author of the row rather than a witness.
+
+        The one question two different features ask for the same reason. The
+        detector must not read its own output as evidence of a rhythm, and
+        reconciliation must not accept it as evidence that a charge happened:
+        both would be this app confirming itself, and both would be perfectly
+        regular by construction.
+        """
+        return self in _SELF_WRITTEN
+
+
+_SELF_WRITTEN = frozenset({TransactionOrigin.ACCRUAL, TransactionOrigin.SCHEDULED})
+
 
 class TransactionStatus(enum.Enum):
     # No account answers to this movement's instrument, or the alert named
@@ -490,6 +505,24 @@ def normalize_counterparty(value: str) -> str:
     # as far as it can be — instead of being refused or sharing one
     # fingerprint with every other such alert.
     return folded or " ".join(stripped.casefold().split())
+
+
+def counterparty_key(counterparty: str, merchant_id: str | None) -> str:
+    """Who a movement was with, as one comparable string.
+
+    The merchant when one owns the spelling, because that is what makes the
+    same gym recognisable through `PAGO GYM SA` one month and `GYMSA*BOG` the
+    next; the folded text otherwise, which is all there is for a name nothing
+    has ever attributed.
+
+    **Prefixed, so the two spaces cannot collide.** A merchant id and a piece
+    of normalized text are different kinds of answer, and a key that could be
+    either would call them equal the day one looked like the other.
+    """
+    if merchant_id is not None:
+        return f"merchant:{merchant_id}"
+
+    return f"text:{normalize_counterparty(counterparty)}"
 
 
 def _canonical_amount(amount: Money) -> str:

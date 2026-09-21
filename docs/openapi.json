@@ -553,6 +553,47 @@
         "title": "AmortizationStyle",
         "type": "string"
       },
+      "AutomaticSettlementResponse": {
+        "description": "One charge this run answered for, and how.\n\n`matched` means a movement the ledger already held was recognised as this\ncharge: **nothing was written**, and taking it back only forgets the link.\n`charged` means the bill charged itself and a real movement now exists,\nwhich an undo erases.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/SettlementAction"
+          },
+          "bill": {
+            "$ref": "#/components/schemas/BillResponse"
+          },
+          "occurrence": {
+            "$ref": "#/components/schemas/BillOccurrenceResponse"
+          }
+        },
+        "required": [
+          "action",
+          "bill",
+          "occurrence"
+        ],
+        "title": "AutomaticSettlementResponse",
+        "type": "object"
+      },
+      "AutopayPayload": {
+        "description": "Arm this bill to charge itself, or disarm it.\n\nThe timezone is not decoration: turning it on writes down the day it was\nturned on, and that day is the earliest charge it may ever reach. Read in\nUTC it would already be tomorrow for the whole Bogotá evening, and a\ncharge due today would fall outside a permission granted a minute ago.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "timezone": {
+            "default": "America/Bogota",
+            "maxLength": 64,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "AutopayPayload",
+        "type": "object"
+      },
       "BillCadence": {
         "description": "How often the charge comes back.\n\nExplicit string values: the cadence is persisted, so reordering the\nmembers must not rewrite anybody's data.",
         "enum": [
@@ -638,6 +679,16 @@
             ],
             "title": "Settled At"
           },
+          "settled_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChargeSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "state": {
             "$ref": "#/components/schemas/OccurrenceState"
           }
@@ -669,6 +720,22 @@
           "amount": {
             "title": "Amount",
             "type": "string"
+          },
+          "autopay": {
+            "title": "Autopay",
+            "type": "boolean"
+          },
+          "autopay_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autopay From"
           },
           "cadence": {
             "$ref": "#/components/schemas/BillCadence"
@@ -732,6 +799,8 @@
           "account_id",
           "category",
           "status",
+          "autopay",
+          "autopay_from",
           "frozen",
           "next_occurrence"
         ],
@@ -812,6 +881,36 @@
           "totals"
         ],
         "title": "BillsResponse",
+        "type": "object"
+      },
+      "BillsSettlementResponse": {
+        "properties": {
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeProposalResponse"
+            },
+            "title": "Proposals",
+            "type": "array"
+          },
+          "settled": {
+            "items": {
+              "$ref": "#/components/schemas/AutomaticSettlementResponse"
+            },
+            "title": "Settled",
+            "type": "array"
+          },
+          "today": {
+            "format": "date",
+            "title": "Today",
+            "type": "string"
+          }
+        },
+        "required": [
+          "today",
+          "settled",
+          "proposals"
+        ],
+        "title": "BillsSettlementResponse",
         "type": "object"
       },
       "BudgetPayload": {
@@ -1419,6 +1518,44 @@
         "title": "ChargeBasis",
         "type": "string"
       },
+      "ChargeCandidateResponse": {
+        "description": "A movement that could be answering for a charge.\n\nCarries what a person needs in order to recognise it — who it was with,\nhow much and when — because \"is this the gym?\" is not a question an id\ncan answer.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "counterparty": {
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/Currency"
+          },
+          "movement_id": {
+            "title": "Movement Id",
+            "type": "string"
+          },
+          "occurred_on": {
+            "format": "date",
+            "title": "Occurred On",
+            "type": "string"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/MatchQuality"
+          }
+        },
+        "required": [
+          "movement_id",
+          "counterparty",
+          "amount",
+          "currency",
+          "occurred_on",
+          "quality"
+        ],
+        "title": "ChargeCandidateResponse",
+        "type": "object"
+      },
       "ChargePayload": {
         "description": "One thing charged every period besides the interest.\n\nA *seguro de vida deudores* is a rate on what is owed; a *seguro de\nincendio y terremoto* is a rate on what the property is insured for, which\nis not a balance this app holds; an administration fee is a flat amount;\n*retención en la fuente* is a rate on what an investment earned. Which\n`basis` is chosen decides which of `amount`, `rate` and `base` is\nrequired, and the wrong pairing is refused rather than silently priced\nat zero.\n\n`charged_to_balance` is false when the bank collects it somewhere else —\nits own direct debit on a savings account. It is then part of what has to\nbe paid and never part of this balance, because that debit arrives as its\nown alert and posting it here as well would charge one insurance twice.",
         "properties": {
@@ -1495,6 +1632,37 @@
         "title": "ChargePayload",
         "type": "object"
       },
+      "ChargeProposalResponse": {
+        "description": "A charge with movements that could be it, and no clear answer.\n\nWhat the app refuses to decide on its own: two plausible movements, or\none whose figure is nowhere near the bill's. Linking it is one tap and\nignoring it is none.",
+        "properties": {
+          "bill_id": {
+            "title": "Bill Id",
+            "type": "string"
+          },
+          "bill_name": {
+            "title": "Bill Name",
+            "type": "string"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ChargeCandidateResponse"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "occurrence": {
+            "$ref": "#/components/schemas/BillOccurrenceResponse"
+          }
+        },
+        "required": [
+          "bill_id",
+          "bill_name",
+          "occurrence",
+          "candidates"
+        ],
+        "title": "ChargeProposalResponse",
+        "type": "object"
+      },
       "ChargeResponse": {
         "description": "One thing charged every period besides the interest.",
         "properties": {
@@ -1553,6 +1721,15 @@
         ],
         "title": "ChargeResponse",
         "type": "object"
+      },
+      "ChargeSource": {
+        "description": "Which kind of ledger row is answering for this charge.\n\nThe difference is not decoration: it decides what undoing means. A\n`CONFIRMED` row exists because this feature wrote it — by hand or by the\nautomatic charge — so taking the answer back means erasing money that only\nthis app ever recorded. A `MATCHED` row is the bank's own movement, which\nwas going to be there either way; taking that answer back only forgets the\nlink, and erasing the movement would throw away a fact.",
+        "enum": [
+          "confirmed",
+          "matched"
+        ],
+        "title": "ChargeSource",
+        "type": "string"
       },
       "ConfirmChargePayload": {
         "description": "What actually happened, where it differs from what the bill projected.\n\nEvery field is optional and the empty body is the ordinary case: the gym\ncharged what it always charges, on the day it always charges it. What this\nexists for is the month it did not — a price that went up, and the 4th\nthat fell on a Saturday so the money left on the 6th.\n\nNone of it takes part in the charge's identity, which is the bill and the\nperiod. So a figure corrected by confirming again does not write a second\nrow; it is answered with the row already there, and correcting it is\nediting that movement, where every other correction in this app is made.",
@@ -2714,6 +2891,22 @@
         "title": "InvestmentTermsResponse",
         "type": "object"
       },
+      "LinkChargePayload": {
+        "description": "The movement that already paid this charge.",
+        "properties": {
+          "movement_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Movement Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "movement_id"
+        ],
+        "title": "LinkChargePayload",
+        "type": "object"
+      },
       "LinkInstrumentPayload": {
         "description": "Teach an account another of the names its alerts arrive under.\n\nOne real account emails as a debit card for purchases and as an account\nnumber for transfers, under different last four digits. Both have to be\nlinked or half its movements wait forever.",
         "properties": {
@@ -2996,6 +3189,15 @@
         ],
         "title": "LoginPayload",
         "type": "object"
+      },
+      "MatchQuality": {
+        "description": "How much this movement looks like the charge.\n\nExplicit strings: it crosses the API to a screen that renders the two\ndifferently, so reordering the members must not change what a client\nreads.",
+        "enum": [
+          "certain",
+          "likely"
+        ],
+        "title": "MatchQuality",
+        "type": "string"
       },
       "MerchantCatalogResponse": {
         "description": "Every vocabulary this context's endpoints accept or return.\n\nCategories are not among them, and cannot be: half of that vocabulary\nbelongs to whoever is asking, and this answer is the same for everybody.\n`GET /merchants/categories` is the one place to read it from.",
@@ -4201,6 +4403,28 @@
         },
         "title": "SetCreditLimitPayload",
         "type": "object"
+      },
+      "SettleChargesPayload": {
+        "description": "Nothing but where the caller is, because everything else is derived.",
+        "properties": {
+          "timezone": {
+            "default": "America/Bogota",
+            "maxLength": 64,
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "title": "SettleChargesPayload",
+        "type": "object"
+      },
+      "SettlementAction": {
+        "description": "What this run did about one charge.",
+        "enum": [
+          "matched",
+          "charged"
+        ],
+        "title": "SettlementAction",
+        "type": "string"
       },
       "SetupStepResponse": {
         "description": "One step of connecting a bank.\n\n`at` is null for the two steps that are states rather than events (the\naddress exists, somebody is approved) — and for any step still open.",
@@ -6518,6 +6742,53 @@
         ]
       }
     },
+    "/financial/bills/settle": {
+      "post": {
+        "description": "Answer for the charges nobody has answered for, as far as is safe.\n\nWhat the bills screen calls when it opens, the same shape `POST\n/financial/accrue` has and for the same reason: nothing in this\ndeployment can walk every user yet, so the work happens when its owner is\nthere — which is also the moment an undo is worth anything.\n\nThree outcomes, and evidence decides which:\n\n* a movement already in the ledger is recognised as the charge, and\n  **nothing is written** — this happens for any active bill, armed or\n  not, because recognising money that is already recorded is not acting\n  on somebody's behalf;\n* a bill that charges itself, whose charge nothing matched and whose\n  match window has closed, writes the charge exactly as the button does;\n* anything less clear comes back as a proposal and is left alone.\n\nSafe to call again: a charge already answered for is not answered twice,\nand a charge written by a previous run is found by its own id rather than\nwritten a second time.",
+        "operationId": "settle_due_charges_financial_bills_settle_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettleChargesPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillsSettlementResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Settle Due Charges",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/bills/{bill_id}": {
       "delete": {
         "description": "Forget a bill entirely.\n\nA real delete, where closing an account would be wrong: a closed account\nstill explains movements that are in the ledger, and a bill explains\nnothing because it never wrote anything. Pausing is for the one worth\nkeeping.",
@@ -6610,6 +6881,188 @@
           }
         ],
         "summary": "Amend Bill",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/autopay": {
+      "post": {
+        "description": "Let this bill charge itself, or stop it.\n\n**Off until this is called**, bill by bill, and that is the whole design:\nevery other write in this feature happens because somebody pressed\nsomething, and this is the one that happens because a clock said so. An\nautomatic charge is not a confirmation — in the manual path the owner\nknows the money moved, here it is the calendar that assumes it — so the\napp waits until the charge's **match window has closed** before writing\nanything, and answers the charge with a movement instead whenever one in\nthe ledger looks like it.\n\nTurning it on is not retroactive. The day it was turned on is remembered,\nand nothing due before it is ever charged automatically: a switch flipped\ntoday must not take money for a charge somebody has been looking at as\noverdue for a week, and may already have paid in a way this app cannot\nsee.",
+        "operationId": "set_bill_autopay_financial_bills__bill_id__autopay_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutopayPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Bill Autopay",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/bills/{bill_id}/occurrences/{period}/link": {
+      "delete": {
+        "description": "Take back the claim that a movement answered for this charge.\n\n**Erases nothing**, which is the whole difference from undoing a\nconfirmation: the movement is the bank's own fact and stays where it is,\nspent and counted. What goes away is only this app's claim about which\ncharge it paid.\n\nSilent when nothing was linked, like every undo here.",
+        "operationId": "unlink_bill_charge_financial_bills__bill_id__occurrences__period__link_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unlink Bill Charge",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Say a movement already in the ledger is what this charge cost.\n\nThe month the bank *did* send the email. The money is recorded, the\nbalance already moved, and the only thing missing was that nobody had\nsaid which charge it answers for. **It writes nothing**: confirming\ninstead would record the same money twice, which is the exact drift this\nfeature exists to remove.\n\nRefused when the charge is already confirmed — two answers pointing at\ndifferent money — and for a movement this app wrote itself, a transfer\nbetween the owner's own accounts, the opposite direction, another\ncurrency, or one already answering for some other charge. One payment\nsettles one thing.",
+        "operationId": "link_bill_charge_financial_bills__bill_id__occurrences__period__link_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bill_id",
+            "required": true,
+            "schema": {
+              "title": "Bill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "period",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkChargePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillChargeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Link Bill Charge",
         "tags": [
           "financial"
         ]

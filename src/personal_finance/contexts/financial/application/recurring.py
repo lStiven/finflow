@@ -55,6 +55,7 @@ from personal_finance.contexts.financial.application.ports import (
 )
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
 from personal_finance.contexts.financial.domain.entities import Transaction
+from personal_finance.contexts.financial.domain.reconciliation import bill_keys
 from personal_finance.contexts.financial.domain.recurring import (
     HISTORY_MONTHS,
     RecurringSeries,
@@ -64,17 +65,10 @@ from personal_finance.contexts.financial.domain.recurring import (
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     MovementDirection,
-    TransactionOrigin,
-    normalize_counterparty,
+    counterparty_key,
 )
 from personal_finance.shared.domain.value_objects import Currency, UserId
 
-
-#: Origins that can never be evidence of a rhythm somebody would want to
-#: declare, because this application wrote them itself. `ACCRUAL` is the
-#: interest and the insurance a credit charges every cut; `SCHEDULED` is a
-#: bill charge somebody already confirmed.
-SELF_WRITTEN = frozenset({TransactionOrigin.ACCRUAL, TransactionOrigin.SCHEDULED})
 
 #: How many series one answer carries. A bound rather than a page: the list is
 #: read top-down and nobody acts on the eightieth suggestion, so the honest
@@ -240,7 +234,7 @@ def _is_evidence(movement: Transaction) -> bool:
     between somebody's own accounts is the most regular charge anybody has and
     is not spending at all.
     """
-    return movement.origin not in SELF_WRITTEN and not movement.is_transfer
+    return not movement.origin.is_self_written and not movement.is_transfer
 
 
 type GroupKey = tuple[str, MovementDirection, Currency]
@@ -306,14 +300,14 @@ def _day_of(movement: Transaction, zone: dt.tzinfo) -> dt.date:
 def _key_of(counterparty: str, attribution: MerchantAttribution | None) -> str:
     """The merchant, or the folded text when no merchant owns the spelling.
 
-    Prefixed so the two spaces cannot collide: a merchant id and a piece of
-    normalized text are different kinds of answer, and a key that could be
-    either would group them together the day one looked like the other.
+    One definition, in the domain, because reconciliation asks the same
+    question of the same movements: two answers to "who was this with" would
+    let the detector and the matcher disagree about one charge.
     """
-    if attribution is not None:
-        return f"merchant:{attribution.merchant_id}"
-
-    return f"text:{normalize_counterparty(counterparty)}"
+    return counterparty_key(
+        counterparty,
+        None if attribution is None else attribution.merchant_id,
+    )
 
 
 def _already_declared(
@@ -355,14 +349,12 @@ def _already_declared(
 def _bill_keys(
     bill: ScheduledBill,
     attribution: MerchantAttribution | None,
-) -> list[str]:
+) -> frozenset[str]:
     """Every counterparty key this bill could be recognised under."""
-    text = f"text:{normalize_counterparty(bill.name)}"
-
-    if attribution is None:
-        return [text]
-
-    return [f"merchant:{attribution.merchant_id}", text]
+    return bill_keys(
+        bill,
+        None if attribution is None else attribution.merchant_id,
+    )
 
 
 def _covering_bill(
@@ -377,7 +369,7 @@ def _covering_bill(
     them up.
     """
     _, direction, currency = group.identity
-    fallback = f"text:{normalize_counterparty(group.name)}"
+    fallback = counterparty_key(group.name, None)
 
     return covered.get(group.identity) or covered.get((fallback, direction, currency))
 

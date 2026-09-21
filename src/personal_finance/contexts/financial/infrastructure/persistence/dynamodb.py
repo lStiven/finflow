@@ -1436,6 +1436,26 @@ def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
         # the stored row does not churn on a rewrite that changed nothing else.
         item["skipped"] = {"SS": sorted(day.isoformat() for day in bill.skipped)}
 
+    if bill.autopay:
+        item["autopay"] = {"BOOL": True}
+
+    if bill.autopay_from is not None:
+        # ISO and not epoch, for the reason `starts_on` gives: it is a
+        # calendar day, and a day stored as an instant is a different day
+        # depending on where it is read.
+        item["autopay_from"] = {"S": bill.autopay_from.isoformat()}
+
+    if bill.linked:
+        # A map rather than a set, because both halves are needed: which
+        # period, and which movement answered for it. Absent on the ordinary
+        # bill, whose charges are all either confirmed or still coming.
+        item["linked"] = {
+            "M": {
+                day.isoformat(): {"S": movement}
+                for day, movement in sorted(bill.linked.items())
+            },
+        }
+
     return item
 
 
@@ -1456,6 +1476,7 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         raise CorruptFinancialItemError("Stored bill is missing its amount or age")
 
     account_id = _string(item, ACCOUNT_ID_ATTRIBUTE)
+    autopay_from = _string(item, "autopay_from")
 
     return ScheduledBill(
         id=BillId.from_string(sort_value.removeprefix(BILL_PREFIX)),
@@ -1478,6 +1499,15 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         skipped=frozenset(
             dt.date.fromisoformat(day) for day in item.get("skipped", {}).get("SS", [])
         ),
+        autopay=item.get("autopay", {}).get("BOOL", False),
+        autopay_from=(
+            None if autopay_from is None else dt.date.fromisoformat(autopay_from)
+        ),
+        linked={
+            dt.date.fromisoformat(day): movement
+            for day, stored in item.get("linked", {}).get("M", {}).items()
+            if (movement := stored.get("S"))
+        },
         created_at=PosixTime.from_epoch_seconds(int(_number(item, "created_at"))),
     )
 

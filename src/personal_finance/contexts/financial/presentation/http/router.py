@@ -35,6 +35,14 @@ from personal_finance.contexts.financial.application.allowance import (
     ReadAllowanceQuery,
     ReadMonthlyAllowanceUseCase,
 )
+from personal_finance.contexts.financial.application.autopay import (
+    AutomaticSettlement,
+    ChargeProposal,
+    SettleDueChargesCommand,
+    SettleDueChargesUseCase,
+    SettlementAction,
+    SettlementView,
+)
 from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
     BillSummary,
@@ -155,6 +163,7 @@ from personal_finance.contexts.financial.domain.bills import (
     BillId,
     BillOccurrence,
     BillStatus,
+    ChargeSource,
     OccurrenceState,
 )
 from personal_finance.contexts.financial.domain.budgets import (
@@ -199,6 +208,10 @@ from personal_finance.contexts.financial.domain.financing import (
     ScheduledPayment,
 )
 from personal_finance.contexts.financial.domain.plan import MonthlyPlan
+from personal_finance.contexts.financial.domain.reconciliation import (
+    ChargeCandidate,
+    MatchQuality,
+)
 from personal_finance.contexts.financial.domain.recurring import (
     HISTORY_MONTHS,
     SeriesState,
@@ -3120,13 +3133,21 @@ class BillOccurrenceResponse(BaseModel):
     # screen in somebody's browser.
     direction: MovementDirection
     state: OccurrenceState
-    #: The ledger row that confirmed this charge. Present exactly when `state`
-    #: is `paid`, and what an undo needs in order to erase the movement.
+    #: The ledger row that answers for this charge. Present exactly when
+    #: `state` is `paid`, and what an undo needs in order to erase the
+    #: movement — when it is a movement this app wrote. See `settled_by`.
     movement_id: str | None = None
     #: What actually moved, which may not be what the bill says.
     settled_amount: str | None = None
     #: When it actually moved, in epoch seconds.
     settled_at: int | None = None
+    #: **Which kind of row is answering, and therefore how to take it back.**
+    #: `confirmed` is the row this bill wrote: undoing means erasing it, and
+    #: the account gets its money back. `matched` is a movement that arrived
+    #: on its own: undoing means forgetting the link, and the movement stays
+    #: exactly where it is. A screen that offered one button for both would
+    #: erase the bank's own fact half the time.
+    settled_by: ChargeSource | None = None
 
 
 class BillResponse(BaseModel):
@@ -3140,6 +3161,15 @@ class BillResponse(BaseModel):
     account_id: str | None
     category: str | None
     status: BillStatus
+    #: Whether this bill charges itself once a charge's match window has
+    #: closed and nothing in the ledger looks like it. Off unless somebody
+    #: turned it on, bill by bill.
+    autopay: bool
+    #: The day it was turned on. Nothing before it is ever charged
+    #: automatically, so a switch flipped today cannot reach last week's
+    #: charge — which its owner has been looking at as overdue and may
+    #: already have paid where this app cannot see.
+    autopay_from: dt.date | None
     #: Its account is closed. Derived from the account, never stored — an
     #: account is closed and never deleted, so reopening one un-freezes its
     #: bills without anything having to remember to.
@@ -3189,6 +3219,86 @@ class BillsResponse(BaseModel):
     totals: list[BillTotalResponse]
 
 
+class AutopayPayload(BaseModel):
+    """Arm this bill to charge itself, or disarm it.
+
+    The timezone is not decoration: turning it on writes down the day it was
+    turned on, and that day is the earliest charge it may ever reach. Read in
+    UTC it would already be tomorrow for the whole Bogotá evening, and a
+    charge due today would fall outside a permission granted a minute ago.
+    """
+
+    enabled: bool
+    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=64)
+
+
+class LinkChargePayload(BaseModel):
+    """The movement that already paid this charge."""
+
+    movement_id: str = Field(min_length=1, max_length=128)
+
+
+class SettleChargesPayload(BaseModel):
+    """Nothing but where the caller is, because everything else is derived."""
+
+    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=64)
+
+
+class ChargeCandidateResponse(BaseModel):
+    """A movement that could be answering for a charge.
+
+    Carries what a person needs in order to recognise it — who it was with,
+    how much and when — because "is this the gym?" is not a question an id
+    can answer.
+    """
+
+    movement_id: str
+    counterparty: str
+    amount: str
+    currency: Currency
+    occurred_on: dt.date
+    #: `certain` is the right merchant for about the right money, and is what
+    #: gets linked without asking when it is the only one. `likely` is one of
+    #: the two, and is only ever shown.
+    quality: MatchQuality
+
+
+class ChargeProposalResponse(BaseModel):
+    """A charge with movements that could be it, and no clear answer.
+
+    What the app refuses to decide on its own: two plausible movements, or
+    one whose figure is nowhere near the bill's. Linking it is one tap and
+    ignoring it is none.
+    """
+
+    bill_id: str
+    bill_name: str
+    occurrence: BillOccurrenceResponse
+    candidates: list[ChargeCandidateResponse]
+
+
+class AutomaticSettlementResponse(BaseModel):
+    """One charge this run answered for, and how.
+
+    `matched` means a movement the ledger already held was recognised as this
+    charge: **nothing was written**, and taking it back only forgets the link.
+    `charged` means the bill charged itself and a real movement now exists,
+    which an undo erases.
+    """
+
+    action: SettlementAction
+    bill: BillResponse
+    occurrence: BillOccurrenceResponse
+
+
+class BillsSettlementResponse(BaseModel):
+    today: dt.date
+    #: What was settled, either way. Empty is the ordinary answer.
+    settled: list[AutomaticSettlementResponse]
+    #: What needs a person. Never acted on by anything here.
+    proposals: list[ChargeProposalResponse]
+
+
 @functools.lru_cache(maxsize=1)
 def build_bills() -> DynamoDBScheduledBillRepository:
     return DynamoDBScheduledBillRepository(
@@ -3232,8 +3342,31 @@ def _build_settle_charge() -> SettleBillChargeUseCase:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _build_settle_due_charges() -> SettleDueChargesUseCase:
+    """The lazy sweep, wired to read widely and write through one door.
+
+    It reads the ledger through `build_ledger()` — which satisfies the
+    listing port and nothing narrower exists — and writes only through
+    `_build_settle_charge()`, the very object the two buttons on the screen
+    use. An automatic charge taking a path of its own would be a second way
+    for money to appear here.
+    """
+    return SettleDueChargesUseCase(
+        bills=build_bills(),
+        charges=build_ledger(),
+        ledger=build_ledger(),
+        settle=_build_settle_charge(),
+        merchants=build_merchant_directory(),
+    )
+
+
 def get_manage_bills_use_case() -> ManageBillsUseCase:
     return _build_manage_bills()
+
+
+def get_settle_due_charges_use_case() -> SettleDueChargesUseCase:
+    return _build_settle_due_charges()
 
 
 def get_list_bills_use_case() -> ListBillsUseCase:
@@ -3248,6 +3381,10 @@ ManageBills = Annotated[ManageBillsUseCase, Depends(get_manage_bills_use_case)]
 SettleCharge = Annotated[
     SettleBillChargeUseCase,
     Depends(get_settle_charge_use_case),
+]
+SettleDueCharges = Annotated[
+    SettleDueChargesUseCase,
+    Depends(get_settle_due_charges_use_case),
 ]
 
 
@@ -3396,6 +3533,84 @@ def resume_bill(
     return _bill_summary_response(summary)
 
 
+@router.post("/bills/{bill_id}/autopay", response_model=BillResponse)
+def set_bill_autopay(
+    user_id: CurrentUser,
+    bill_id: str,
+    payload: AutopayPayload,
+    use_case: ManageBills,
+) -> BillResponse:
+    """Let this bill charge itself, or stop it.
+
+    **Off until this is called**, bill by bill, and that is the whole design:
+    every other write in this feature happens because somebody pressed
+    something, and this is the one that happens because a clock said so. An
+    automatic charge is not a confirmation — in the manual path the owner
+    knows the money moved, here it is the calendar that assumes it — so the
+    app waits until the charge's **match window has closed** before writing
+    anything, and answers the charge with a movement instead whenever one in
+    the ledger looks like it.
+
+    Turning it on is not retroactive. The day it was turned on is remembered,
+    and nothing due before it is ever charged automatically: a switch flipped
+    today must not take money for a charge somebody has been looking at as
+    overdue for a week, and may already have paid in a way this app cannot
+    see.
+    """
+    with _domain_errors():
+        summary = use_case.set_autopay(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            enabled=payload.enabled,
+            timezone=_known_timezone(payload.timezone),
+        )
+
+    return _bill_summary_response(summary)
+
+
+@router.post("/bills/settle", response_model=BillsSettlementResponse)
+def settle_due_charges(
+    user_id: CurrentUser,
+    payload: SettleChargesPayload,
+    use_case: SettleDueCharges,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> BillsSettlementResponse:
+    """Answer for the charges nobody has answered for, as far as is safe.
+
+    What the bills screen calls when it opens, the same shape `POST
+    /financial/accrue` has and for the same reason: nothing in this
+    deployment can walk every user yet, so the work happens when its owner is
+    there — which is also the moment an undo is worth anything.
+
+    Three outcomes, and evidence decides which:
+
+    * a movement already in the ledger is recognised as the charge, and
+      **nothing is written** — this happens for any active bill, armed or
+      not, because recognising money that is already recorded is not acting
+      on somebody's behalf;
+    * a bill that charges itself, whose charge nothing matched and whose
+      match window has closed, writes the charge exactly as the button does;
+    * anything less clear comes back as a proposal and is left alone.
+
+    Safe to call again: a charge already answered for is not answered twice,
+    and a charge written by a previous run is found by its own id rather than
+    written a second time.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            SettleDueChargesCommand(
+                user_id=user_id,
+                timezone=_known_timezone(payload.timezone),
+            ),
+        )
+
+    for settlement in view.settled:
+        if settlement.action is SettlementAction.CHARGED:
+            _file_charge_merchant(settlement.settled, merchants, user_id=user_id)
+
+    return _settlement_response(view)
+
+
 @router.post(
     "/bills/{bill_id}/occurrences/{period}/pay", response_model=BillChargeResponse
 )
@@ -3538,6 +3753,71 @@ def undo_bill_skip(
     return _bill_charge_response(settled)
 
 
+@router.post(
+    "/bills/{bill_id}/occurrences/{period}/link",
+    response_model=BillChargeResponse,
+)
+def link_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    payload: LinkChargePayload,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Say a movement already in the ledger is what this charge cost.
+
+    The month the bank *did* send the email. The money is recorded, the
+    balance already moved, and the only thing missing was that nobody had
+    said which charge it answers for. **It writes nothing**: confirming
+    instead would record the same money twice, which is the exact drift this
+    feature exists to remove.
+
+    Refused when the charge is already confirmed — two answers pointing at
+    different money — and for a movement this app wrote itself, a transfer
+    between the owner's own accounts, the opposite direction, another
+    currency, or one already answering for some other charge. One payment
+    settles one thing.
+    """
+    with _domain_errors():
+        settled = use_case.link(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+            movement_id=payload.movement_id,
+        )
+
+    return _bill_charge_response(settled)
+
+
+@router.delete(
+    "/bills/{bill_id}/occurrences/{period}/link",
+    response_model=BillChargeResponse,
+)
+def unlink_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Take back the claim that a movement answered for this charge.
+
+    **Erases nothing**, which is the whole difference from undoing a
+    confirmation: the movement is the bank's own fact and stays where it is,
+    spent and counted. What goes away is only this app's claim about which
+    charge it paid.
+
+    Silent when nothing was linked, like every undo here.
+    """
+    with _domain_errors():
+        settled = use_case.unlink(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+        )
+
+    return _bill_charge_response(settled)
+
+
 @router.delete("/bills/{bill_id}", status_code=status.HTTP_204_NO_CONTENT)
 def forget_bill(user_id: CurrentUser, bill_id: str, use_case: ManageBills) -> None:
     """Forget a bill entirely.
@@ -3596,6 +3876,8 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         account_id=None if bill.account_id is None else str(bill.account_id.value),
         category=bill.category,
         status=bill.status,
+        autopay=bill.autopay,
+        autopay_from=bill.autopay_from,
         frozen=summary.frozen,
         next_occurrence=(
             None
@@ -3618,6 +3900,7 @@ def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
         movement_id=None if payment is None else payment.movement_id,
         settled_amount=None if payment is None else str(payment.amount.amount),
         settled_at=None if payment is None else payment.occurred_at.as_epoch_seconds(),
+        settled_by=None if payment is None else payment.source,
     )
 
 
@@ -3625,6 +3908,42 @@ def _bill_charge_response(settled: SettledCharge) -> BillChargeResponse:
     return BillChargeResponse(
         bill=_bill_summary_response(settled.bill),
         occurrence=_occurrence_response(settled.occurrence),
+    )
+
+
+def _settlement_response(view: SettlementView) -> BillsSettlementResponse:
+    return BillsSettlementResponse(
+        today=view.today,
+        settled=[_settled_response(each) for each in view.settled],
+        proposals=[_proposal_response(each) for each in view.proposals],
+    )
+
+
+def _settled_response(settlement: AutomaticSettlement) -> AutomaticSettlementResponse:
+    return AutomaticSettlementResponse(
+        action=settlement.action,
+        bill=_bill_summary_response(settlement.settled.bill),
+        occurrence=_occurrence_response(settlement.settled.occurrence),
+    )
+
+
+def _proposal_response(proposal: ChargeProposal) -> ChargeProposalResponse:
+    return ChargeProposalResponse(
+        bill_id=str(proposal.bill_id.value),
+        bill_name=proposal.bill_name,
+        occurrence=_occurrence_response(proposal.occurrence),
+        candidates=[_candidate_response(each) for each in proposal.candidates],
+    )
+
+
+def _candidate_response(candidate: ChargeCandidate) -> ChargeCandidateResponse:
+    return ChargeCandidateResponse(
+        movement_id=candidate.movement_id,
+        counterparty=candidate.counterparty,
+        amount=str(candidate.amount.amount),
+        currency=candidate.amount.currency,
+        occurred_on=candidate.occurred_on,
+        quality=candidate.quality,
     )
 
 

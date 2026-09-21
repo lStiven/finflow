@@ -21,6 +21,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from personal_finance.contexts.financial.application.autopay import (
+    SettleDueChargesUseCase,
+)
 from personal_finance.contexts.financial.application.bills import (
     ListBillsUseCase,
     ManageBillsUseCase,
@@ -39,12 +42,14 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
     AccountKind,
+    MovementDirection,
 )
 from personal_finance.contexts.financial.presentation.http.router import (
     get_list_bills_use_case,
     get_manage_bills_use_case,
     get_merchant_directory,
     get_settle_charge_use_case,
+    get_settle_due_charges_use_case,
     router,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
@@ -53,6 +58,7 @@ from personal_finance.contexts.identity.presentation.http.router import (
 from personal_finance.shared.domain.entities import Event
 from personal_finance.shared.domain.value_objects import (
     Currency,
+    Money,
     PosixTime,
     UserId,
 )
@@ -301,12 +307,20 @@ def wired() -> Wiring:
         accounts=accounts,
         charges=ledger,
     )
-    app.dependency_overrides[get_settle_charge_use_case] = lambda: (
-        SettleBillChargeUseCase(
+    settle = SettleBillChargeUseCase(
+        bills=bills,
+        accounts=accounts,
+        charges=ledger,
+        transactions=transactions,
+    )
+    app.dependency_overrides[get_settle_charge_use_case] = lambda: settle
+    app.dependency_overrides[get_settle_due_charges_use_case] = lambda: (
+        SettleDueChargesUseCase(
             bills=bills,
-            accounts=accounts,
             charges=ledger,
-            transactions=transactions,
+            ledger=ledger,
+            settle=settle,
+            merchants=merchants,
         )
     )
 
@@ -953,3 +967,211 @@ def test_a_charge_is_confirmed_in_the_bills_own_currency(wired: Wiring) -> None:
     assert refused.status_code == 400
     assert accepted.status_code == 200
     assert accepted.json()["occurrence"]["settled_amount"] == "15"
+
+
+# ----------------------------------------------------------------------
+# Charging itself, and the movement that answers a charge
+# ----------------------------------------------------------------------
+
+
+def _arm(client: TestClient, bill: dict[str, Any], *, enabled: bool = True) -> Any:  # noqa: ANN401
+    return client.post(
+        f"/financial/bills/{bill['id']}/autopay",
+        json={"enabled": enabled, "timezone": "America/Bogota"},
+    )
+
+
+def _armed_before(wired: Wiring, bill: dict[str, Any], day: dt.date) -> None:
+    """Arm the bill as if it had been armed before that charge fell due.
+
+    Reaching into the repository on purpose: arming is never retroactive —
+    the day it was turned on is the earliest charge it may reach — so no
+    sequence of calls to the API can produce an automatic charge on the same
+    day the switch is flipped. That rule is pinned in the use cases; what
+    these cases are about is what the endpoint answers once it applies.
+    """
+    _arm(wired.client, bill)
+    stored = wired.bills.rows[(USER_ID, BillId.from_string(bill["id"]))]
+    stored.autopay_from = day
+
+
+def _settle_due(client: TestClient) -> dict[str, Any]:
+    response = client.post(
+        "/financial/bills/settle",
+        json={"timezone": "America/Bogota"},
+    )
+
+    assert response.status_code == 200, response.text
+
+    return response.json()
+
+
+def _entered(
+    ledger: InMemoryLedger,
+    *,
+    day: dt.date,
+    counterparty: str = "Gimnasio",
+    amount: str = "120000",
+) -> Transaction:
+    """A movement the bank announced, put straight into the ledger."""
+    movement = Transaction.enter_manually(
+        user_id=USER_ID,
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal(amount), currency=Currency.COP),
+        occurred_at=PosixTime.from_epoch_seconds(
+            int(dt.datetime.combine(day, dt.time(hour=12), tzinfo=dt.UTC).timestamp()),
+        ),
+        counterparty=counterparty,
+    )
+    ledger.rows[movement.id.value] = movement
+
+    return movement
+
+
+def test_a_bill_is_declared_without_charging_itself(wired: Wiring) -> None:
+    """Off unless somebody turns it on, which is what makes every other rule
+    here a refusal to guess rather than a hope."""
+    bill = _declare(wired.client, starts_on="2026-09-04")
+
+    assert bill["autopay"] is False
+    assert bill["autopay_from"] is None
+
+
+def test_arming_a_bill_answers_with_the_day_it_was_armed(wired: Wiring) -> None:
+    bill = _declare(wired.client, starts_on="2026-09-04")
+
+    body = _arm(wired.client, bill).json()
+
+    assert body["autopay"] is True
+    assert body["autopay_from"] is not None
+
+    disarmed = _arm(wired.client, bill, enabled=False).json()
+
+    assert disarmed["autopay"] is False
+    assert disarmed["autopay_from"] is None
+
+
+def test_settling_charges_an_armed_bill_whose_window_has_closed(
+    wired: Wiring,
+) -> None:
+    client, ledger = wired.client, wired.ledger
+    due = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=10)
+    bill = _declare(client, starts_on=due.isoformat())
+    _armed_before(wired, bill, due - dt.timedelta(days=1))
+
+    body = _settle_due(client)
+
+    assert [each["action"] for each in body["settled"]] == ["charged"]
+    assert body["settled"][0]["occurrence"]["state"] == "paid"
+    assert body["settled"][0]["occurrence"]["settled_by"] == "confirmed"
+    assert len(ledger.rows) == 1
+
+
+def test_an_automatic_charge_is_filed_under_the_bills_category(
+    wired: Wiring,
+) -> None:
+    """The same enrichment the button already does. Without it the charge
+    sits outside every breakdown, which is most of what it was declared
+    for."""
+    client = wired.client
+    due = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=10)
+    bill = _declare(client, starts_on=due.isoformat(), category="health")
+    _armed_before(wired, bill, due - dt.timedelta(days=1))
+
+    _settle_due(client)
+
+    assert wired.merchants.filed == [("Gimnasio", "health")]
+
+
+def test_settling_answers_a_charge_with_a_movement_instead_of_writing_one(
+    wired: Wiring,
+) -> None:
+    client, ledger = wired.client, wired.ledger
+    due = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=10)
+    bill = _declare(client, starts_on=due.isoformat())
+    _armed_before(wired, bill, due - dt.timedelta(days=1))
+    paid = _entered(ledger, day=due)
+
+    body = _settle_due(client)
+
+    assert [each["action"] for each in body["settled"]] == ["matched"]
+    assert body["settled"][0]["occurrence"]["movement_id"] == paid.id.value
+    assert body["settled"][0]["occurrence"]["settled_by"] == "matched"
+    assert len(ledger.rows) == 1
+
+
+def test_an_unclear_match_comes_back_as_a_proposal(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    due = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=10)
+    bill = _declare(client, starts_on=due.isoformat())
+    _armed_before(wired, bill, due - dt.timedelta(days=1))
+    _entered(ledger, day=due, amount="260000")
+
+    body = _settle_due(client)
+
+    assert body["settled"] == []
+    assert body["proposals"][0]["bill_name"] == "Gimnasio"
+    assert body["proposals"][0]["candidates"][0]["quality"] == "likely"
+    assert len(ledger.rows) == 1
+
+
+def test_a_movement_can_be_linked_to_a_charge_by_hand(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    paid = _entered(ledger, day=dt.date(2026, 9, 6), counterparty="PAGO PSE GYMSA")
+
+    body = client.post(
+        _charge_url(bill, "2026-09-04", "link"),
+        json={"movement_id": paid.id.value},
+    )
+
+    assert body.status_code == 200, body.text
+    assert body.json()["occurrence"]["state"] == "paid"
+    assert body.json()["occurrence"]["settled_by"] == "matched"
+    assert len(ledger.rows) == 1
+
+
+def test_unlinking_leaves_the_movement_where_it_is(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    paid = _entered(ledger, day=dt.date(2026, 9, 4))
+    client.post(
+        _charge_url(bill, "2026-09-04", "link"),
+        json={"movement_id": paid.id.value},
+    )
+
+    body = client.delete(_charge_url(bill, "2026-09-04", "link"))
+
+    assert body.status_code == 200, body.text
+    assert body.json()["occurrence"]["state"] != "paid"
+    assert paid.id.value in ledger.rows
+
+
+def test_linking_a_movement_that_is_not_there_reads_as_missing(
+    wired: Wiring,
+) -> None:
+    bill = _declare(wired.client, starts_on="2026-09-04")
+
+    response = wired.client.post(
+        _charge_url(bill, "2026-09-04", "link"),
+        json={"movement_id": "nothing"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_arming_today_leaves_a_charge_that_already_fell_due_alone(
+    wired: Wiring,
+) -> None:
+    """The switch is not retroactive. That charge has been on screen as
+    overdue for a week and may already have been paid where this app cannot
+    see it; taking the money now would be the app inventing an expense."""
+    client = wired.client
+    due = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=10)
+    bill = _declare(client, starts_on=due.isoformat())
+    _arm(client, bill)
+
+    body = _settle_due(client)
+
+    assert body["settled"] == []
+    assert wired.ledger.rows == {}

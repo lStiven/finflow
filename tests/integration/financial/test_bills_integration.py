@@ -44,8 +44,11 @@ from personal_finance.contexts.financial.domain.bills import (
     BillStatus,
     OccurrenceState,
 )
-from personal_finance.contexts.financial.domain.entities import Account
-from personal_finance.contexts.financial.domain.value_objects import AccountKind
+from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.value_objects import (
+    AccountKind,
+    MovementDirection,
+)
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     BILL_PREFIX,
     PARTITION_KEY,
@@ -55,7 +58,12 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
     DynamoDBTransactionLedger,
 )
 from personal_finance.shared.domain.events import Event
-from personal_finance.shared.domain.value_objects import Currency, Money, UserId
+from personal_finance.shared.domain.value_objects import (
+    Currency,
+    Money,
+    PosixTime,
+    UserId,
+)
 from personal_finance.shared.infrastructure.aws.provisioning import provision_table
 
 
@@ -582,3 +590,182 @@ def test_one_persons_charges_are_never_read_as_anothers(
 
     assert theirs.id != mine.id
     assert [charge.state for charge in view.occurrences] != [OccurrenceState.PAID]
+
+
+# ----------------------------------------------------------------------
+# Charging itself, and the movement that answers a charge
+# ----------------------------------------------------------------------
+
+
+def test_arming_a_bill_survives_the_round_trip(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    """Both halves or neither: the switch alone would let a charge from
+    before it was turned on be posted after a reload."""
+    bill = manage.declare(_declare()).bill
+
+    manage.set_autopay(
+        user_id=OWNER,
+        bill_id=bill.id,
+        enabled=True,
+        timezone="America/Bogota",
+    )
+
+    stored = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert stored is not None
+    assert stored.autopay is True
+    assert stored.autopay_from is not None
+
+
+def test_disarming_removes_both_attributes_from_the_row(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> None:
+    """A whole-item put has to make them go away — a day left behind would be
+    a permission nobody granted, waiting for the switch to come back."""
+    bill = manage.declare(_declare()).bill
+    manage.set_autopay(
+        user_id=OWNER,
+        bill_id=bill.id,
+        enabled=True,
+        timezone="America/Bogota",
+    )
+
+    manage.set_autopay(
+        user_id=OWNER,
+        bill_id=bill.id,
+        enabled=False,
+        timezone="America/Bogota",
+    )
+
+    item = dynamodb_client.get_item(
+        TableName=table,
+        Key={
+            PARTITION_KEY: {"S": str(OWNER.value)},
+            SORT_KEY: {"S": f"{BILL_PREFIX}{bill.id.value}"},
+        },
+    ).get("Item")
+    assert item is not None
+    assert "autopay" not in item
+    assert "autopay_from" not in item
+
+
+def test_a_linked_movement_survives_the_round_trip_and_writes_no_row(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    listing: ListBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Against the real table: the link is stored, and the charge reads paid
+    by that movement without a second row appearing anywhere."""
+    bill = manage.declare(_declare()).bill
+    paid = _entered(ledger, day=dt.date(2026, 9, 5))
+    before = len(list(ledger.list_all(OWNER)))
+
+    settle.link(
+        user_id=OWNER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    stored = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert stored is not None
+    assert stored.linked == {dt.date(2026, 9, 4): paid.id.value}
+    assert len(list(ledger.list_all(OWNER))) == before
+
+    view = listing.execute(
+        ListBillsQuery(
+            user_id=OWNER,
+            since=dt.date(2026, 9, 1),
+            until=dt.date(2026, 9, 30),
+            timezone="America/Bogota",
+        ),
+    )
+    assert [each.state for each in view.occurrences] == [OccurrenceState.PAID]
+
+
+def test_erasing_a_linked_movement_un_pays_its_charge(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    listing: ListBillsUseCase,
+    ledger: DynamoDBTransactionLedger,
+) -> None:
+    """Read against the ledger rather than believed, exactly like a confirmed
+    charge — so nothing has to remember to undo anything."""
+    bill = manage.declare(_declare()).bill
+    paid = _entered(ledger, day=dt.date(2026, 9, 4))
+    settle.link(
+        user_id=OWNER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    ledger.remove([paid], reversals=[])
+
+    view = listing.execute(
+        ListBillsQuery(
+            user_id=OWNER,
+            since=dt.date(2026, 9, 1),
+            until=dt.date(2026, 9, 30),
+            timezone="America/Bogota",
+        ),
+    )
+    assert [each.state for each in view.occurrences] != [OccurrenceState.PAID]
+
+
+def test_unlinking_removes_the_map_from_the_row(
+    manage: ManageBillsUseCase,
+    settle: SettleBillChargeUseCase,
+    ledger: DynamoDBTransactionLedger,
+    dynamodb_client: DynamoDBClient,
+    table: str,
+) -> None:
+    bill = manage.declare(_declare()).bill
+    paid = _entered(ledger, day=dt.date(2026, 9, 4))
+    settle.link(
+        user_id=OWNER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    settle.unlink(user_id=OWNER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    item = dynamodb_client.get_item(
+        TableName=table,
+        Key={
+            PARTITION_KEY: {"S": str(OWNER.value)},
+            SORT_KEY: {"S": f"{BILL_PREFIX}{bill.id.value}"},
+        },
+    ).get("Item")
+    assert item is not None
+    assert "linked" not in item
+    assert paid.id.value in {row.id.value for row in ledger.list_all(OWNER)}
+
+
+def _entered(
+    ledger: DynamoDBTransactionLedger,
+    *,
+    day: dt.date,
+    counterparty: str = "Gimnasio",
+    amount: str = "120000",
+) -> Transaction:
+    """A movement the bank announced, written straight into the real table."""
+    movement = Transaction.enter_manually(
+        user_id=OWNER,
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal(amount), currency=Currency.COP),
+        occurred_at=PosixTime.from_epoch_seconds(
+            int(dt.datetime.combine(day, dt.time(hour=12), tzinfo=dt.UTC).timestamp()),
+        ),
+        counterparty=counterparty,
+    )
+    ledger.record(transaction=movement, balance_delta=None)
+
+    return movement

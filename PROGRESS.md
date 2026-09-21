@@ -78,7 +78,26 @@ Todo el backend de la versión 1 está terminado y probado:
   mes que un cobro no llegó se salta, y eso no escribe nada. La pantalla lee
   dos cifras: lo que cuesta el mes y lo que falta por pagar. Un ingreso
   declarado —la nómina— usa los mismos botones con otras palabras: llega, no
-  se paga.
+  se paga. Al confirmar, la pantalla recuerda que eso **escribe un movimiento
+  nuevo** y que si lo que uno quería era apartar la plata del mes, eso son los
+  Presupuestos.
+
+- **Y se pueden cobrar solas, factura por factura.** Apagado hasta que alguien
+  lo encienda. Una factura armada **no cobra el día que vence**: espera a que
+  se cierre la ventana de cinco días, porque un cobro domiciliado lo presenta
+  un negocio y lo asienta un banco, y escribir antes es apuntar dos veces la
+  misma plata. Y **no cobra hacia atrás**: se guarda desde qué día se armó, así
+  que encenderlo hoy no toca el cobro que llevaba una semana vencido. Antes de
+  escribir nada, la app **mira si el movimiento ya está**: si en el historial
+  hay uno que cuadra —el mismo comercio, más o menos el mismo monto, cerca del
+  día—, el cobro queda pagado **por ese movimiento** y no se escribe nada; eso
+  pasa con todas las facturas activas, armadas o no, y es lo que evita cobrar
+  dos veces cuando el banco sí avisó. Si hay dos que podrían serlo, o uno que
+  solo se parece, no decide nadie: la pantalla lo propone y basta un toque
+  para enlazarlo —o para enlazar a mano cualquier movimiento con cualquier
+  cobro—. Desenlazar **no borra nada**: el movimiento es del banco y se queda
+  donde está; deshacer un cobro automático sí borra el que escribió la app, y
+  además lo marca como saltado para que no vuelva solo esa misma tarde.
 
 - **Y la app propone las que uno no declaró.** Mira los últimos dos años de
   movimientos y, cuando algo se repite —el mismo comercio, el mismo día del
@@ -121,8 +140,9 @@ Todo el backend de la versión 1 está terminado y probado:
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 79 operaciones de API en cinco contextos, seis procesos en
-la nube, 2136 pruebas de Python y 409 del frontend, todas en verde.
+**Estado técnico:** 83 operaciones de API en cinco contextos, seis procesos en
+la nube, 2217 pruebas de Python y 416 del frontend, todas en verde salvo la
+de la mesada que se cae cinco horas al día (ver Huecos conocidos).
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -153,10 +173,10 @@ Medido contra AWS y contra el `openapi.json` que sirve cada API, no recordado:
 
 | | Operaciones | Estado |
 |---|---|---|
-| API producción | 79 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
-| API desarrollo | 79 operaciones | 43 — igual que producción |
+| API producción | 83 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
+| API desarrollo | 83 operaciones | 43 — igual que producción |
 | Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas, presupuestos | ninguna |
-| Contrato de la rama `dev` | 79 | — |
+| Contrato de la rama `dev` | 83 | — |
 | API desarrollo (`finflow-dev`) | 75 | `UPDATE_COMPLETE` 2026-09-15 |
 | API producción (`finflow`) | 70 | `UPDATE_COMPLETE` 2026-09-15 |
 | Web producción (`finflow-apk.pages.dev`) | — | responde 200 |
@@ -222,9 +242,9 @@ AWS (ver Trabas).
    [docs/alerts.md](docs/alerts.md).
 
 6. **Lo que queda de los features en curso.** De las facturas (E2) están
-   A, B y D —declarar, confirmar o saltar a mano, y que el detector proponga—;
-   faltan **C** (que se cargue solo, con ventana de conciliación) y **E**
-   (avisar antes del cobro), esta última **aplazada a propósito**. El tercer
+   A, B, C y D —declarar, confirmar o saltar a mano, que se cobren solas con
+   su ventana de conciliación, y que el detector proponga—; falta solo **E**
+   (avisar *antes* del cobro), **aplazada a propósito**. El tercer
    feature (E3, el disponible del mes) está entregado, y el cuarto (E4, los
    presupuestos) también salvo su aviso por Telegram — que **no depende de
    E1**, como el plan creía, sino del punto 3 de esta misma lista: un
@@ -314,6 +334,23 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-21 — **Una factura ya se cobra sola, con red debajo.** Entrega C del
+  segundo feature, y la red es la mitad que importa: **antes de escribir nada
+  se mira el historial**, y si hay un movimiento que cuadra, el cobro queda
+  pagado *por ese movimiento* sin escribir ninguno. Eso pasa con toda factura
+  activa, armada o no —reconocer plata que ya está no es actuar por nadie— y
+  es lo único que separa esta feature de causar el doble conteo que existe
+  para quitar. Lo automático espera a que **se cierre la ventana de cinco
+  días**, no a la gracia de tres: lo primero pregunta «¿es esto el gimnasio?»
+  y lo decide un banco; lo segundo pregunta «¿va tarde?» y lo decide el dueño.
+  Armarlo **no toca el pasado** (se guarda desde cuándo) y dos candidatos no
+  enlazan nada: elegir sería adivinar de quién es la plata. También se enlaza
+  y se desenlaza a mano, y desenlazar no borra el movimiento del banco.
+  Comprobado en el navegador contra la pila real (`just e2e-bills`): conciliar
+  no escribió ni una fila. La revisión encontró cinco cosas reales, dos de
+  ellas dinero: confirmar no miraba si un movimiento ya respondía por el cobro
+  —el doble conteo, desde el otro lado— y una semanal podía cobrarse sola un
+  cobro que un movimiento entre dos ventanas ya había pagado.
 - 2026-09-21 — **`just up` ya abre en el navegador, en cualquier entorno y sin
   flags.** `DEFAULT_API_HOST` pasa a `0.0.0.0` en `scripts/run_stack.py`:
   dentro de un DevContainer el loopback es una interfaz distinta de aquella a
@@ -382,20 +419,3 @@ AWS (ver Trabas).
   ahorro no sobreviva al ingreso contra el que se fijó. La revisión encontró
   cinco cosas reales, entre ellas que teclear «0» en «quieres guardar» se
   rechazaba y que un 5xx de la tarjeta se llevaba por delante todo el panel.
-- 2026-09-15 — **La app propone las facturas que uno no declaró.**
-  Entrega D del segundo feature. Lee el historial, agrupa por el comercio
-  atribuido —no por el texto, que el mismo gimnasio llega como `PAGO GYM SA`
-  y `GYMSA*BOG`— y decide la cadencia por el calendario y no por los días:
-  Netflix cobra el 15 con brechas de 30, 31 y 31, y medir días la llamaría
-  irregular. **No escribe nada**: aceptar una sugerencia es declarar la
-  factura por el mismo endpoint del formulario. Construirlo corrigió dos
-  suposiciones del plan. La ventana de trece meses **no podía funcionar**: con
-  tres apariciones como mínimo, trece meses caben dos cobros anuales, así que
-  lo anual no se habría sugerido nunca —en silencio, porque «no es una serie»
-  y «no alcanza la ventana» se ven igual desde afuera—; son veinticinco meses.
-  Y una subida de precio no es ruido: 16.900 tres veces y luego 19.900 se lee
-  como el precio nuevo, no como una serie variable que predice el viejo. La
-  revisión encontró las dos, más una colisión de claves entre monedas y un
-  emparejamiento que fallaba justo para las facturas que esta pantalla crea.
-  `just seed` deja dos series para mirarlas, y `just e2e-bills` acepta una en
-  el navegador y comprueba que no movió un peso.

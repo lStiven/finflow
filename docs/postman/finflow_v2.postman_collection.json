@@ -2618,6 +2618,73 @@
           "response": []
         },
         {
+          "name": "Arm a bill to charge itself",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/autopay",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "autopay"
+              ]
+            },
+            "description": "Let this bill charge itself, or stop it. **Off until this is called**, bill by bill: every other write under `/bills` happens because somebody pressed something, and this is the one that happens because a clock said so. An armed bill does not write on its due date — it waits until the charge's *match window* has closed (five days), so a movement arriving late is recognised as the charge instead of becoming a second one. It is not retroactive either: the day it was armed is stored, and nothing due before it is ever charged automatically. `timezone` decides what that day is, so leaving it out reads the switch in UTC and can push it a day forward. 409 when the bill's account is closed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"timezone\": \"America/Bogota\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Settle what is due",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/settle",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "settle"
+              ]
+            },
+            "description": "What the bills screen calls when it opens, the same shape as `POST /financial/accrue` and for the same reason: nothing can walk every user on a schedule yet, so the work happens while its owner is there. Three outcomes, decided by evidence rather than by a setting. A movement already in the ledger that clearly is the charge answers it — **nothing is written** — and that happens for every active bill, armed or not. An armed bill whose charge nothing matched and whose window has closed writes the charge, exactly as the button does. Anything less clear comes back under `proposals` and is left alone. Safe to call again: a charge already answered for is not answered twice.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"timezone\": \"America/Bogota\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Pause a bill",
           "request": {
             "method": "POST",
@@ -2786,6 +2853,70 @@
               ]
             },
             "description": "Let a skipped charge be expected again. No calendar check, on purpose: amending the bill's day can leave a skip on a date the calendar no longer visits, and refusing to remove that would make it permanent."
+          },
+          "response": []
+        },
+        {
+          "name": "Link a movement to a charge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/link",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "link"
+              ]
+            },
+            "description": "Say a movement already in the ledger is what this charge cost — the month the bank *did* send the email. **It writes nothing**: the money is recorded and the balance already moved, and confirming instead would record the same money twice. Refused when the charge is already confirmed (undo that first), and for a movement this app wrote itself, a transfer between the owner's own accounts, the opposite direction, another currency, or one already answering for some other charge — one payment settles one thing. 404 when the movement is not this user's.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"movement_id\": \"{{movement_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unlink a movement from a charge",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/link",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "link"
+              ]
+            },
+            "description": "Take back the claim that a movement answered for this charge. **Erases nothing** — that is the whole difference from `DELETE .../pay`: the movement is the bank's own fact and stays where it is, spent and counted. Silent when nothing was linked, like every undo here."
           },
           "response": []
         },

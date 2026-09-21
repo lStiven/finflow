@@ -66,6 +66,10 @@ export type BillOccurrence = components["schemas"]["BillOccurrenceResponse"];
 export type BillTotal = components["schemas"]["BillTotalResponse"];
 export type BillCadence = components["schemas"]["BillCadence"];
 export type BillCharge = components["schemas"]["BillChargeResponse"];
+export type BillsSettlement = components["schemas"]["BillsSettlementResponse"];
+export type ChargeProposal = components["schemas"]["ChargeProposalResponse"];
+export type ChargeCandidate = components["schemas"]["ChargeCandidateResponse"];
+export type AutomaticSettlement = components["schemas"]["AutomaticSettlementResponse"];
 export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
 /**
  * A rhythm the detector found in the history, with how much to believe it.
@@ -1506,7 +1510,7 @@ export const recurringQuery = queryOptions({
  * path rather than the body is what makes paying September and paying October
  * two different requests.
  */
-export type ChargeAction = "pay" | "unpay" | "skip" | "unskip";
+export type ChargeAction = "pay" | "unpay" | "skip" | "unskip" | "unlink";
 
 export type SettleChargeVariables = {
   billId: string;
@@ -1564,6 +1568,17 @@ export function useSettleCharge(): UseMutationResult<
         );
       }
 
+      // Not the same undo as `unpay`, and the difference is money: this one
+      // forgets a claim about which charge a movement paid, and leaves the
+      // movement itself exactly where the bank put it.
+      if (action === "unlink") {
+        return unwrap(
+          api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/link", {
+            params,
+          }),
+        );
+      }
+
       return unwrap(
         api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/skip", { params }),
       );
@@ -1574,6 +1589,96 @@ export function useSettleCharge(): UseMutationResult<
       void client.invalidateQueries({ queryKey: queryKeys.summary });
       void client.invalidateQueries({ queryKey: queryKeys.trends });
       void client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+/**
+ * Arm a bill to charge itself, or disarm it.
+ *
+ * The timezone goes with it because the day it was armed is what the server
+ * writes down, and that day is the earliest charge the switch may ever reach.
+ */
+export function useSetBillAutopay(): UseMutationResult<
+  Bill,
+  Error,
+  { billId: string; enabled: boolean }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, enabled }: { billId: string; enabled: boolean }) =>
+      unwrap(
+        api.POST("/financial/bills/{bill_id}/autopay", {
+          params: { path: { bill_id: billId } },
+          body: { enabled, timezone: DISPLAY_TIMEZONE },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+/**
+ * Say a movement already in the ledger is what this charge cost.
+ *
+ * **It writes nothing**, which is why its invalidations are narrower than
+ * `useSettleCharge`'s: no balance moved and no row was added, so the accounts
+ * and the summary are as true as they were a second ago. What changed is what
+ * the month still owes.
+ */
+export function useLinkCharge(): UseMutationResult<
+  BillCharge,
+  Error,
+  { billId: string; period: string; movementId: string }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, period, movementId }) =>
+      unwrap(
+        api.POST("/financial/bills/{bill_id}/occurrences/{period}/link", {
+          params: { path: { bill_id: billId, period } },
+          body: { movement_id: movementId },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
+/**
+ * Settle what can be settled, as the screen opens.
+ *
+ * A mutation and not a query, because it can write: a bill that charges
+ * itself writes its charge here. Lazy on purpose — nothing in this
+ * deployment can walk every user yet, so the work happens while its owner is
+ * looking, which is also the only moment an undo is worth anything.
+ *
+ * Everything it can touch is invalidated, because in the worst case it wrote
+ * a movement: the same list `useSettleCharge` gives, for the same reason.
+ */
+export function useSettleDueCharges(): UseMutationResult<BillsSettlement, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/financial/bills/settle", {
+          body: { timezone: DISPLAY_TIMEZONE },
+        }),
+      ),
+    onSuccess: (view) => {
+      if (view.settled.length === 0) {
+        return;
+      }
+
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+      void client.invalidateQueries({ queryKey: queryKeys.transactions });
+      void client.invalidateQueries({ queryKey: queryKeys.summary });
+      void client.invalidateQueries({ queryKey: queryKeys.trends });
+      void client.invalidateQueries({ queryKey: queryKeys.accounts });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
