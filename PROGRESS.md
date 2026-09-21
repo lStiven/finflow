@@ -193,6 +193,13 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
+- **Una prueba de la mesada se cae cinco horas al día.**
+  `test_it_answers_for_the_calendar_month_and_counts_today` compara
+  `days_left` contra un `today()` que el propio test calcula en UTC, mientras
+  `allowance.py` lo calcula en `America/Bogota` (`today_in(zone)`). Entre las
+  00:00 y las 05:00 UTC —19:00 a 24:00 en Bogotá— las dos fechas no coinciden
+  y `just prepare` se pone rojo sin que nada esté mal en la aplicación. El
+  arreglo es una línea en el helper del test.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
@@ -247,6 +254,7 @@ AWS (ver Trabas).
   cuenta.
 
 ## Últimos trabajos terminados
+
 - 2026-09-21 — **Desplegar sin cambios de backend ya no es un error.**
   `fail_on_empty_changeset = false` en los dos entornos de
   `infra/samconfig.toml`. La imagen solo lleva `pyproject.toml`, `uv.lock` y

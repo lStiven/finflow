@@ -9,11 +9,19 @@ see **Frontend** in [`docs/decisions.md`](../docs/decisions.md).
 ## Running it
 
 ```bash
-just web-install                      # once
-cp .env.example .env.development      # points at http://localhost:8000
-just up                               # emulator, seed data, API and the four workers
-just web                              # this, on http://localhost:5173
+just web-install                  # once
+cp .env.example .env.development  # points at http://localhost:8000
+just up                           # emulator, seed data, API and the four workers
+just web                          # this, on http://localhost:5173
 ```
+
+Both ports reach the host's browser because both processes bind every
+interface: inside a DevContainer a loopback bind is invisible to the published
+Docker port, so the page would load on 5173 and every call it makes would fail
+— the fetch happens in your browser, not in the container. `just up` used to
+need `--api-host 0.0.0.0` for that reason and now does it by itself; the flag
+still takes `127.0.0.1` if you want the API kept in. The full reason is in
+[docs/running.md](../docs/running.md#4-los-seis-procesos).
 
 `just dev` alone is enough if you only need the API. Log in with the seeded
 account: `demo@finflow.local` / `una frase larga de verdad`.
@@ -136,8 +144,8 @@ says will happen (`lib/deletion.ts`), and the two transfer roles
 (`lib/transfers.ts`). Add to them before changing any of those files.
 
 A screen itself is checked by looking at it: `just shot` drives a headless
-Chromium over the running app (`just up` in one terminal, `just web` in
-another) and writes PNGs to `.screenshots/`, which git ignores.
+Chromium over the running app (`just up` in one terminal,
+`just web` in another) and writes PNGs to `.screenshots/`, which git ignores.
 
 ## Layout
 

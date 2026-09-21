@@ -30,7 +30,7 @@ just up                    # emulador, recursos, datos demo y los procesos
 ```
 
 `just up` hace por sí solo lo que antes eran cuatro comandos y cinco
-terminales. La API queda en http://localhost:8000/docs.
+terminales. La API queda en http://localhost:8000/docs, sin flags.
 
 El resto de esta guía explica cada paso y los otros dos entornos.
 
@@ -236,6 +236,26 @@ tres entornos y el poller marca como leído lo que lee, así que un run local
 contra un emulador en memoria se comería el correo que development iba a
 procesar — sin que nada lo reporte. En local la entrada es el webhook que la
 API monta justo para eso. Si de verdad lo quieres: `just up --with-ingest`.
+
+**La API escucha en todas las interfaces, en todos los entornos.** Tiene que
+hacerlo: dentro de un DevContainer, `127.0.0.1` es una interfaz distinta de
+aquella a la que Docker entrega el puerto publicado, así que un bind al
+loopback responde a `curl` desde dentro y no responde a
+http://localhost:8000/docs desde Windows o macOS. Se reconoce con `ss -ltn`:
+`127.0.0.1:8000` en vez de `0.0.0.0:8000` es exactamente eso.
+
+Esto fue durante un tiempo un flag que había que acordarse de escribir
+(`--api-host 0.0.0.0`) y el flag se olvidaba, que es como acabó siendo el
+default. Quien quiera lo de antes: `just up --api-host 127.0.0.1`.
+
+Lo que decide quién llega desde fuera de la máquina no es este bind sino el
+*publish* de Docker, en `.devcontainer/devcontainer.json`. Si te preocupa la
+red local —`just up-dev` habla con los recursos `dev-` de verdad—, lo que se
+estrecha es el mapeo, a `127.0.0.1:8000:8000`.
+
+> `just dev` **sí** bindea `0.0.0.0` por su cuenta, igual que `run-dev` y
+> `run-prod`. La asimetría es la que confunde: la misma URL funciona con
+> `just dev` y no con `just up`.
 
 Dos stacks a la vez (local y development) necesitan puertos distintos:
 `just up --api-port 8001`.
@@ -536,6 +556,12 @@ navegador del host.** Es la dirección del contenedor en la red interna de
 Docker. Abre siempre `http://localhost:5173`. Está explicado, con el orden de
 diagnóstico, en [`frontend/README.md`](../frontend/README.md).
 
+**Y si la página carga pero todas sus llamadas fallan, mira si la API está
+arriba.** Vite escucha en todas las interfaces, así que 5173 responde aunque
+8000 no, y la pantalla se pinta mientras cada petición muere en la pestaña
+**Network**. Son dos puertos y hay que publicar los dos — ver
+[Los seis procesos](#4-los-seis-procesos).
+
 ### Verlo de verdad: `just shot`
 
 En este DevContainer no hay navegador, así que una pantalla que solo compila
@@ -543,8 +569,8 @@ En este DevContainer no hay navegador, así que una pantalla que solo compila
 que ya está corriendo y escribe PNGs que sí se pueden abrir.
 
 ```bash
-just up                       # emulador, datos de prueba y la API
-just web                      # el frontend, en otra terminal
+just up     # emulador, datos de prueba y la API
+just web    # el frontend, en otra terminal
 
 just shot                     # las pantallas principales, tamaño teléfono
 just shot /reportes --full    # una sola, la página entera

@@ -54,11 +54,24 @@ GRACE_SECONDS = 25.0
 
 DEFAULT_API_PORT = 8000
 
-# Loopback, not 0.0.0.0. `up-dev` runs against real `dev-` resources, and
-# binding every interface publishes that to the whole network without anybody
-# choosing to. Testing from a phone is a real need and `--api-host 0.0.0.0` is
-# how to say so out loud.
-DEFAULT_API_HOST = "127.0.0.1"
+# Every interface, because the only thing that reaches this API is a browser
+# outside the container.
+#
+# This used to default to the container's loopback, reasoning that `up-dev`
+# talks to real `dev-` resources and that binding everything would publish
+# them to the network. The reasoning was sound and the address was wrong:
+# inside a DevContainer, loopback is invisible to the published Docker port,
+# so `http://localhost:8000/docs` answered nothing from the host — on the one
+# environment the app is actually delivered to. It cost a documentation note
+# telling people to pass a flag, and then cost the flag being forgotten.
+#
+# The exposure that worried us is decided by the *publish*, not by the bind:
+# `.devcontainer/devcontainer.json` maps the port, and narrowing it to
+# `127.0.0.1:8000:8000` is what keeps the local network out. `just dev`,
+# `just run-prod` and Vite all bind everything already — this stops being the
+# odd one out, and `--api-host 127.0.0.1` is still there for anybody who
+# wants the old behaviour back.
+DEFAULT_API_HOST = "0.0.0.0"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -348,9 +361,9 @@ def main() -> None:
         "--api-host",
         default=DEFAULT_API_HOST,
         help=(
-            f"Interface the API binds (default {DEFAULT_API_HOST}). Pass "
-            "0.0.0.0 to reach it from another device, such as a phone on the "
-            "same network."
+            f"Interface the API binds (default {DEFAULT_API_HOST}, which is "
+            "what a browser outside the container needs). Pass 127.0.0.1 to "
+            "keep it inside."
         ),
     )
     arguments = parser.parse_args()
