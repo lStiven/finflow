@@ -66,11 +66,15 @@ from personal_finance.shared.infrastructure.config.settings import (
     ENV_FILE,
     BillingMode,
     get_alerts_settings,
+    get_api_settings,
     get_aws_settings,
     get_financial_settings,
     get_identity_settings,
     get_ingestion_settings,
     get_merchant_settings,
+)
+from personal_finance.shared.infrastructure.throttling.dynamodb import (
+    PARTITION_KEY as THROTTLE_PARTITION_KEY,
 )
 
 
@@ -805,6 +809,7 @@ def provision() -> ProvisionedResources:
     merchant_settings = get_merchant_settings()
     financial_settings = get_financial_settings()
     alerts_settings = get_alerts_settings()
+    api_settings = get_api_settings()
 
     started = _step(f"table {settings.notifications_table}")
     provision_table(
@@ -884,6 +889,25 @@ def provision() -> ProvisionedResources:
         # it. Nothing *depends* on the sweep: every expiry that decides
         # anything is compared in a condition expression too, because
         # DynamoDB's own deletion is eventual and can be hours late.
+        enable_ttl=True,
+    )
+    _done(started)
+
+    started = _step(f"table {api_settings.throttle_table}")
+    provision_table(
+        get_dynamodb_client(),
+        table_name=api_settings.throttle_table,
+        partition_key=THROTTLE_PARTITION_KEY,
+        billing_mode=settings.dynamodb_billing_mode,
+        read_capacity=settings.dynamodb_read_capacity,
+        write_capacity=settings.dynamodb_write_capacity,
+        max_read_units=settings.dynamodb_max_read_units,
+        max_write_units=settings.dynamodb_max_write_units,
+        # One counter per door per window, and every one of them is rubbish
+        # the moment its window closes. Nothing reads a row after its expiry
+        # — the window is part of the key, so the next attempt asks for a
+        # different one — which makes this the one table where the sweep is
+        # the whole of the cleanup.
         enable_ttl=True,
     )
     _done(started)

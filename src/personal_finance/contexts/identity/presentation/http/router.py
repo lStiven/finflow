@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
@@ -92,6 +92,13 @@ from personal_finance.contexts.identity.infrastructure.security.secret_hashing i
     BcryptSecretHasher,
     Sha256SecretHasher,
 )
+from personal_finance.contexts.identity.presentation.http.throttling import (
+    CHALLENGE,
+    LOGIN,
+    MAIL,
+    PASSWORD_CHANGE,
+    REGISTRATION,
+)
 from personal_finance.contexts.ingestion.application.inbox_handlers import (
     ListUserInboxesUseCase,
     RegisterUserInboxUseCase,
@@ -120,6 +127,8 @@ from personal_finance.shared.infrastructure.observability.composite_event_publis
 from personal_finance.shared.infrastructure.observability.logging_event_publisher import (  # noqa: E501
     LoggingEventPublisher,
 )
+from personal_finance.shared.infrastructure.throttling import build_guard
+from personal_finance.shared.presentation.throttling import Guard
 
 
 router = APIRouter(prefix="/identity", tags=["identity"])
@@ -623,8 +632,10 @@ def _as_response(
     response_model=AccessTokenResponse,
 )
 def register(
+    request: Request,
     payload: RegisterPayload,
     use_case: Annotated[RegisterUserUseCase, Depends(get_register_use_case)],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> AccessTokenResponse:
     """Create an account and assign it a forwarding address.
 
@@ -637,7 +648,16 @@ def register(
     The forwarding address never appears in this response — it depends only
     on the new account's id, so `GET /identity/inbox` right after this call
     already has it.
+
+    Counted per address, and **only when an account is created**. The cost
+    here is the account, not the request: a POST without a valid ticket
+    creates nothing and is refused before the password is ever hashed, so
+    charging for those would let ten pieces of junk close registration for
+    everybody behind a shared connection — which is the false positive this
+    door exists without.
     """
+    guard.require(REGISTRATION, request)
+
     try:
         result = use_case.execute(
             RegisterUserCommand(
@@ -669,6 +689,8 @@ def register(
             detail=str(error),
         ) from error
 
+    guard.charge(REGISTRATION, request)
+
     return _as_response(
         user_id=result.user_id,
         access_token_value=result.access_token.value,
@@ -678,20 +700,37 @@ def register(
 
 @router.post("/login", response_model=AccessTokenResponse)
 def login(
+    request: Request,
     payload: LoginPayload,
     use_case: Annotated[LoginUseCase, Depends(get_login_use_case)],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> AccessTokenResponse:
+    """Trade an address and a password for a token.
+
+    The one door in this deployment that a password can be guessed at, so it
+    is the one that counts wrong answers — **only the wrong ones**. Getting
+    in costs nothing and forgives what came before it, which is what keeps a
+    shared connection from being locked out by whoever else is behind it.
+    """
+    guard.require(LOGIN, request, subject=payload.email)
+
     try:
         result = use_case.execute(
             LoginCommand(email=payload.email, password=payload.password),
         )
     except (InvalidCredentialsError, ValueError) as error:
+        # Counted after the attempt rather than before it, so the budget is
+        # spent by wrong answers and not by people logging in.
+        guard.charge(LOGIN, request, subject=payload.email)
+
         # Same response for "unknown email" and "wrong password" — and for a
         # malformed email — so a caller learns nothing about which it was.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         ) from error
+
+    guard.forgive(LOGIN, subject=payload.email)
 
     return _as_response(
         user_id=result.user_id,
@@ -822,17 +861,25 @@ def _profile_response(profile: UserProfile) -> CurrentUserResponse:
     response_model=VerificationRequestedResponse,
 )
 def request_email_verification(
+    request: Request,
     payload: EmailPayload,
     use_case: Annotated[
         RequestEmailVerificationUseCase,
         Depends(get_request_verification_use_case),
     ],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> VerificationRequestedResponse:
     """Mail a one-time code to an address that wants an account.
 
     202 rather than 200: what this promises is that a message was handed to
     the mail server, not that anybody read it.
+
+    One address is already capped at five mails an hour by the challenge
+    itself; what the door adds is the spray across many addresses from one
+    place, which is how a mailbox loses its sender reputation.
     """
+    guard.spend(MAIL, request)
+
     try:
         requested = use_case.execute(
             RequestEmailVerificationCommand(email=payload.email),
@@ -858,18 +905,26 @@ def request_email_verification(
 
 @router.post("/verification/confirm", response_model=VerificationConfirmedResponse)
 def confirm_email_verification(
+    request: Request,
     payload: VerificationCodePayload,
     use_case: Annotated[
         ConfirmEmailVerificationUseCase,
         Depends(get_confirm_verification_use_case),
     ],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> VerificationConfirmedResponse:
     """Trade a code for the token `POST /identity/register` spends.
 
     The token is what reserves the address: verifying is not registering, and
     somebody who merely knows that an address was just verified must not be
     able to race its owner to the account.
+
+    A code is six digits, and the challenge behind it is already spent after
+    five wrong answers. The door is what stops those five being tried against
+    every address somebody can think of.
     """
+    guard.require(CHALLENGE, request)
+
     try:
         ticket = use_case.execute(
             ConfirmEmailVerificationCommand(email=payload.email, code=payload.code),
@@ -885,6 +940,8 @@ def confirm_email_verification(
             detail="That code expired. Ask for a new one.",
         ) from error
     except (InvalidVerificationCodeError, ValueError) as error:
+        guard.charge(CHALLENGE, request)
+
         # One answer for a wrong code, a malformed address and an address with
         # no challenge behind it.
         raise HTTPException(
@@ -905,17 +962,25 @@ def confirm_email_verification(
 
 @router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
 def request_password_reset(
+    request: Request,
     payload: EmailPayload,
     use_case: Annotated[
         RequestPasswordResetUseCase,
         Depends(get_request_password_reset_use_case),
     ],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> Response:
     """Mail a link that lets somebody who cannot log in set a new password.
 
     Answers 202 whether or not the address has an account, and sends mail
     either way, so this is not a way to find out who is registered here.
+
+    Shares the mail door with the verification code, because they share the
+    mailbox: what matters is how much mail one place can cause, not which of
+    the two endpoints it asked through.
     """
+    guard.spend(MAIL, request)
+
     try:
         use_case.execute(RequestPasswordResetCommand(email=payload.email))
     except DeliveryThrottledError as error:
@@ -936,15 +1001,23 @@ def request_password_reset(
 
 @router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
 def reset_password(
+    request: Request,
     payload: ResetPasswordPayload,
     use_case: Annotated[ResetPasswordUseCase, Depends(get_reset_password_use_case)],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> Response:
     """Spend an emailed link and set the password behind it.
 
     No token comes back: the account this just handed over is reached by
     logging in with the new password, which is also the proof that it worked.
     Every session opened with the old password stops working here.
+
+    Wrong links are counted per address, for the reason the code's door
+    gives: the token is long enough that guessing it is hopeless, and a
+    thousand hopeless guesses is still somebody to stop.
     """
+    guard.require(CHALLENGE, request)
+
     try:
         use_case.execute(
             ResetPasswordCommand(
@@ -958,6 +1031,8 @@ def reset_password(
             detail=str(error),
         ) from error
     except InvalidPasswordResetTokenError as error:
+        guard.charge(CHALLENGE, request)
+
         # Unknown, expired and already spent are one answer: confirming that a
         # token was ever real is already more than a stranger should learn.
         raise HTTPException(
@@ -970,9 +1045,11 @@ def reset_password(
 
 @router.post("/password/change", response_model=AccessTokenResponse)
 def change_password(
+    request: Request,
     payload: ChangePasswordPayload,
     caller: Annotated[AuthenticatedUser, Depends(get_current_user)],
     use_case: Annotated[ChangePasswordUseCase, Depends(get_change_password_use_case)],
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> AccessTokenResponse:
     """Change the password of somebody who can still log in.
 
@@ -983,7 +1060,14 @@ def change_password(
     A token comes back because the change invalidates the one that made this
     request, along with every other session. The client is expected to replace
     what it holds with this.
+
+    Counted against the account rather than the address, because the token
+    already says which account it is: the attack this narrows is a session
+    left open on a shared machine, guessed at until it becomes somebody
+    else's.
     """
+    guard.require(PASSWORD_CHANGE, request, subject=str(caller.user_id.value))
+
     try:
         token = use_case.execute(
             caller=caller,
@@ -993,6 +1077,12 @@ def change_password(
             ),
         )
     except InvalidCredentialsError as error:
+        guard.charge(
+            PASSWORD_CHANGE,
+            request,
+            subject=str(caller.user_id.value),
+        )
+
         # 403, not 401. The caller *is* authenticated — their token is fine and
         # their session is not over; they failed a second challenge for this
         # one action. Answering 401 would overload the code the client uses to
@@ -1009,6 +1099,8 @@ def change_password(
         ) from error
     except UserNotFoundError as error:
         raise _account_is_gone() from error
+
+    guard.forgive(PASSWORD_CHANGE, subject=str(caller.user_id.value))
 
     return _as_response(
         user_id=caller.user_id,

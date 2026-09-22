@@ -5,6 +5,7 @@ import os
 from typing import TYPE_CHECKING
 
 import boto3
+from botocore.config import Config
 
 from personal_finance.shared.infrastructure.config.settings import (
     AwsSettings,
@@ -91,6 +92,31 @@ def get_dynamodb_client() -> DynamoDBClient:
 
 
 @functools.lru_cache(maxsize=1)
+def get_throttling_dynamodb_client() -> DynamoDBClient:
+    """The same table, on a much shorter leash.
+
+    Its own client because the rate limiter is the one caller here that would
+    rather be wrong than slow. Every other read in this app is the answer
+    somebody asked for; this one only decides whether to *let them ask*, and
+    it fails open. With boto3's defaults — sixty seconds to connect, sixty to
+    read, several retries — a DynamoDB outage would not disable the limiter,
+    it would hang the login screen for minutes while deciding to ignore it.
+
+    Two seconds and one retry is enough to survive a dropped packet and short
+    enough that nobody notices the day the table is gone.
+    """
+    return get_session().client(  # pyright: ignore[reportUnknownMemberType]
+        "dynamodb",
+        endpoint_url=get_aws_settings().endpoint_url,
+        config=Config(
+            connect_timeout=1,
+            read_timeout=2,
+            retries={"max_attempts": 2, "mode": "standard"},
+        ),
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def get_sqs_client() -> SQSClient:
     return get_session().client(  # pyright: ignore[reportUnknownMemberType]
         "sqs",
@@ -118,6 +144,7 @@ def reset_session() -> None:
     """Drop the cached session and clients."""
     get_session.cache_clear()
     get_dynamodb_client.cache_clear()
+    get_throttling_dynamodb_client.cache_clear()
     get_sqs_client.cache_clear()
     get_eventbridge_client.cache_clear()
     get_ssm_client.cache_clear()

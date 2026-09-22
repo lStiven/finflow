@@ -334,6 +334,22 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
+  registro, el correo de verificación, la recuperación, el cambio de
+  contraseña y el secreto del webhook de Telegram cuentan intentos por
+  dirección y, donde hay cuenta, también por cuenta. La distinción que
+  sostiene todo lo demás: **la cuenta es una cerradura** —cinco claves malas
+  por cuarto de hora, comprobadas *antes* de verificar, que es lo único que
+  impide seguir adivinando— y **la dirección es un freno** —veinte por
+  minuto, que se suelta solo—. Entrar bien no gasta nada y perdona lo
+  anterior, así que una casa o una oficina detrás de una sola IP nunca paga
+  por usar la app. Los contadores viven en DynamoDB con TTL, porque en Lambda
+  un contador en memoria no cuenta nada; y **fallan abiertos y rápidos**: sin
+  tabla, un login sigue tardando lo que tarda bcrypt en vez de colgarse un
+  minuto. Dos falsos positivos los encontró la propia suite: la primera
+  versión del freno rechazaba una clave *correcta* durante quince minutos
+  tras una ráfaga ajena, y el webhook rechazaba a Telegram con el secreto
+  bueno cuando alguien había gastado la puerta.
 - 2026-09-21 — **Una factura ya se cobra sola, con red debajo.** Entrega C del
   segundo feature, y la red es la mitad que importa: **antes de escribir nada
   se mira el historial**, y si hay un movimiento que cuadra, el cobro queda

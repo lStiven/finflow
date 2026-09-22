@@ -235,6 +235,13 @@ Resources:
       Environment:
         Variables:
           API_CORS_ORIGINS: !Ref CorsOrigins
+          # There *is* something in front of this process — the adapter, fed
+          # by the Function URL — so the address a request came from can be
+          # read from the context AWS builds instead of from a socket that
+          # is always the adapter itself. Without this every request on earth
+          # would be counted under one address, and the first attack would
+          # lock everybody out. See `shared/presentation/throttling.py`.
+          API_TRUST_PROXY_HEADERS: "true"
           # Only the API signs and verifies tokens.
           IDENTITY_JWT_SECRET: !Sub "ssm:${JwtSecretParameter}"
           # And only the API sends mail: the codes and reset links belong to
@@ -270,6 +277,11 @@ Resources:
             TableName: !Sub "${ResourcePrefix}credential_challenges"
         - DynamoDBCrudPolicy:
             TableName: !Sub "${ResourcePrefix}user_inboxes"
+        # Wrong passwords, wrong codes and wrong webhook secrets, counted per
+        # address so a guesser runs out before a password does. Only the API
+        # writes here: no worker has a door to guard.
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}throttle"
         - DynamoDBReadPolicy:
             TableName: !Sub "${ResourcePrefix}bank_notifications"
         - DynamoDBCrudPolicy:

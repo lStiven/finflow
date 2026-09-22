@@ -60,6 +60,8 @@ from personal_finance.contexts.identity.presentation.http.router import (
 )
 from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+from personal_finance.shared.infrastructure.throttling import build_guard
+from personal_finance.shared.presentation.throttling import Guard
 
 
 PASSWORD = "correct horse battery staple"
@@ -352,6 +354,37 @@ def generator() -> FixedSecretGenerator:
     return FixedSecretGenerator()
 
 
+class InMemoryAttemptCounter:
+    """`AttemptCounter` en un diccionario.
+
+    Guarda `expires_at` aunque nada lo lea: es lo que deja comprobar que la
+    ventana se fija al crear el balde y no se empuja con cada intento, que es
+    la diferencia entre una ventana y una cuenta que nunca termina.
+    """
+
+    def __init__(self) -> None:
+        self.hits: dict[str, int] = {}
+        self.expiries: dict[str, int] = {}
+
+    def spent(self, bucket: str) -> int:
+        return self.hits.get(bucket, 0)
+
+    def record(self, *, bucket: str, expires_at: PosixTime) -> int:
+        self.hits[bucket] = self.hits.get(bucket, 0) + 1
+        self.expiries.setdefault(bucket, expires_at.as_epoch_seconds())
+
+        return self.hits[bucket]
+
+    def clear(self, bucket: str) -> None:
+        self.hits.pop(bucket, None)
+        self.expiries.pop(bucket, None)
+
+
+@pytest.fixture
+def counter() -> InMemoryAttemptCounter:
+    return InMemoryAttemptCounter()
+
+
 @pytest.fixture
 def authenticated_client(
     token_issuer: JWTTokenIssuer,
@@ -361,6 +394,7 @@ def authenticated_client(
     resets: InMemoryPasswordResetRepository,
     notifier: RecordingNotifier,
     generator: FixedSecretGenerator,
+    counter: InMemoryAttemptCounter,
 ) -> TestClient:
     hasher = BcryptLikeHasher()
     secret_hasher = FakeSecretHasher()
@@ -387,6 +421,13 @@ def authenticated_client(
 
     app = FastAPI()
     app.include_router(router)
+    # The limiter, over a counter in a dict rather than DynamoDB. Overridden
+    # rather than disabled: every case below goes through the real `Guard`,
+    # so the doors are exercised by the same code the deployment runs.
+    app.dependency_overrides[build_guard] = lambda: Guard(
+        counter,
+        trust_proxy=False,
+    )
     app.dependency_overrides[get_register_use_case] = lambda: register_use_case
     app.dependency_overrides[get_login_use_case] = lambda: login_use_case
     app.dependency_overrides[get_update_approved_senders_use_case] = lambda: (
@@ -1225,3 +1266,188 @@ def test_changing_a_password_without_a_token_is_unauthorized(
     )
 
     assert response.status_code == 401
+
+
+# ----------------------------------------------------------------------
+# Fuerza bruta, y la gente que no la está haciendo
+#
+# La mitad interesante de estos casos no es que un ataque se corte: es que
+# usar la aplicación normalmente nunca lo dispare. Un límite que encierra a
+# quien no hizo nada no es una protección, es la caída que el atacante quería.
+# ----------------------------------------------------------------------
+
+
+def _wrong_login(client: TestClient, email: str = "person@example.com") -> int:
+    return client.post(
+        "/identity/login",
+        json={"email": email, "password": "not the password"},
+    ).status_code
+
+
+def _right_login(client: TestClient, email: str = "person@example.com") -> int:
+    return client.post(
+        "/identity/login",
+        json={"email": email, "password": PASSWORD},
+    ).status_code
+
+
+def test_una_direccion_no_admite_mas_de_cinco_claves_equivocadas(
+    authenticated_client: TestClient,
+) -> None:
+    """Cinco por cuarto de hora: 480 al día contra una contraseña de verdad
+    no es un ataque viable, y cinco fallos seguidos es alguien que ya debería
+    estar pidiendo el enlace de recuperación."""
+    _register(authenticated_client)
+
+    for _ in range(5):
+        assert _wrong_login(authenticated_client) == 401
+
+    refused = authenticated_client.post(
+        "/identity/login",
+        json={"email": "person@example.com", "password": "not the password"},
+    )
+
+    assert refused.status_code == 429
+    assert int(refused.headers["Retry-After"]) > 0
+
+
+def test_entrar_bien_no_gasta_presupuesto(authenticated_client: TestClient) -> None:
+    """El falso positivo más caro sería este: que usar la app la cerrara."""
+    _register(authenticated_client)
+
+    for _ in range(50):
+        assert _right_login(authenticated_client) == 200
+
+
+def test_acertar_perdona_los_fallos_anteriores(
+    authenticated_client: TestClient,
+) -> None:
+    """Quien se equivoca cuatro veces y a la quinta entra no puede quedarse
+    con cuatro fallos encima el resto del cuarto de hora."""
+    _register(authenticated_client)
+
+    for _ in range(4):
+        assert _wrong_login(authenticated_client) == 401
+
+    assert _right_login(authenticated_client) == 200
+
+    for _ in range(5):
+        assert _wrong_login(authenticated_client) == 401
+
+
+def test_una_cuenta_agotada_no_encierra_a_quien_comparte_la_conexion(
+    authenticated_client: TestClient,
+) -> None:
+    """La casa, la oficina, el operador que mete una ciudad detrás de una IP:
+    agotar el presupuesto de una cuenta no puede tocar la de al lado."""
+    _register(authenticated_client)
+    _register(authenticated_client, email="vecina@example.com")
+
+    for _ in range(6):
+        _wrong_login(authenticated_client)
+
+    assert _wrong_login(authenticated_client) == 429
+    assert _right_login(authenticated_client, email="vecina@example.com") == 200
+
+
+def test_la_direccion_es_un_freno_y_no_una_cerradura(
+    authenticated_client: TestClient,
+) -> None:
+    """Lo que la dimensión por cuenta no puede ver: una contraseña probada
+    contra veinte direcciones distintas, cada una una sola vez.
+
+    La ventana es de un minuto a propósito. La primera versión eran treinta
+    fallos por cuarto de hora, y el e2e enseñó lo que eso significaba: tras
+    una ráfaga de claves malas, una **correcta** desde la misma dirección
+    quedaba rechazada quince minutos. Un atacante sigue sin poder probar más
+    de veinte por minuto; un vecino espera menos de uno.
+    """
+    for index in range(20):
+        assert (
+            _wrong_login(authenticated_client, email=f"quien{index}@example.com") == 401
+        )
+
+    assert _wrong_login(authenticated_client, email="una-mas@example.com") == 429
+
+
+def test_el_freno_por_direccion_se_suelta_solo(
+    authenticated_client: TestClient,
+    counter: InMemoryAttemptCounter,
+) -> None:
+    """La otra mitad de la misma decisión: el presupuesto por dirección vive
+    en una ventana de un minuto, así que la siguiente es otro balde y nadie
+    arrastra los fallos de un desconocido más allá de eso."""
+    _register(authenticated_client)
+
+    for index in range(20):
+        _wrong_login(authenticated_client, email=f"quien{index}@example.com")
+
+    assert _wrong_login(authenticated_client, email="otra@example.com") == 429
+
+    # Pasado el minuto el intento pertenece a otra ventana, y la ventana va
+    # en la clave del balde: vaciar los de esta dirección es exactamente lo
+    # que hace el reloj.
+    counter.hits = {
+        bucket: hits
+        for bucket, hits in counter.hits.items()
+        if not bucket.startswith("login|ip|")
+    }
+
+    assert _right_login(authenticated_client) == 200
+
+
+def test_registrarse_tiene_techo_por_direccion(
+    authenticated_client: TestClient,
+) -> None:
+    """Aquí la cuenta creada *es* el costo, así que se cuenta todo intento y
+    no solo los fallos."""
+    codes = [
+        _register(authenticated_client, email=f"nueva{index}@example.com").status_code
+        for index in range(12)
+    ]
+
+    assert codes[:10] == [201] * 10
+    assert codes[10:] == [429, 429]
+
+
+def test_pedir_correo_tiene_techo_compartido(
+    authenticated_client: TestClient,
+) -> None:
+    """El código de verificación y el enlace de recuperación comparten puerta
+    porque comparten buzón: importa cuánto correo puede provocar un sitio, no
+    por cuál de los dos endpoints lo pidió."""
+    for index in range(10):
+        authenticated_client.post(
+            "/identity/verification/request",
+            json={"email": f"quien{index}@example.com"},
+        )
+
+    for index in range(10):
+        authenticated_client.post(
+            "/identity/password/forgot",
+            json={"email": f"otra{index}@example.com"},
+        )
+
+    refused = authenticated_client.post(
+        "/identity/verification/request",
+        json={"email": "una-mas@example.com"},
+    )
+
+    assert refused.status_code == 429
+
+
+def test_adivinar_codigos_tiene_techo(authenticated_client: TestClient) -> None:
+    """Cada reto ya se gasta a los cinco fallos; esto impide probar esos
+    cinco contra todas las direcciones que a uno se le ocurran."""
+    for index in range(30):
+        authenticated_client.post(
+            "/identity/verification/confirm",
+            json={"email": f"quien{index}@example.com", "code": "000000"},
+        )
+
+    refused = authenticated_client.post(
+        "/identity/verification/confirm",
+        json={"email": "una-mas@example.com", "code": "000000"},
+    )
+
+    assert refused.status_code == 429

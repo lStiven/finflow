@@ -115,6 +115,16 @@ function messageFor(status: number, detail: unknown): string {
   // rather than rendering).
   if (status === 401) return "Correo o contraseña incorrectos";
 
+  // Its own copy rather than the server's `detail`, which is what this used
+  // to fall through to. The text happened to be right — and that is the
+  // problem: a message a user reads was living in a Python exception, one
+  // rewording away from reaching a Spanish screen in English. Screens that
+  // want the *wait* and not just the fact use `identityErrorMessage`, which
+  // reads `Retry-After`; this is what the rest say.
+  if (status === 429) {
+    return "Demasiados intentos. Espera un momento y vuelve a intentarlo.";
+  }
+
   if (typeof detail === "object" && detail !== null && "detail" in detail) {
     const inner = (detail as { detail: unknown }).detail;
     if (typeof inner === "string") return inner;
