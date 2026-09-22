@@ -67,7 +67,10 @@ from personal_finance.contexts.alerts.presentation.http.dependencies import (
     build_link_repository,
     build_message_sender,
 )
+from personal_finance.shared.domain.throttling import RateLimit
 from personal_finance.shared.infrastructure.config.settings import get_alerts_settings
+from personal_finance.shared.infrastructure.throttling import build_guard
+from personal_finance.shared.presentation.throttling import Door, Guard
 
 
 if TYPE_CHECKING:
@@ -109,8 +112,23 @@ def get_redeem_use_case() -> RedeemChannelLinkUseCase:
     return _build_redeem_use_case()
 
 
+#: Wrong secrets, per address. Telegram itself never spends any of this — a
+#: call that carries the right header is not counted — so the budget belongs
+#: entirely to whoever is guessing. Twenty an hour against a secret with this
+#: much entropy is not an attack that finishes; it is one that gets noticed.
+#:
+#: Deliberately *not* a limit on the endpoint as a whole: a burst of real
+#: updates is exactly what a busy day looks like, and refusing those would
+#: make Telegram back off and eventually disable the webhook for everybody.
+BAD_SECRET = Door(
+    name="telegram-secret", address=RateLimit(attempts=20, window_seconds=3600)
+)
+
+
 def verify_telegram_secret(
+    request: Request,
     secret_token: Annotated[str | None, Header(alias=SECRET_HEADER)] = None,
+    guard: Guard = Depends(build_guard),  # noqa: B008
 ) -> None:
     """The only thing standing between the internet and this endpoint.
 
@@ -122,6 +140,15 @@ def verify_telegram_secret(
     `401`, because there is no credential to prompt a browser for — and
     because a real misconfiguration should be loud rather than look like an
     ordinary rejection.
+
+    **Wrong answers are counted; right ones cost nothing** — and the order
+    below is what makes that true rather than merely intended. The secret is
+    compared first, so a call carrying it is answered before the limiter is
+    consulted at all: Telegram delivers from a handful of addresses and a
+    busy afternoon is a burst of perfectly valid calls, and a limit that
+    could refuse those would have Telegram back off and eventually disable
+    the webhook for everybody. Asking the guard *first* did exactly that, and
+    a test caught it.
     """
     expected = get_alerts_settings().telegram_webhook_secret.get_secret_value()
 
@@ -144,6 +171,14 @@ def verify_telegram_secret(
     if not hmac.compare_digest(secret_token or "", expected):
         # Without the value, either of them.
         _logger.warning("rejected a telegram webhook call with a bad secret")
+
+        # `spend` rather than counting and then asking: it counts this
+        # attempt and judges *that* number, so the twentieth wrong secret is
+        # still a 403 and the twenty-first is a 429. Counting and asking
+        # separately would add the attempt twice and refuse one guess early —
+        # which is the kind of off-by-one that only ever shows up as somebody
+        # being locked out sooner than the door says.
+        guard.spend(BAD_SECRET, request)
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -175,6 +175,20 @@ class ApiSettings(BaseSettings):
     # Comma-separated rather than JSON, so an env file stays readable:
     # `API_CORS_ORIGINS=http://localhost:5173,https://app.example.com`.
     cors_origins: str = ""
+    # Where the attempts against a guarded door are counted. One table, TTL
+    # on every row, read and written only by the API.
+    throttle_table: str = "throttle"
+    # Whether there is something in front of this process that can be
+    # believed about who is calling.
+    #
+    # **Off by default, and that is the safe default rather than the
+    # convenient one.** With it on, the address a request claims comes from a
+    # header; off, it comes from the socket. A deployment that turned it on
+    # without a front door would let anybody pick their own address and walk
+    # around every limit below; one that leaves it off where a front door
+    # exists files every request on earth under the proxy's address — which
+    # the limiter treats as "unknown" rather than as one very busy visitor.
+    trust_proxy_headers: bool = False
 
     @model_validator(mode="after")
     def _validate_origins(self) -> Self:
@@ -189,6 +203,15 @@ class ApiSettings(BaseSettings):
                     "ENVIRONMENT=production: '*' lets any page on the internet "
                     "call this API from a visitor's browser",
                 )
+
+        return self
+
+    @model_validator(mode="after")
+    def _namespace_resources(self) -> Self:
+        self.throttle_table = _namespaced(
+            self.throttle_table,
+            environment=self.environment,
+        )
 
         return self
 

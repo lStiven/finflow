@@ -81,7 +81,9 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 70 operaciones de API en cinco contextos, seis procesos en
-la nube, 1884 pruebas de Python y 354 del frontend, todas en verde.
+la nube, 1933 pruebas de Python y 367 del frontend, todas en verde. Siete
+tablas: la séptima, `throttle`, cuenta los intentos contra las puertas que se
+pueden adivinar y se vacía sola por TTL.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -259,6 +261,22 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
+  registro, el correo de verificación, la recuperación, el cambio de
+  contraseña y el secreto del webhook de Telegram cuentan intentos por
+  dirección y, donde hay cuenta, también por cuenta. La distinción que
+  sostiene todo lo demás: **la cuenta es una cerradura** —cinco claves malas
+  por cuarto de hora, comprobadas *antes* de verificar, que es lo único que
+  impide seguir adivinando— y **la dirección es un freno** —veinte por
+  minuto, que se suelta solo—. Entrar bien no gasta nada y perdona lo
+  anterior, así que una casa o una oficina detrás de una sola IP nunca paga
+  por usar la app. Los contadores viven en DynamoDB con TTL, porque en Lambda
+  un contador en memoria no cuenta nada; y **fallan abiertos y rápidos**: sin
+  tabla, un login sigue tardando lo que tarda bcrypt en vez de colgarse un
+  minuto. Dos falsos positivos los encontró la propia suite: la primera
+  versión del freno rechazaba una clave *correcta* durante quince minutos
+  tras una ráfaga ajena, y el webhook rechazaba a Telegram con el secreto
+  bueno cuando alguien había gastado la puerta.
 - 2026-09-21 — **Desplegar sin cambios de backend ya no es un error.**
   `fail_on_empty_changeset = false` en los dos entornos de
   `infra/samconfig.toml`. La imagen solo lleva `pyproject.toml`, `uv.lock` y
@@ -290,19 +308,3 @@ AWS (ver Trabas).
   seguir moviendo la página de atrás —la hoja «Más» del teléfono y los dos
   diálogos de la guía—, con `lib/useScrollLock.ts` como el único sitio donde
   eso se decide. Comprobado en el navegador a 390 y 1280 px.
-- 2026-09-14 — **Una factura ya se puede pagar, y eso sí es plata.**
-  Entrega B del segundo feature. «Pagado» escribe el movimiento por el mismo
-  caso de uso que respalda el movimiento a mano, así que el saldo, el comercio,
-  el gasto del mes y el aviso por Telegram vienen puestos. **Pagar dos veces
-  cobra una:** la identidad del cobro sale de la factura y del periodo —nunca
-  del monto ni del día—, así que el segundo intento lo rechaza la escritura
-  condicional de la tabla y no un `if`. «Pagado» **no se guarda en ninguna
-  parte**: se lee de la fila del ledger, de modo que borrar el movimiento
-  despaga el cobro sin que nada tenga que acordarse de deshacer nada. Saltar sí
-  se guarda, porque no hay fila que leer. Las dos cosas se deshacen. Origen
-  nuevo `scheduled` —ni `manual` ni `accrual`— que `alerts` aprendió en el
-  mismo cambio y que **debe desplegarse primero**. `upcoming` pasó a
-  `outstanding` porque cambió de significado: ya no es «aún no vence», es «sin
-  pagar». Comprobado de punta a punta contra la pila real: el e2e confirma por
-  el navegador, comprueba que la cuenta se movió por exactamente lo confirmado,
-  y manda una segunda confirmación por la API para ver que no se mueve nada.

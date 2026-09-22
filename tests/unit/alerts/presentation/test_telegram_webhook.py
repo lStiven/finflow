@@ -44,6 +44,8 @@ from personal_finance.contexts.alerts.presentation.http.telegram import (
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 from personal_finance.shared.infrastructure.config.settings import reset_settings
+from personal_finance.shared.infrastructure.throttling import build_guard
+from personal_finance.shared.presentation.throttling import Guard
 
 
 SECRET = "a-webhook-secret-only-telegram-knows"
@@ -89,10 +91,41 @@ def configured_secret(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_settings()
 
 
+class InMemoryAttemptCounter:
+    """El contador del limitador, en un diccionario.
+
+    Sin esto estos casos dependerían de si el emulador está arriba: con él
+    caído el guardia se abre y todo pasa; con él en pie, los secretos
+    equivocados de una prueba se suman a los de la siguiente y la vigésimo
+    primera se lleva un 429 que nadie escribió. Una prueba que cambia de
+    resultado según qué haya corriendo en la máquina no está probando nada.
+    """
+
+    def __init__(self) -> None:
+        self.hits: dict[str, int] = {}
+
+    def spent(self, bucket: str) -> int:
+        return self.hits.get(bucket, 0)
+
+    def record(self, *, bucket: str, expires_at: PosixTime) -> int:
+        del expires_at
+        self.hits[bucket] = self.hits.get(bucket, 0) + 1
+
+        return self.hits[bucket]
+
+    def clear(self, bucket: str) -> None:
+        self.hits.pop(bucket, None)
+
+
 def _client(use_case: RedeemChannelLinkUseCase | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_redeem_use_case] = lambda: use_case or StubRedeem()
+    # Un contador por cliente, no por petición: la dependencia se resuelve
+    # en cada llamada, así que construirlo dentro del lambda daría un
+    # contador nuevo cada vez — y un límite que nunca cuenta dos.
+    guard = Guard(InMemoryAttemptCounter(), trust_proxy=False)
+    app.dependency_overrides[build_guard] = lambda: guard
 
     return TestClient(app)
 
@@ -263,3 +296,38 @@ def test_the_owner_is_never_read_from_what_the_caller_says() -> None:
 
     [command] = use_case.commands
     assert not hasattr(command, "user_id")
+
+
+def test_adivinar_el_secreto_se_corta_y_telegram_no_lo_nota() -> None:
+    """Los intentos con secreto equivocado se cuentan por dirección; los que
+    traen el secreto bueno no cuestan nada.
+
+    Las dos mitades importan. Sin la primera, la única puerta que este
+    despliegue tiene contra internet —`AuthType: NONE` no puede fijar rangos
+    de direcciones— se puede tantear sin límite. Sin la segunda, una tarde
+    movida de actualizaciones legítimas se frenaría sola, y Telegram
+    responde a eso desactivando el webhook.
+    """
+    client = _client()
+    body = _update(text="/start cualquiera")
+
+    refused = [
+        client.post(
+            "/alerts/telegram/webhook",
+            json=body,
+            headers={SECRET_HEADER: "no es el secreto"},
+        ).status_code
+        for _ in range(22)
+    ]
+
+    assert refused[:20] == [403] * 20
+    assert refused[20:] == [429, 429]
+
+    # Y el que sí trae el secreto sigue entrando, con la puerta agotada.
+    accepted = client.post(
+        "/alerts/telegram/webhook",
+        json=body,
+        headers={SECRET_HEADER: SECRET},
+    )
+
+    assert accepted.status_code == 200

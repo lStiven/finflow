@@ -33,6 +33,7 @@ import {
   useUpdateProfile,
 } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
+import { identityErrorMessage } from "@/auth/errors";
 import { LENGTH_MESSAGE, passwordChangeIssue } from "@/auth/password";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/Button";
@@ -506,12 +507,15 @@ function PasswordCard() {
       // A wrong current password is a 403, not a 401: the session is fine, and
       // the client must not read it as one that ended. Saying which of the two
       // it was is safe here — whoever is asking already holds the account.
+      //
+      // Everything else goes through the same function the login, the
+      // recovery and the reset screens use. That is what makes a 429 here say
+      // *how long* rather than "espera un momento": the wait is in a header,
+      // and `identityErrorMessage` is the only place that reads it.
       setError(
         cause instanceof ApiError && cause.status === 403
           ? "La contraseña actual no es correcta."
-          : cause instanceof Error
-            ? cause.message
-            : "Algo salió mal",
+          : identityErrorMessage(cause),
       );
     } finally {
       setBusy(false);

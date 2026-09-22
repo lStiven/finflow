@@ -64,3 +64,26 @@ describe("cuando no hubo respuesta", () => {
     await expect(broken).rejects.not.toThrow(/No pudimos conectar/);
   });
 });
+
+describe("cuando el servidor dice que son demasiados intentos", () => {
+  it("lo cuenta en español sin depender del texto del backend", async () => {
+    // El `detail` a propósito en inglés: el mensaje que se lee en pantalla no
+    // puede vivir en una excepción de Python.
+    await expect(
+      unwrap(answered(429, { detail: "Too many attempts" })),
+    ).rejects.toThrow("Demasiados intentos. Espera un momento y vuelve a intentarlo.");
+  });
+
+  it("guarda cuánto hay que esperar cuando la API lo dice", async () => {
+    const limited = Promise.resolve({
+      data: undefined,
+      error: { detail: "Too many attempts" },
+      response: new Response(null, { status: 429, headers: { "Retry-After": "90" } }),
+    });
+
+    await unwrap(limited).catch((error: unknown) => {
+      expect((error as ApiError).retryAfterSeconds).toBe(90);
+    });
+    expect.assertions(1);
+  });
+});

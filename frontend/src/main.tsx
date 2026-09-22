@@ -28,7 +28,13 @@ const queryClient = new QueryClient({
 function isTerminal(error: unknown): boolean {
   // Every failure reaches here as an `ApiError`, which carries the status.
   const status = (error as { status?: number } | null)?.status;
-  return status === 401 || status === 403 || status === 404;
+
+  // A 429 is not terminal in the sense the other three are — it is the one
+  // failure that *will* pass on its own. It stops the retries anyway, and
+  // that is the point: trying again immediately is the one response
+  // guaranteed not to help, and on the doors that count every attempt it is
+  // the client spending what is left of its own budget.
+  return status === 401 || status === 403 || status === 404 || status === 429;
 }
 
 const router = createRouter({
