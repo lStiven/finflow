@@ -700,19 +700,37 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   these outright rather than guess which instrument is the source. If it comes
   back, it comes back as a *suggestion* a person confirms, never as a write.
 
-  **The cost, stated, because it has no workaround today.** Nothing links a
-  lone leg to a movement that may already be in the ledger for the other side.
-  Somebody who tracks *both* the Lulo account and the Bancolombia card, and
-  pays one from the other, gets Lulo's own alert recorded as spending — it
-  names one instrument and an external destination, which is exactly what an
-  ordinary transfer looks like — and then enters this leg on the card to clear
-  the debt. The debt is then right, the balances are right, and there is a
-  phantom expense the size of the payment that nothing can clear: no endpoint
-  turns an existing alert-derived movement into a transfer leg, and `edit`
-  deliberately does not touch what a row says about itself. That is the
-  narrower half of the pairing work above, and the next thing worth building
-  here. Somebody who tracks only one of the two sides — much the commoner
-  case at this deployment's size — is unaffected.
+  **Declared afterwards (2026-09-26), and still never automatic.** The cost
+  this paragraph used to state — an alert-derived movement nothing could turn
+  into a transfer — is what `POST /financial/transactions/{id}/transfer`
+  closes, prompted by a real one: "Pagaste $3,625,733.00 a BANCO COMERCIAL AV
+  VILLAS desde tu producto *5261", with AV Villas' own mail a receipt the LLM
+  rightly refuses. The owner pairs it with a movement already here, has the
+  other side written on an account, or marks it lone. The screen *proposes*
+  (bank name of an account, or the same amount the other way within four
+  days) and a person confirms — the rejection above stands for the write.
+  What a fresh session could not recover from the code:
+  * **The written side's identity is the declared movement alone**, not the
+    account. Two screens naming two accounts race for one key and one loses,
+    instead of both winning and the payment lowering two debts.
+  * **Declared legs name the other side by movement only**, and only they may:
+    `TransferLeg`'s "fully or not at all" rule still holds for every stated leg,
+    which is also why stated rows serialise byte for byte as before (`basis`
+    is written only when declared). Neither alert named the other's card, so
+    there are no digits to carry.
+  * **Undo is by basis**: `reclassified` goes back to spending or income,
+    `counterpart` is erased with its balance. A stated transfer is refused —
+    it has no earlier self — and `DELETE` stays the way to remove it.
+  * **A movement a bill counts as its charge is refused**, keeping the
+    existing rule that a transfer is not a bill payment.
+  * **Risk knowingly accepted:** the declaration is a conditional `Update` of
+    the marker, but `save` and `remove` are the unconditional whole-row writes
+    they always were. An edit or adoption that read the row *before* a
+    concurrent declaration can write it back without the marker, and a delete
+    that read it before can leave the written side behind. Closing that means
+    conditioning the existing writes, which every current flow goes through;
+    at this deployment's size, two people acting on one movement in the same
+    second is not worth that change yet.
 
 ### A headless browser in the DevContainer (2026-09-02)
 

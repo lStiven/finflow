@@ -70,6 +70,7 @@ function pairedLeg(overrides: Partial<TransferLeg> = {}): TransferLeg {
     counterpart_movement_id: "mov-2",
     counterpart_instrument_kind: "credit_card",
     counterpart_last_four: "7653",
+    basis: "stated",
     ...overrides,
   };
 }
@@ -83,6 +84,7 @@ function loneLeg(overrides: Partial<TransferLeg> = {}): TransferLeg {
     counterpart_movement_id: null,
     counterpart_instrument_kind: null,
     counterpart_last_four: null,
+    basis: "stated",
     ...overrides,
   };
 }
@@ -357,5 +359,22 @@ describe("every shape", () => {
     const isPair = leg !== null && leg.external === false;
 
     expect(consequence.rows).toBe(isPair ? 2 : 1);
+  });
+});
+
+describe("a transfer declared after the fact", () => {
+  it("points at undoing it rather than erasing the bank's own alert", () => {
+    const consequence = describeDeletion(
+      movement({
+        transfer: pairedLeg({
+          basis: "reclassified",
+          counterpart_instrument_kind: null,
+          counterpart_last_four: null,
+        }),
+      }),
+      undefined,
+    );
+
+    expect(consequence.instead).toContain("«Deshacer traslado»");
   });
 });

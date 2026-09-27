@@ -12,6 +12,7 @@ from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
+    TransferId,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
 
@@ -335,6 +336,54 @@ class TransactionLedger(Protocol):
 
         The whole point for somebody who declared no accounts: what came in
         and what went out is a complete answer on its own.
+        """
+        ...
+
+
+class TransferDeclarations(Protocol):
+    """The writes behind declaring a transfer after the fact, and undoing it.
+
+    Apart from `TransactionLedger` rather than two more methods on it: the
+    ledger has a stand-in in every test that records a movement, and none of
+    them has any business learning this. Production passes the same object
+    for both.
+
+    Each method is one write, for the reason `record` is: a movement marked
+    as a transfer while the side written for it failed to land would stop
+    counting as spending with nothing lowering the debt it paid.
+    """
+
+    def declare(
+        self,
+        *,
+        reclassified: Sequence[Transaction],
+        written: Transaction | None,
+        balance_delta: Decimal | None,
+    ) -> bool:
+        """Mark these movements as transfer sides, and write the new one.
+
+        Each reclassified movement already carries its marker; the store only
+        takes it if the row still carries none. `written`, when present, is
+        stored like `record` stores a row, moving its account by
+        `balance_delta`. False when a condition refused any row — nothing
+        was applied.
+        """
+        ...
+
+    def undeclare(
+        self,
+        *,
+        restored: Sequence[Transaction],
+        transfer_id: TransferId,
+        erased: Transaction | None,
+        reversal: BalanceReversal | None,
+    ) -> bool:
+        """Clear the marker on these movements, and erase the written side.
+
+        A row loses its marker only while it still belongs to `transfer_id`.
+        `erased` goes the way `remove` takes a row, with its account unwound
+        by `reversal`. False when a condition refused any row — nothing was
+        applied.
         """
         ...
 

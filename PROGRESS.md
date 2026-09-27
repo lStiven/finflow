@@ -32,7 +32,12 @@ Todo el backend de la versión 1 está terminado y probado:
   recupera la plata.
 - **Los traslados no cuentan como gasto ni como ingreso.** Pagar la tarjeta
   desde una cuenta del mismo banco mueve los dos saldos; pagada desde otro
-  banco, se registra a mano el lado que sí se conoce.
+  banco, se registra a mano el lado que sí se conoce — o, si el correo ya
+  llegó como gasto («Pagaste $X a BANCO COMERCIAL AV VILLAS»), se **marca
+  como traslado** desde el propio movimiento: se empareja con el ingreso que
+  el otro banco sí avisó, o la app escribe el abono en la cuenta que elijas.
+  La pantalla lo propone cuando el banco del correo es el de una cuenta tuya,
+  y se puede deshacer.
 - **Los créditos se cobran solos lo que el mes les cobra.** Con la tasa, el día
   de corte, la cuota y los seguros declarados, cada corte cerrado deja escritos
   los intereses y cada seguro como movimientos con nombre. Pagar 2.000.000 sobre
@@ -140,9 +145,8 @@ Todo el backend de la versión 1 está terminado y probado:
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 83 operaciones de API en cinco contextos, seis procesos en
-la nube, 2217 pruebas de Python y 416 del frontend, todas en verde salvo la
-de la mesada que se cae cinco horas al día (ver Huecos conocidos).
+**Estado técnico:** 86 operaciones de API en cinco contextos, seis procesos en
+la nube, 2343 pruebas de Python y 433 del frontend, todas en verde.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
 sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
 cola compartido, la paginación de notificaciones, las categorías propias, y el
@@ -272,13 +276,6 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
-- **Una prueba de la mesada se cae cinco horas al día.**
-  `test_it_answers_for_the_calendar_month_and_counts_today` compara
-  `days_left` contra un `today()` que el propio test calcula en UTC, mientras
-  `allowance.py` lo calcula en `America/Bogota` (`today_in(zone)`). Entre las
-  00:00 y las 05:00 UTC —19:00 a 24:00 en Bogotá— las dos fechas no coinciden
-  y `just prepare` se pone rojo sin que nada esté mal en la aplicación. El
-  arreglo es una línea en el helper del test.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
@@ -334,6 +331,16 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado.**
+  Bancolombia avisa «Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto
+  *5261»: una cuenta y una institución, nunca la tarjeta, así que entraba como
+  gasto y el patrimonio quedaba mal por todo el pago. Ahora esa frase tiene
+  plantilla (lee exactamente lo que leía el modelo, para no darle otra
+  identidad a lo ya registrado) y el movimiento se declara traslado de tres
+  formas: emparejado con el que el otro banco sí avisó, escribiendo el abono en
+  una cuenta tuya, o hacia fuera de Finflow. Todo en un solo write, y todo se
+  deshace. Comprobado en el navegador contra la pila real con el correo real:
+  el patrimonio vuelve exactamente a donde estaba antes del pago.
 - 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
   registro, el correo de verificación, la recuperación, el cambio de
   contraseña y el secreto del webhook de Telegram cuentan intentos por
@@ -399,39 +406,3 @@ AWS (ver Trabas).
   mover un peso, y lo comprueba el mismo e2e. Faltan las otras tres
   iteraciones —periodos libres, rollover, y alertas con nombre e icono por
   cuenta—.
-- 2026-09-18 — **Ya se le puede poner tope a una categoría.**
-  Cuarto feature (E4), en su propia pantalla `/presupuestos` y no dentro de
-  Resumen: el plan pedía el semáforo en el desglose de Resumen, y esa pantalla
-  responde otras cuatro preguntas primero. En Resumen quedó solo un resumen,
-  después de las cuentas — y el disponible de E3 bajó ahí también, que era lo
-  que se pedía. **El tope se repite o vale para un mes**, y el del mes tapa al
-  de siempre: son dos filas y no una con una excepción encima, así que quitar
-  la de diciembre deja la de siempre intacta. Lo que **no** se entregó es el
-  aviso por Telegram, y el porqué es lo que hay que llevarse: un movimiento
-  **no tiene categoría cuando se registra** —Financial guarda el texto del
-  banco y lo resuelve al leer, que es lo que hace que corregir un comercio
-  arregle el pasado—, así que nada en la escritura sabe a qué tope pertenece
-  una compra. Calcularlo al abrir la app es justo lo que este proyecto ya
-  decidió que no se avisa, con los devengos. Por eso el cruce **no se guarda
-  ni se anuncia: se deriva**, como «pagado» se deriva de la fila del ledger.
-  Las dos revisiones encontraron ocho cosas, la peor de ellas que el
-  interruptor «se repite cada mes» dejaba mover la identidad del tope al
-  editarlo: guardar parecía no hacer nada y dejaba una fila inalcanzable
-  detrás. Y mirar la pantalla encontró lo que el código no podía: el semáforo
-  tenía un solo color —`accent` es magenta y `outgoing` es rojo— bajo una
-  tarjeta que dice «1 de 3 en verde», y `bg-mid` no existe, así que la barra
-  ámbar del disponible llevaba sin pintarse desde E3.
-- 2026-09-15 — **La app ya dice cuánto queda para gastar.**
-  Tercer feature (E3). Se declara el mes —cuánto esperas que entre, cuánto
-  quieres guardar— y arriba del Resumen aparece un número con su resta a la
-  vista. Lo delicado no es la aritmética sino **cuál de las dos cifras de las
-  facturas se resta**: se resta lo que *aún se debe*, nunca lo que el mes
-  cuesta, porque un cobro ya confirmado está en lo gastado —es una fila del
-  ledger— y contarlo también como compromiso lo descontaría dos veces. Un e2e
-  lo comprueba contra la pila real: declara su propia factura, la confirma y
-  exige que el número **no se mueva**. Sin plan declarado los dos endpoints
-  responden 404 y la tarjeta no existe: un cero ahí se lee como «no te queda
-  nada». El plan se reemplaza entero y nunca se fusiona, para que una meta de
-  ahorro no sobreviva al ingreso contra el que se fijó. La revisión encontró
-  cinco cosas reales, entre ellas que teclear «0» en «quieres guardar» se
-  rechazaba y que un 5xx de la tarjeta se llevaba por delante todo el panel.

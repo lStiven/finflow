@@ -1211,6 +1211,68 @@ export interface paths {
         patch: operations["edit_transaction_financial_transactions__transaction_id__patch"];
         trace?: never;
     };
+    "/financial/transactions/{transaction_id}/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Declare Transfer
+         * @description Say this movement was money between two of its owner's balances.
+         *
+         *     It stops counting as spending or income. With `counterpart_account_id`
+         *     the other side is written on that account and moves its balance — on a
+         *     credit card, the debt falls. With `counterpart_movement_id` the two
+         *     existing movements are paired and no balance moves. With neither, the
+         *     other side is outside this app.
+         *
+         *     Idempotent: declaring the same thing twice answers the same rows. Refused
+         *     with 409 on a movement that already is a transfer some other way, on a
+         *     charge this app wrote, and on one a bill counts as its charge.
+         */
+        post: operations["declare_transfer_financial_transactions__transaction_id__transfer_post"];
+        /**
+         * Undo Transfer
+         * @description Take back a transfer declared after the fact, from either of its sides.
+         *
+         *     The movements go back to being spending or income, and a side this app
+         *     wrote is erased with the balance it moved. Refused with 409 on a transfer
+         *     an alert stated or its owner entered as one: there is nothing to go back
+         *     to, and `DELETE /financial/transactions/{id}` is what removes those.
+         */
+        delete: operations["undo_transfer_financial_transactions__transaction_id__transfer_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/transactions/{transaction_id}/transfer-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Transfer Options
+         * @description What could be the other side of this movement, before anything changes.
+         *
+         *     Reads every movement its owner has, to find one going the other way for
+         *     the same amount: meant for one movement on screen, never for a list.
+         */
+        get: operations["transfer_options_financial_transactions__transaction_id__transfer_options_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/trends": {
         parameters: {
             query?: never;
@@ -1319,7 +1381,15 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Login */
+        /**
+         * Login
+         * @description Trade an address and a password for a token.
+         *
+         *     The one door in this deployment that a password can be guessed at, so it
+         *     is the one that counts wrong answers — **only the wrong ones**. Getting
+         *     in costs nothing and forgives what came before it, which is what keeps a
+         *     shared connection from being locked out by whoever else is behind it.
+         */
         post: operations["login_identity_login_post"];
         delete?: never;
         options?: never;
@@ -1378,6 +1448,11 @@ export interface paths {
          *     A token comes back because the change invalidates the one that made this
          *     request, along with every other session. The client is expected to replace
          *     what it holds with this.
+         *
+         *     Counted against the account rather than the address, because the token
+         *     already says which account it is: the attack this narrows is a session
+         *     left open on a shared machine, guessed at until it becomes somebody
+         *     else's.
          */
         post: operations["change_password_identity_password_change_post"];
         delete?: never;
@@ -1401,6 +1476,10 @@ export interface paths {
          *
          *     Answers 202 whether or not the address has an account, and sends mail
          *     either way, so this is not a way to find out who is registered here.
+         *
+         *     Shares the mail door with the verification code, because they share the
+         *     mailbox: what matters is how much mail one place can cause, not which of
+         *     the two endpoints it asked through.
          */
         post: operations["request_password_reset_identity_password_forgot_post"];
         delete?: never;
@@ -1425,6 +1504,10 @@ export interface paths {
          *     No token comes back: the account this just handed over is reached by
          *     logging in with the new password, which is also the proof that it worked.
          *     Every session opened with the old password stops working here.
+         *
+         *     Wrong links are counted per address, for the reason the code's door
+         *     gives: the token is long enough that guessing it is hopeless, and a
+         *     thousand hopeless guesses is still somebody to stop.
          */
         post: operations["reset_password_identity_password_reset_post"];
         delete?: never;
@@ -1455,6 +1538,13 @@ export interface paths {
          *     The forwarding address never appears in this response — it depends only
          *     on the new account's id, so `GET /identity/inbox` right after this call
          *     already has it.
+         *
+         *     Counted per address, and **only when an account is created**. The cost
+         *     here is the account, not the request: a POST without a valid ticket
+         *     creates nothing and is refused before the password is ever hashed, so
+         *     charging for those would let ten pieces of junk close registration for
+         *     everybody behind a shared connection — which is the false positive this
+         *     door exists without.
          */
         post: operations["register_identity_register_post"];
         delete?: never;
@@ -1479,6 +1569,10 @@ export interface paths {
          *     The token is what reserves the address: verifying is not registering, and
          *     somebody who merely knows that an address was just verified must not be
          *     able to race its owner to the account.
+         *
+         *     A code is six digits, and the challenge behind it is already spent after
+         *     five wrong answers. The door is what stops those five being tried against
+         *     every address somebody can think of.
          */
         post: operations["confirm_email_verification_identity_verification_confirm_post"];
         delete?: never;
@@ -1502,6 +1596,10 @@ export interface paths {
          *
          *     202 rather than 200: what this promises is that a message was handed to
          *     the mail server, not that anybody read it.
+         *
+         *     One address is already capped at five mails an hour by the challenge
+         *     itself; what the door adds is the spray across many addresses from one
+         *     place, which is how a mailbox loses its sender reputation.
          */
         post: operations["request_email_verification_identity_verification_request_post"];
         delete?: never;
@@ -2724,6 +2822,21 @@ export interface components {
              * @default 0
              */
             savings_target: number | string;
+        };
+        /**
+         * DeclareTransferPayload
+         * @description Where the other side of a movement declared a transfer is.
+         *
+         *     At most one field. `counterpart_movement_id` pairs it with a movement
+         *     already here — both banks emailed. `counterpart_account_id` writes the
+         *     other side on that account — the bank on the other end never emailed.
+         *     Neither: the other side is outside this app.
+         */
+        DeclareTransferPayload: {
+            /** Counterpart Account Id */
+            counterpart_account_id?: string | null;
+            /** Counterpart Movement Id */
+            counterpart_movement_id?: string | null;
         };
         /**
          * DeletedCategoryResponse
@@ -3956,6 +4069,58 @@ export interface components {
          */
         TransactionSort: "date" | "amount";
         /**
+         * TransferAccountOptionResponse
+         * @description An account that could hold the other side of a declared transfer.
+         */
+        TransferAccountOptionResponse: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Suggested */
+            suggested: boolean;
+        };
+        /**
+         * TransferDeclaredResponse
+         * @description The rows that now say "transfer", the declared one first.
+         *
+         *     `accounts` carries the balance that moved when a side was written, already
+         *     recomputed; empty when two existing movements were paired or the other
+         *     side is outside this app, because then no balance moved.
+         */
+        TransferDeclaredResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountResponse"][];
+            /** Transactions */
+            transactions: components["schemas"]["TransactionResponse"][];
+        };
+        /**
+         * TransferOptionsResponse
+         * @description What a screen can offer before a movement is declared a transfer.
+         *
+         *     `refusal` set means none of it applies, and both lists are empty:
+         *     `already_transfer`, `self_written` (an accrual or a confirmed bill),
+         *     `unplaceable` (on no account and no account could adopt it) or
+         *     `linked_to_bill`.
+         *
+         *     `counterparts` are movements already here that could be the other side —
+         *     opposite direction, the same amount to the cent, a different account,
+         *     within a few days. When one of them is it, pairing is the answer:
+         *     writing a side on its account would count the money twice there.
+         */
+        TransferOptionsResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["TransferAccountOptionResponse"][];
+            /** Counterparts */
+            counterparts: components["schemas"]["TransactionResponse"][];
+            /** Refusal */
+            refusal: string | null;
+            /** Role */
+            role: string;
+        };
+        /**
          * TransferResponse
          * @description The half of a movement that says it was not spending.
          *
@@ -3974,6 +4139,11 @@ export interface components {
          *     called the other side ("Nequi", "efectivo").
          */
         TransferResponse: {
+            /**
+             * Basis
+             * @default stated
+             */
+            basis: string;
             /** Counterpart Instrument Kind */
             counterpart_instrument_kind: string | null;
             /** Counterpart Last Four */
@@ -3998,6 +4168,22 @@ export interface components {
          * @enum {string}
          */
         TransferRole: "source" | "destination";
+        /**
+         * TransferUndoneResponse
+         * @description What undoing a declared transfer put back and took away.
+         *
+         *     `transactions` are spending or income again. `erased` names the side this
+         *     app had written, which no longer exists, and `accounts` the balance it
+         *     gave back.
+         */
+        TransferUndoneResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["AccountResponse"][];
+            /** Erased */
+            erased: string[];
+            /** Transactions */
+            transactions: components["schemas"]["TransactionResponse"][];
+        };
         /**
          * TransferView
          * @description Whether a set of movements includes the two sides of a transfer.
@@ -5949,6 +6135,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TransactionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declare_transfer_financial_transactions__transaction_id__transfer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclareTransferPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferDeclaredResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undo_transfer_financial_transactions__transaction_id__transfer_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferUndoneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transfer_options_financial_transactions__transaction_id__transfer_options_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferOptionsResponse"];
                 };
             };
             /** @description Validation Error */

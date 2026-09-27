@@ -227,6 +227,18 @@ class TransactionEdited(TransactionEvent):
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionReclassified(TransactionEvent):
+    """Its owner said what this movement was, after it was recorded.
+
+    `transfer` is True when it became one side of a transfer — no longer
+    spending or income — and False when that declaration was undone. No
+    balance moved either way: what changed is which totals count it.
+    """
+
+    transfer: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class TransactionUnassigned(TransactionEvent):
     """The movement came off the account that was holding it.
 

@@ -5,6 +5,7 @@ masking — because that is exactly what the parser has to survive. Names,
 account digits and transfer keys are replaced with fakes of the same shape.
 """
 
+import datetime as dt
 from decimal import Decimal
 
 import pytest
@@ -20,7 +21,7 @@ from personal_finance.contexts.ingestion.domain.transactions import (
     TransactionKind,
     TransferKind,
 )
-from personal_finance.shared.domain.value_objects import Currency
+from personal_finance.shared.domain.value_objects import Currency, PosixTime
 
 
 CARD_PURCHASE = (
@@ -51,6 +52,15 @@ CARD_PAYMENT = (
 CARD_PAYMENT_ACCENTED = (
     "Bancolombia: Pagaste $1.200.000,50 en la tarjeta de crédito 7653 desde "
     "la cuenta 5261 el 21/05/2026 a las 16:30. Estamos cerca."
+)
+PAYMENT_TO_ANOTHER_BANK = (
+    "Bancolombia: Pagaste $3,625,733.00 a BANCO COMERCIAL AV VILLAS desde tu "
+    "producto *5261 el 30/12/2025 11:17:03. ¿Dudas? Llamanos al 6045109095. "
+    "Estamos cerca."
+)
+PAYMENT_TO_ANOTHER_BANK_UNMASKED = (
+    "Bancolombia: Pagaste $504,179.72 a LULO BANK S A desde tu producto 5261 el "
+    "21/09/2026 16:05:18. ¿Dudas? Llamanos al 6045109095. Estamos cerca"
 )
 INCOMING_PAYROLL = (
     "Bancolombia: Recibiste un pago de Nomina de BOLD.CO SAS por $19,850,806.00 "
@@ -250,3 +260,64 @@ def test_a_transfer_to_somebody_else_stays_a_single_movement(
     """Money leaving for an account the bank does not say is yours is one
     expense, and must not be turned into a pair."""
     assert isinstance(parser.parse(TRANSFER), ExtractedTransaction)
+
+
+# ------------------------------------------------- pago a otra entidad
+
+
+def test_a_payment_to_another_bank_is_one_outgoing_movement(
+    parser: BancolombiaParser,
+) -> None:
+    """One instrument and an institution: a single movement. Only the owner
+    knows the institution holds their card, so declaring it a transfer is
+    theirs to do afterwards — the parser must not guess it into a pair."""
+    transaction = parser.parse(PAYMENT_TO_ANOTHER_BANK)
+
+    assert isinstance(transaction, ExtractedTransaction)
+    assert transaction.kind is TransactionKind.TRANSFER
+    assert transaction.direction is TransactionDirection.OUTGOING
+    assert transaction.amount.amount == Decimal("3625733.00")
+    assert transaction.amount.currency is Currency.COP
+    assert transaction.counterparty == "BANCO COMERCIAL AV VILLAS"
+    assert transaction.bank == "bancolombia"
+    assert transaction.instrument is not None
+    assert transaction.instrument.kind is InstrumentKind.ACCOUNT
+    assert transaction.instrument.last_four == "5261"
+
+
+def test_a_payment_to_another_bank_reads_exactly_what_the_fallback_read(
+    parser: BancolombiaParser,
+) -> None:
+    """Before this template the model read these alerts, and a movement's
+    identity is its content. Recorded from the fallback on 2026-09-26 for
+    this very alert: account *5261, "BANCO COMERCIAL AV VILLAS", 11:17 in
+    Bogotá. Any field read differently here — the seconds kept, the
+    instrument called a savings account — would give a movement already
+    recorded a second identity, and a redelivery would count it twice."""
+    transaction = parser.parse(PAYMENT_TO_ANOTHER_BANK)
+
+    assert isinstance(transaction, ExtractedTransaction)
+    assert transaction.occurred_at == PosixTime.from_datetime(
+        dt.datetime(2025, 12, 30, 16, 17, tzinfo=dt.UTC),
+    )
+
+
+def test_a_payment_to_another_bank_survives_the_missing_asterisk(
+    parser: BancolombiaParser,
+) -> None:
+    transaction = parser.parse(PAYMENT_TO_ANOTHER_BANK_UNMASKED)
+
+    assert isinstance(transaction, ExtractedTransaction)
+    assert transaction.amount.amount == Decimal("504179.72")
+    assert transaction.counterparty == "LULO BANK S A"
+    assert transaction.instrument is not None
+    assert transaction.instrument.last_four == "5261"
+
+
+def test_a_card_payment_at_this_bank_still_wins_over_a_payment_to_another(
+    parser: BancolombiaParser,
+) -> None:
+    """Both open with "Pagaste". The one naming a card of the owner's at this
+    same bank is two movements and has to keep being read as the pair."""
+    assert isinstance(parser.parse(CARD_PAYMENT), ExtractedTransfer)
+    assert isinstance(parser.parse(CARD_PAYMENT_ACCENTED), ExtractedTransfer)

@@ -15,7 +15,7 @@ moved.
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 import contextlib
 import datetime as dt
 from decimal import Decimal
@@ -157,6 +157,11 @@ from personal_finance.contexts.financial.application.recurring import (
     DetectRecurringSeriesUseCase,
     RecurringView,
 )
+from personal_finance.contexts.financial.application.transfers import (
+    DeclareTransferCommand,
+    DeclareTransferUseCase,
+    TransferOptions,
+)
 from personal_finance.contexts.financial.domain.bills import (
     MAX_NAME_LENGTH as MAX_BILL_NAME_LENGTH,
     BillCadence,
@@ -188,6 +193,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     FinancingTermsError,
     InstrumentNotLinkedError,
     TransactionAlreadyAssignedError,
+    TransferDeclarationError,
     TransferLegError,
 )
 from personal_finance.contexts.financial.domain.financing import (
@@ -561,6 +567,12 @@ class TransferResponse(BaseModel):
     counterpart_movement_id: str | None
     counterpart_instrument_kind: str | None
     counterpart_last_four: str | None
+    # `stated` — an alert named both sides, or its owner entered it as a
+    # transfer; only `DELETE` takes it back. `reclassified` — recorded as
+    # spending or income and declared a transfer afterwards; `counterpart` —
+    # the side this app wrote for such a declaration. Both of the last two are
+    # undone by `DELETE /financial/transactions/{id}/transfer`.
+    basis: str = "stated"
 
 
 class TransactionResponse(BaseModel):
@@ -587,6 +599,63 @@ class TransactionResponse(BaseModel):
     # Set on both rows of a transfer between the owner's own accounts. Null
     # on ordinary spending, which is nearly everything.
     transfer: TransferResponse | None = None
+
+
+class TransferAccountOptionResponse(BaseModel):
+    """An account that could hold the other side of a declared transfer."""
+
+    id: str
+    name: str
+    kind: str
+    # True when the movement's counterparty names this account's bank —
+    # "Pagaste … a BANCO COMERCIAL AV VILLAS" and a card declared at AV Villas.
+    suggested: bool
+
+
+class TransferOptionsResponse(BaseModel):
+    """What a screen can offer before a movement is declared a transfer.
+
+    `refusal` set means none of it applies, and both lists are empty:
+    `already_transfer`, `self_written` (an accrual or a confirmed bill),
+    `unplaceable` (on no account and no account could adopt it) or
+    `linked_to_bill`.
+
+    `counterparts` are movements already here that could be the other side —
+    opposite direction, the same amount to the cent, a different account,
+    within a few days. When one of them is it, pairing is the answer:
+    writing a side on its account would count the money twice there.
+    """
+
+    # What this movement would be: `source` (money left) | `destination`.
+    role: str
+    refusal: str | None
+    accounts: list[TransferAccountOptionResponse]
+    counterparts: list[TransactionResponse]
+
+
+class TransferDeclaredResponse(BaseModel):
+    """The rows that now say "transfer", the declared one first.
+
+    `accounts` carries the balance that moved when a side was written, already
+    recomputed; empty when two existing movements were paired or the other
+    side is outside this app, because then no balance moved.
+    """
+
+    transactions: list[TransactionResponse]
+    accounts: list[AccountResponse]
+
+
+class TransferUndoneResponse(BaseModel):
+    """What undoing a declared transfer put back and took away.
+
+    `transactions` are spending or income again. `erased` names the side this
+    app had written, which no longer exists, and `accounts` the balance it
+    gave back.
+    """
+
+    transactions: list[TransactionResponse]
+    erased: list[str]
+    accounts: list[AccountResponse]
 
 
 class DeletedTransactionResponse(BaseModel):
@@ -1096,6 +1165,35 @@ class EnterTransferLegPayload(BaseModel):
     note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
 
 
+class DeclareTransferPayload(BaseModel):
+    """Where the other side of a movement declared a transfer is.
+
+    At most one field. `counterpart_movement_id` pairs it with a movement
+    already here — both banks emailed. `counterpart_account_id` writes the
+    other side on that account — the bank on the other end never emailed.
+    Neither: the other side is outside this app.
+    """
+
+    counterpart_account_id: str | None = None
+    counterpart_movement_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+    )
+
+    @model_validator(mode="after")
+    def _one_side(self) -> DeclareTransferPayload:
+        if (
+            self.counterpart_account_id is not None
+            and self.counterpart_movement_id is not None
+        ):
+            raise ValueError(
+                "Give counterpart_account_id or counterpart_movement_id, not both",
+            )
+
+        return self
+
+
 class EditTransactionPayload(BaseModel):
     """A correction. Everything omitted is left alone.
 
@@ -1174,6 +1272,19 @@ def _build_manage_transactions() -> ManageTransactionsUseCase:
     return ManageTransactionsUseCase(
         accounts=build_accounts(),
         ledger=build_ledger(),
+        event_publisher=build_financial_event_publisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_declare_transfer() -> DeclareTransferUseCase:
+    ledger = build_ledger()
+
+    return DeclareTransferUseCase(
+        accounts=build_accounts(),
+        ledger=ledger,
+        declarations=ledger,
+        bills=build_bills(),
         event_publisher=build_financial_event_publisher(),
     )
 
@@ -1259,6 +1370,10 @@ def get_manage_accounts_use_case() -> ManageAccountsUseCase:
 
 def get_manage_transactions_use_case() -> ManageTransactionsUseCase:
     return _build_manage_transactions()
+
+
+def get_declare_transfer_use_case() -> DeclareTransferUseCase:
+    return _build_declare_transfer()
 
 
 def get_manage_financing_use_case() -> ManageFinancingUseCase:
@@ -2378,6 +2493,135 @@ def delete_transaction(
     )
 
 
+# ---------------------------------------------- transfers declared afterwards
+#
+# A payment to a card at another bank arrives as an ordinary outgoing
+# movement: its alert names the account and the institution, never the card.
+# These three say, after the fact, that it was a transfer — and take it back.
+# None of them touches how a movement is recorded; see
+# `application/transfers.py`.
+
+
+@router.get(
+    "/transactions/{transaction_id}/transfer-options",
+    response_model=TransferOptionsResponse,
+)
+def transfer_options(
+    user_id: CurrentUser,
+    transaction_id: str,
+    use_case: Annotated[
+        DeclareTransferUseCase,
+        Depends(get_declare_transfer_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> TransferOptionsResponse:
+    """What could be the other side of this movement, before anything changes.
+
+    Reads every movement its owner has, to find one going the other way for
+    the same amount: meant for one movement on screen, never for a list.
+    """
+    with _domain_errors():
+        options = use_case.options(user_id=user_id, transaction_id=transaction_id)
+
+    return _transfer_options_response(options, merchants)
+
+
+@router.post(
+    "/transactions/{transaction_id}/transfer",
+    response_model=TransferDeclaredResponse,
+)
+def declare_transfer(
+    user_id: CurrentUser,
+    transaction_id: str,
+    payload: DeclareTransferPayload,
+    use_case: Annotated[
+        DeclareTransferUseCase,
+        Depends(get_declare_transfer_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> TransferDeclaredResponse:
+    """Say this movement was money between two of its owner's balances.
+
+    It stops counting as spending or income. With `counterpart_account_id`
+    the other side is written on that account and moves its balance — on a
+    credit card, the debt falls. With `counterpart_movement_id` the two
+    existing movements are paired and no balance moves. With neither, the
+    other side is outside this app.
+
+    Idempotent: declaring the same thing twice answers the same rows. Refused
+    with 409 on a movement that already is a transfer some other way, on a
+    charge this app wrote, and on one a bill counts as its charge.
+    """
+    with _domain_errors():
+        result = use_case.declare(
+            DeclareTransferCommand(
+                user_id=user_id,
+                transaction_id=transaction_id,
+                counterpart_account_id=(
+                    None
+                    if payload.counterpart_account_id is None
+                    else _account_id(payload.counterpart_account_id)
+                ),
+                counterpart_movement_id=payload.counterpart_movement_id,
+            ),
+        )
+
+    return TransferDeclaredResponse(
+        transactions=_attributed_all(result.movements, merchants),
+        accounts=[_account_response(account) for account in result.accounts],
+    )
+
+
+@router.delete(
+    "/transactions/{transaction_id}/transfer",
+    response_model=TransferUndoneResponse,
+)
+def undo_transfer(
+    user_id: CurrentUser,
+    transaction_id: str,
+    use_case: Annotated[
+        DeclareTransferUseCase,
+        Depends(get_declare_transfer_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> TransferUndoneResponse:
+    """Take back a transfer declared after the fact, from either of its sides.
+
+    The movements go back to being spending or income, and a side this app
+    wrote is erased with the balance it moved. Refused with 409 on a transfer
+    an alert stated or its owner entered as one: there is nothing to go back
+    to, and `DELETE /financial/transactions/{id}` is what removes those.
+    """
+    with _domain_errors():
+        result = use_case.undo(user_id=user_id, transaction_id=transaction_id)
+
+    return TransferUndoneResponse(
+        transactions=_attributed_all(result.restored, merchants),
+        erased=list(result.erased),
+        accounts=[_account_response(account) for account in result.accounts],
+    )
+
+
+def _transfer_options_response(
+    options: TransferOptions,
+    merchants: MerchantDirectory,
+) -> TransferOptionsResponse:
+    return TransferOptionsResponse(
+        role=options.role.value,
+        refusal=None if options.refusal is None else options.refusal.value,
+        accounts=[
+            TransferAccountOptionResponse(
+                id=str(account.id.value),
+                name=account.name,
+                kind=account.kind.value,
+                suggested=account.id in options.suggested,
+            )
+            for account in options.accounts
+        ],
+        counterparts=_attributed_all(options.counterparts, merchants),
+    )
+
+
 # ----------------------------------------------------------------- helpers
 
 
@@ -2772,9 +3016,35 @@ def _transaction_response(entry: AttributedTransaction) -> TransactionResponse:
                 ),
                 counterpart_instrument_kind=leg.counterpart_instrument_kind,
                 counterpart_last_four=leg.counterpart_last_four,
+                basis=leg.basis.value,
             )
         ),
     )
+
+
+def _attributed_all(
+    transactions: Sequence[Transaction],
+    merchants: MerchantDirectory,
+) -> list[TransactionResponse]:
+    """Several movements read back the way a list reads them, in one lookup."""
+    if not transactions:
+        return []
+
+    user_id = transactions[0].user_id
+    attributed = merchants.attribute(
+        user_id=user_id,
+        counterparties=list({movement.counterparty for movement in transactions}),
+    )
+
+    return [
+        _transaction_response(
+            AttributedTransaction(
+                transaction=movement,
+                merchant=attributed.get(movement.counterparty),
+            ),
+        )
+        for movement in transactions
+    ]
 
 
 def _summary_response(
@@ -2981,10 +3251,10 @@ def _domain_errors() -> Generator[None]:
             status_code=status.HTTP_409_CONFLICT,
             detail=str(error),
         ) from error
-    except TransferLegError as error:
+    except (TransferLegError, TransferDeclarationError) as error:
         # The request is well formed and the movement exists; what refuses it
-        # is that this row is half of one fact. 409 rather than 400: nothing
-        # about the body could be rewritten to make it work.
+        # is that this row is half of one fact, or already is one. 409 rather
+        # than 400: nothing about the body could be rewritten to make it work.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(error),

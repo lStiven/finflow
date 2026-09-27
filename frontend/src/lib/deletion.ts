@@ -79,6 +79,12 @@ export function describeDeletion(
  * send somebody to a control the edit form does not even show.
  */
 function instead(movement: Transaction, leg: TransferLeg | null): string {
+  // A transfer declared after the fact has a lighter way back than erasing
+  // both rows — one of which is the bank's own alert.
+  if (leg !== null && leg.basis !== "stated") {
+    return "Esto no se puede deshacer, y borra también la otra mitad. Si solo quieres que deje de ser un traslado, usa «Deshacer traslado».";
+  }
+
   const base =
     "Esto no se puede deshacer. Si el movimiento sí ocurrió y solo está mal, usa Corregir";
 

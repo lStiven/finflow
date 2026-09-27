@@ -26,6 +26,10 @@ from personal_finance.contexts.financial.application.allowance import (
     ReadMonthlyAllowanceUseCase,
 )
 from personal_finance.contexts.financial.application.bills import ListBillsUseCase
+from personal_finance.contexts.financial.application.financing import (
+    today_in,
+    zone_of,
+)
 from personal_finance.contexts.financial.application.ports import BalanceReversal
 from personal_finance.contexts.financial.application.queries import (
     SummarizeSpendingUseCase,
@@ -237,7 +241,12 @@ def money(amount: str, currency: Currency = Currency.COP) -> Money:
 
 
 def today() -> dt.date:
-    return dt.datetime.now(tz=dt.UTC).date()
+    """Today where the use case is asked about, not in UTC.
+
+    The two disagree from 19:00 to midnight in Bogotá, and a test reading the
+    UTC date there compared `days_left` against tomorrow.
+    """
+    return today_in(zone_of(TIMEZONE))
 
 
 def day_of_this_month(day: int) -> dt.date:

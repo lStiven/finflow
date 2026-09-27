@@ -11,6 +11,7 @@ function leg(overrides: Partial<TransferLeg> = {}): TransferLeg {
     counterpart_movement_id: "def",
     counterpart_instrument_kind: "credit_card",
     counterpart_last_four: "1234",
+    basis: "stated",
     ...overrides,
   };
 }
@@ -28,6 +29,7 @@ function loneLeg(overrides: Partial<TransferLeg> = {}): TransferLeg {
     counterpart_movement_id: null,
     counterpart_instrument_kind: null,
     counterpart_last_four: null,
+    basis: "stated",
     ...overrides,
   };
 }
