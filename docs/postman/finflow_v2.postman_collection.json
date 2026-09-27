@@ -2391,6 +2391,115 @@
           "response": []
         },
         {
+          "name": "Transfer options",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId/transfer-options",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId",
+                "transfer-options"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "What could be the other side of this movement, before anything changes. For a payment to a card at another bank — \"Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto *5261\" — whose alert names an institution and never the card.\n\n`role` is what this movement would be (`source` when money left). `accounts` are the open accounts in its currency that could take the other side, `suggested: true` first when the movement's counterparty names that account's bank. `counterparts` are movements already here that could be the other side: the opposite direction, the same amount to the cent, another account, within four days — when both banks emailed, pairing one of those is the answer, and writing a side would count the money twice.\n\n`refusal` set means nothing can be offered: `already_transfer`, `self_written` (an accrual or a confirmed bill), `unplaceable` (on no account and nothing could adopt it) or `linked_to_bill`.\n\nReads every movement the user has: meant for one movement on screen, never for a list."
+          },
+          "response": []
+        },
+        {
+          "name": "Declare transfer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId/transfer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId",
+                "transfer"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Say this movement was money between two of the owner's own balances. It stops counting as spending or income, and its identity does not change — the alert arriving again is still refused as a duplicate.\n\nAt most one of: `counterpart_account_id` writes the other side on that account and moves its balance (on a credit card, the debt falls); `counterpart_movement_id` pairs it with a movement already here, moving no balance; neither means the other side is outside this app. Both → 422.\n\nAnswers `transactions` (the declared movement first, then its other side when there is one, each with `transfer.basis` `reclassified` or `counterpart`) and `accounts` (the balance a written side moved; empty otherwise). Idempotent: the same body twice answers the same rows. 409 when the movement already is a transfer some other way, was written by this app, is linked to a bill, or the other side is its own account; 404 for a movement or account that is not there.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"counterpart_account_id\": \"{{account_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Undo declared transfer",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/:transactionId/transfer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                ":transactionId",
+                "transfer"
+              ],
+              "variable": [
+                {
+                  "key": "transactionId",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Take back a transfer declared after the fact, from either of its sides. Reclassified movements are spending or income again; a side this app wrote is erased with the balance it moved.\n\nAnswers `transactions` (what came back), `erased` (the written side's id, when there was one) and `accounts` (the balance it gave back). 409 on a movement that is not a transfer, and on one an alert stated or its owner entered as a transfer — `DELETE /financial/transactions/:transactionId` is what removes those."
+          },
+          "response": []
+        },
+        {
           "name": "List bills",
           "request": {
             "method": "GET",

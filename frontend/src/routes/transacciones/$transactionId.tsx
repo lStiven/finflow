@@ -1,4 +1,4 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -7,6 +7,7 @@ import {
   Pencil,
   Trash2,
   TriangleAlert,
+  Undo2,
   Unlink,
 } from "lucide-react";
 import { type SubmitEvent, useEffect, useRef, useState } from "react";
@@ -19,6 +20,7 @@ import {
   transactionQuery,
   useDeleteTransaction,
   useEditTransaction,
+  useUndoTransfer,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
@@ -29,9 +31,11 @@ import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
+import { undoConsequence } from "@/lib/declaring";
 import { describeDeletion } from "@/lib/deletion";
 import { transferBlurb, transferTitle } from "@/lib/transfers";
 import { categoryLabels, labelFrom } from "@/merchants/categories";
+import { DeclareTransfer } from "@/transfers/DeclareTransfer";
 
 export const Route = createFileRoute("/transacciones/$transactionId")({
   beforeLoad: ({ context }) => {
@@ -139,13 +143,19 @@ function TransactionScreen() {
             {movement.status === "assigned" ? "En una cuenta" : "Sin asignar"}
           </Row>
           <Row label="Origen">
-            {movement.origin === "manual" ? "Registrado a mano" : "Alerta del banco"}
+            {transfer?.basis === "counterpart"
+              ? "Escrito por Finflow al marcar el traslado"
+              : movement.origin === "manual"
+                ? "Registrado a mano"
+                : "Alerta del banco"}
           </Row>
           {movement.bank ? <Row label="Banco">{movement.bank}</Row> : null}
           {movement.note ? <Row label="Nota">{movement.note}</Row> : null}
         </Card>
 
         <Stated movement={movement} />
+
+        {transfer ? null : <DeclareTransfer movement={movement} />}
 
         {movement.account_id ? null : (
           <p className="text-faint text-xs">
@@ -583,7 +593,108 @@ function TransferPanel({ movement }: { movement: Transaction }) {
             <ArrowLeftRight className="size-3.5" />
           </Link>
         )}
+        {transfer.basis !== "stated" ? <UndoDeclaration movement={movement} /> : null}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Taking back a transfer its owner declared after the fact.
+ *
+ * Only offered on those: a transfer an alert stated has no earlier version to
+ * go back to. What undoing does depends on the other side — erased if Finflow
+ * wrote it, put back if it was a movement of its own — so that side is read
+ * before the promise is made. Undone from the side Finflow wrote, this screen's
+ * movement no longer exists, and the reader is taken to the one that stayed.
+ */
+function UndoDeclaration({ movement }: { movement: Transaction }) {
+  const navigate = useNavigate();
+  const transfer = movement.transfer;
+  const other = transfer?.counterpart_movement_id ?? null;
+  const {
+    data: counterpart,
+    isPending: reading,
+    isError: unreadable,
+  } = useQuery({
+    ...transactionQuery(other ?? ""),
+    enabled: other !== null,
+  });
+  const { data: accounts } = useSuspenseQuery(accountsQuery("all"));
+  const undo = useUndoTransfer(movement.id);
+  const [confirming, setConfirming] = useState(false);
+
+  // Undefined while the other side is unknown: the sentence below must not
+  // promise that no balance moves before it knows whether one will.
+  const written =
+    other === null
+      ? null
+      : unreadable || counterpart === undefined
+        ? undefined
+        : counterpart.transfer?.basis === "counterpart"
+          ? (accounts.accounts.find((account) => account.id === counterpart.account_id)
+              ?.name ?? "la otra cuenta")
+          : null;
+  const waiting = other !== null && reading && !unreadable;
+
+  async function onConfirm() {
+    try {
+      const result = await undo.mutateAsync();
+      if (result.erased.includes(movement.id) && other !== null) {
+        await navigate({
+          to: "/transacciones/$transactionId",
+          params: { transactionId: other },
+          replace: true,
+        });
+      }
+      setConfirming(false);
+    } catch {
+      // `undo.error` carries it, shown below.
+    }
+  }
+
+  if (!confirming) {
+    return (
+      <Button
+        variant="quiet"
+        className="mt-3 px-0 py-0 text-xs"
+        onClick={() => setConfirming(true)}
+      >
+        <Undo2 className="size-3.5" />
+        Deshacer traslado
+      </Button>
+    );
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-xl border border-line bg-ink p-3">
+      <p className="text-sm leading-relaxed">{undoConsequence(movement, written)}</p>
+      {undo.error ? (
+        <p role="alert" className="text-outgoing text-sm">
+          {undo.error.message}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          className="py-2 text-xs"
+          disabled={undo.isPending || waiting}
+          onClick={() => void onConfirm()}
+        >
+          {undo.isPending ? "Deshaciendo…" : "Sí, deshacer"}
+        </Button>
+        <Button
+          variant="quiet"
+          className="py-2 text-xs"
+          disabled={undo.isPending}
+          onClick={() => {
+            undo.reset();
+            setConfirming(false);
+          }}
+        >
+          Mejor no
+        </Button>
+      </div>
+    </div>
   );
 }

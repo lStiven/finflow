@@ -693,6 +693,111 @@ export function useDeleteTransaction(
   });
 }
 
+/* ------------------------------------------- transfers declared afterwards */
+
+/**
+ * What could be the other side of one movement, before anything changes.
+ *
+ * Its own query rather than part of the movement's: the API reads every
+ * movement the owner has to find one going the other way, so it is asked for
+ * only while a detail screen is open, never for a list.
+ */
+export type TransferOptions = components["schemas"]["TransferOptionsResponse"];
+export type TransferAccountOption =
+  components["schemas"]["TransferAccountOptionResponse"];
+type DeclareTransferBody = components["schemas"]["DeclareTransferPayload"];
+
+export const transferOptionsQuery = (transactionId: string) =>
+  queryOptions({
+    queryKey: [...queryKeys.transactions, "transfer-options", transactionId],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/transactions/{transaction_id}/transfer-options", {
+          params: { path: { transaction_id: transactionId } },
+        }),
+      ),
+  });
+
+/**
+ * Everything a declaration or its undo can change: which totals count the
+ * movement, and — when a side is written or erased — a balance.
+ */
+function invalidateAfterReclassifying(client: ReturnType<typeof useQueryClient>) {
+  client.invalidateQueries({ queryKey: queryKeys.transactions });
+  client.invalidateQueries({ queryKey: queryKeys.summary });
+  client.invalidateQueries({ queryKey: queryKeys.trends });
+  client.invalidateQueries({ queryKey: queryKeys.accounts });
+  client.invalidateQueries({ queryKey: queryKeys.financing });
+}
+
+/**
+ * Say a movement was money between two of the owner's own balances.
+ *
+ * `counterpart_account_id` writes the other side on that account (a card's
+ * debt falls); `counterpart_movement_id` pairs it with a movement already
+ * here; neither leaves the other side outside Finflow.
+ */
+export function useDeclareTransfer(
+  transactionId: string,
+): UseMutationResult<
+  components["schemas"]["TransferDeclaredResponse"],
+  Error,
+  DeclareTransferBody
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DeclareTransferBody) =>
+      unwrap(
+        api.POST("/financial/transactions/{transaction_id}/transfer", {
+          params: { path: { transaction_id: transactionId } },
+          body,
+        }),
+      ),
+    onSuccess: (data) => {
+      for (const movement of data.transactions) {
+        client.setQueryData(
+          [...queryKeys.transactions, "detail", movement.id],
+          movement,
+        );
+      }
+      invalidateAfterReclassifying(client);
+    },
+  });
+}
+
+/**
+ * Take a declared transfer back, from either side. A side Finflow wrote is
+ * erased, so its detail leaves the cache rather than answering for a row
+ * that no longer exists.
+ */
+export function useUndoTransfer(
+  transactionId: string,
+): UseMutationResult<components["schemas"]["TransferUndoneResponse"], Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.DELETE("/financial/transactions/{transaction_id}/transfer", {
+          params: { path: { transaction_id: transactionId } },
+        }),
+      ),
+    onSuccess: (data) => {
+      for (const erased of data.erased) {
+        client.removeQueries({
+          queryKey: [...queryKeys.transactions, "detail", erased],
+        });
+      }
+      for (const movement of data.transactions) {
+        client.setQueryData(
+          [...queryKeys.transactions, "detail", movement.id],
+          movement,
+        );
+      }
+      invalidateAfterReclassifying(client);
+    },
+  });
+}
+
 type RenameAccountBody = components["schemas"]["RenameAccountPayload"];
 
 /**

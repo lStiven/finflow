@@ -69,6 +69,24 @@ _CARD_PAYMENT = re.compile(
     re.IGNORECASE,
 )
 
+# Paying somebody from an account: a card at another bank, a Lulo account, a
+# utility. "Pagaste $3,625,733.00 a BANCO COMERCIAL AV VILLAS desde tu producto
+# *5261 el 30/12/2025 11:17:03." One instrument and an external payee, so one
+# movement — unlike `_CARD_PAYMENT`, whose card is at this same bank and named.
+# Whether the payee holds a card of the owner's is something only the owner
+# knows; they declare it afterwards, on the movement this produces.
+#
+# Read here what the LLM fallback already read out of these, field for field
+# — the same instrument, counterparty and minute — so a movement recorded
+# before this template existed has the identity this one would give it.
+# The seconds the alert prints are dropped for that reason too.
+_PAYMENT_TO = re.compile(
+    _PREFIX + rf"Pagaste\s+{_AMOUNT}\s+a\s+(?P<payee>.+?)"
+    r"\s+desde\s+tu\s+producto\s*\*?(?P<last_four>\d+)"
+    rf"\s+{_WHEN}",
+    re.IGNORECASE,
+)
+
 _INCOMING_PAYMENT = re.compile(
     _PREFIX + r"Recibiste\s+un\s+pago\s+de\s+(?P<concept>.+?)"
     rf"\s+de\s+(?P<payer>.+?)\s+por\s+{_AMOUNT}"
@@ -112,6 +130,7 @@ class BancolombiaParser:
             self._card_payment,
             self._qr_payment,
             self._transfer,
+            self._payment_to,
             self._incoming_payment,
         ):
             transaction = handler(normalized)
@@ -197,6 +216,25 @@ class BancolombiaParser:
             occurred_at=parse_date_time(match.group("when")),
             bank=self.bank,
             counterparty=match.group("destination").strip(),
+            instrument=Instrument(
+                kind=InstrumentKind.ACCOUNT,
+                last_four=_last_four(match.group("last_four")),
+            ),
+        )
+
+    def _payment_to(self, text: str) -> ExtractedTransaction | None:
+        match = _PAYMENT_TO.search(text)
+
+        if match is None:
+            return None
+
+        return ExtractedTransaction(
+            kind=TransactionKind.TRANSFER,
+            direction=TransactionDirection.OUTGOING,
+            amount=parse_amount(match.group("amount")),
+            occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
+            counterparty=match.group("payee").strip(),
             instrument=Instrument(
                 kind=InstrumentKind.ACCOUNT,
                 last_four=_last_four(match.group("last_four")),

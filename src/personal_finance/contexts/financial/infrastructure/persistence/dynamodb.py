@@ -60,6 +60,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     MovementId,
     StatedMovement,
     TransactionOrigin,
+    TransferBasis,
     TransferId,
     TransferLeg,
     TransferRole,
@@ -548,16 +549,23 @@ def _transfer_to_item(leg: TransferLeg) -> dict[str, AttributeValueTypeDef]:
         "role": {"S": leg.role.value},
     }
 
-    if (
-        leg.counterpart_id is None
-        or leg.counterpart_instrument_kind is None
-        or leg.counterpart_last_four is None
-    ):
-        return stored
+    # Omitted when stated, which is every leg written before declared ones
+    # existed: those rows read back exactly as they were stored.
+    if leg.basis.is_declared:
+        stored["basis"] = {"S": leg.basis.value}
 
-    stored["counterpart_id"] = {"S": leg.counterpart_id.value}
-    stored["counterpart_instrument_kind"] = {"S": leg.counterpart_instrument_kind}
-    stored["counterpart_last_four"] = {"S": leg.counterpart_last_four}
+    if leg.counterpart_id is not None:
+        stored["counterpart_id"] = {"S": leg.counterpart_id.value}
+
+    # A stated leg carries all three counterpart fields or none, so this
+    # writes what it always wrote. A declared one names its other side by
+    # movement only, and stops at the id above.
+    if (
+        leg.counterpart_instrument_kind is not None
+        and leg.counterpart_last_four is not None
+    ):
+        stored["counterpart_instrument_kind"] = {"S": leg.counterpart_instrument_kind}
+        stored["counterpart_last_four"] = {"S": leg.counterpart_last_four}
 
     return stored
 
@@ -648,6 +656,31 @@ def _transfer_to_entity(
     instrument_kind = _string(item, "counterpart_instrument_kind")
     last_four = _string(item, "counterpart_last_four")
     described = (counterpart_id, instrument_kind, last_four)
+    basis = _enum(
+        TransferBasis,
+        _string(item, "basis") or TransferBasis.STATED.value,
+        "transfer basis",
+    )
+
+    if basis.is_declared:
+        # Checked by the value object itself, whose rules for a declared leg
+        # are narrower than the ones below — a refusal there is a row nothing
+        # here wrote, and it is reported as one.
+        try:
+            return TransferLeg(
+                transfer_id=TransferId(value=transfer_id),
+                role=_enum(TransferRole, role, "transfer role"),
+                counterpart_id=(
+                    None if counterpart_id is None else MovementId(value=counterpart_id)
+                ),
+                counterpart_instrument_kind=instrument_kind,
+                counterpart_last_four=last_four,
+                basis=basis,
+            )
+        except ValueError as error:
+            raise CorruptFinancialItemError(
+                f"Stored declared transfer leg is malformed: {error}",
+            ) from error
 
     if all(part is None for part in described):
         return TransferLeg(
@@ -1190,6 +1223,177 @@ class DynamoDBTransactionLedger:
             if not any(refused_by_condition(error, index=at) for at in erasures):
                 raise
 
+    def declare(
+        self,
+        *,
+        reclassified: Sequence[Transaction],
+        written: Transaction | None,
+        balance_delta: Decimal | None,
+    ) -> bool:
+        """Store a transfer its owner declared, in one write.
+
+        Each reclassified row gets its transfer marker and nothing else —
+        an `Update`, not the `Put` that `save` is, so an adoption or a
+        correction landing in the same instant keeps what it wrote. Each is
+        conditional on carrying no marker yet, which is what keeps two
+        declarations racing from pairing one movement twice.
+
+        The written side, when there is one, goes in exactly the way `record`
+        writes a row: conditional on its key, with its balance moved by the
+        database. False means somebody else's declaration won; nothing here
+        was applied.
+        """
+        items: list[TransactWriteItemTypeDef] = [
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": _key(
+                        movement.user_id,
+                        f"{MOVEMENT_PREFIX}{movement.id.value}",
+                    ),
+                    "UpdateExpression": "SET #transfer = :leg",
+                    "ConditionExpression": (
+                        f"attribute_exists({SORT_KEY}) "
+                        "AND attribute_not_exists(#transfer)"
+                    ),
+                    "ExpressionAttributeNames": {"#transfer": "transfer"},
+                    "ExpressionAttributeValues": {
+                        ":leg": {"M": _transfer_to_item(leg)},
+                    },
+                },
+            }
+            for movement in reclassified
+            if (leg := movement.transfer) is not None
+        ]
+
+        if len(items) != len(reclassified):
+            raise ValueError("A reclassified movement carries its transfer marker")
+
+        rows = len(items)
+
+        if written is not None:
+            account_id = written.account_id
+
+            if account_id is None or balance_delta is None:
+                raise ValueError(
+                    "The side a declaration writes is on an account, and moves it",
+                )
+
+            rows += 1
+            items.extend(
+                [
+                    {
+                        "Put": {
+                            "TableName": self._table_name,
+                            "Item": movement_to_item(written),
+                            "ConditionExpression": f"attribute_not_exists({SORT_KEY})",
+                        },
+                    },
+                    _balance_update(
+                        table_name=self._table_name,
+                        user_id=written.user_id,
+                        account_id=account_id,
+                        delta=balance_delta,
+                        movements=1,
+                    ),
+                ],
+            )
+
+        return self._transact(items, rows=rows)
+
+    def undeclare(
+        self,
+        *,
+        restored: Sequence[Transaction],
+        transfer_id: TransferId,
+        erased: Transaction | None,
+        reversal: BalanceReversal | None,
+    ) -> bool:
+        """Take back a declared transfer, in one write.
+
+        The mirror of `declare`. Each restored row loses its marker only if
+        the marker is still the one being undone; the written side, when
+        there is one, is deleted and its balance unwound by the database, as
+        `remove` does. False means the state this was built on is gone —
+        undone already, or erased — and nothing here was applied.
+        """
+        items: list[TransactWriteItemTypeDef] = [
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": _key(
+                        movement.user_id,
+                        f"{MOVEMENT_PREFIX}{movement.id.value}",
+                    ),
+                    "UpdateExpression": "REMOVE #transfer",
+                    "ConditionExpression": "#transfer.#transfer_id = :transfer_id",
+                    "ExpressionAttributeNames": {
+                        "#transfer": "transfer",
+                        "#transfer_id": "transfer_id",
+                    },
+                    "ExpressionAttributeValues": {
+                        ":transfer_id": {"S": transfer_id.value},
+                    },
+                },
+            }
+            for movement in restored
+        ]
+        rows = len(items)
+
+        if erased is not None:
+            rows += 1
+            items.append(
+                {
+                    "Delete": {
+                        "TableName": self._table_name,
+                        "Key": _key(
+                            erased.user_id,
+                            f"{MOVEMENT_PREFIX}{erased.id.value}",
+                        ),
+                        "ConditionExpression": f"attribute_exists({SORT_KEY})",
+                    },
+                },
+            )
+
+            if reversal is not None:
+                items.append(
+                    _balance_update(
+                        table_name=self._table_name,
+                        user_id=erased.user_id,
+                        account_id=reversal.account_id,
+                        delta=reversal.delta,
+                        movements=-reversal.movements,
+                    ),
+                )
+
+        return self._transact(items, rows=rows)
+
+    def _transact(self, items: list[TransactWriteItemTypeDef], *, rows: int) -> bool:
+        """Run one declaration's write; False when a row's condition lost.
+
+        The first `rows` items are movement rows, whose conditions mean
+        "somebody else changed this first". Past them are balance updates,
+        whose condition means the account is gone — that is the write not
+        happening at all, and it is raised, exactly as `record` does.
+        """
+        if not items:
+            return True
+
+        try:
+            self._client.transact_write_items(TransactItems=items)
+        except self._client.exceptions.TransactionCanceledException as error:
+            if any(
+                refused_by_condition(error, index=at) for at in range(rows, len(items))
+            ):
+                raise
+
+            if any(refused_by_condition(error, index=at) for at in range(rows)):
+                return False
+
+            raise
+
+        return True
+
     def list_unassigned_matching(
         self,
         *,
@@ -1330,6 +1534,31 @@ class DynamoDBTransactionLedger:
                 filter_expression=f"attribute_not_exists({ACCOUNT_ID_ATTRIBUTE})",
             )
         ]
+
+
+def _balance_update(
+    *,
+    table_name: str,
+    user_id: UserId,
+    account_id: AccountId,
+    delta: Decimal,
+    movements: int,
+) -> TransactWriteItemTypeDef:
+    """Move one account's running total by the database, as `record` does."""
+    return {
+        "Update": {
+            "TableName": table_name,
+            "Key": _key(user_id, f"{ACCOUNT_PREFIX}{account_id.value}"),
+            "UpdateExpression": (
+                f"ADD {BALANCE_ATTRIBUTE} :delta, {MOVEMENTS_APPLIED_ATTRIBUTE} :count"
+            ),
+            "ExpressionAttributeValues": {
+                ":delta": {"N": str(delta)},
+                ":count": {"N": str(movements)},
+            },
+            "ConditionExpression": f"attribute_exists({SORT_KEY})",
+        },
+    }
 
 
 def _key(user_id: UserId, sort_value: str) -> dict[str, AttributeValueTypeDef]:

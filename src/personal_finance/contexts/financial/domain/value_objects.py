@@ -366,6 +366,21 @@ class TransactionOrigin(enum.Enum):
     ACCRUAL = "accrual"
     SCHEDULED = "scheduled"
 
+    @property
+    def is_self_written(self) -> bool:
+        """Whether this app is the author of the row rather than a witness.
+
+        The one question two different features ask for the same reason. The
+        detector must not read its own output as evidence of a rhythm, and
+        reconciliation must not accept it as evidence that a charge happened:
+        both would be this app confirming itself, and both would be perfectly
+        regular by construction.
+        """
+        return self in _SELF_WRITTEN
+
+
+_SELF_WRITTEN = frozenset({TransactionOrigin.ACCRUAL, TransactionOrigin.SCHEDULED})
+
 
 class TransactionStatus(enum.Enum):
     # No account answers to this movement's instrument, or the alert named
@@ -754,6 +769,28 @@ class MovementFingerprint(ValueObject):
 
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
+    @classmethod
+    def from_declared_counterpart(
+        cls,
+        *,
+        user_id: UserId,
+        movement_id: MovementId,
+    ) -> Self:
+        """What makes the side written for a declared transfer the same side.
+
+        Only the movement it is the other side of — not the account it lands
+        on, not the amount. One movement has at most one other side, so
+        declaring the same transfer twice, from two tabs or two presses,
+        writes this key twice and the ledger's conditional write keeps one.
+        Keyed on the account too, two requests naming two different accounts
+        would both win, and the same payment would lower two debts.
+        """
+        canonical = _canonical(
+            (_DECLARED_COUNTERPART_TAG, str(user_id.value), movement_id.value),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
     def to_dict(self) -> JsonValue:
         return self.value
 
@@ -762,6 +799,10 @@ class MovementFingerprint(ValueObject):
 # alike. Changing it re-identifies every leg entered after it, and the same
 # payment would then be enterable a second time.
 _TRANSFER_LEG_TAG = "transfer-leg"
+
+# The same contract for the side a declared transfer writes: change it and a
+# transfer already declared could be declared again, writing a second side.
+_DECLARED_COUNTERPART_TAG = "declared-counterpart"
 
 # The same contract for a computed charge: changing this re-identifies every
 # accrual, and every period already posted would be posted a second time.
@@ -784,6 +825,83 @@ class TransferRole(enum.Enum):
 
     SOURCE = "source"
     DESTINATION = "destination"
+
+    @classmethod
+    def of(cls, direction: MovementDirection) -> TransferRole:
+        """The side a movement going this way can be: money leaving is a source."""
+        return (
+            cls.SOURCE if direction is MovementDirection.OUTGOING else cls.DESTINATION
+        )
+
+
+class TransferBasis(enum.Enum):
+    """On whose word a movement is one side of a transfer.
+
+    `STATED` is every transfer this app knew about before 2026-09-26: one
+    alert named both instruments, or its owner entered the payment as a
+    transfer from the start. Nothing about it can be taken back short of
+    erasing it.
+
+    The other two exist because a payment to a card at *another* bank arrives
+    as an ordinary outgoing movement — its alert names one instrument and an
+    institution, and only the owner knows that institution holds their card.
+    `RECLASSIFIED` is that movement once its owner says so: recorded as
+    spending or income, and now neither. `COUNTERPART` is the row this app
+    wrote as its other side, on an account the owner named. Both can be
+    undone, and undoing is exactly the difference between them: a
+    reclassified movement goes back to being what it was, a counterpart is
+    erased, because nothing but the declaration ever said it happened.
+    """
+
+    STATED = "stated"
+    RECLASSIFIED = "reclassified"
+    COUNTERPART = "counterpart"
+
+    @property
+    def is_declared(self) -> bool:
+        return self is not TransferBasis.STATED
+
+
+class DeclarationRefusal(enum.Enum):
+    """Why a movement cannot be declared a transfer.
+
+    A code rather than a sentence, because a screen offering the choice has
+    to say why it is not offering it, in its own words; `reason` is the one
+    the API sends with a refusal.
+    """
+
+    ALREADY_TRANSFER = "already_transfer"
+    # An interest charge or a confirmed bill is this app's arithmetic or its
+    # owner's schedule; neither is money that moved between two balances.
+    SELF_WRITTEN = "self_written"
+    # On no account and naming no instrument: as a transfer it would claim a
+    # balance moved while none did, and nothing would ever adopt it — the
+    # same state `Transaction.detach` refuses.
+    UNPLACEABLE = "unplaceable"
+    # It answers for a bill's charge, and a bill is paid by spending.
+    LINKED_TO_BILL = "linked_to_bill"
+
+    @property
+    def reason(self) -> str:
+        return _REFUSAL_REASONS[self]
+
+
+_REFUSAL_REASONS = {
+    DeclarationRefusal.ALREADY_TRANSFER: (
+        "This movement is already one side of a transfer"
+    ),
+    DeclarationRefusal.SELF_WRITTEN: (
+        "This movement was written by this app, not announced, so it cannot be "
+        "a transfer"
+    ),
+    DeclarationRefusal.UNPLACEABLE: (
+        "This movement is on no account and no account could adopt it, so as a "
+        "transfer it would move nothing"
+    ),
+    DeclarationRefusal.LINKED_TO_BILL: (
+        "This movement is linked to a bill's charge; unlink it first"
+    ),
+}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -828,6 +946,33 @@ class TransferId(ValueObject):
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
     @classmethod
+    def declared(
+        cls,
+        *,
+        source: MovementId | None,
+        destination: MovementId | None,
+    ) -> Self:
+        """Identity for a transfer its owner declared after the fact.
+
+        Derived from the movements it ties, in role order, so declaring the
+        same pair twice produces the same transfer, and a lone side names
+        its one movement. Tagged so this can never equal what `from_parts`
+        or `from_lone_leg` build.
+        """
+        if source is None and destination is None:
+            raise ValueError("A declared transfer ties at least one movement")
+
+        canonical = _canonical(
+            (
+                _DECLARED_TRANSFER_TAG,
+                "" if source is None else source.value,
+                "" if destination is None else destination.value,
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    @classmethod
     def from_parts(
         cls,
         *,
@@ -862,6 +1007,7 @@ class TransferId(ValueObject):
 
 # Same contract as `_TRANSFER_LEG_TAG`: changing it re-identifies transfers.
 _LONE_TRANSFER_TAG = "lone-transfer"
+_DECLARED_TRANSFER_TAG = "declared-transfer"
 
 
 def transfer_counterparty(*, instrument_kind: str, last_four: str) -> str:
@@ -895,6 +1041,13 @@ class TransferLeg(ValueObject):
     Half a description is the state this class exists to make impossible,
     because a leg holding an id nothing can resolve is worse than one that
     says plainly that the other side is elsewhere.
+
+    A **declared** leg (see `TransferBasis`) is the one exception, and a
+    narrow one: it names the other side by movement only, never by
+    instrument. Its two sides were two ordinary movements, or one movement and
+    a row written for it, and neither alert named the other's card — so there
+    are no digits to carry, and inventing some would be the half description
+    above in a different shape.
     """
 
     transfer_id: TransferId
@@ -906,8 +1059,14 @@ class TransferLeg(ValueObject):
     counterpart_id: MovementId | None = None
     counterpart_instrument_kind: str | None = None
     counterpart_last_four: str | None = None
+    basis: TransferBasis = TransferBasis.STATED
 
     def __post_init__(self) -> None:
+        if self.basis.is_declared:
+            self._check_declared()
+
+            return
+
         described = (
             self.counterpart_id,
             self.counterpart_instrument_kind,
@@ -937,6 +1096,21 @@ class TransferLeg(ValueObject):
         whether there is a second row to point a reader at.
         """
         return self.counterpart_id is None
+
+    def _check_declared(self) -> None:
+        if (
+            self.counterpart_instrument_kind is not None
+            or self.counterpart_last_four is not None
+        ):
+            raise ValueError(
+                "A declared transfer names its other side by movement, never "
+                "by instrument",
+            )
+
+        if self.basis is TransferBasis.COUNTERPART and self.counterpart_id is None:
+            # Written for one movement and for nothing else: without it, undoing
+            # the declaration could not find what to put back.
+            raise ValueError("A written counterpart names the movement it answers")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

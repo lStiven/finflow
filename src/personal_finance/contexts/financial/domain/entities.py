@@ -23,6 +23,7 @@ from personal_finance.contexts.financial.domain.events import (
     TransactionAssigned,
     TransactionEdited,
     TransactionErased,
+    TransactionReclassified,
     TransactionRecorded,
     TransactionUnassigned,
 )
@@ -31,6 +32,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     CurrencyMismatchError,
     FinancingTermsError,
     TransactionAlreadyAssignedError,
+    TransferDeclarationError,
     TransferLegError,
 )
 from personal_finance.contexts.financial.domain.financing import (
@@ -50,6 +52,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     AccountKind,
     Balance,
+    DeclarationRefusal,
     InstrumentKind,
     LedgerMovement,
     MovementDirection,
@@ -58,6 +61,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     StatedMovement,
     TransactionOrigin,
     TransactionStatus,
+    TransferBasis,
     TransferId,
     TransferLeg,
     TransferRole,
@@ -1464,6 +1468,232 @@ class Transaction(AggregateRoot[MovementId]):
                 movement_id=self.id,
                 user_id=self.user_id,
                 account_id=previous,
+            ),
+        )
+
+    @property
+    def declaration_refusal(self) -> DeclarationRefusal | None:
+        """Why this movement cannot be declared a transfer, or None if it can.
+
+        What the aggregate alone can answer. Whether a bill counts it as its
+        charge is the bill's business, asked by the use case.
+        """
+        if self.transfer is not None:
+            return DeclarationRefusal.ALREADY_TRANSFER
+
+        if self.origin.is_self_written:
+            return DeclarationRefusal.SELF_WRITTEN
+
+        if self.account_id is None and not self.is_routable:
+            return DeclarationRefusal.UNPLACEABLE
+
+        return None
+
+    def declare_transfer(self) -> None:
+        """Say this movement was money moved to, or from, a balance of the
+        owner's that this app does not hold.
+
+        The lone case: a card paid at a bank nobody declared here. Its balance
+        does not move — it already did when the movement was recorded — but
+        it stops counting as spending or income, which is the whole of what
+        was wrong with it.
+        """
+        role = TransferRole.of(self.direction)
+        self._reclassify(
+            TransferLeg(
+                transfer_id=TransferId.declared(
+                    source=self.id if role is TransferRole.SOURCE else None,
+                    destination=self.id if role is TransferRole.DESTINATION else None,
+                ),
+                role=role,
+                basis=TransferBasis.RECLASSIFIED,
+            ),
+        )
+
+    def pair_with(self, other: Transaction) -> None:
+        """Say this movement and `other` are the two sides of one transfer.
+
+        Paying a Lulo account from Bancolombia, with both banks emailing:
+        one movement left, another arrived, and until now the first counted
+        as spending and the second as income. Neither balance moves here —
+        both already did — so the only question is whether the two really are
+        one fact, and the checks are the ones that fact implies: opposite
+        directions, the same amount to the cent, two different accounts.
+
+        Refused as a whole: both sides change or neither does.
+        """
+        if other.id == self.id:
+            raise TransferDeclarationError("A movement cannot be its own other side")
+
+        if other.user_id != self.user_id:
+            raise TransferDeclarationError("Both sides of a transfer are one owner's")
+
+        for movement in (self, other):
+            if (refusal := movement.declaration_refusal) is not None:
+                raise TransferDeclarationError(refusal.reason)
+
+        if other.direction is self.direction:
+            raise TransferDeclarationError(
+                "Both movements go the same way, so neither is the other's side",
+            )
+
+        if other.amount != self.amount:
+            # To the cent and in the same currency. A fee between the two is
+            # real spending, and pairing them would make it vanish; the owner
+            # corrects the amount first if the difference is a misreading.
+            raise TransferDeclarationError(
+                "The two movements are for different amounts",
+            )
+
+        if self.account_id is not None and self.account_id == other.account_id:
+            raise TransferDeclarationError(
+                "Both movements are on the same account, so no money changed sides",
+            )
+
+        source, destination = (
+            (self, other)
+            if self.direction is MovementDirection.OUTGOING
+            else (other, self)
+        )
+        transfer_id = TransferId.declared(source=source.id, destination=destination.id)
+
+        for movement, counterpart in ((source, destination), (destination, source)):
+            movement._reclassify(
+                TransferLeg(
+                    transfer_id=transfer_id,
+                    role=TransferRole.of(movement.direction),
+                    counterpart_id=counterpart.id,
+                    basis=TransferBasis.RECLASSIFIED,
+                ),
+            )
+
+    def declare_counterpart(
+        self,
+        *,
+        account_id: AccountId,
+        counterparty: str,
+        bank: str = "",
+    ) -> Transaction:
+        """Say this movement was paid into, or out of, `account_id` — and
+        write that side, which no alert ever will.
+
+        The case that started this: Bancolombia emails "Pagaste $X a BANCO
+        COMERCIAL AV VILLAS", AV Villas emails a receipt nobody can read as a
+        movement, and the card's debt never falls. The row returned is that
+        fall — an incoming movement on the card, the same amount at the same
+        moment — and this movement stops counting as spending.
+
+        The written side moves its account's balance like any movement, and
+        the caller stores it with that balance in one write. Its identity
+        comes from this movement alone (see
+        `MovementFingerprint.from_declared_counterpart`), so declaring twice
+        is one row.
+
+        `counterparty` is how the written side names this one — the name of
+        the account the money came from, typically. It is only ever read by a
+        person: nothing matches on it.
+        """
+        if (refusal := self.declaration_refusal) is not None:
+            raise TransferDeclarationError(refusal.reason)
+
+        if self.account_id == account_id:
+            raise TransferDeclarationError(
+                "The other side of a transfer is a different account",
+            )
+
+        counterpart_id = MovementId.from_fingerprint(
+            MovementFingerprint.from_declared_counterpart(
+                user_id=self.user_id,
+                movement_id=self.id,
+            ),
+        )
+        role = TransferRole.of(self.direction)
+        source, destination = (
+            (self.id, counterpart_id)
+            if role is TransferRole.SOURCE
+            else (counterpart_id, self.id)
+        )
+        transfer_id = TransferId.declared(source=source, destination=destination)
+        written = Transaction(
+            id=counterpart_id,
+            user_id=self.user_id,
+            direction=(
+                MovementDirection.INCOMING
+                if self.direction is MovementDirection.OUTGOING
+                else MovementDirection.OUTGOING
+            ),
+            amount=self.amount,
+            occurred_at=self.occurred_at,
+            counterparty=_valid_counterparty(counterparty),
+            bank=bank.strip().lower(),
+            # MANUAL rather than an origin of its own. It is the owner's word,
+            # which is exactly what MANUAL means, and every subscriber of
+            # `MovementRecorded` already reads it — a new member would be
+            # refused as malformed by any that had not learned it yet.
+            origin=TransactionOrigin.MANUAL,
+            account_id=account_id,
+            transfer=TransferLeg(
+                transfer_id=transfer_id,
+                role=(
+                    TransferRole.DESTINATION
+                    if role is TransferRole.SOURCE
+                    else TransferRole.SOURCE
+                ),
+                counterpart_id=self.id,
+                basis=TransferBasis.COUNTERPART,
+            ),
+        )
+        self._reclassify(
+            TransferLeg(
+                transfer_id=transfer_id,
+                role=role,
+                counterpart_id=counterpart_id,
+                basis=TransferBasis.RECLASSIFIED,
+            ),
+        )
+        written._announce()
+
+        return written
+
+    def undo_declaration(self) -> None:
+        """Put back what this movement was before its owner called it a
+        transfer: spending or income again, on the same balance it never
+        left.
+
+        Only a reclassified movement can be put back. One the bank stated as
+        a transfer has no earlier self to return to, and a written
+        counterpart is not restored but erased — the caller does that, with
+        its balance, in the same write.
+        """
+        leg = self.transfer
+
+        if leg is None:
+            raise TransferDeclarationError("This movement is not a transfer")
+
+        if leg.basis is not TransferBasis.RECLASSIFIED:
+            raise TransferDeclarationError(
+                "Only a movement its owner declared a transfer can be put back",
+            )
+
+        self.transfer = None
+        self.record_event(
+            TransactionReclassified(
+                movement_id=self.id,
+                user_id=self.user_id,
+                transfer=False,
+            ),
+        )
+
+    def _reclassify(self, leg: TransferLeg) -> None:
+        if (refusal := self.declaration_refusal) is not None:
+            raise TransferDeclarationError(refusal.reason)
+
+        self.transfer = leg
+        self.record_event(
+            TransactionReclassified(
+                movement_id=self.id,
+                user_id=self.user_id,
+                transfer=True,
             ),
         )
 

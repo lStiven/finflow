@@ -29,7 +29,12 @@ Todo el backend de la versión 1 está terminado y probado:
   recupera la plata.
 - **Los traslados no cuentan como gasto ni como ingreso.** Pagar la tarjeta
   desde una cuenta del mismo banco mueve los dos saldos; pagada desde otro
-  banco, se registra a mano el lado que sí se conoce.
+  banco, se registra a mano el lado que sí se conoce — o, si el correo ya
+  llegó como gasto («Pagaste $X a BANCO COMERCIAL AV VILLAS»), se **marca
+  como traslado** desde el propio movimiento: se empareja con el ingreso que
+  el otro banco sí avisó, o la app escribe el abono en la cuenta que elijas.
+  La pantalla lo propone cuando el banco del correo es el de una cuenta tuya,
+  y se puede deshacer.
 - **Los créditos se cobran solos lo que el mes les cobra.** Con la tasa, el día
   de corte, la cuota y los seguros declarados, cada corte cerrado deja escritos
   los intereses y cada seguro como movimientos con nombre. Pagar 2.000.000 sobre
@@ -80,8 +85,8 @@ Todo el backend de la versión 1 está terminado y probado:
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 70 operaciones de API en cinco contextos, seis procesos en
-la nube, 1933 pruebas de Python y 367 del frontend, todas en verde. Siete
+**Estado técnico:** 73 operaciones de API en cinco contextos, seis procesos en
+la nube, 2021 pruebas de Python y 377 del frontend, todas en verde. Siete
 tablas: la séptima, `throttle`, cuenta los intentos contra las puertas que se
 pueden adivinar y se vacía sola por TTL.
 El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
@@ -261,6 +266,17 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado.**
+  Bancolombia avisa «Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto
+  *5261»: una cuenta y una institución, nunca la tarjeta, así que entraba como
+  gasto y el patrimonio quedaba mal por todo el pago. Ahora esa frase tiene
+  plantilla (lee exactamente lo que leía el modelo, para no darle otra
+  identidad a lo ya registrado) y el movimiento se declara traslado de tres
+  formas: emparejado con el que el otro banco sí avisó, escribiendo el abono en
+  una cuenta tuya, o hacia fuera de Finflow. Todo en un solo write, y todo se
+  deshace. Traído a `master` desde `dev` antes que los presupuestos; aquí no
+  hay rechazo por factura vinculada porque ese vínculo (E2·C) aún no existe.
+  El seed trae los dos casos para probarlo en local.
 - 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
   registro, el correo de verificación, la recuperación, el cambio de
   contraseña y el secreto del webhook de Telegram cuentan intentos por
@@ -302,9 +318,3 @@ AWS (ver Trabas).
   detrás de ese botón, así que estar en Reportes ya no dejaba la barra
   entera apagada. La regla (`inSheet`) es dato comprobable en
   `navigation/destinations.ts`, con cinco pruebas.
-- 2026-09-20 — **Dos arreglos de pantalla.** El card del login ya no crece
-  hacia arriba al pasar a «Crear cuenta»: el borde de arriba queda anclado y
-  el campo nuevo aparece debajo de los que ya estaban. Y ningún overlay deja
-  seguir moviendo la página de atrás —la hoja «Más» del teléfono y los dos
-  diálogos de la guía—, con `lib/useScrollLock.ts` como el único sitio donde
-  eso se decide. Comprobado en el navegador a 390 y 1280 px.

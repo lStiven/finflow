@@ -332,6 +332,49 @@ ALERTS: tuple[Alert, ...] = (
         received_at=_local(2026, 8, 25, 9, 16),
         sender=LULO_SENDER,
     ),
+    # A card at another bank, paid from Bancolombia. The alert names the
+    # account and the institution, never the card, so it lands as spending;
+    # the movement's screen then proposes "¿Fue un pago a tu Tarjeta AV
+    # Villas?", because that card is declared below with this bank. AV Villas'
+    # own receipt is not here on purpose: the model refuses it, as it should.
+    Alert(
+        message_id="<seed-avvillas-payment@finflow.local>",
+        subject="Alertas y Notificaciones",
+        body=(
+            "Bancolombia: Pagaste $480,000.00 a BANCO COMERCIAL AV VILLAS desde "
+            "tu producto *5261 el 30/08/2026 11:17:03. ¿Dudas? Llamanos al "
+            "6045109095. Estamos cerca."
+        ),
+        received_at=_local(2026, 8, 30, 11, 18),
+    ),
+    # The same wording towards Lulo, and this time the other bank *does*
+    # email: two movements, one spending and one income, for money that
+    # never left. The screen offers to pair them — writing a side on Lulo
+    # instead would count the money twice there.
+    Alert(
+        message_id="<seed-lulo-topup-out@finflow.local>",
+        subject="Alertas y Notificaciones",
+        body=(
+            "Bancolombia: Pagaste $200,000.00 a LULO BANK S A desde tu producto "
+            "5261 el 30/08/2026 16:05:18. ¿Dudas? Llamanos al 6045109095. "
+            "Estamos cerca"
+        ),
+        received_at=_local(2026, 8, 30, 16, 6),
+    ),
+    Alert(
+        message_id="<seed-lulo-topup-in@finflow.local>",
+        subject="Recibiste dinero en tu cuenta",
+        body=(
+            "Recibiste dinero en tu cuenta "
+            "Recibiste de JUAN PEREZ $200.000. "
+            "Origen cuenta • 5261 BANCOLOMBIA "
+            "Destino cuenta • 4407 Lulo Bank "
+            "ID. transacción • 998901 "
+            "Fecha 30 de agosto de 2026 Hora 4:06 p.m. " + LULO_FOOTER
+        ),
+        received_at=_local(2026, 8, 30, 16, 7),
+        sender=LULO_SENDER,
+    ),
 )
 
 ACCOUNTS: tuple[SeedAccount, ...] = (
@@ -368,6 +411,16 @@ ACCOUNTS: tuple[SeedAccount, ...] = (
         name="Efectivo",
         kind="cash",
         opening_balance="200000",
+    ),
+    # A card nothing emails about, so it answers to no instrument: its bank
+    # is what lets a movement's screen recognise "BANCO COMERCIAL AV VILLAS"
+    # as a payment to it. Declared owing exactly the payment above, so
+    # accepting the proposal leaves it at zero.
+    SeedAccount(
+        name="Tarjeta AV Villas",
+        kind="credit_card",
+        opening_balance="480000",
+        bank="AV Villas",
     ),
 )
 

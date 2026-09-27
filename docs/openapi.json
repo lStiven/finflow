@@ -1334,6 +1334,37 @@
         "title": "DeclareBillPayload",
         "type": "object"
       },
+      "DeclareTransferPayload": {
+        "description": "Where the other side of a movement declared a transfer is.\n\nAt most one field. `counterpart_movement_id` pairs it with a movement\nalready here — both banks emailed. `counterpart_account_id` writes the\nother side on that account — the bank on the other end never emailed.\nNeither: the other side is outside this app.",
+        "properties": {
+          "counterpart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Account Id"
+          },
+          "counterpart_movement_id": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Movement Id"
+          }
+        },
+        "title": "DeclareTransferPayload",
+        "type": "object"
+      },
       "DeletedCategoryResponse": {
         "description": "What was removed, and how much moved with it.",
         "properties": {
@@ -4082,9 +4113,110 @@
         "title": "TransactionSort",
         "type": "string"
       },
+      "TransferAccountOptionResponse": {
+        "description": "An account that could hold the other side of a declared transfer.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "suggested": {
+            "title": "Suggested",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "suggested"
+        ],
+        "title": "TransferAccountOptionResponse",
+        "type": "object"
+      },
+      "TransferDeclaredResponse": {
+        "description": "The rows that now say \"transfer\", the declared one first.\n\n`accounts` carries the balance that moved when a side was written, already\nrecomputed; empty when two existing movements were paired or the other\nside is outside this app, because then no balance moved.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionResponse"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "transactions",
+          "accounts"
+        ],
+        "title": "TransferDeclaredResponse",
+        "type": "object"
+      },
+      "TransferOptionsResponse": {
+        "description": "What a screen can offer before a movement is declared a transfer.\n\n`refusal` set means none of it applies, and both lists are empty:\n`already_transfer`, `self_written` (an accrual or a confirmed bill),\n`unplaceable` (on no account and no account could adopt it) or\n`linked_to_bill`.\n\n`counterparts` are movements already here that could be the other side —\nopposite direction, the same amount to the cent, a different account,\nwithin a few days. When one of them is it, pairing is the answer:\nwriting a side on its account would count the money twice there.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/TransferAccountOptionResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "counterparts": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionResponse"
+            },
+            "title": "Counterparts",
+            "type": "array"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "refusal",
+          "accounts",
+          "counterparts"
+        ],
+        "title": "TransferOptionsResponse",
+        "type": "object"
+      },
       "TransferResponse": {
         "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.\n\nThe other side is not always here. A card paid from another bank, from a\nwallet or in cash has one knowable side, entered by hand through\n`POST /financial/transactions/transfer`: `external` is true there and\nevery `counterpart_*` field is null. Read `external` rather than\nnull-checking the three — it is the question a client is actually asking,\nand the movement's own `counterparty` already carries what the owner\ncalled the other side (\"Nequi\", \"efectivo\").",
         "properties": {
+          "basis": {
+            "default": "stated",
+            "title": "Basis",
+            "type": "string"
+          },
           "counterpart_instrument_kind": {
             "anyOf": [
               {
@@ -4150,6 +4282,39 @@
         ],
         "title": "TransferRole",
         "type": "string"
+      },
+      "TransferUndoneResponse": {
+        "description": "What undoing a declared transfer put back and took away.\n\n`transactions` are spending or income again. `erased` names the side this\napp had written, which no longer exists, and `accounts` the balance it\ngave back.",
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "erased": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Erased",
+            "type": "array"
+          },
+          "transactions": {
+            "items": {
+              "$ref": "#/components/schemas/TransactionResponse"
+            },
+            "title": "Transactions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "transactions",
+          "erased",
+          "accounts"
+        ],
+        "title": "TransferUndoneResponse",
+        "type": "object"
       },
       "TransferView": {
         "description": "Whether a set of movements includes the two sides of a transfer.\n\nA transfer between the owner's own accounts is not spending and not\nincome: money moved from one of their balances to another and net worth\ndid not change. So the *list* shows both sides by default — they explain\nwhy an account fell — while every **total** leaves them out, or a card\npayment would report as an expense the size of the card's whole balance.\n\n`ONLY` exists for the screen that asks the opposite question: what did I\nmove between my own accounts this month.",
@@ -7098,6 +7263,158 @@
         ]
       }
     },
+    "/financial/transactions/{transaction_id}/transfer": {
+      "delete": {
+        "description": "Take back a transfer declared after the fact, from either of its sides.\n\nThe movements go back to being spending or income, and a side this app\nwrote is erased with the balance it moved. Refused with 409 on a transfer\nan alert stated or its owner entered as one: there is nothing to go back\nto, and `DELETE /financial/transactions/{id}` is what removes those.",
+        "operationId": "undo_transfer_financial_transactions__transaction_id__transfer_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferUndoneResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undo Transfer",
+        "tags": [
+          "financial"
+        ]
+      },
+      "post": {
+        "description": "Say this movement was money between two of its owner's balances.\n\nIt stops counting as spending or income. With `counterpart_account_id`\nthe other side is written on that account and moves its balance — on a\ncredit card, the debt falls. With `counterpart_movement_id` the two\nexisting movements are paired and no balance moves. With neither, the\nother side is outside this app.\n\nIdempotent: declaring the same thing twice answers the same rows. Refused\nwith 409 on a movement that already is a transfer some other way, on a\ncharge this app wrote, and on one a bill counts as its charge.",
+        "operationId": "declare_transfer_financial_transactions__transaction_id__transfer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclareTransferPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferDeclaredResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Declare Transfer",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
+    "/financial/transactions/{transaction_id}/transfer-options": {
+      "get": {
+        "description": "What could be the other side of this movement, before anything changes.\n\nReads every movement its owner has, to find one going the other way for\nthe same amount: meant for one movement on screen, never for a list.",
+        "operationId": "transfer_options_financial_transactions__transaction_id__transfer_options_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferOptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Transfer Options",
+        "tags": [
+          "financial"
+        ]
+      }
+    },
     "/financial/trends": {
       "get": {
         "description": "How spending moved over time, split into the bands a chart stacks.\n\n`/summary` answers one dimension at a time — what a period adds up to, or\nhow it splits by category, never both. This answers the two together:\nrestaurants against transport against groceries, month by month. Asking\n`/summary` for that a month at a time is twelve round trips whose buckets\ncan each be ranked differently, so they cannot be stacked without the\nclient reconciling them first.\n\nTwo properties are what a chart needs and what this guarantees. The bands\nare **ranked once over the whole range**, so every bucket stacks the same\nones in the same order. And the buckets are **dense** and each series has\nexactly one point per bucket, in the same order: a month nothing happened\nin is a zero, and a client zips `series[].points` against `buckets` by\nindex without ever filling a gap.\n\nThe range is `periods` intervals back from now, or an explicit `from`/`to`\nwidened to the intervals it touches — half of August charted beside the\nwhole of September reports a fall that did not happen. It takes the same\nfilters as `/transactions`, so any band can be opened as the list behind\nit by repeating the query with the band's key.\n\n`dimension=none` is one undivided band, which is not the same question as\nthe rest: every point already carries `incoming` and `outgoing`, so that\none band is the cashflow chart.",
@@ -7481,6 +7798,7 @@
     },
     "/identity/login": {
       "post": {
+        "description": "Trade an address and a password for a token.\n\nThe one door in this deployment that a password can be guessed at, so it\nis the one that counts wrong answers — **only the wrong ones**. Getting\nin costs nothing and forgives what came before it, which is what keeps a\nshared connection from being locked out by whoever else is behind it.",
         "operationId": "login_identity_login_post",
         "requestBody": {
           "content": {
@@ -7594,7 +7912,7 @@
     },
     "/identity/password/change": {
       "post": {
-        "description": "Change the password of somebody who can still log in.\n\nThe current password is required even though the caller already holds a\ntoken: a session left open on a shared machine must not be enough to take\nan account over.\n\nA token comes back because the change invalidates the one that made this\nrequest, along with every other session. The client is expected to replace\nwhat it holds with this.",
+        "description": "Change the password of somebody who can still log in.\n\nThe current password is required even though the caller already holds a\ntoken: a session left open on a shared machine must not be enough to take\nan account over.\n\nA token comes back because the change invalidates the one that made this\nrequest, along with every other session. The client is expected to replace\nwhat it holds with this.\n\nCounted against the account rather than the address, because the token\nalready says which account it is: the attack this narrows is a session\nleft open on a shared machine, guessed at until it becomes somebody\nelse's.",
         "operationId": "change_password_identity_password_change_post",
         "requestBody": {
           "content": {
@@ -7641,7 +7959,7 @@
     },
     "/identity/password/forgot": {
       "post": {
-        "description": "Mail a link that lets somebody who cannot log in set a new password.\n\nAnswers 202 whether or not the address has an account, and sends mail\neither way, so this is not a way to find out who is registered here.",
+        "description": "Mail a link that lets somebody who cannot log in set a new password.\n\nAnswers 202 whether or not the address has an account, and sends mail\neither way, so this is not a way to find out who is registered here.\n\nShares the mail door with the verification code, because they share the\nmailbox: what matters is how much mail one place can cause, not which of\nthe two endpoints it asked through.",
         "operationId": "request_password_reset_identity_password_forgot_post",
         "requestBody": {
           "content": {
@@ -7681,7 +7999,7 @@
     },
     "/identity/password/reset": {
       "post": {
-        "description": "Spend an emailed link and set the password behind it.\n\nNo token comes back: the account this just handed over is reached by\nlogging in with the new password, which is also the proof that it worked.\nEvery session opened with the old password stops working here.",
+        "description": "Spend an emailed link and set the password behind it.\n\nNo token comes back: the account this just handed over is reached by\nlogging in with the new password, which is also the proof that it worked.\nEvery session opened with the old password stops working here.\n\nWrong links are counted per address, for the reason the code's door\ngives: the token is long enough that guessing it is hopeless, and a\nthousand hopeless guesses is still somebody to stop.",
         "operationId": "reset_password_identity_password_reset_post",
         "requestBody": {
           "content": {
@@ -7716,7 +8034,7 @@
     },
     "/identity/register": {
       "post": {
-        "description": "Create an account and assign it a forwarding address.\n\nThe last step of three: `POST /identity/verification/request` mails a\ncode, `POST /identity/verification/confirm` trades it for the token this\nendpoint spends. Without that token there is no account, which is what\nkeeps this from being a way to fill the deployment with addresses nobody\ncan reach.\n\nThe forwarding address never appears in this response — it depends only\non the new account's id, so `GET /identity/inbox` right after this call\nalready has it.",
+        "description": "Create an account and assign it a forwarding address.\n\nThe last step of three: `POST /identity/verification/request` mails a\ncode, `POST /identity/verification/confirm` trades it for the token this\nendpoint spends. Without that token there is no account, which is what\nkeeps this from being a way to fill the deployment with addresses nobody\ncan reach.\n\nThe forwarding address never appears in this response — it depends only\non the new account's id, so `GET /identity/inbox` right after this call\nalready has it.\n\nCounted per address, and **only when an account is created**. The cost\nhere is the account, not the request: a POST without a valid ticket\ncreates nothing and is refused before the password is ever hashed, so\ncharging for those would let ten pieces of junk close registration for\neverybody behind a shared connection — which is the false positive this\ndoor exists without.",
         "operationId": "register_identity_register_post",
         "requestBody": {
           "content": {
@@ -7758,7 +8076,7 @@
     },
     "/identity/verification/confirm": {
       "post": {
-        "description": "Trade a code for the token `POST /identity/register` spends.\n\nThe token is what reserves the address: verifying is not registering, and\nsomebody who merely knows that an address was just verified must not be\nable to race its owner to the account.",
+        "description": "Trade a code for the token `POST /identity/register` spends.\n\nThe token is what reserves the address: verifying is not registering, and\nsomebody who merely knows that an address was just verified must not be\nable to race its owner to the account.\n\nA code is six digits, and the challenge behind it is already spent after\nfive wrong answers. The door is what stops those five being tried against\nevery address somebody can think of.",
         "operationId": "confirm_email_verification_identity_verification_confirm_post",
         "requestBody": {
           "content": {
@@ -7800,7 +8118,7 @@
     },
     "/identity/verification/request": {
       "post": {
-        "description": "Mail a one-time code to an address that wants an account.\n\n202 rather than 200: what this promises is that a message was handed to\nthe mail server, not that anybody read it.",
+        "description": "Mail a one-time code to an address that wants an account.\n\n202 rather than 200: what this promises is that a message was handed to\nthe mail server, not that anybody read it.\n\nOne address is already capped at five mails an hour by the challenge\nitself; what the door adds is the spray across many addresses from one\nplace, which is how a mailbox loses its sender reputation.",
         "operationId": "request_email_verification_identity_verification_request_post",
         "requestBody": {
           "content": {

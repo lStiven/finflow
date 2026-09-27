@@ -50,6 +50,15 @@ class TransferLegError(FinancialDomainError):
     """
 
 
+class TransferDeclarationError(FinancialDomainError):
+    """Raised when a movement cannot be declared a transfer, or undeclared.
+
+    Each refusal is about the movement's state rather than the request's
+    shape: it already is one side of a transfer, this app wrote it, or it
+    would end up claiming a balance moved while no balance can.
+    """
+
+
 class FinancingTermsError(FinancialDomainError):
     """Raised when the terms of a loan or an investment cannot describe one.
 

@@ -20,6 +20,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     InstrumentKind,
     MovementDirection,
     TransactionOrigin,
+    TransferBasis,
     TransferRole,
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
@@ -279,3 +280,106 @@ def test_a_row_with_no_transfer_attribute_is_ordinary_spending() -> None:
     del item["transfer"]
 
     assert movement_to_entity(item).is_transfer is False
+
+
+# ------------------------------------------------ transfers declared afterwards
+
+
+def _declared_pair() -> tuple[Transaction, Transaction]:
+    """A Bancolombia alert declared as paying a card, and the side written."""
+    movement = Transaction.from_alert(
+        user_id=USER,
+        bank="bancolombia",
+        direction=MovementDirection.OUTGOING,
+        amount=_cop("3625733.00"),
+        occurred_at=PAID_AT,
+        counterparty="BANCO COMERCIAL AV VILLAS",
+        instrument_kind="account",
+        last_four="5261",
+    )
+    movement.assign_to(ACCOUNT)
+    written = movement.declare_counterpart(
+        account_id=AccountId.new(),
+        counterparty="Ahorros Bancolombia",
+    )
+
+    return movement, written
+
+
+def test_a_declared_side_comes_back_declared_and_pointing_at_the_other() -> None:
+    movement, written = _declared_pair()
+
+    stored = _round_trip(movement)
+
+    assert stored.transfer == movement.transfer
+    assert stored.transfer is not None
+    assert stored.transfer.basis is TransferBasis.RECLASSIFIED
+    assert stored.transfer.counterpart_id == written.id
+    assert stored.has_counterpart_movement is True
+
+
+def test_a_written_side_comes_back_as_the_counterpart_it_is() -> None:
+    _, written = _declared_pair()
+
+    stored = _round_trip(written)
+
+    assert stored.transfer == written.transfer
+    assert stored.transfer is not None
+    assert stored.transfer.basis is TransferBasis.COUNTERPART
+    assert stored.origin is TransactionOrigin.MANUAL
+
+
+def test_a_lone_declared_side_comes_back_external() -> None:
+    lone = _spending()
+    lone.declare_transfer()
+
+    stored = _round_trip(lone)
+
+    assert stored.transfer is not None
+    assert stored.transfer.basis is TransferBasis.RECLASSIFIED
+    assert stored.transfer.counterpart_is_external is True
+
+
+def test_a_declared_side_writes_its_basis_and_the_movement_only() -> None:
+    movement, _ = _declared_pair()
+
+    assert _transfer_attributes(movement) == {
+        "transfer_id": {"S": movement.transfer.transfer_id.value},  # pyright: ignore[reportOptionalMemberAccess]
+        "role": {"S": "source"},
+        "basis": {"S": "reclassified"},
+        "counterpart_id": {"S": movement.transfer.counterpart_id.value},  # pyright: ignore[reportOptionalMemberAccess]
+    }
+
+
+def test_a_stated_leg_still_writes_no_basis() -> None:
+    """Every transfer written before declared ones existed stays byte for
+    byte what it was, so nothing already stored reads differently."""
+    source, _ = _pair()
+
+    assert "basis" not in _transfer_attributes(source)
+    assert "basis" not in _transfer_attributes(_lone_leg())
+
+
+def test_a_declared_leg_stored_with_an_instrument_is_refused() -> None:
+    with pytest.raises(CorruptFinancialItemError, match="declared"):
+        movement_to_entity(
+            _stored_with(  # pyright: ignore[reportArgumentType]
+                transfer_id="abc",
+                role="source",
+                basis="reclassified",
+                counterpart_id="def",
+                counterpart_instrument_kind="credit_card",
+                counterpart_last_four="7653",
+            ),
+        )
+
+
+def test_a_leg_stored_with_an_unknown_basis_is_refused() -> None:
+    with pytest.raises(CorruptFinancialItemError):
+        movement_to_entity(
+            _stored_with(  # pyright: ignore[reportArgumentType]
+                transfer_id="abc",
+                role="source",
+                basis="guessed",
+            ),
+        )
