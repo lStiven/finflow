@@ -737,8 +737,18 @@ e2e-export *args:
 e2e-alerts *args:
     cd {{frontend_dir}} && node scripts/e2e-alerts.mjs {{args}}
 
+# Every screen, on a phone and on a desktop, in a real browser. The screens
+# are read from `frontend/src/routes`, so a new one is covered the day it
+# lands; each fails on a JavaScript or console error, an API answer of 400+
+# (bar the 404s the app asks for), sideways scroll, not exactly one h1, or a
+# redirect. Needs `just up` and `just web`.
+#
+# Open every screen and refuse to pass if any of them is broken.
+e2e-views *args:
+    cd {{frontend_dir}} && node scripts/e2e-views.mjs {{args}}
+
 # The browser suites, in order.
-e2e: e2e-bills e2e-export e2e-alerts
+e2e: e2e-bills e2e-export e2e-alerts e2e-views
 
 # Format check, lint and typecheck the frontend.
 web-check:

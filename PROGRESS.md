@@ -197,10 +197,14 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
-   desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
-   olvidado en el computador mientras producción sigue vieja — que es exactamente
-   lo que está pasando ahora mismo (punto 1).
+7. **Publicar automáticamente: construido el 2026-09-30, falta encenderlo.**
+   `.github/workflows/pipeline.yml`: un push a `master` despliega producción y
+   uno a `dev` desarrollo, después de `check-all`, `infra-check`, `just verify`
+   y todas las e2e (pantallas incluidas) contra la pila local en el runner; el
+   smoke va después del despliegue y, si falla, vuelve sola a la versión
+   anterior. Falta lo que solo puede hacer el dueño: el proveedor OIDC y los dos
+   roles en AWS, y los entornos, variables y secretos en GitHub —la lista está
+   en [docs/ci.md](docs/ci.md)—.
 
 ## Huecos conocidos, sin urgencia
 
