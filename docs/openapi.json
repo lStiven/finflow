@@ -326,9 +326,10 @@
         "type": "object"
       },
       "AlertType": {
-        "description": "What a channel can be told about.\n\nExplicit string values because they are persisted. One member today;\nE2 adds the recurring charge and E4 the budget threshold.",
+        "description": "What a channel can be told about.\n\nExplicit string values because they are persisted. `MOVEMENT` is every\npurchase and income as it happens; `WEEKLY_SUMMARY` is Monday's look back\nat the week before, against its owner's own normal.",
         "enum": [
-          "movement"
+          "movement",
+          "weekly_summary"
         ],
         "title": "AlertType",
         "type": "string"
@@ -1988,6 +1989,220 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "InboxBudgetResponse": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "remaining": {
+            "title": "Remaining",
+            "type": "string"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "ok",
+              "warning",
+              "over"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "currency",
+          "limit",
+          "spent",
+          "remaining",
+          "state"
+        ],
+        "title": "InboxBudgetResponse",
+        "type": "object"
+      },
+      "InboxEntryResponse": {
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "movement",
+              "weekly_summary"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "movement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxMovementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxSummaryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "created_at",
+          "movement",
+          "summary"
+        ],
+        "title": "InboxEntryResponse",
+        "type": "object"
+      },
+      "InboxMovementResponse": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "bank": {
+            "title": "Bank",
+            "type": "string"
+          },
+          "budgets": {
+            "items": {
+              "$ref": "#/components/schemas/InboxBudgetResponse"
+            },
+            "title": "Budgets",
+            "type": "array"
+          },
+          "counterparty": {
+            "title": "Counterparty",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "direction": {
+            "enum": [
+              "outgoing",
+              "incoming"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "movement_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Movement Id"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "integer"
+          },
+          "origin": {
+            "enum": [
+              "bank_alert",
+              "manual",
+              "accrual",
+              "scheduled"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "unassigned": {
+            "title": "Unassigned",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "movement_id",
+          "direction",
+          "amount",
+          "currency",
+          "counterparty",
+          "bank",
+          "occurred_at",
+          "origin",
+          "unassigned",
+          "budgets"
+        ],
+        "title": "InboxMovementResponse",
+        "type": "object"
+      },
+      "InboxResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/InboxEntryResponse"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "InboxResponse",
+        "type": "object"
+      },
+      "InboxRiseResponse": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "typical": {
+            "title": "Typical",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "label",
+          "spent",
+          "typical"
+        ],
+        "title": "InboxRiseResponse",
+        "type": "object"
+      },
       "InboxSendersPayload": {
         "description": "The senders approved for the caller's one forwarding address.\n\nNo address here — it is assigned automatically and never chosen by a\ncaller. Both lists may be empty, which approves nothing: a forwarding\naddress with no approved sender reads nothing, the safe default rather\nthan a broken one.",
         "properties": {
@@ -2053,6 +2268,62 @@
           "unapproved_senders"
         ],
         "title": "InboxSetupResponse",
+        "type": "object"
+      },
+      "InboxSummaryResponse": {
+        "properties": {
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "movements": {
+            "title": "Movements",
+            "type": "integer"
+          },
+          "rise": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxRiseResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spent": {
+            "title": "Spent",
+            "type": "string"
+          },
+          "typical": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Typical"
+          },
+          "week_end": {
+            "title": "Week End",
+            "type": "string"
+          },
+          "week_start": {
+            "title": "Week Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "week_start",
+          "week_end",
+          "currency",
+          "spent",
+          "movements",
+          "typical",
+          "rise"
+        ],
+        "title": "InboxSummaryResponse",
         "type": "object"
       },
       "IngestionCatalogResponse": {
@@ -4845,6 +5116,57 @@
           }
         ],
         "summary": "Update Preference",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/alerts/inbox": {
+      "get": {
+        "description": "The newest alerts, this user's only, newest first.",
+        "operationId": "list_inbox_alerts_inbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Inbox",
         "tags": [
           "alerts"
         ]

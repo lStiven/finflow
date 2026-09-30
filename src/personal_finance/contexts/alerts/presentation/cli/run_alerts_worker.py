@@ -15,6 +15,10 @@ from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import
     DynamoDBAlertChannelRepository,
     DynamoDBDeliveryLog,
 )
+from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
+    DynamoDBInbox,
+    DynamoDBRecipients,
+)
 from personal_finance.contexts.alerts.presentation.http.dependencies import (
     build_message_sender,
 )
@@ -54,6 +58,10 @@ def build_worker() -> SQSAlertsWorker:
             # The same builder the webhook uses, so a message sent by the
             # worker and the hello sent at linking go out the same way.
             sender=build_message_sender(),
+            # No budget line yet: this branch has no budgets for Financial to
+            # answer about, and without `budgets` every alert goes out as is.
+            inbox=DynamoDBInbox(client=dynamodb, table_name=table_name),
+            recipients=DynamoDBRecipients(client=dynamodb, table_name=table_name),
         ),
     )
 

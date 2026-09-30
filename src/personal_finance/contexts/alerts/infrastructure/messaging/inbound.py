@@ -138,6 +138,21 @@ class MovementRecordedDetail(BaseModel):
     bank: str = Field(default="", max_length=256)
     origin: str = Field(min_length=1, max_length=64)
     unassigned: bool = False
+    # Optional so a message published before Financial carried it still
+    # reads; without it the alert simply has no budget line and no link.
+    # Financial's ids are hex — a uuid's or a sha256's — and this is used as a
+    # key and in a link, so nothing else is let through.
+    movement_id: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_-]{1,128}$",
+    )
+    # The envelope's own time — when Financial recorded the fact — flattened
+    # in beside the payload by the transport. Stable across redeliveries.
+    occurred_at: int | None = Field(
+        default=None,
+        ge=MIN_OCCURRED_AT,
+        le=MAX_OCCURRED_AT,
+    )
 
     @field_validator("counterparty")
     @classmethod
@@ -171,6 +186,11 @@ class MovementRecordedDetail(BaseModel):
         return DeliverMovementAlertCommand(
             user_id=UserId(value=self.user_id),
             event_id=self.event_id,
+            recorded_at=(
+                None
+                if self.occurred_at is None
+                else PosixTime.from_epoch_seconds(self.occurred_at)
+            ),
             alert=MovementAlert(
                 amount=Money(
                     amount=Decimal(self.amount),
@@ -182,6 +202,7 @@ class MovementRecordedDetail(BaseModel):
                 occurred_at=PosixTime.from_epoch_seconds(self.movement_occurred_at),
                 origin=_origin(self.origin),
                 unassigned=self.unassigned,
+                movement_id=self.movement_id,
             ),
         )
 

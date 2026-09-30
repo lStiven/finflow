@@ -617,6 +617,58 @@ Resources:
                   kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
 
   # ------------------------------------------------------------------
+  # Weekly summary — Monday's look back, for everybody Alerts has told
+  # ------------------------------------------------------------------
+  WeeklySummaryFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ..
+      Dockerfile: Dockerfile
+      DockerTag: weekly
+    Properties:
+      PackageType: Image
+      LoggingConfig:
+        LogGroup: !Ref WeeklySummaryLogGroup
+      ImageConfig:
+        Command:
+          - personal_finance.contexts.alerts.presentation.awslambda.weekly_summary_handler.handler
+      MemorySize: 256
+      # Every user's five weeks of spending, one after another, each message
+      # up to 10s on Telegram. A handful of people fits with room to spare.
+      Timeout: 300
+      # Serialised for the same reason as AlertsFunction: delivery is
+      # remembered after the send, and two runs at once would both send.
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          ALERTS_TELEGRAM_BOT_TOKEN: !Sub "ssm:${TelegramBotTokenParameter}"
+      Events:
+        Monday:
+          Type: Schedule
+          Properties:
+            # 13:00 UTC is 08:00 in Bogotá, which has no daylight saving.
+            Schedule: cron(0 13 ? * MON *)
+            Description: Send last week's spending summary.
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Sub "${ResourcePrefix}alert_channels"
+        - DynamoDBReadPolicy:
+            TableName: !Sub "${ResourcePrefix}financial"
+        - DynamoDBReadPolicy:
+            TableName: !Sub "${ResourcePrefix}merchants"
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramBotTokenParameter}"
+            - Effect: Allow
+              Action: kms:Decrypt
+              Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+              Condition:
+                StringEquals:
+                  kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+
+  # ------------------------------------------------------------------
   # Logs — retention set explicitly, per function
   # ------------------------------------------------------------------
   # ------------------------------------------------------------------
@@ -662,6 +714,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/finflow/${AWS::StackName}/alerts"
+      RetentionInDays: !Ref LogRetentionDays
+
+  WeeklySummaryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/finflow/${AWS::StackName}/weekly-summary"
       RetentionInDays: !Ref LogRetentionDays
 
   # ------------------------------------------------------------------

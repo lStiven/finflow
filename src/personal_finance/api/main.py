@@ -6,6 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from personal_finance.contexts.alerts.presentation.http.inbox import (
+    router as alerts_inbox_router,
+)
 from personal_finance.contexts.alerts.presentation.http.router import (
     router as alerts_router,
 )
@@ -131,6 +134,7 @@ def create_app(
     app.include_router(ingestion_notifications_router)
     app.include_router(ingestion_setup_router)
     app.include_router(alerts_router)
+    app.include_router(alerts_inbox_router)
     # Mounted in every environment, unlike the webhook below: this is how
     # every channel everywhere gets bound, not a way to replay something
     # locally. `tests/unit/api/test_app_wiring.py` pins that, because the

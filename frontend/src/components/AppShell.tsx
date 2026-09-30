@@ -21,6 +21,7 @@ import type { ComponentType, ReactNode } from "react";
 import { useState } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
+import { AlertsBell } from "@/components/AlertsCenter";
 import { BetaMark } from "@/components/BetaMark";
 import { Logo } from "@/components/Logo";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
@@ -46,6 +47,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </main>
       </div>
       <Bar />
+      <AlertsBell placement="floating" />
       <WelcomeDialog />
       <ReadyDialog />
     </div>
@@ -114,7 +116,10 @@ function Wordmark({ className }: { className?: string }) {
 function Rail() {
   return (
     <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col gap-8 border-line border-r bg-surface px-4 py-6 lg:flex">
-      <Wordmark className="px-2" />
+      <div className="flex items-center justify-between gap-2 pr-1">
+        <Wordmark className="px-2" />
+        <AlertsBell placement="rail" />
+      </div>
 
       <nav aria-label="Secciones" className="flex flex-col gap-1">
         {DESTINATIONS.map(({ label, icon: Icon, to }) =>

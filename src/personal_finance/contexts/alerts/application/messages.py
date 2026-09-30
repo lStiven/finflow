@@ -13,9 +13,11 @@ it differently; what a message is *about* is this.
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
+from decimal import Decimal
 import enum
 
-from personal_finance.shared.domain.value_objects import Money, PosixTime
+from personal_finance.shared.domain.value_objects import Currency, Money, PosixTime
 
 
 class MovementDirection(enum.Enum):
@@ -57,6 +59,32 @@ class MovementOrigin(enum.Enum):
         return self is not MovementOrigin.ACCRUAL
 
 
+class BudgetState(enum.Enum):
+    """Green, amber or red, as Financial decided it. Never recomputed here."""
+
+    OK = "ok"
+    WARNING = "warning"
+    OVER = "over"
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class BudgetStanding:
+    """One budget the movement counts against, and how the month stands.
+
+    Plain figures rather than `Money`: `remaining` goes negative once the cap
+    is passed, and `Money` refuses a negative — rightly, for an amount that
+    moved, and wrongly for a distance to a ceiling.
+    """
+
+    name: str
+    currency: Currency
+    limit: Decimal
+    spent: Decimal
+    #: The cap less what is spent; negative once it was passed.
+    remaining: Decimal
+    state: BudgetState
+
+
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class MovementAlert:
     """Money moved, and everything an alert may say about it.
@@ -73,7 +101,43 @@ class MovementAlert:
     occurred_at: PosixTime
     origin: MovementOrigin
     unassigned: bool
+    #: Financial's id for the movement, so a screen can open it. None only
+    #: for a payload published before Financial carried it.
+    movement_id: str | None = None
+    #: The budgets this movement counts against — empty for most movements,
+    #: and filled by the use case, never by the payload.
+    budgets: tuple[BudgetStanding, ...] = ()
 
     @property
     def is_worth_announcing(self) -> bool:
         return self.origin.is_news_to_the_owner
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class CategoryRise:
+    """The category that went up the most against its owner's own normal."""
+
+    category: str
+    #: The owner's name for a category they wrote; the API's English label for
+    #: a shipped one, which the message restates from `category`.
+    label: str
+    spent: Decimal
+    typical: Decimal
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class WeeklySummary:
+    """One week of spending against the weeks before it, in one currency.
+
+    `typical` is None in somebody's first week: there is no normal yet, and
+    the message says so rather than comparing against zero.
+    """
+
+    week_start: dt.date
+    #: Sunday, inclusive.
+    week_end: dt.date
+    currency: Currency
+    spent: Decimal
+    movements: int
+    typical: Decimal | None
+    rise: CategoryRise | None
