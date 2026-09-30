@@ -1672,6 +1672,35 @@ way out, and still stores nothing.
   Lambda's asynchronous retry runs it again; the delivery log and the inbox's
   conditional write make the retry send only what was missed.
 
+### Deploying on every push (2026-09-30)
+
+- **Everything that can prove the new code runs before AWS is touched.**
+  `check-all`, `infra-check`, `just verify` and every e2e run against the
+  emulator in the runner, so a failure there costs nothing. The smoke cannot
+  move before the deploy: it drives the API that *is* deployed, and before the
+  deploy that is the old code. So it runs after, with a rollback behind it.
+- **The rollback is the same script over the previous release**, found by the
+  `deployed/<env>` tag the last green run moved. A second, rollback-only path
+  would be exercised only on the worst day. Provisioning is not rolled back: it
+  only creates or adjusts, and the older code ignores what it does not know.
+- **No manual approval before production**, by the owner's decision: the gate
+  is the tests, not a person. `master` should be protected so that only a
+  branch whose checks passed can reach it.
+- **OIDC, one role per GitHub environment, trusted by environment and not by
+  branch.** Development and production share an AWS account, so the only
+  thing keeping a push to `dev` from production is which role it may assume.
+  The `sub` claim of a job that names an environment is
+  `repo:…:environment:<name>`, and each environment only deploys from its
+  branch — two locks instead of one. No AWS key is stored in GitHub.
+- **Named profiles kept in CI.** Every recipe reads a named profile (the one
+  thing that stops a dev command from reading production by default), so CI
+  writes the OIDC credentials under that name instead of teaching each recipe
+  a second way to authenticate.
+- **`verify_flow.py` had gone stale** — it read `total` from
+  `/ingestion/notifications` after pagination replaced it with `has_more` —
+  and nobody noticed because nothing ran it. Putting it in the gate is what
+  found it.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

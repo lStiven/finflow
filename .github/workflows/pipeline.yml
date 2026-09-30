@@ -1,0 +1,206 @@
+# Every push to master deploys production and every push to dev deploys
+# development — but only once everything that proves the old still works has
+# passed. See docs/ci.md for the one-time setup this needs in AWS and GitHub.
+#
+#   checks  ── formato, lint, tipos, pruebas unitarias y de integración,
+#              contrato de la API, frontend, plantilla desplegable
+#   e2e     ── la pila local entera en el runner: flujo de dos usuarios y
+#              todas las e2e en un navegador de verdad, pantallas incluidas
+#   deploy  ── backend y web juntos, smoke contra lo desplegado; si algo falla,
+#              vuelve a la última versión que pasó
+#
+# Nothing reaches AWS until the first two are green, and no job of one
+# environment runs beside another job of the same environment.
+
+name: Validar y desplegar
+
+on:
+  push:
+    branches: [master, dev]
+  workflow_dispatch:
+
+# One pipeline per branch at a time, never cancelled halfway: a deploy stopped
+# between the backend and the web leaves the two out of step.
+concurrency:
+  group: pipeline-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Validaciones (check-all)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: extractions/setup-just@v3
+
+      - name: Dependencias
+        run: |
+          uv sync --frozen
+          npm ci --prefix frontend
+
+      # The local settings, which point at the in-process emulator: nothing
+      # here talks to AWS.
+      - name: Configuración local
+        run: cp .env.example .env
+
+      - name: Formato, lint, tipos, pruebas, contrato y frontend
+        run: just check-all
+
+      - name: Plantilla desplegable en los dos entornos
+        run: just infra-check
+
+  e2e:
+    name: Flujos y pantallas en el navegador
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: extractions/setup-just@v3
+
+      - name: Dependencias y navegador
+        run: |
+          uv sync --frozen
+          npm ci --prefix frontend
+          npx --prefix frontend playwright install --with-deps chromium
+
+      - name: Levantar la pila local
+        run: scripts/ci/local-stack.sh start
+
+      - name: Dos usuarios de punta a punta, sin cruzarse
+        run: just verify
+
+      - name: Todas las e2e, pantallas incluidas
+        run: just e2e
+
+      - name: Bajar la pila
+        if: always()
+        run: scripts/ci/local-stack.sh stop
+
+      - name: Guardar los logs si algo falló
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-e2e
+          path: .ci-logs/
+          retention-days: 7
+
+  deploy:
+    name: Desplegar y comprobar
+    needs: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    # The GitHub environment holds this target's role, secrets and Cloudflare
+    # account, and is what keeps a dev push from ever holding production's.
+    environment: ${{ github.ref_name == 'master' && 'production' || 'development' }}
+    permissions:
+      contents: write # to move the `deployed/<entorno>` tag
+      id-token: write # to assume the AWS role by OIDC, with no stored keys
+    env:
+      TARGET: ${{ github.ref_name == 'master' && 'production' || 'development' }}
+      AWS_PROFILE_NAME: ${{ github.ref_name == 'master' && 'finflow-production' || 'finflow-dev' }}
+      ENV_FILE_NAME: ${{ github.ref_name == 'master' && '.env.production' || '.env.development' }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags say what is deployed now
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: extractions/setup-just@v3
+
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Dependencias
+        run: |
+          uv sync --frozen
+          npm ci --prefix frontend
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-duration-seconds: 3600
+
+      - name: Perfil de AWS y configuración del entorno
+        env:
+          ENV_FILE_CONTENT: ${{ secrets.ENV_FILE }}
+        run: |
+          scripts/ci/aws-profile.sh "$AWS_PROFILE_NAME"
+          printf '%s\n' "$ENV_FILE_CONTENT" > "$ENV_FILE_NAME"
+
+      - name: Qué está desplegado ahora
+        id: previous
+        run: |
+          sha="$(git rev-parse -q --verify "refs/tags/deployed/$TARGET^{commit}" || true)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "desplegado ahora en $TARGET: ${sha:-nada registrado todavía}"
+
+      - name: Desplegar backend y web
+        id: deploy
+        run: scripts/ci/deploy.sh "$TARGET"
+
+      - name: Smoke contra lo desplegado
+        id: smoke
+        run: scripts/ci/smoke.sh "$TARGET"
+
+      - name: Marcar esta versión como la desplegada
+        run: |
+          git tag -f "deployed/$TARGET" "$GITHUB_SHA"
+          git push -f origin "refs/tags/deployed/$TARGET"
+
+      # Only when this run changed what is deployed and it did not hold: the
+      # previous release goes out again, through the same script, and the run
+      # still ends red so the failure is seen.
+      - name: Volver a la versión anterior
+        if: >-
+          failure() && steps.previous.outputs.sha != '' &&
+          (steps.deploy.outcome == 'failure' || steps.smoke.outcome == 'failure')
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.sha }}
+        run: |
+          echo "volviendo a $PREVIOUS"
+          git worktree add ../previous "$PREVIOUS"
+          cp "$ENV_FILE_NAME" "../previous/$ENV_FILE_NAME"
+          npm ci --prefix ../previous/frontend
+          scripts/ci/deploy.sh "$TARGET" ../previous
+          scripts/ci/smoke.sh "$TARGET"
+          echo "::error::El despliegue de $GITHUB_SHA falló; $TARGET volvió a $PREVIOUS."

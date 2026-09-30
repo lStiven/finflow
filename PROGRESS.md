@@ -266,13 +266,14 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente.** Que un push a `dev` despliegue desarrollo y
-   uno a `master` despliegue producción, sin tener que acordarse de qué rama va
-   dónde. Plan propuesto el 2026-09-30, sin construir: GitHub Actions con
-   `just check-all` como puerta; `dev` → `deploy-dev` + `web-publish-dev`,
-   `master` → `deploy-prod` + `web-publish` + `smoke-prod` tras aprobación
-   manual; AWS por OIDC (un rol por entorno, sin llaves guardadas) y
-   `CLOUDFLARE_API_TOKEN` como secreto. Pide `--no-confirm-changeset` en CI.
+7. **Publicar automáticamente: construido el 2026-09-30, falta encenderlo.**
+   `.github/workflows/pipeline.yml`: un push a `master` despliega producción y
+   uno a `dev` desarrollo, después de `check-all`, `infra-check`, `just verify`
+   y todas las e2e (pantallas incluidas) contra la pila local en el runner; el
+   smoke va después del despliegue y, si falla, vuelve sola a la versión
+   anterior. Falta lo que solo puede hacer el dueño: el proveedor OIDC y los dos
+   roles en AWS, y los entornos, variables y secretos en GitHub —la lista está
+   en [docs/ci.md](docs/ci.md)—.
 
 ## Huecos conocidos, sin urgencia
 

@@ -1041,8 +1041,15 @@ def _check_isolation(
         not (their_ids & my_ids),
         f"{label}: the two see different notifications",
     )
+    # Counted off the page itself: the list is paginated and reports whether
+    # another page follows rather than a total, so a page that says there is
+    # more would make the count a statement about the page and not the inbox.
+    report.check(
+        not mine_notifications["has_more"],
+        f"{label}: {mine.person.label}'s alerts fit on one page",
+    )
     report.equal(
-        mine_notifications["total"],
+        len(mine_notifications["notifications"]),
         len(mine.person.alerts),
         f"{label}: {mine.person.label} sees only their own alerts",
     )
