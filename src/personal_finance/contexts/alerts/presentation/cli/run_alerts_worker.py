@@ -8,12 +8,19 @@ from __future__ import annotations
 from personal_finance.contexts.alerts.application.handlers import (
     DeliverMovementAlertUseCase,
 )
+from personal_finance.contexts.alerts.infrastructure.financial.adapters import (
+    build_budget_standings,
+)
 from personal_finance.contexts.alerts.infrastructure.messaging.sqs_worker import (
     SQSAlertsWorker,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import (
     DynamoDBAlertChannelRepository,
     DynamoDBDeliveryLog,
+)
+from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
+    DynamoDBInbox,
+    DynamoDBRecipients,
 )
 from personal_finance.contexts.alerts.presentation.http.dependencies import (
     build_message_sender,
@@ -54,6 +61,9 @@ def build_worker() -> SQSAlertsWorker:
             # The same builder the webhook uses, so a message sent by the
             # worker and the hello sent at linking go out the same way.
             sender=build_message_sender(),
+            budgets=build_budget_standings(timezone=settings.display_timezone),
+            inbox=DynamoDBInbox(client=dynamodb, table_name=table_name),
+            recipients=DynamoDBRecipients(client=dynamodb, table_name=table_name),
         ),
     )
 

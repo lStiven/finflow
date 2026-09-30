@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import functools
 
-from personal_finance.contexts.alerts.application.ports import MessageSender
+from personal_finance.contexts.alerts.application.ports import (
+    MessageSender,
+    SummarySender,
+)
 from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import (
     DynamoDBAlertChannelRepository,
     DynamoDBChannelLinkRepository,
@@ -59,6 +62,16 @@ def alerts_are_configured() -> bool:
 
 @functools.lru_cache(maxsize=1)
 def build_message_sender() -> MessageSender:
+    return _build_sender()
+
+
+@functools.lru_cache(maxsize=1)
+def build_summary_sender() -> SummarySender:
+    """The same transport, seen through the port Monday's job needs."""
+    return _build_sender()
+
+
+def _build_sender() -> TelegramMessageSender | LoggingMessageSender:
     """The transport this deployment sends through, or a refusal to start.
 
     Raises where no bot is configured, which the *worker* treats as a reason

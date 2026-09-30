@@ -1612,6 +1612,66 @@ way out, and still stores nothing.
   relative to it: the dialog opened a page below the viewport. Only a real
   browser showed it.
 
+### Budgets in the alert, the in-app inbox, and Monday's summary (2026-09-30)
+
+- **The budget line is asked of Financial, by Alerts, at delivery.** E1 had
+  refused to put anything but the payload in a message, so an alert would not
+  depend on two more things being up. That still holds where it matters: the
+  lookup is an enrichment and a failure sends the alert without the line
+  (`DeliverMovementAlertUseCase._with_budgets`, broad `except` on purpose).
+  What changed is the argument about *where* it is computed. Putting the
+  standing in the `MovementRecorded` payload would freeze a number at write
+  time — before Merchant has attributed the counterparty — and would make
+  Financial compute budgets for every movement of everybody, including the
+  ones nobody alerts. Asking at delivery reads the category a few seconds
+  later, which is exactly the delay that makes it known for a merchant seen
+  before. It goes through Financial's published `ReadMovementBudgetsUseCase`
+  via `alerts/infrastructure/financial/adapters.py`, the integration CLAUDE.md
+  allows; AlertsFunction gained read-only access to the financial and merchant
+  tables for it.
+- **"Covers" means "would count it", and nothing looser.** Same rules as
+  `ReadBudgetsUseCase` and the same figures, so the message can never disagree
+  with the budgets screen: outgoing, not a transfer, the category a budget
+  names *or* a budget over every category, the account if the budget narrows
+  to some, same currency, the movement's own month in Bogotá. A movement no
+  merchant owns yet has no category — only whole-month budgets cover it. The
+  owner asked for «solo si un presupuesto cubre esa categoría»; a whole-month
+  budget does cover every category, so it is named too. That is a reading of
+  the request, recorded here in case it was not the intended one.
+- **The inbox is for everybody, not a mirror of Telegram.** Every movement
+  Alerts would announce (accruals excluded, same rule) is kept 30 days whether
+  or not a channel exists, because «¿cuál fue mi último movimiento?» is asked
+  from inside the app. The per-channel minimum amount does not apply to it —
+  that floor is about waking a phone.
+- **Keyed by when the fact was recorded, not when the worker saw it.** The
+  envelope's `occurred_at` is the same on every redelivery; a key with "now"
+  in it would make each redelivery a second row. The weekly entry uses a fixed
+  instant (the Monday after, 13:00 UTC) for the same reason. The newest-first
+  read is then a `Query` with `ScanIndexForward=False` and a `Limit`, which is
+  what a poll every 15 s can afford.
+- **Polling, not a socket.** API Gateway WebSockets or AppSync would be the
+  real-time answer and neither is worth a second piece of infrastructure for
+  a handful of users: a visible tab asks every 15 s, a hidden one does not ask
+  at all. What the page had when it opened is history and never toasted.
+- **Toasts at the bottom.** On a phone the bell floats top-right and a toast
+  across the top covered it — the control listing what the toast was about
+  was untappable while it showed. Found by the e2e, not by looking.
+- **The watcher and the toaster live in the root route, not in `AppShell`.**
+  Every screen draws its own shell, so a toaster there was unmounted on each
+  navigation and a notification vanished mid-read.
+- **Monday's summary walks Alerts' own recipients.** Walking users was the
+  blocker for the credits' monthly charge and the per-category budget alert;
+  it is not solved in general. Alerts keeps a `RECIPIENTS` partition, written
+  whenever it hears about somebody's movement, which is enough for a summary
+  that only makes sense for people with movements. The comparison is against
+  the average of the four weeks before, counting only weeks after the
+  person's first movement — averaging in weeks before they arrived would call
+  every week of theirs expensive. Currencies are ordered by movement count,
+  never by amount.
+- **A transport outage fails the weekly run at the end, not halfway**, so
+  Lambda's asynchronous retry runs it again; the delivery log and the inbox's
+  conditional write make the retry send only what was missed.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a

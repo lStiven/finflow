@@ -181,6 +181,15 @@ alerts-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.alerts.presentation.cli.run_alerts_worker
 
+# Monday's spending summary, once, for the week before today — or for the
+# week containing a date, e.g. `just weekly-summary 2026-09-21`. In the cloud
+# a schedule runs it at 08:00 Bogotá; running it twice sends nothing twice.
+#
+# Send the weekly summaries now, to Telegram and to the in-app inbox.
+weekly-summary *args: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.run_weekly_summary {{args}}
+
 # Telegram cannot reach a laptop and `setWebhook` wants a public HTTPS name,
 # so the inbound half of linking is the one part the network will not allow
 # locally. Everything else stays real. Pass the `start=` payload from the
@@ -738,8 +747,19 @@ e2e-budgets *args:
 e2e-export *args:
     cd {{frontend_dir}} && node scripts/e2e-export.mjs {{args}}
 
+# The in-app alerts, in a real browser and against the real stack.
+# Writes a purchase under a budget through the API and waits for the page —
+# polling — to show it as a floating notification, with the budget line equal
+# to what `/financial/budgets` reports; then «Ver», the bell's unseen count,
+# and an income with no budget line. Needs `just up` (the workers too) and
+# `just web`.
+#
+# Watch a movement reach the open page as a notification.
+e2e-alerts *args:
+    cd {{frontend_dir}} && node scripts/e2e-alerts.mjs {{args}}
+
 # The browser suites, in order.
-e2e: e2e-bills e2e-allowance e2e-budgets e2e-export
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-alerts
 
 # Format check, lint and typecheck the frontend.
 web-check:

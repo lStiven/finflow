@@ -134,6 +134,9 @@ export const queryKeys = {
   catalog: ["catalog"] as const,
   financing: ["financing"] as const,
   alertChannels: ["alert-channels"] as const,
+  // Not `inbox`, which is Identity's forwarding address: this is the alerts
+  // the app shows — every movement and Monday's summary.
+  alertsInbox: ["alerts-inbox"] as const,
   bills: ["bills"] as const,
   recurring: ["recurring"] as const,
   plan: ["plan"] as const,
@@ -1325,6 +1328,30 @@ export function useRevalue(
  * out — and `refetchInterval` returning false is what stops the timer once
  * there is nothing left to find out. The same shape `/ingestion/setup` uses.
  */
+export type AlertsInboxEntry = components["schemas"]["InboxEntryResponse"];
+export type AlertsInboxMovement = components["schemas"]["InboxMovementResponse"];
+export type AlertsInboxSummary = components["schemas"]["InboxSummaryResponse"];
+
+/** How often a visible tab asks for new alerts. Hidden tabs do not ask. */
+export const ALERTS_POLL_MS = 15_000;
+
+/**
+ * The alerts the app shows, newest first — what reached Telegram, and the
+ * same for somebody with no channel at all.
+ *
+ * Polled while the page is visible: a deployment without a socket gets as
+ * close to real time as a request every few seconds, and a hidden tab asking
+ * all afternoon would be reads nobody sees.
+ */
+export const alertsInboxQuery = queryOptions({
+  queryKey: queryKeys.alertsInbox,
+  queryFn: () => unwrap(api.GET("/alerts/inbox", { params: { query: { limit: 20 } } })),
+  refetchInterval: ALERTS_POLL_MS,
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000,
+});
+
 export const alertChannelsQuery = queryOptions({
   queryKey: queryKeys.alertChannels,
   queryFn: () => unwrap(api.GET("/alerts/channels")),

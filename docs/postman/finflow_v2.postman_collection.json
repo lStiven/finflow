@@ -3415,6 +3415,36 @@
           "response": []
         },
         {
+          "name": "Inbox",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox?limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "1-50, newest first"
+                }
+              ]
+            },
+            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification."
+          }
+        },
+        {
           "name": "Update preference",
           "request": {
             "method": "PATCH",

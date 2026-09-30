@@ -65,6 +65,26 @@ export interface paths {
         patch: operations["update_preference_alerts_channels__channel_id__patch"];
         trace?: never;
     };
+    "/alerts/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Inbox
+         * @description The newest alerts, this user's only, newest first.
+         */
+        get: operations["list_inbox_alerts_inbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/alerts/telegram/webhook": {
         parameters: {
             query?: never;
@@ -2063,11 +2083,12 @@ export interface components {
          * AlertType
          * @description What a channel can be told about.
          *
-         *     Explicit string values because they are persisted. One member today;
-         *     E2 adds the recurring charge and E4 the budget threshold.
+         *     Explicit string values because they are persisted. `MOVEMENT` is every
+         *     purchase and income as it happens; `WEEKLY_SUMMARY` is Monday's look back
+         *     at the week before, against its owner's own normal.
          * @enum {string}
          */
-        AlertType: "movement";
+        AlertType: "movement" | "weekly_summary";
         /**
          * AliasResponse
          * @description One child: a spelling that resolves to this merchant.
@@ -3086,6 +3107,83 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** InboxBudgetResponse */
+        InboxBudgetResponse: {
+            /** Currency */
+            currency: string;
+            /** Limit */
+            limit: string;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: string;
+            /** Spent */
+            spent: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "warning" | "over";
+        };
+        /** InboxEntryResponse */
+        InboxEntryResponse: {
+            /** Created At */
+            created_at: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "movement" | "weekly_summary";
+            movement: components["schemas"]["InboxMovementResponse"] | null;
+            summary: components["schemas"]["InboxSummaryResponse"] | null;
+        };
+        /** InboxMovementResponse */
+        InboxMovementResponse: {
+            /** Amount */
+            amount: string;
+            /** Bank */
+            bank: string;
+            /** Budgets */
+            budgets: components["schemas"]["InboxBudgetResponse"][];
+            /** Counterparty */
+            counterparty: string;
+            /** Currency */
+            currency: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "outgoing" | "incoming";
+            /** Movement Id */
+            movement_id: string | null;
+            /** Occurred At */
+            occurred_at: number;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "bank_alert" | "manual" | "accrual" | "scheduled";
+            /** Unassigned */
+            unassigned: boolean;
+        };
+        /** InboxResponse */
+        InboxResponse: {
+            /** Entries */
+            entries: components["schemas"]["InboxEntryResponse"][];
+        };
+        /** InboxRiseResponse */
+        InboxRiseResponse: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Spent */
+            spent: string;
+            /** Typical */
+            typical: string;
+        };
         /**
          * InboxSendersPayload
          * @description The senders approved for the caller's one forwarding address.
@@ -3113,6 +3211,22 @@ export interface components {
             steps: components["schemas"]["SetupStepResponse"][];
             /** Unapproved Senders */
             unapproved_senders: string[];
+        };
+        /** InboxSummaryResponse */
+        InboxSummaryResponse: {
+            /** Currency */
+            currency: string;
+            /** Movements */
+            movements: number;
+            rise: components["schemas"]["InboxRiseResponse"] | null;
+            /** Spent */
+            spent: string;
+            /** Typical */
+            typical: string | null;
+            /** Week End */
+            week_end: string;
+            /** Week Start */
+            week_start: string;
         };
         /**
          * IngestionCatalogResponse
@@ -4516,6 +4630,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_inbox_alerts_inbox_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxResponse"];
                 };
             };
             /** @description Validation Error */

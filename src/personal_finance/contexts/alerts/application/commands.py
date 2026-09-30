@@ -10,7 +10,7 @@ from personal_finance.contexts.alerts.domain.value_objects import (
     ChannelKind,
     ChatId,
 )
-from personal_finance.shared.domain.value_objects import Money, UserId
+from personal_finance.shared.domain.value_objects import Money, PosixTime, UserId
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -60,3 +60,7 @@ class DeliverMovementAlertCommand:
     user_id: UserId
     event_id: uuid.UUID
     alert: MovementAlert
+    #: When Financial recorded the fact — the envelope's own time, the same on
+    #: every redelivery, so the in-app entry lands in one place. None falls
+    #: back to when this worker first sees it.
+    recorded_at: PosixTime | None = None

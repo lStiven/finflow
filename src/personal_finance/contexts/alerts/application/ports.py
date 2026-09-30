@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+import datetime as dt
+from typing import TYPE_CHECKING, Protocol
 import uuid
 
-from personal_finance.contexts.alerts.application.messages import MovementAlert
+from personal_finance.contexts.alerts.application.messages import (
+    BudgetStanding,
+    MovementAlert,
+    WeeklySummary,
+)
 from personal_finance.contexts.alerts.domain.entities import AlertChannel
 from personal_finance.contexts.alerts.domain.linking import ChannelLink
 from personal_finance.contexts.alerts.domain.value_objects import (
@@ -13,6 +18,10 @@ from personal_finance.contexts.alerts.domain.value_objects import (
     SecretHash,
 )
 from personal_finance.shared.domain.value_objects import PosixTime, UserId
+
+
+if TYPE_CHECKING:
+    from personal_finance.contexts.alerts.application.inbox import InboxEntry
 
 
 class AlertChannelRepository(Protocol):
@@ -234,3 +243,64 @@ class MessageSender(Protocol):
         "nothing to do" mail rather than staying silent.
         """
         ...
+
+
+class SummarySender(Protocol):
+    """Delivers Monday's summary. Its own port so the movement's stays small."""
+
+    def send_weekly_summary(
+        self, *, chat_id: ChatId, summary: WeeklySummary
+    ) -> None: ...
+
+
+class BudgetStandings(Protocol):
+    """Which budgets a movement counts against, as Financial answers it.
+
+    Financial owns budgets, categories and what counts as spending; this port
+    is how Alerts asks without knowing any of it. An implementation answers
+    empty for a movement it cannot find — and may raise on an outage, which
+    the caller treats as «no budget line» rather than as a failed alert.
+    """
+
+    def covering(
+        self,
+        *,
+        user_id: UserId,
+        movement_id: str,
+    ) -> Sequence[BudgetStanding]: ...
+
+
+class WeeklySpendingSource(Protocol):
+    """One week of somebody's spending against their own normal, per currency.
+
+    Busiest currency first. Empty when there is nothing to say — no spending
+    this week and none before it.
+    """
+
+    def week(self, *, user_id: UserId, week_of: dt.date) -> Sequence[WeeklySummary]: ...
+
+
+class Inbox(Protocol):
+    """The in-app copy of every alert, per user.
+
+    Writing the same entry twice is not an error and changes nothing: the
+    entry's id is the fact's, and delivery is at-least-once.
+    """
+
+    def record(self, entry: InboxEntry) -> None: ...
+
+    def recent(self, *, user_id: UserId, limit: int) -> Sequence[InboxEntry]:
+        """Newest first, this user's only."""
+        ...
+
+
+class Recipients(Protocol):
+    """Everybody Alerts has ever had something to tell.
+
+    Alerts' own list, built from the movements it hears about, so a weekly
+    job can walk its users without asking another context who exists.
+    """
+
+    def remember(self, *, user_id: UserId, now: PosixTime) -> None: ...
+
+    def everyone(self) -> Sequence[UserId]: ...

@@ -29,13 +29,17 @@ from personal_finance.contexts.alerts.infrastructure.telegram.messages import (
     compose_chat_already_linked,
     compose_link_confirmation,
     compose_movement_alert,
+    compose_weekly_summary,
 )
 
 
 if TYPE_CHECKING:
     from pydantic import SecretStr
 
-    from personal_finance.contexts.alerts.application.messages import MovementAlert
+    from personal_finance.contexts.alerts.application.messages import (
+        MovementAlert,
+        WeeklySummary,
+    )
     from personal_finance.contexts.alerts.domain.value_objects import ChatId
 
 
@@ -73,6 +77,9 @@ class TelegramMessageSender:
             chat_id,
             compose_movement_alert(alert, timezone=self._display_timezone),
         )
+
+    def send_weekly_summary(self, *, chat_id: ChatId, summary: WeeklySummary) -> None:
+        self._send(chat_id, compose_weekly_summary(summary))
 
     def send_link_confirmation(self, *, chat_id: ChatId) -> None:
         self._send(chat_id, compose_link_confirmation())
@@ -147,6 +154,9 @@ class LoggingMessageSender:
             chat_id,
             compose_movement_alert(alert, timezone=self._display_timezone),
         )
+
+    def send_weekly_summary(self, *, chat_id: ChatId, summary: WeeklySummary) -> None:
+        self._log(chat_id, compose_weekly_summary(summary))
 
     def send_link_confirmation(self, *, chat_id: ChatId) -> None:
         self._log(chat_id, compose_link_confirmation())
