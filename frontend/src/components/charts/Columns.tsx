@@ -180,30 +180,36 @@ export function Columns({
       {/*
        * The table twin. Not a fallback — the same numbers, reachable without a
        * pointer and without colour.
+       *
+       * Hidden by a wrapper rather than on the table itself: a table never
+       * shrinks below its content, so `sr-only`'s 1px width did not apply
+       * and the hidden table pushed the whole page sideways on a phone.
        */}
-      <table id={tableId} className="sr-only">
-        <caption>{caption}</caption>
-        <thead>
-          <tr>
-            <th>Periodo</th>
-            {series.map((band) => (
-              <th key={band.key}>{band.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {buckets.map((bucket, index) => (
-            <tr key={bucket.key}>
-              <th scope="row">{bucket.full}</th>
+      <div className="sr-only">
+        <table id={tableId}>
+          <caption>{caption}</caption>
+          <thead>
+            <tr>
+              <th>Periodo</th>
               {series.map((band) => (
-                <td key={band.key}>
-                  {formatMoney(band.points[index]?.amount ?? "0", currency)}
-                </td>
+                <th key={band.key}>{band.label}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {buckets.map((bucket, index) => (
+              <tr key={bucket.key}>
+                <th scope="row">{bucket.full}</th>
+                {series.map((band) => (
+                  <td key={band.key}>
+                    {formatMoney(band.points[index]?.amount ?? "0", currency)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }
