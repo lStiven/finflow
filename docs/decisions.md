@@ -1409,6 +1409,47 @@ way out, and still stores nothing.
   re-runnable without checking anything, because the charge's id makes the
   second write DynamoDB's problem.
 
+### Exporting movements (2026-09-30)
+
+- **The server writes the file, not the browser.** The Transacciones screen
+  holds one page of 25; a client-side export would either be that page or a
+  loop over every page with its own chance to stop short. `GET
+  /financial/export` takes the same filters as `/financial/transactions`,
+  through the same `_movement_filter`, and reuses `ListTransactionsUseCase`,
+  so the file behind a filter is that list — the e2e compares ids against a
+  full walk of the list.
+- **Refused past 10 000 rows, never cut.** A Lambda answer stops at 6 MB and
+  a file that silently ends early is the one wrong answer for somebody
+  keeping their data. The refusal is a 422 whose `detail.code` is
+  `export_too_large`, because a deleted category or a malformed filter is a
+  422 too and only this one is fixed by picking fewer dates. The dialog
+  counts first (`/transactions?limit=1`), so the ceiling is seen, not hit.
+- **Every text cell is untrusted.** Counterparty, note, merchant name,
+  account name and a user's own category label can all start with `=`. The
+  CSV prefixes `'` on `= + - @ \t \r` (OWASP's CSV-injection advice); the
+  workbook is written with `strings_to_formulas` off *and* `write_string`, so
+  no library option can turn a cell back into a formula. Amounts and dates
+  are written by the server and are never neutralised — a `-` there is a
+  number.
+- **Two formats on purpose.** CSV is RFC 4180 with a point decimal and a BOM
+  (without the BOM Excel reads UTF-8 as mojibake) — for tools. A
+  Spanish-locale Excel expects `;` and a comma decimal, so the answer for
+  Excel is the `.xlsx`, not a CSV dialect: real dates, real numbers, a
+  frozen header and a filter.
+- **Category names are restated in Spanish from the value.** Merchant's
+  catalogue labels the shipped categories in English by contract; the export
+  keeps a copy of the frontend's table and falls back to the catalogue's label
+  for a user's own category. `category_labels` is a separate port
+  (`CategoryNamer`), not a method on `MerchantDirectory`, so none of the fakes
+  implementing the directory had to change.
+- **XlsxWriter over openpyxl**: write-only is all this needs, it has no
+  dependencies, and it prints a `Decimal` digit for digit (`{:.16G}` on the
+  Decimal itself) rather than through a float.
+- **The dialog is portalled to `<body>`.** The screen's content sits in an
+  animated container, and a transformed ancestor makes `position: fixed`
+  relative to it: the dialog opened a page below the viewport. Only a real
+  browser showed it.
+
 ### Operations
 
 - **CORS is configuration, not code** (2026-08-24). `API_CORS_ORIGINS` is a
@@ -2111,8 +2152,9 @@ to whatever ends up serving the bundle, which the bundle is not told.
   real finding: the only setting that exists and has no home is the display
   timezone, and it is not even per-user yet (`ALERTS_DISPLAY_TIMEZONE` is one
   value for the whole deployment, and Financial's endpoints take it as a query
-  default). Deleting your account and exporting your data are the other two
-  things a reader expects there and that do not exist in any form. So the
+  default). Deleting your account is the other thing a reader expects there
+  and that does not exist in any form; exporting does since 2026-09-30, but
+  from Transacciones, beside the filters that decide what goes into the file. So the
   screen stays announced and unbuilt on purpose: it earns its place when E2 and
   E4 turn one kind of alert into three and the Telegram card can no longer hold
   "what to announce" beside "where to send it". Categories stay inside
