@@ -12,6 +12,8 @@ La verificación local de los avisos por Telegram: **2026-09-14**.
 Los presupuestos se comprobaron contra la pila local el **2026-09-18**, con
 `just e2e-budgets`, `just check-all` y en el navegador, después de rehacerlos
 sobre el modelo de alcance.
+**2026-09-30:** las cinco e2e (`just e2e`) y las 21 pantallas a 390 y 1280 px,
+en `dev` y en `master`, sin errores ni desbordes.
 
 ## Qué hace hoy la aplicación
 
@@ -142,15 +144,25 @@ Todo el backend de la versión 1 está terminado y probado:
   pantalla lo ofrece. En Resumen queda un resumen —«2 de 4 en verde»— debajo
   de las cuentas.
 
+- **Los movimientos se exportan a CSV o Excel.** Desde Transacciones se elige
+  el periodo, gastos o ingresos, la cuenta, la categoría y si entran los
+  traslados; sale el archivo con todas las páginas, no solo la que se ve. Ninguna
+  celda se vuelve fórmula aunque el banco escriba `=…`.
+
+- **Lo que llega a Telegram se ve también en la app**, tenga o no canal: cada
+  movimiento aparece como notificación flotante mientras la pestaña está
+  abierta (se consulta cada 15 s) y una campana lista los últimos. Bajo una
+  compra va **lo que queda de cada presupuesto que la cubre** —solo si alguno la
+  cubre—, igual en Telegram. Y **cada lunes**, el resumen de la semana contra la
+  semana normal de uno mismo, a Telegram y a la campana.
+
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 86 operaciones de API en cinco contextos, seis procesos en
-la nube, 2343 pruebas de Python y 433 del frontend, todas en verde.
-El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
-sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
-cola compartido, la paginación de notificaciones, las categorías propias, y el
-contexto `alerts` entero).
+**Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
+la nube, 2455 pruebas de Python y 473 del frontend, todas en verde, y cinco
+e2e en el navegador (`just e2e`). El contrato de la API y los tipos del
+frontend están sincronizados.
 
 **Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
@@ -171,35 +183,23 @@ dirección. Abajo de 1024 px la barra inferior lleva Resumen, Transacciones,
 Cuentas y **Más**, que abre el resto —Reportes, Comercios, Guías, la cuenta y
 cerrar sesión—; de 1024 para arriba, la columna de la izquierda de siempre.
 
-## Lo publicado, medido el 2026-09-20
+## Lo publicado, medido el 2026-09-30
 
-Medido contra AWS y contra el `openapi.json` que sirve cada API, no recordado:
-
-| | Operaciones | Estado |
+| | Código | Estado |
 |---|---|---|
-| API producción | 83 operaciones | 43 — le faltan préstamos, inversiones, borrar movimiento, desenlazar tarjeta, reabrir cuenta, las categorías propias, los avisos, las facturas y los presupuestos |
-| API desarrollo | 83 operaciones | 43 — igual que producción |
-| Web (ambas) | pestaña Traslado, borrar, financiación, desenlazar, reabrir, categorías propias, avisos, facturas, presupuestos | ninguna |
-| Contrato de la rama `dev` | 83 | — |
-| API desarrollo (`finflow-dev`) | 75 | `UPDATE_COMPLETE` 2026-09-15 |
-| API producción (`finflow`) | 70 | `UPDATE_COMPLETE` 2026-09-15 |
-| Web producción (`finflow-apk.pages.dev`) | — | responde 200 |
-| Web desarrollo (`finflow-dev-2tc.pages.dev`) | — | responde 200 |
+| Desarrollo — API y web | `dev` (5474b9c), 88 operaciones | publicado el 2026-09-30, `UPDATE_COMPLETE` |
+| Producción — API y web | 43 operaciones, web anterior al 2 de septiembre | sin cambios |
+| Rama `master` | exportar + avisos en la app + resumen semanal, **sin presupuestos** | lista para producción, sin publicar |
 
-El despliegue del 2026-09-15 sí entró: las seis funciones están en pie en
-producción, `AlertsFunction` incluida, así que **el hueco de
-`lambda:PutFunctionConcurrency` está resuelto** y ya no es una traba.
+`master` lleva la exportación y las notificaciones pero no los presupuestos, la
+mesada ni las facturas propuestas: esos siguen solo en `dev`. Por eso en
+producción el aviso saldrá **sin** la línea de presupuesto; se enciende sola el
+día que presupuestos llegue a `master`.
 
-Lo que le falta a producción son las nueve operaciones de lo último: la
-mesada (`/financial/allowance`), los presupuestos (`/financial/budgets`), el
-plan (`/financial/plan`) y las facturas propuestas (`/financial/recurring`).
-Son exactamente los commits que `dev` tiene y esta rama no.
-
-**Publicar la web sí está trabado**, y por el contenedor, no por Cloudflare:
-`wrangler` no tiene credenciales aquí (`wrangler whoami` dice que no), y
-`wrangler login` no puede terminar porque su callback OAuth escucha en
-`localhost:8976` y el DevContainer sólo publica 5173 y 8000. Se resuelve con
-un API token de Cloudflare en `CLOUDFLARE_API_TOKEN`, que no abre navegador.
+**Publicar la web ya no está trabado:** `wrangler` tiene sesión (OAuth) con la
+cuenta de Cloudflare. Y `just deploy-*` **pide confirmar el changeset** en la
+terminal (`confirm_changeset = true`): sin nadie que responda aborta sin tocar
+nada, y el changeset queda creado para revisarlo y ejecutarlo.
 
 | | Nombre | Buzón | Revisa cada |
 |---|---|---|---|
@@ -212,16 +212,13 @@ AWS (ver Trabas).
 
 ## Lo siguiente, en orden
 
-1. **Publicar lo que ya está hecho.** Es lo único que separa el trabajo de estar
-   en manos de quien lo usa. En desarrollo primero: `just deploy-dev` y, **en la
-   misma sentada**, `just web-publish-dev` — si la web queda vieja frente a una
-   API nueva, la pantalla se rompe (ya pasó el 2026-09-01). Cuando desarrollo
-   corra unos días sin sorpresas, lo mismo en producción con `just deploy-prod`,
-   `just web-publish` y `just smoke-prod`. Desplegar ya aprovisiona primero,
-   así que el índice nuevo de las notificaciones queda antes que el código que
-   lo consulta. Cuando el despliegue esté arriba, borrar a mano el índice viejo
-   `by_user` de la tabla de notificaciones: ya no lo consulta nadie y se sigue
-   pagando.
+1. **Publicar `master` en producción.** Está lista y probada: `just deploy-prod`
+   (confirmar el changeset), `just web-publish` en la misma sentada —una web
+   vieja frente a una API nueva rompe la pantalla, ya pasó el 2026-09-01— y
+   `just smoke-prod`. Trae una función nueva, `WeeklySummaryFunction`, que sale
+   los lunes a las 8:00. Después, borrar a mano el índice viejo `by_user` de la
+   tabla de notificaciones. Presupuestos, mesada y facturas propuestas siguen
+   solo en `dev` hasta que se decida llevarlos.
 
 2. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
    plantilla reconoce llama a Gemini, y no hay ningún límite. Es lo único de esta
@@ -269,10 +266,13 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
-   desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
-   olvidado en el computador mientras producción sigue vieja — que es exactamente
-   lo que está pasando ahora mismo (punto 1).
+7. **Publicar automáticamente.** Que un push a `dev` despliegue desarrollo y
+   uno a `master` despliegue producción, sin tener que acordarse de qué rama va
+   dónde. Plan propuesto el 2026-09-30, sin construir: GitHub Actions con
+   `just check-all` como puerta; `dev` → `deploy-dev` + `web-publish-dev`,
+   `master` → `deploy-prod` + `web-publish` + `smoke-prod` tras aprobación
+   manual; AWS por OIDC (un rol por entorno, sin llaves guardadas) y
+   `CLOUDFLARE_API_TOKEN` como secreto. Pide `--no-confirm-changeset` en CI.
 
 ## Huecos conocidos, sin urgencia
 
@@ -331,78 +331,17 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
-- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado.**
-  Bancolombia avisa «Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto
-  *5261»: una cuenta y una institución, nunca la tarjeta, así que entraba como
-  gasto y el patrimonio quedaba mal por todo el pago. Ahora esa frase tiene
-  plantilla (lee exactamente lo que leía el modelo, para no darle otra
-  identidad a lo ya registrado) y el movimiento se declara traslado de tres
-  formas: emparejado con el que el otro banco sí avisó, escribiendo el abono en
-  una cuenta tuya, o hacia fuera de Finflow. Todo en un solo write, y todo se
-  deshace. Comprobado en el navegador contra la pila real con el correo real:
-  el patrimonio vuelve exactamente a donde estaba antes del pago.
-- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
-  registro, el correo de verificación, la recuperación, el cambio de
-  contraseña y el secreto del webhook de Telegram cuentan intentos por
-  dirección y, donde hay cuenta, también por cuenta. La distinción que
-  sostiene todo lo demás: **la cuenta es una cerradura** —cinco claves malas
-  por cuarto de hora, comprobadas *antes* de verificar, que es lo único que
-  impide seguir adivinando— y **la dirección es un freno** —veinte por
-  minuto, que se suelta solo—. Entrar bien no gasta nada y perdona lo
-  anterior, así que una casa o una oficina detrás de una sola IP nunca paga
-  por usar la app. Los contadores viven en DynamoDB con TTL, porque en Lambda
-  un contador en memoria no cuenta nada; y **fallan abiertos y rápidos**: sin
-  tabla, un login sigue tardando lo que tarda bcrypt en vez de colgarse un
-  minuto. Dos falsos positivos los encontró la propia suite: la primera
-  versión del freno rechazaba una clave *correcta* durante quince minutos
-  tras una ráfaga ajena, y el webhook rechazaba a Telegram con el secreto
-  bueno cuando alguien había gastado la puerta.
-- 2026-09-21 — **Una factura ya se cobra sola, con red debajo.** Entrega C del
-  segundo feature, y la red es la mitad que importa: **antes de escribir nada
-  se mira el historial**, y si hay un movimiento que cuadra, el cobro queda
-  pagado *por ese movimiento* sin escribir ninguno. Eso pasa con toda factura
-  activa, armada o no —reconocer plata que ya está no es actuar por nadie— y
-  es lo único que separa esta feature de causar el doble conteo que existe
-  para quitar. Lo automático espera a que **se cierre la ventana de cinco
-  días**, no a la gracia de tres: lo primero pregunta «¿es esto el gimnasio?»
-  y lo decide un banco; lo segundo pregunta «¿va tarde?» y lo decide el dueño.
-  Armarlo **no toca el pasado** (se guarda desde cuándo) y dos candidatos no
-  enlazan nada: elegir sería adivinar de quién es la plata. También se enlaza
-  y se desenlaza a mano, y desenlazar no borra el movimiento del banco.
-  Comprobado en el navegador contra la pila real (`just e2e-bills`): conciliar
-  no escribió ni una fila. La revisión encontró cinco cosas reales, dos de
-  ellas dinero: confirmar no miraba si un movimiento ya respondía por el cobro
-  —el doble conteo, desde el otro lado— y una semanal podía cobrarse sola un
-  cobro que un movimiento entre dos ventanas ya había pagado.
-- 2026-09-21 — **`just up` ya abre en el navegador, en cualquier entorno y sin
-  flags.** `DEFAULT_API_HOST` pasa a `0.0.0.0` en `scripts/run_stack.py`:
-  dentro de un DevContainer el loopback es una interfaz distinta de aquella a
-  la que Docker entrega el puerto publicado, así que el default anterior hacía
-  que `http://localhost:8000/docs` no respondiera desde Windows. Era un flag
-  que había que recordar y se olvidaba. Quien quiera lo de antes,
-  `--api-host 127.0.0.1`; y si preocupa la red local, lo que se estrecha es el
-  *publish* del `devcontainer.json`, no el bind. Los dos guías que mandaban
-  escribir el flag ya no lo hacen.
-- 2026-09-18 — **Un presupuesto ya no es una categoría: es un alcance.**
-  Rehecho el módulo entero sobre el modelo de TimelyBills, primera de cuatro
-  iteraciones. Un tope tiene **id propio, nombre e icono**, y vigila lo que se
-  le diga: todo el mes sin elegir nada, una categoría o hasta veinte, y
-  opcionalmente solo unas cuentas. Vacío significa *todas* en los dos ejes —un
-  campo en vez de dos banderas que pueden contradecirse—. Eso **revierte a
-  propósito** la identidad anterior («dos topes sobre la misma categoría son
-  uno declarado dos veces»), que solo se sostenía mientras un tope vigilaba una
-  categoría: «Salidas» y «Restaurantes» se solapan porque alguien lo quiso. Con
-  ella se cae el **tapado**: el tope de diciembre ya no esconde al de siempre,
-  los dos gobiernan el mes y los dos se muestran. A cambio aparece lo que antes
-  era imposible: **corregir un tope entero** sin perder su fila. El endpoint
-  pasó de `PUT /budgets` a `POST /budgets` + `PUT|DELETE /budgets/{id}`, y no
-  hizo falta migrar nada porque los presupuestos **nunca se publicaron** — el
-  atraso de despliegue que este archivo llama el problema más grande es lo
-  único que abarató esto. La prueba de integración se ganó el sueldo: cazó que
-  `AccountId` no define `__str__`, así que el alcance por cuenta se guardaba
-  como el `repr` del dataclass; un doble en memoria no lo ve nunca. Y mirar la
-  pantalla encontró lo que ningún test vio: la tarjeta «Todo el mes» repetía el
-  mismo texto como título y subtítulo. Lo que **no** cambió: un tope sigue sin
-  mover un peso, y lo comprueba el mismo e2e. Faltan las otras tres
-  iteraciones —periodos libres, rollover, y alertas con nombre e icono por
-  cuenta—.
+- 2026-09-30 — **`master` lista para producción** con la exportación y los
+  avisos en la app, sin presupuestos (no existen ahí); `dev` publicada entera
+  en desarrollo, API y web.
+- 2026-09-30 — **Los avisos llegan también a la app**: notificación flotante,
+  campana, línea de presupuesto bajo la compra y resumen semanal los lunes.
+  Una cola que espera 5 s es lo que deja clasificar el comercio antes de leer
+  su presupuesto.
+- 2026-09-30 — **Exportar movimientos a CSV o Excel**, eligiendo qué entra, sin
+  cortar nunca el archivo y sin que una celda se vuelva fórmula.
+- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado**, con
+  las tres formas de hacerlo y todo deshacible.
+- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan**: login,
+  registro, recuperación y el webhook de Telegram cuentan intentos por
+  dirección y por cuenta, en DynamoDB.

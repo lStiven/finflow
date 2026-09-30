@@ -259,6 +259,11 @@ async function main() {
     );
 
     // 4 · The bell counts it, lists it, and opening clears the count.
+    // After the detail screen has settled: while it loads, the bell on screen
+    // is still the previous screen's, and a click on it opens a panel that
+    // goes away with it an instant later.
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("heading", { level: 1 }).waitFor();
     const bell = page.locator("button[data-alerts-bell]:visible");
     const label = await bell.getAttribute("aria-label");
     check("la campana cuenta lo que no se ha visto", /sin ver/.test(label ?? ""), true);
