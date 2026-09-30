@@ -2321,6 +2321,108 @@
           "response": []
         },
         {
+          "name": "Export transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/export?format=xlsx",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "xlsx",
+                  "description": "csv (default) | xlsx. Save the response to a file — Postman's \"Send and Download\""
+                },
+                {
+                  "key": "account_id",
+                  "value": "",
+                  "description": "Only this account's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "unassigned",
+                  "value": "",
+                  "description": "true exports only what no account claimed",
+                  "disabled": true
+                },
+                {
+                  "key": "origin",
+                  "value": "",
+                  "description": "bank_alert | manual | accrual | scheduled",
+                  "disabled": true
+                },
+                {
+                  "key": "direction",
+                  "value": "",
+                  "description": "incoming | outgoing — outgoing is the spending",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Matched against the counterparty",
+                  "disabled": true
+                },
+                {
+                  "key": "merchant_id",
+                  "value": "",
+                  "description": "Only this merchant's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Any value GET /merchants/categories lists for this caller",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "Epoch seconds, included",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "Epoch seconds, excluded",
+                  "disabled": true
+                },
+                {
+                  "key": "transfers",
+                  "value": "",
+                  "description": "include (default) | exclude | only",
+                  "disabled": true
+                },
+                {
+                  "key": "currency",
+                  "value": "",
+                  "description": "COP | USD ...",
+                  "disabled": true
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Dates in the file are written in this zone",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Every movement the same filters as List transactions match, as a CSV (UTF-8 with BOM, comma-separated) or an Excel workbook. Not paginated: past 10 000 matching movements it answers 422 and asks for a shorter range rather than cutting the file. Text a spreadsheet would evaluate as a formula is neutralised."
+          }
+        },
+        {
           "name": "Enter transaction",
           "request": {
             "method": "POST",

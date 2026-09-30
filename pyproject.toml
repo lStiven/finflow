@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.13.0",
+    "xlsxwriter>=3.2.9",
 ]
 
 [dependency-groups]

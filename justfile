@@ -725,8 +725,21 @@ e2e-allowance *args:
 e2e-budgets *args:
     cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
 
-# The three browser suites, in order.
-e2e: e2e-bills e2e-allowance e2e-budgets
+# The Transacciones export, in a real browser and against the real stack.
+# Drives the export dialog and checks the file against the API: «Todo» +
+# «Gastos» carries every outgoing movement `/financial/transactions` pages
+# through — same ids, same amounts — not the page on screen; «Mes pasado» on
+# one account is that month on that account; a range that ends before it
+# starts cannot be downloaded; the workbook is a real xlsx; a counterparty
+# starting with `=` comes back as text; and exporting moved no balance.
+# Needs `just up` and `just web`.
+#
+# Download the export from the screen and check it against the API.
+e2e-export *args:
+    cd {{frontend_dir}} && node scripts/e2e-export.mjs {{args}}
+
+# The browser suites, in order.
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export
 
 # Format check, lint and typecheck the frontend.
 web-check:

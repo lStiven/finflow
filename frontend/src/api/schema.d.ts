@@ -908,6 +908,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Transactions
+         * @description Every movement the same filters as `/financial/transactions` match.
+         *
+         *     Newest first, and all of them rather than a page: a file is where somebody
+         *     takes their data to keep it, so a silent cut would be the one wrong
+         *     answer. Past the ceiling the request is refused and asks for a shorter
+         *     range instead. Dates are written in `timezone`, the one the screen shows.
+         */
+        get: operations["export_transactions_financial_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/history": {
         parameters: {
             query?: never;
@@ -2970,6 +2995,11 @@ export interface components {
             occurred_at: number;
             role: components["schemas"]["TransferRole"];
         };
+        /**
+         * ExportFormat
+         * @enum {string}
+         */
+        ExportFormat: "csv" | "xlsx";
         /**
          * FinancialCatalogResponse
          * @description Every vocabulary this context's endpoints accept.
@@ -5738,6 +5768,48 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FinancialCatalogResponse"];
                 };
+            };
+        };
+    };
+    export_transactions_financial_export_get: {
+        parameters: {
+            query?: {
+                format?: components["schemas"]["ExportFormat"];
+                account_id?: string | null;
+                unassigned?: boolean | null;
+                origin?: components["schemas"]["TransactionOrigin"] | null;
+                direction?: components["schemas"]["MovementDirection"] | null;
+                search?: string | null;
+                merchant_id?: string | null;
+                category?: string | null;
+                from?: number | null;
+                to?: number | null;
+                transfers?: components["schemas"]["TransferView"];
+                currency?: components["schemas"]["Currency"] | null;
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The movements, as a file to download. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": unknown;
+                    "text/csv; charset=utf-8": unknown;
+                };
+            };
+            /** @description `detail.code` is `export_too_large` when more than 10000 movements match; any other 422 is a filter the API refused. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

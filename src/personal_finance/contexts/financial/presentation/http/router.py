@@ -25,7 +25,7 @@ from typing import Annotated
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 from personal_finance.contexts.financial.application.allowance import (
@@ -86,6 +86,12 @@ from personal_finance.contexts.financial.application.commands import (
     SetInvestmentTermsCommand,
     SetLoanTermsCommand,
     UnlinkInstrumentCommand,
+)
+from personal_finance.contexts.financial.application.export import (
+    EXPORT_TOO_LARGE,
+    MAX_EXPORT_ROWS,
+    ExportTooLargeError,
+    ExportTransactionsUseCase,
 )
 from personal_finance.contexts.financial.application.financing import (
     DEFAULT_SCHEDULE_PERIODS,
@@ -244,6 +250,13 @@ from personal_finance.contexts.financial.infrastructure.persistence.dynamodb imp
     DynamoDBMonthlyPlanRepository,
     DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
+)
+from personal_finance.contexts.financial.presentation.http.export import (
+    MEDIA_TYPES as EXPORT_MEDIA_TYPES,
+    ExportFormat,
+    encode as encode_export,
+    export_rows,
+    file_name as export_file_name,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
@@ -1339,6 +1352,18 @@ def _build_list_transactions() -> ListTransactionsUseCase:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_export_transactions() -> ExportTransactionsUseCase:
+    directory = build_merchant_directory()
+
+    return ExportTransactionsUseCase(
+        ledger=build_ledger(),
+        accounts=build_accounts(),
+        merchants=directory,
+        categories=directory,
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def _build_get_transaction() -> GetTransactionUseCase:
     return GetTransactionUseCase(
         ledger=build_ledger(),
@@ -1406,6 +1431,10 @@ def get_list_transactions_use_case() -> ListTransactionsUseCase:
 
 def get_transaction_use_case() -> GetTransactionUseCase:
     return _build_get_transaction()
+
+
+def get_export_transactions_use_case() -> ExportTransactionsUseCase:
+    return _build_export_transactions()
 
 
 def get_read_trend_use_case() -> ReadSpendingTrendUseCase:
@@ -2095,6 +2124,103 @@ def list_transactions(
         total=page.total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/export",
+    response_class=Response,
+    responses={
+        status.HTTP_200_OK: {
+            "content": {media_type: {} for media_type in EXPORT_MEDIA_TYPES.values()},
+            "description": "The movements, as a file to download.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": (
+                f"`detail.code` is `{EXPORT_TOO_LARGE}` when more than "
+                f"{MAX_EXPORT_ROWS} movements match; any other 422 is a filter "
+                "the API refused."
+            ),
+        },
+    },
+)
+def export_transactions(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ExportTransactionsUseCase,
+        Depends(get_export_transactions_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    file_format: Annotated[ExportFormat, Query(alias="format")] = ExportFormat.CSV,
+    account_id: Annotated[str | None, Query()] = None,
+    unassigned: Annotated[bool | None, Query()] = None,
+    origin: Annotated[TransactionOrigin | None, Query()] = None,
+    direction: Annotated[MovementDirection | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    merchant_id: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    since: Annotated[
+        int | None,
+        Query(alias="from", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    transfers: Annotated[TransferView, Query()] = TransferView.INCLUDE,
+    currency: Annotated[Currency | None, Query()] = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> Response:
+    """Every movement the same filters as `/financial/transactions` match.
+
+    Newest first, and all of them rather than a page: a file is where somebody
+    takes their data to keep it, so a silent cut would be the one wrong
+    answer. Past the ceiling the request is refused and asks for a shorter
+    range instead. Dates are written in `timezone`, the one the screen shows.
+    """
+    zone = ZoneInfo(_known_timezone(timezone))
+
+    try:
+        export = use_case.execute(
+            _movement_filter(
+                user_id=user_id,
+                account_id=account_id,
+                unassigned=unassigned,
+                origin=origin,
+                direction=direction,
+                search=search,
+                merchant_id=merchant_id,
+                category=_known_category(category, merchants, user_id=user_id),
+                since=since,
+                until=until,
+                transfers=transfers,
+                currency=currency,
+            ),
+        )
+    except ExportTooLargeError as error:
+        # Structured, because an unknown category or a malformed filter is a
+        # 422 too, and only this one is answered by asking for fewer dates.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": EXPORT_TOO_LARGE,
+                "message": str(error),
+                "matched": error.matched,
+                "limit": error.limit,
+            },
+        ) from error
+
+    name = export_file_name(file_format, today=dt.datetime.now(tz=zone).date())
+
+    return Response(
+        content=encode_export(file_format, export_rows(export, zone=zone)),
+        media_type=EXPORT_MEDIA_TYPES[file_format],
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            # Somebody's whole ledger: nothing between here and the browser
+            # gets to keep a copy.
+            "Cache-Control": "no-store",
+        },
     )
 
 

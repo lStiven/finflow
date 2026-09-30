@@ -169,3 +169,21 @@ def test_a_counterparty_nothing_owns_is_absent_rather_than_an_error() -> None:
     )
 
     assert attributed == {}
+
+
+def test_every_category_comes_back_with_the_name_it_is_shown_by() -> None:
+    categories = InMemoryCategoryRepository()
+    own = Category.create(user_id=USER_ID, label="Gatos", created_at=NOW)
+    categories.add(own)
+
+    labels = _directory(
+        InMemoryMerchantRepository(),
+        categories=categories,
+    ).category_labels(user_id=USER_ID)
+
+    assert labels[own.id.value] == "Gatos"
+    assert labels["groceries"] == "Groceries"
+    assert set(labels) == _directory(
+        InMemoryMerchantRepository(),
+        categories=categories,
+    ).categories(user_id=USER_ID)
