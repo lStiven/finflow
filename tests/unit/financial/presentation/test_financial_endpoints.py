@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
+import time
 from typing import Any
 
 from fastapi import FastAPI
@@ -2434,11 +2435,23 @@ def test_a_trend_answers_dense_buckets_with_one_point_each(
     assert [bucket["partial"] for bucket in trend["buckets"]].count(True) == 1
 
 
+# The trend endpoint reads the last `periods` months counted from *today*, so
+# these are dated an hour ago: a fixed date fell out of the window the day
+# the month turned, and the tests failed on the 1st of October for that alone.
+_RECENT = int(time.time()) - 3600
+
+
 def test_an_undivided_trend_carries_both_directions_in_one_band(
     client: TestClient,
 ) -> None:
-    _enter(client, counterparty="NOMINA", amount="3000000", direction="incoming")
-    _enter(client, counterparty="TIENDAS ARA", amount="80000")
+    _enter(
+        client,
+        occurred_at=_RECENT,
+        counterparty="NOMINA",
+        amount="3000000",
+        direction="incoming",
+    )
+    _enter(client, occurred_at=_RECENT, counterparty="TIENDAS ARA", amount="80000")
 
     trend = client.get(
         "/financial/trends",
@@ -2453,8 +2466,8 @@ def test_an_undivided_trend_carries_both_directions_in_one_band(
 
 
 def test_a_trend_folds_the_bands_a_chart_cannot_stack(client: TestClient) -> None:
-    _enter(client, counterparty="TIENDAS ARA", amount="500000")
-    _enter(client, counterparty="UBER", amount="10000")
+    _enter(client, occurred_at=_RECENT, counterparty="TIENDAS ARA", amount="500000")
+    _enter(client, occurred_at=_RECENT, counterparty="UBER", amount="10000")
 
     trend = client.get(
         "/financial/trends",

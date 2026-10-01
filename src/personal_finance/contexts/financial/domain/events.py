@@ -192,8 +192,14 @@ class TransactionRecorded(TransactionEvent):
     late.
 
     `account_fingerprint` is absent when the alert named no usable instrument.
-    That is the unassigned case, and it is a fact worth publishing: nothing
-    else explains why a movement is sitting outside every balance.
+
+    `account_id` is the account the movement **landed on**, and None when it
+    landed on none — the fact a subscriber means by "unassigned". The two are
+    not the same and must not be read for each other: a confirmed bill or a
+    movement entered by hand sits on an account with no fingerprint at all,
+    and an alert whose card nobody declared has a fingerprint and no account.
+    The movement is placed *after* this is raised, so `Transaction.assign_to`
+    restates it while it is still pending.
     """
 
     direction: MovementDirection
@@ -203,6 +209,7 @@ class TransactionRecorded(TransactionEvent):
     bank: str
     origin: TransactionOrigin
     account_fingerprint: AccountFingerprint | None
+    account_id: AccountId | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

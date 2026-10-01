@@ -332,6 +332,9 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
+  huella de tarjeta y no de la cuenta donde quedó el movimiento; el detalle ya
+  nombra los cuatro orígenes.
 - 2026-09-30 — **`master` lista para producción** con la exportación y los
   avisos en la app, sin presupuestos (no existen ahí); `dev` publicada entera
   en desarrollo, API y web.
@@ -343,6 +346,3 @@ AWS (ver Trabas).
   cortar nunca el archivo y sin que una celda se vuelva fórmula.
 - 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado**, con
   las tres formas de hacerlo y todo deshacible.
-- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan**: login,
-  registro, recuperación y el webhook de Telegram cuentan intentos por
-  dirección y por cuenta, en DynamoDB.

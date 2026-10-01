@@ -82,12 +82,15 @@ class FinancialIntegrationEventTranslator:
                         "counterparty": event.counterparty,
                         "bank": event.bank,
                         "origin": event.origin.value,
-                        # Whether the movement landed outside every balance.
-                        # The fact, not the key: `account_fingerprint` names a
-                        # bank/instrument pair, which is this context's way of
-                        # matching an alert to an account and nobody else's
-                        # business.
-                        "unassigned": event.account_fingerprint is None,
+                        # Whether the movement landed outside every balance —
+                        # read off the account it landed on, never off the
+                        # fingerprint. The fingerprint is how an alert finds
+                        # an account, and a bill or a hand-written movement on
+                        # an account has none: reading it here called every
+                        # one of those "sin cuenta asignada". The fingerprint
+                        # itself stays in: matching alerts to accounts is
+                        # this context's business.
+                        "unassigned": event.account_id is None,
                     },
                 )
             case AccountBalanceChanged():

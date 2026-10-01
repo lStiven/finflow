@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import datetime as dt
 from decimal import Decimal
 from typing import Self
@@ -1421,6 +1421,7 @@ class Transaction(AggregateRoot[MovementId]):
             )
 
         self.account_id = account_id
+        self._restate_landing()
         self.record_event(
             TransactionAssigned(
                 movement_id=self.id,
@@ -1463,6 +1464,7 @@ class Transaction(AggregateRoot[MovementId]):
 
         previous = self.account_id
         self.account_id = None
+        self._restate_landing()
         self.record_event(
             TransactionUnassigned(
                 movement_id=self.id,
@@ -1748,8 +1750,25 @@ class Transaction(AggregateRoot[MovementId]):
                 bank=self.bank,
                 origin=self.origin,
                 account_fingerprint=self.account_fingerprint,
+                account_id=self.account_id,
             ),
         )
+
+    def _restate_landing(self) -> None:
+        """Keep a still-unpublished announcement true to where this landed.
+
+        A movement is announced when it is built and placed afterwards, so
+        without this the announcement would say "on no account" about every
+        alert that found its account a moment later. Only a pending one is
+        touched: once published, a fact is history, and moving the movement
+        later is its own event.
+        """
+        self._pending_events[:] = [
+            replace(event, account_id=self.account_id)
+            if isinstance(event, TransactionRecorded) and event.movement_id == self.id
+            else event
+            for event in self._pending_events
+        ]
 
 
 def _account_fingerprint(
