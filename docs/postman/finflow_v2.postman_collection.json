@@ -3441,8 +3441,79 @@
                 }
               ]
             },
-            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification."
-          }
+            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification. An alert about a movement that has since been deleted is left out."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const entries = pm.response.json().entries;",
+                  "    // The newest, for Alerts > Dismiss inbox alert.",
+                  "    if (entries.length > 0) pm.environment.set('alert_entry_id', entries[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dismiss inbox alert",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox/:entryId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox",
+                ":entryId"
+              ],
+              "variable": [
+                {
+                  "key": "entryId",
+                  "value": "{{alert_entry_id}}",
+                  "description": "An entry's `id` from GET /alerts/inbox"
+                }
+              ]
+            },
+            "description": "Removes one alert from the app's inbox. It stays removed if the same event is delivered again. 204 on success, 404 for an entry that is not yours or no longer there. Telegram is untouched: what was sent there stays sent."
+          },
+          "response": []
+        },
+        {
+          "name": "Dismiss every inbox alert",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox"
+              ]
+            },
+            "description": "Empties the app's inbox for the signed-in user. 204, even when it was already empty."
+          },
+          "response": []
         },
         {
           "name": "Update preference",

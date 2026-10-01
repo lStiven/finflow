@@ -15,6 +15,7 @@ from personal_finance.contexts.alerts.application.inbox import (
     InboxEntry,
     InboxKind,
     ListInboxUseCase,
+    ManageInboxUseCase,
 )
 from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
@@ -27,6 +28,7 @@ from personal_finance.contexts.alerts.application.messages import (
 )
 from personal_finance.contexts.alerts.presentation.http.inbox import (
     get_list_inbox_use_case,
+    get_manage_inbox_use_case,
     router,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
@@ -51,6 +53,20 @@ class Inbox:
 
     def record(self, entry: InboxEntry) -> None:
         self.entries.append(entry)
+
+    def dismiss(self, *, user_id: UserId, entry_id: uuid.UUID) -> bool:
+        before = len(self.entries)
+        self.entries = [
+            e
+            for e in self.entries
+            if not (e.user_id == user_id and e.entry_id == entry_id)
+        ]
+        return len(self.entries) < before
+
+    def dismiss_all(self, *, user_id: UserId) -> int:
+        before = len(self.entries)
+        self.entries = [e for e in self.entries if e.user_id != user_id]
+        return before - len(self.entries)
 
     def recent(self, *, user_id: UserId, limit: int) -> Sequence[InboxEntry]:
         self.asked.append((user_id, limit))
@@ -125,6 +141,9 @@ def client(inbox: Inbox) -> TestClient:
     app.dependency_overrides[get_list_inbox_use_case] = lambda: ListInboxUseCase(
         inbox=inbox,
     )
+    app.dependency_overrides[get_manage_inbox_use_case] = lambda: ManageInboxUseCase(
+        inbox=inbox,
+    )
 
     return TestClient(app)
 
@@ -169,3 +188,39 @@ def test_the_page_size_is_bounded(client: TestClient) -> None:
     assert client.get("/alerts/inbox", params={"limit": 0}).status_code == 422
     assert client.get("/alerts/inbox", params={"limit": 51}).status_code == 422
     assert len(client.get("/alerts/inbox", params={"limit": 1}).json()["entries"]) == 1
+
+
+def test_an_alert_can_be_dismissed(client: TestClient, inbox: Inbox) -> None:
+    [first, *_] = client.get("/alerts/inbox").json()["entries"]
+
+    response = client.delete(f"/alerts/inbox/{first['id']}")
+
+    assert response.status_code == 204
+    assert first["id"] not in {
+        e["id"] for e in client.get("/alerts/inbox").json()["entries"]
+    }
+
+
+def test_dismissing_an_alert_that_is_not_yours_is_not_found(
+    client: TestClient,
+    inbox: Inbox,
+) -> None:
+    theirs = next(entry for entry in inbox.entries if entry.user_id == OTHER)
+
+    response = client.delete(f"/alerts/inbox/{theirs.entry_id}")
+
+    assert response.status_code == 404
+    assert theirs in inbox.entries
+
+
+def test_a_malformed_id_is_refused(client: TestClient) -> None:
+    assert client.delete("/alerts/inbox/not-an-id").status_code == 422
+
+
+def test_all_alerts_can_be_dismissed_and_only_the_owners(
+    client: TestClient,
+    inbox: Inbox,
+) -> None:
+    assert client.delete("/alerts/inbox").status_code == 204
+    assert client.get("/alerts/inbox").json()["entries"] == []
+    assert any(entry.user_id == OTHER for entry in inbox.entries)

@@ -332,6 +332,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
+  desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
+  se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
+  muestra «Something went wrong!»: hay pantalla propia para sin conexión, algo
+  que ya no existe y fallo nuestro. En `master` y en `dev`.
 - 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
   huella de tarjeta y no de la cuenta donde quedó el movimiento; el detalle ya
   nombra los cuatro orígenes.
@@ -344,5 +349,3 @@ AWS (ver Trabas).
   su presupuesto.
 - 2026-09-30 — **Exportar movimientos a CSV o Excel**, eligiendo qué entra, sin
   cortar nunca el archivo y sin que una celda se vuelva fórmula.
-- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado**, con
-  las tres formas de hacerlo y todo deshacible.

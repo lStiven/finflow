@@ -27,8 +27,10 @@ from personal_finance.contexts.alerts.application.handlers import (
 )
 from personal_finance.contexts.alerts.application.inbox import (
     InboxEntry,
+    InboxEntryNotFoundError,
     InboxKind,
     ListInboxUseCase,
+    ManageInboxUseCase,
 )
 from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
@@ -161,6 +163,7 @@ class Inbox:
     def __init__(self) -> None:
         self.entries: dict[tuple[UserId, int, uuid.UUID], InboxEntry] = {}
         self.writes = 0
+        self.dismissed: set[uuid.UUID] = set()
 
     def record(self, entry: InboxEntry) -> None:
         self.writes += 1
@@ -169,10 +172,30 @@ class Inbox:
 
     def recent(self, *, user_id: UserId, limit: int) -> Sequence[InboxEntry]:
         mine = [
-            entry for (owner, _, _), entry in self.entries.items() if owner == user_id
+            entry
+            for (owner, _, _), entry in self.entries.items()
+            if owner == user_id and entry.entry_id not in self.dismissed
         ]
         mine.sort(key=lambda entry: entry.created_at.as_epoch_seconds(), reverse=True)
         return mine[:limit]
+
+    def dismiss(self, *, user_id: UserId, entry_id: uuid.UUID) -> bool:
+        mine = {
+            e.entry_id for (owner, _, _), e in self.entries.items() if owner == user_id
+        }
+        if entry_id not in mine:
+            return False
+        self.dismissed.add(entry_id)
+        return True
+
+    def dismiss_all(self, *, user_id: UserId) -> int:
+        mine = {
+            e.entry_id
+            for (owner, _, _), e in self.entries.items()
+            if owner == user_id and e.entry_id not in self.dismissed
+        }
+        self.dismissed |= mine
+        return len(mine)
 
 
 class Recipients:
@@ -677,3 +700,147 @@ def test_the_monday_after_is_the_first_day_a_week_can_be_summarised() -> None:
     ).execute(week_of=dt.date(2026, 9, 27), today=AFTER)
 
     assert run.summaries == 1
+
+
+# ------------------------------------------- erased movements, dismissing
+
+
+class Presence:
+    def __init__(self, *existing: str, fails: bool = False) -> None:
+        self._existing = frozenset(existing)
+        self._fails = fails
+        self.asked: list[list[str]] = []
+
+    def existing(
+        self, *, user_id: UserId, movement_ids: Sequence[str]
+    ) -> frozenset[str]:
+        self.asked.append(list(movement_ids))
+        if self._fails:
+            raise RuntimeError("financial is having a bad second")
+        return self._existing & frozenset(movement_ids)
+
+
+def _inbox_with(*movement_ids: str | None) -> Inbox:
+    inbox = Inbox()
+    for offset, movement_id in enumerate(movement_ids):
+        _deliverer(inbox=inbox).execute(
+            DeliverMovementAlertCommand(
+                user_id=USER,
+                event_id=uuid.uuid4(),
+                alert=_alert(movement_id=movement_id),
+                recorded_at=PosixTime.from_epoch_seconds(
+                    RECORDED.as_epoch_seconds() + offset
+                ),
+            ),
+        )
+    return inbox
+
+
+def test_an_alert_about_an_erased_movement_is_left_out() -> None:
+    inbox = _inbox_with("kept", "erased")
+
+    listed = ListInboxUseCase(inbox=inbox, movements=Presence("kept")).execute(
+        user_id=USER,
+    )
+
+    assert [entry.movement.movement_id for entry in listed if entry.movement] == [
+        "kept",
+    ]
+
+
+def test_an_alert_with_no_movement_id_is_never_hidden_for_it() -> None:
+    inbox = _inbox_with(None)
+
+    listed = ListInboxUseCase(inbox=inbox, movements=Presence()).execute(user_id=USER)
+
+    assert len(listed) == 1
+
+
+def test_financial_failing_never_empties_the_inbox() -> None:
+    inbox = _inbox_with("a", "b")
+
+    listed = ListInboxUseCase(
+        inbox=inbox,
+        movements=Presence(fails=True),
+    ).execute(user_id=USER)
+
+    assert len(listed) == 2
+
+
+def test_the_presence_check_is_one_question_per_read() -> None:
+    inbox = _inbox_with("a", "b", "c")
+    presence = Presence("a", "b", "c")
+
+    ListInboxUseCase(inbox=inbox, movements=presence).execute(user_id=USER)
+
+    assert len(presence.asked) == 1
+    assert sorted(presence.asked[0]) == ["a", "b", "c"]
+
+
+def test_a_page_of_erased_movements_reaches_back_for_the_alerts_still_standing() -> (
+    None
+):
+    # Newest last: the three erased ones are the three newest.
+    inbox = _inbox_with("old-1", "old-2", "gone-1", "gone-2", "gone-3")
+    presence = Presence("old-1", "old-2")
+
+    listed = ListInboxUseCase(inbox=inbox, movements=presence).execute(
+        user_id=USER,
+        limit=2,
+    )
+
+    assert [entry.movement.movement_id for entry in listed if entry.movement] == [
+        "old-2",
+        "old-1",
+    ]
+    # Each movement is asked about once, however many times the read widens.
+    asked = [movement_id for question in presence.asked for movement_id in question]
+    assert sorted(asked) == sorted(set(asked))
+
+
+def test_a_read_never_returns_more_than_it_was_asked_for() -> None:
+    inbox = _inbox_with("a", "b", "c")
+
+    listed = ListInboxUseCase(inbox=inbox, movements=Presence("a", "b", "c")).execute(
+        user_id=USER,
+        limit=2,
+    )
+
+    assert len(listed) == 2
+
+
+def test_a_dismissed_alert_is_gone_and_stays_gone_after_a_redelivery() -> None:
+    inbox = Inbox()
+    event_id = uuid.uuid4()
+    deliverer = _deliverer(inbox=inbox)
+    deliverer.execute(_command(event_id=event_id))
+    [entry] = inbox.recent(user_id=USER, limit=10)
+
+    ManageInboxUseCase(inbox=inbox).dismiss(user_id=USER, entry_id=entry.entry_id)
+    deliverer.execute(_command(event_id=event_id))
+
+    assert inbox.recent(user_id=USER, limit=10) == []
+
+
+def test_dismissing_somebody_elses_alert_is_not_found() -> None:
+    inbox = Inbox()
+    _deliverer(inbox=inbox).execute(_command(user_id=OTHER))
+    [theirs] = inbox.recent(user_id=OTHER, limit=10)
+
+    with pytest.raises(InboxEntryNotFoundError):
+        ManageInboxUseCase(inbox=inbox).dismiss(user_id=USER, entry_id=theirs.entry_id)
+
+    assert len(inbox.recent(user_id=OTHER, limit=10)) == 1
+
+
+def test_dismissing_all_hides_only_the_owners() -> None:
+    inbox = Inbox()
+    _deliverer(inbox=inbox).execute(_command())
+    _deliverer(inbox=inbox).execute(_command(event_id=uuid.uuid4()))
+    _deliverer(inbox=inbox).execute(_command(user_id=OTHER))
+
+    hidden = ManageInboxUseCase(inbox=inbox).dismiss_all(user_id=USER)
+
+    assert hidden == 2
+    assert inbox.recent(user_id=USER, limit=10) == []
+    assert len(inbox.recent(user_id=OTHER, limit=10)) == 1

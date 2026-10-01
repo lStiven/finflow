@@ -6029,6 +6029,24 @@
       }
     },
     "/alerts/inbox": {
+      "delete": {
+        "description": "Hide every alert this user has in the app.",
+        "operationId": "dismiss_inbox_alerts_inbox_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Dismiss Inbox",
+        "tags": [
+          "alerts"
+        ]
+      },
       "get": {
         "description": "The newest alerts, this user's only, newest first.",
         "operationId": "list_inbox_alerts_inbox_get",
@@ -6074,6 +6092,48 @@
           }
         ],
         "summary": "List Inbox",
+        "tags": [
+          "alerts"
+        ]
+      }
+    },
+    "/alerts/inbox/{entry_id}": {
+      "delete": {
+        "description": "Hide one alert from the app. 404 when this user has no such entry.\n\nHidden for good: an alert redelivered later lands on the same row and\nstays hidden. Telegram is not touched — a message already sent stays sent.",
+        "operationId": "dismiss_inbox_entry_alerts_inbox__entry_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Dismiss Inbox Entry",
         "tags": [
           "alerts"
         ]

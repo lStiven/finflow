@@ -7,6 +7,9 @@ from decimal import Decimal
 
 import pytest
 
+from personal_finance.contexts.financial.application.movement_presence import (
+    ExistingMovementsUseCase,
+)
 from personal_finance.contexts.financial.application.ports import (
     BalanceReversal,
     MerchantAttribution,
@@ -127,6 +130,18 @@ class InMemoryLedger:
 
     def list_all(self, user_id: UserId) -> Sequence[Transaction]:
         return [row for row in self.rows.values() if row.user_id == user_id]
+
+    def find_many(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> Mapping[str, Transaction]:
+        return {
+            movement_id: row
+            for movement_id in movement_ids
+            if (row := self.find(user_id=user_id, transaction_id=movement_id))
+        }
 
 
 class InMemoryAccounts:
@@ -1864,3 +1879,32 @@ def test_asking_about_the_mortgage_by_name_still_answers(
     )
 
     assert [str(figure.outgoing) for figure in summary.totals] == ["899922.87"]
+
+
+# ------------------------------------------------- which movements exist
+
+
+def test_only_the_owners_existing_movements_are_named(ledger: InMemoryLedger) -> None:
+    mine = _spend(ledger, counterparty="TIENDAS ARA 123")
+    theirs = Transaction.enter_manually(
+        user_id=UserId.new(),
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal("1"), currency=Currency.COP),
+        occurred_at=PosixTime.from_epoch_seconds(AUGUST_MIDDAY),
+        counterparty="AJENO",
+    )
+    ledger.save(theirs)
+
+    existing = ExistingMovementsUseCase(ledger=ledger).execute(
+        user_id=USER_ID,
+        movement_ids=[mine.id.value, theirs.id.value, "erased"],
+    )
+
+    assert existing == frozenset({mine.id.value})
+    assert (
+        ExistingMovementsUseCase(ledger=ledger).execute(
+            user_id=USER_ID,
+            movement_ids=[],
+        )
+        == frozenset()
+    )

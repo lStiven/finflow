@@ -15,7 +15,14 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowDownLeft, ArrowUpRight, Bell, CalendarDays, X } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Bell,
+  CalendarDays,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Toaster, toast } from "sonner";
@@ -28,7 +35,12 @@ import {
   unreadCount,
   writeSeen,
 } from "@/alerts/inbox";
-import { type AlertsInboxEntry, alertsInboxQuery } from "@/api/queries";
+import {
+  type AlertsInboxEntry,
+  alertsInboxQuery,
+  useDismissAlert,
+  useDismissAllAlerts,
+} from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/dates";
@@ -46,22 +58,58 @@ export function AlertsToaster() {
   return (
     <Toaster
       position="bottom-right"
-      theme="dark"
       visibleToasts={MAX_TOASTS}
-      closeButton
       offset={24}
       mobileOffset={{ bottom: 112, left: 12, right: 12 }}
-      toastOptions={{
-        duration: 8_000,
-        classNames: {
-          toast: "!rounded-2xl !border-line !bg-surface-raised !text-text !shadow-xl",
-          title: "!font-semibold",
-          description: "!text-muted",
-          actionButton: "!bg-accent !text-accent-ink",
-          closeButton: "!border-line !bg-surface !text-muted",
-        },
-      }}
+      toastOptions={{ duration: 8_000, unstyled: true }}
     />
+  );
+}
+
+/**
+ * One alert as a floating card, drawn here rather than by sonner's own
+ * layout: its icon slot is a 16 px glyph, and the app's 32 px tone tile in it
+ * sat crooked beside a title indented to make room for something smaller.
+ */
+function AlertToast({
+  toastId,
+  described,
+  onOpen,
+}: {
+  toastId: string | number;
+  described: Described;
+  onOpen?: () => void;
+}) {
+  return (
+    <div className="flex w-[min(380px,calc(100vw-24px))] items-start gap-3 rounded-2xl border border-line bg-surface-raised/95 p-3.5 text-text shadow-2xl backdrop-blur">
+      <ToneIcon tone={described.tone} />
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold text-sm leading-tight">{described.title}</p>
+        <Lines described={described} />
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-2">
+        <button
+          type="button"
+          aria-label="Cerrar aviso"
+          onClick={() => toast.dismiss(toastId)}
+          className="-mt-1 -mr-1 grid size-7 place-items-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-text"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+        {onOpen ? (
+          <button
+            type="button"
+            onClick={() => {
+              toast.dismiss(toastId);
+              onOpen();
+            }}
+            className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-accent-ink text-xs transition-all hover:brightness-110"
+          >
+            Ver
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -69,40 +117,48 @@ export function AlertsToaster() {
 export function AlertsWatcher() {
   const { data } = useQuery(alertsInboxQuery);
   const seen = useRef<Set<string> | null>(null);
+  const previous = useRef<readonly AlertsInboxEntry[] | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!data) return;
 
-    const fresh = freshEntries(seen.current, data.entries);
+    const fresh = freshEntries(seen.current, data.entries, previous.current);
+    previous.current = data.entries;
     seen.current = new Set([...(seen.current ?? []), ...data.entries.map((e) => e.id)]);
 
     for (const entry of fresh.slice(-MAX_TOASTS)) {
       const described = describeEntry(entry);
       const movementId = described.movementId;
+      const onOpen = movementId
+        ? () =>
+            void navigate({
+              to: "/transacciones/$transactionId",
+              params: { transactionId: movementId },
+            })
+        : undefined;
 
-      toast(described.title, {
-        id: entry.id,
-        description: <Lines described={described} />,
-        icon: <ToneIcon tone={described.tone} />,
-        action: movementId
-          ? {
-              label: "Ver",
-              onClick: () =>
-                void navigate({
-                  to: "/transacciones/$transactionId",
-                  params: { transactionId: movementId },
-                }),
-            }
-          : undefined,
-      });
+      toast.custom(
+        (toastId) => (
+          <AlertToast toastId={toastId} described={described} onOpen={onOpen} />
+        ),
+        { id: entry.id },
+      );
     }
 
     const rest = fresh.length - MAX_TOASTS;
     if (rest > 0) {
-      toast(`Y ${rest} ${rest === 1 ? "aviso más" : "avisos más"}`, {
-        description: "Están en la campana.",
-      });
+      toast.custom((toastId) => (
+        <AlertToast
+          toastId={toastId}
+          described={{
+            title: `Y ${rest} ${rest === 1 ? "aviso más" : "avisos más"}`,
+            lines: ["Están en la campana."],
+            tone: "summary",
+            movementId: null,
+          }}
+        />
+      ));
     }
   }, [data, navigate]);
 
@@ -184,6 +240,8 @@ function AlertsPanel({
   onClose: () => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const dismiss = useDismissAlert();
+  const dismissAll = useDismissAllAlerts();
   useDismissOnEscape(onClose, true);
 
   useEffect(() => {
@@ -209,8 +267,18 @@ function AlertsPanel({
         placement === "floating" ? "top-16 right-3" : "top-4 left-64",
       )}
     >
-      <header className="flex items-center justify-between border-line border-b px-4 py-3">
-        <h2 className="font-semibold text-sm">Avisos recientes</h2>
+      <header className="flex items-center gap-2 border-line border-b px-4 py-3">
+        <h2 className="flex-1 font-semibold text-sm">Avisos recientes</h2>
+        {entries.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => dismissAll.mutate()}
+            disabled={dismissAll.isPending}
+            className="rounded-lg px-2 py-1.5 text-muted text-xs transition-colors hover:bg-surface-raised hover:text-text disabled:opacity-50"
+          >
+            Borrar todo
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onClose}
@@ -230,7 +298,11 @@ function AlertsPanel({
         <ul className="flex flex-col overflow-y-auto">
           {entries.map((entry) => (
             <li key={entry.id} className="border-line border-b last:border-b-0">
-              <Row entry={entry} onNavigate={onClose} />
+              <Row
+                entry={entry}
+                onNavigate={onClose}
+                onDismiss={() => dismiss.mutate(entry.id)}
+              />
             </li>
           ))}
         </ul>
@@ -242,37 +314,51 @@ function AlertsPanel({
 function Row({
   entry,
   onNavigate,
+  onDismiss,
 }: {
   entry: AlertsInboxEntry;
   onNavigate: () => void;
+  onDismiss: () => void;
 }) {
   const described = describeEntry(entry);
   const body = (
-    <div className="flex gap-3 px-4 py-3">
+    <div className="flex gap-3 py-3 pr-12 pl-4">
       <ToneIcon tone={described.tone} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="font-medium text-sm">{described.title}</p>
-          <time className="shrink-0 text-faint text-xs">
-            {formatDateTime(entry.created_at)}
-          </time>
-        </div>
+        <p className="font-medium text-sm">{described.title}</p>
         <Lines described={described} />
+        <time className="mt-1 block text-faint text-[11px]">
+          {formatDateTime(entry.created_at)}
+        </time>
       </div>
     </div>
   );
 
-  if (!described.movementId) return body;
-
   return (
-    <Link
-      to="/transacciones/$transactionId"
-      params={{ transactionId: described.movementId }}
-      onClick={onNavigate}
-      className="block transition-colors duration-150 hover:bg-surface-raised"
-    >
-      {body}
-    </Link>
+    // The dismiss button sits beside the link, never inside it: a button in
+    // an anchor is one control nested in another.
+    <div className="relative">
+      {described.movementId ? (
+        <Link
+          to="/transacciones/$transactionId"
+          params={{ transactionId: described.movementId }}
+          onClick={onNavigate}
+          className="block transition-colors duration-150 hover:bg-surface-raised"
+        >
+          {body}
+        </Link>
+      ) : (
+        body
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={`Borrar aviso: ${described.title}`}
+        className="absolute top-2.5 right-2.5 grid size-8 place-items-center rounded-lg text-faint transition-colors hover:bg-surface-raised hover:text-outgoing"
+      >
+        <Trash2 className="size-4" aria-hidden />
+      </button>
+    </div>
   );
 }
 

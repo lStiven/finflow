@@ -1,11 +1,12 @@
 """The one place Alerts is allowed to know Financial exists.
 
-Alerts asks two questions only Financial can answer — which budgets a
-movement ate into, and what a week of spending looked like against the ones
-before — and it asks them through Financial's own published use cases, never
-its repositories or its rules. This module translates both ways: Alerts'
-vocabulary goes in, Financial's answer comes back as Alerts' own types, and
-nothing of Financial's escapes past these classes.
+Alerts asks three questions only Financial can answer — which budgets a
+movement ate into, what a week of spending looked like against the ones
+before, and which movements still exist — and it asks them through
+Financial's own published use cases, never its repositories or its rules.
+This module translates both ways: Alerts' vocabulary goes in, Financial's
+answer comes back as Alerts' own types, and nothing of Financial's escapes
+past these classes.
 
 Building the use cases needs Financial's storage, which is why the wiring
 lives here, in Alerts' infrastructure, rather than anywhere a use case could
@@ -29,6 +30,9 @@ from personal_finance.contexts.financial.application.budget_standing import (
     ReadMovementBudgetsUseCase,
 )
 from personal_finance.contexts.financial.application.budgets import ReadBudgetsUseCase
+from personal_finance.contexts.financial.application.movement_presence import (
+    ExistingMovementsUseCase,
+)
 from personal_finance.contexts.financial.application.queries import (
     SummarizeSpendingUseCase,
 )
@@ -82,6 +86,21 @@ class FinancialBudgetStandings:
                 ),
             )
         ]
+
+
+class FinancialMovementPresence:
+    """`MovementPresence` over Financial's `ExistingMovementsUseCase`."""
+
+    def __init__(self, *, use_case: ExistingMovementsUseCase) -> None:
+        self._use_case = use_case
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> frozenset[str]:
+        return self._use_case.execute(user_id=user_id, movement_ids=movement_ids)
 
 
 class FinancialWeeklySpending:
@@ -171,3 +190,9 @@ def build_weekly_spending(*, timezone: str) -> FinancialWeeklySpending:
         ),
         timezone=timezone,
     )
+
+
+def build_movement_presence() -> FinancialMovementPresence:
+    ledger, _, _ = _financial_parts()
+
+    return FinancialMovementPresence(use_case=ExistingMovementsUseCase(ledger=ledger))

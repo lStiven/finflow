@@ -79,7 +79,34 @@ export interface paths {
         get: operations["list_inbox_alerts_inbox_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Dismiss Inbox
+         * @description Hide every alert this user has in the app.
+         */
+        delete: operations["dismiss_inbox_alerts_inbox_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/inbox/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss Inbox Entry
+         * @description Hide one alert from the app. 404 when this user has no such entry.
+         *
+         *     Hidden for good: an alert redelivered later lands on the same row and
+         *     stays hidden. Telegram is not touched — a message already sent stays sent.
+         */
+        delete: operations["dismiss_inbox_entry_alerts_inbox__entry_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4662,6 +4689,53 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["InboxResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_inbox_alerts_inbox_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    dismiss_inbox_entry_alerts_inbox__entry_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -3,6 +3,7 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode, Suspense, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { AuthProvider, useAuth } from "@/auth/AuthContext";
+import { NotFoundScreen, RouteError } from "@/components/ErrorScreen";
 import { routeTree } from "@/routeTree.gen";
 import "@/index.css";
 
@@ -42,6 +43,8 @@ const router = createRouter({
   context: { queryClient, session: null },
   defaultPreload: "intent",
   scrollRestoration: true,
+  defaultErrorComponent: RouteError,
+  defaultNotFoundComponent: NotFoundScreen,
 });
 
 declare module "@tanstack/react-router" {

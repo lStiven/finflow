@@ -18,6 +18,12 @@
  * 3. **«Ver» opens the movement.**
  * 4. **The bell counts what is unseen**, lists it, and opening it clears it.
  * 5. **Income carries no budget line.**
+ * 6. **A deleted movement takes its alert with it**: the inbox no longer has
+ *    it, the bell no longer lists it, and its old address shows the app's
+ *    "no longer here" screen — not the router's «Something went wrong!».
+ * 7. **One alert can be deleted from the bell**, and stays deleted.
+ * 8. **«Borrar todo» empties it.** Local data only: it is the demo user's
+ *    inbox, which the next `just up` seeds again.
  *
  * Exits non-zero on the first mismatch, and removes what it wrote, including
  * when an assertion fails.
@@ -42,6 +48,7 @@ const RUN = Date.now().toString(36).toUpperCase();
 const PREFIX = "E2E AVISO";
 const SPENT_TEXT = `${PREFIX} RESTAURANTE ${RUN}`;
 const INCOME_TEXT = `${PREFIX} INGRESO ${RUN}`;
+const LAST_TEXT = `${PREFIX} ULTIMO ${RUN}`;
 /** A budget `just seed` declares over `restaurants`. */
 const BUDGET = "Restaurantes";
 /** A poll every 15 s, then the worker's own queue: generous, not flaky. */
@@ -141,6 +148,38 @@ function pesos(amount) {
 
 function plain(text) {
   return text.replace(/ /g, " ");
+}
+
+/**
+ * Open the bell's list. Once more if the first tap is lost: a screen that has
+ * only just loaded can still redraw its shell, bell included, and a list
+ * opened an instant before goes with it.
+ */
+async function openPanel(page) {
+  const bell = page.locator("button[data-alerts-bell]:visible");
+  const panel = page.getByRole("dialog", { name: "Avisos recientes" });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await bell.click();
+    try {
+      await panel.waitFor({ timeout: 5_000 });
+      return panel;
+    } catch {
+      if (attempt === 1) throw new Error("La campana no abrió la lista");
+    }
+  }
+
+  return panel;
+}
+
+/** The DELETE a tap sends, so what the API holds is read after it, not before. */
+function dismissal(page) {
+  return page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      new URL(response.url()).pathname.startsWith("/alerts/inbox"),
+    { timeout: 10_000 },
+  );
 }
 
 /** Every movement any run of this suite wrote, and no other. */
@@ -267,9 +306,7 @@ async function main() {
     const bell = page.locator("button[data-alerts-bell]:visible");
     const label = await bell.getAttribute("aria-label");
     check("la campana cuenta lo que no se ha visto", /sin ver/.test(label ?? ""), true);
-    await bell.click();
-    const panel = page.getByRole("dialog", { name: "Avisos recientes" });
-    await panel.waitFor();
+    const panel = await openPanel(page);
     check("y lo lista", (await panel.innerText()).includes(SPENT_TEXT), true);
     await page.keyboard.press("Escape");
     check("abrirla la deja en cero", await bell.getAttribute("aria-label"), "Avisos");
@@ -294,6 +331,78 @@ async function main() {
       true,
     );
     check("y sin línea de presupuesto", /te quedan|tope/.test(incomeText), false);
+
+    // 6 · Deleting the movement removes its alert.
+    await call(`/financial/transactions/${spent.id}`, { method: "DELETE" });
+    const afterDelete = await call("/alerts/inbox?limit=50");
+    check(
+      "borrar el movimiento saca su aviso del buzón",
+      afterDelete.entries.some((entry) => entry.movement?.movement_id === spent.id),
+      false,
+    );
+    await page.goto(`${WEB}/`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await openPanel(page);
+    check("y de la campana", (await panel.innerText()).includes(SPENT_TEXT), false);
+    await page.keyboard.press("Escape");
+    // React logs the error the screen caught; that one is expected here.
+    const logged = problems.length;
+    await page.goto(`${WEB}/transacciones/${spent.id}`, { waitUntil: "networkidle" });
+    await page
+      .getByRole("heading", { level: 1, name: "Esto ya no está aquí" })
+      .waitFor({ timeout: 10_000 });
+    check(
+      "su dirección muestra la pantalla de «ya no está», no el error genérico",
+      (await page.locator("body").innerText()).includes("Something went wrong"),
+      false,
+    );
+    problems.splice(logged);
+
+    // 7 · One alert deleted from the bell, and it stays deleted.
+    await page.goto(`${WEB}/`, { waitUntil: "networkidle" });
+    await page.getByRole("heading", { level: 1 }).waitFor();
+    await openPanel(page);
+    const incomeRow = panel.locator("li", { hasText: INCOME_TEXT });
+    await Promise.all([
+      dismissal(page),
+      incomeRow.getByRole("button", { name: /^Borrar aviso/ }).click(),
+    ]);
+    await incomeRow.waitFor({ state: "detached", timeout: 5_000 });
+    check("borrar un aviso lo quita de la lista", await incomeRow.count(), 0);
+    await page.keyboard.press("Escape");
+    const afterDismiss = await call("/alerts/inbox?limit=50");
+    check(
+      "y del buzón, para siempre",
+      afterDismiss.entries.some((entry) =>
+        (entry.movement?.counterparty ?? "").includes(INCOME_TEXT),
+      ),
+      false,
+    );
+
+    // 8 · «Borrar todo», with one alert of its own in the list so the step
+    // never passes on an inbox that was already empty.
+    await call("/financial/transactions", {
+      method: "POST",
+      body: JSON.stringify({
+        direction: "outgoing",
+        amount: "4321",
+        currency: "COP",
+        occurred_at: now,
+        counterparty: LAST_TEXT,
+      }),
+    });
+    await page
+      .locator("[data-sonner-toast]", { hasText: LAST_TEXT })
+      .waitFor({ timeout: ARRIVAL_MS });
+    await openPanel(page);
+    await Promise.all([
+      dismissal(page),
+      panel.getByRole("button", { name: "Borrar todo" }).click(),
+    ]);
+    await panel.getByText("Aquí aparece cada movimiento").waitFor({ timeout: 5_000 });
+    await page.keyboard.press("Escape");
+    const afterAll = await call("/alerts/inbox?limit=50");
+    check("«Borrar todo» deja el buzón vacío", afterAll.entries.length, 0);
 
     check("la pantalla no registró errores", problems, []);
   } catch (error) {

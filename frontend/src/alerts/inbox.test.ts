@@ -217,6 +217,25 @@ describe("freshEntries", () => {
       "c",
     ]);
   });
+
+  it("does not announce what a dismissal brought up from below a full page", () => {
+    // The last look listed a full page of two, b and c; dismissing c brought
+    // a up into view. It is older than anything that look listed.
+    expect(freshEntries(new Set(["b", "c"]), [b, a], [c, b], 2)).toEqual([]);
+  });
+
+  it("still announces something new on top while one comes up from below", () => {
+    const d = movement({}, { id: "d", created_at: 4 });
+    expect(
+      freshEntries(new Set(["b", "c"]), [d, b, a], [c, b], 2).map((entry) => entry.id),
+    ).toEqual(["d"]);
+  });
+
+  it("treats anything new as new after a page that was not full", () => {
+    expect(
+      freshEntries(new Set(["b"]), [b, a], [b], 2).map((entry) => entry.id),
+    ).toEqual(["a"]);
+  });
 });
 
 describe("unreadCount", () => {

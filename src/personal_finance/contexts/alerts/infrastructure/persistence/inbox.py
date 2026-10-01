@@ -20,7 +20,7 @@ it, never a number, for the reason it is a string on the bus.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import suppress
 import datetime as dt
 from decimal import Decimal
@@ -61,6 +61,13 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 INBOX_PREFIX = "INBOX#"
+#: Set when the owner dismissed the entry. The row stays until its TTL, so a
+#: redelivery's conditional write finds it and writes nothing back.
+DISMISSED_ATTRIBUTE = "dismissed_at"
+#: Rows read per page. Dismissed rows are dropped by the query itself, but a
+#: `Limit` still counts them, so a page this wide keeps an inbox emptied with
+#: «Borrar todo» one round trip per poll rather than one per twenty rows.
+PAGE = 100
 RECIPIENTS_PARTITION = "RECIPIENTS"
 
 #: How long the app keeps an alert. The inbox answers «what was my last
@@ -106,6 +113,93 @@ class DynamoDBInbox:
             )
 
     def recent(self, *, user_id: UserId, limit: int) -> Sequence[InboxEntry]:
+        """Newest first, skipping what was dismissed or has expired.
+
+        Paged until `limit` entries are kept, because a `Limit` counts the
+        rows read and not the rows kept: a page of dismissed entries would
+        otherwise answer an inbox that looks empty with more behind it.
+        """
+        now = PosixTime.now().as_epoch_seconds()
+        entries: list[InboxEntry] = []
+
+        for item in self._items(user_id, page=max(limit, PAGE), visible_only=True):
+            if _expired(item, now):
+                continue
+
+            try:
+                entries.append(_entry_from_item(user_id, item))
+            except CorruptInboxItemError:
+                # One unreadable entry must not take the whole inbox down.
+                _logger.warning("skipping an unreadable inbox entry")
+
+            if len(entries) >= limit:
+                break
+
+        return entries
+
+    def dismiss(self, *, user_id: UserId, entry_id: uuid.UUID) -> bool:
+        """Whether the owner has this entry — dismissed already counts.
+
+        An expired entry is one the inbox no longer shows, so it is not
+        found, the same as one the sweep already took.
+        """
+        wanted = str(entry_id)
+        now = PosixTime.now().as_epoch_seconds()
+
+        for item in self._items(user_id, page=PAGE):
+            if item.get("entry_id", {}).get("S") != wanted:
+                continue
+
+            if _expired(item, now):
+                return False
+
+            return DISMISSED_ATTRIBUTE in item or self._mark(item)
+
+        return False
+
+    def dismiss_all(self, *, user_id: UserId) -> int:
+        now = PosixTime.now().as_epoch_seconds()
+        hidden = 0
+
+        for item in self._items(user_id, page=PAGE, visible_only=True):
+            if not _expired(item, now) and self._mark(item):
+                hidden += 1
+
+        return hidden
+
+    def _mark(self, item: Mapping[str, AttributeValueTypeDef]) -> bool:
+        """Dismiss one row, if it is still there.
+
+        Conditional because an update creates what it does not find: a row
+        the TTL sweep took between the read and this write would come back as
+        a stub with no facts and no expiry, read by every query after it.
+        """
+        try:
+            self._client.update_item(
+                TableName=self._table_name,
+                Key={
+                    PARTITION_KEY: item[PARTITION_KEY],
+                    SORT_KEY: item[SORT_KEY],
+                },
+                UpdateExpression=f"SET {DISMISSED_ATTRIBUTE} = :now",
+                ConditionExpression=f"attribute_exists({SORT_KEY})",
+                ExpressionAttributeValues={
+                    ":now": {"N": str(PosixTime.now().as_epoch_seconds())},
+                },
+            )
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+        return True
+
+    def _items(
+        self,
+        user_id: UserId,
+        *,
+        page: int,
+        visible_only: bool = False,
+    ) -> Iterator[dict[str, AttributeValueTypeDef]]:
+        """This user's inbox rows, newest first, one page at a time."""
         request: QueryInputTypeDef = {
             "TableName": self._table_name,
             "KeyConditionExpression": (
@@ -116,26 +210,28 @@ class DynamoDBInbox:
                 ":prefix": {"S": INBOX_PREFIX},
             },
             "ScanIndexForward": False,
-            "Limit": limit,
+            "Limit": page,
         }
-        response = self._client.query(**request)
-        now = PosixTime.now().as_epoch_seconds()
-        entries: list[InboxEntry] = []
 
-        for item in response.get("Items", []):
-            # A time-to-live is eventual and routinely hours late; an expired
-            # entry is not shown just because the sweep has not run yet.
-            expires = item.get(TTL_ATTRIBUTE, {}).get("N")
-            if expires is not None and int(expires) <= now:
-                continue
+        if visible_only:
+            request["FilterExpression"] = f"attribute_not_exists({DISMISSED_ATTRIBUTE})"
 
-            try:
-                entries.append(_entry_from_item(user_id, item))
-            except CorruptInboxItemError:
-                # One unreadable entry must not take the whole inbox down.
-                _logger.warning("skipping an unreadable inbox entry")
+        while True:
+            response = self._client.query(**request)
+            yield from response.get("Items", [])
+            start_key = response.get("LastEvaluatedKey")
 
-        return entries
+            if not start_key:
+                return
+
+            request["ExclusiveStartKey"] = start_key
+
+
+def _expired(item: Mapping[str, AttributeValueTypeDef], now: int) -> bool:
+    # A time-to-live is eventual and routinely hours late; an expired entry is
+    # not shown just because the sweep has not run yet.
+    expires = item.get(TTL_ATTRIBUTE, {}).get("N")
+    return expires is not None and int(expires) <= now
 
 
 class DynamoDBRecipients:
