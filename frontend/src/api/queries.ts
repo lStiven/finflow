@@ -13,6 +13,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { hasPendingLink, LINK_POLL_MS } from "@/alerts/channels";
+import { INBOX_PAGE } from "@/alerts/inbox";
 import { api, unwrap } from "@/api/client";
 import type { components, paths } from "@/api/schema";
 import { DISPLAY_TIMEZONE } from "@/lib/dates";
@@ -692,6 +693,9 @@ export function useDeleteTransaction(
       // payment taken off a loan leaves its amortization describing a debt
       // that is no longer there.
       client.invalidateQueries({ queryKey: queryKeys.financing });
+      // Its alert goes with it: the inbox leaves out alerts about movements
+      // that no longer exist, and the bell should not wait for the next poll.
+      client.invalidateQueries({ queryKey: queryKeys.alertsInbox });
     },
   });
 }
@@ -1296,12 +1300,63 @@ export const ALERTS_POLL_MS = 15_000;
  */
 export const alertsInboxQuery = queryOptions({
   queryKey: queryKeys.alertsInbox,
-  queryFn: () => unwrap(api.GET("/alerts/inbox", { params: { query: { limit: 20 } } })),
+  queryFn: () =>
+    unwrap(api.GET("/alerts/inbox", { params: { query: { limit: INBOX_PAGE } } })),
   refetchInterval: ALERTS_POLL_MS,
   refetchIntervalInBackground: false,
   refetchOnWindowFocus: true,
   staleTime: 5_000,
 });
+
+type InboxPage = { entries: AlertsInboxEntry[] };
+
+/**
+ * Hide one alert from the app. Taken off the list at once — the next poll
+ * would agree — and put back if the server refuses.
+ */
+export function useDismissAlert() {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: (entryId: string) =>
+      unwrap(
+        api.DELETE("/alerts/inbox/{entry_id}", {
+          params: { path: { entry_id: entryId } },
+        }),
+      ),
+    onMutate: async (entryId) => {
+      await client.cancelQueries({ queryKey: queryKeys.alertsInbox });
+      const before = client.getQueryData<InboxPage>(queryKeys.alertsInbox);
+      client.setQueryData<InboxPage>(queryKeys.alertsInbox, (page) =>
+        page ? { entries: page.entries.filter((entry) => entry.id !== entryId) } : page,
+      );
+      return { before };
+    },
+    onError: (_error, _entryId, context) => {
+      if (context?.before) client.setQueryData(queryKeys.alertsInbox, context.before);
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.alertsInbox }),
+  });
+}
+
+/** Hide every alert this user has in the app. */
+export function useDismissAllAlerts() {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/alerts/inbox")),
+    onMutate: async () => {
+      await client.cancelQueries({ queryKey: queryKeys.alertsInbox });
+      const before = client.getQueryData<InboxPage>(queryKeys.alertsInbox);
+      client.setQueryData<InboxPage>(queryKeys.alertsInbox, { entries: [] });
+      return { before };
+    },
+    onError: (_error, _vars, context) => {
+      if (context?.before) client.setQueryData(queryKeys.alertsInbox, context.before);
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.alertsInbox }),
+  });
+}
 
 export const alertChannelsQuery = queryOptions({
   queryKey: queryKeys.alertChannels,

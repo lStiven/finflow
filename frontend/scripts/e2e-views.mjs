@@ -20,6 +20,10 @@
  * - not exactly one `h1`;
  * - being sent somewhere else — a redirect to /login is a screen that
  *   stopped working, not a screen.
+ *
+ * And, signed in, that what cannot be drawn is drawn as the app's own error
+ * screen — never the router's bare «Something went wrong!»: an address that
+ * matches nothing, a movement that does not exist, and the API unreachable.
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -135,6 +139,68 @@ function fill(pattern, known) {
   return { path, missing };
 }
 
+/** The title the app's error screen shows for each case. */
+const ERROR_TITLES = {
+  missing: "Esto ya no está aquí",
+  offline: "Parece que no hay conexión",
+};
+
+/**
+ * Each case on its own: what the screen must say, and that it still has one
+ * `h1`, does not scroll sideways, and offers a way out.
+ */
+async function errorScreens(page, label) {
+  const cases = [
+    ["una dirección que no existe", "/esto-no-existe", ERROR_TITLES.missing, null],
+    [
+      "un movimiento que ya no existe",
+      `/transacciones/${crypto.randomUUID()}`,
+      ERROR_TITLES.missing,
+      null,
+    ],
+    // Every API call refused, the way a phone without signal sees it. The
+    // app retries twice before giving up, so this one waits longer.
+    ["sin conexión con la API", "/cuentas", ERROR_TITLES.offline, `${API}/**`],
+  ];
+  const lines = [];
+
+  for (const [what, path, title, blocked] of cases) {
+    if (blocked)
+      await page.route(blocked, (route) => route.abort("internetdisconnected"));
+
+    try {
+      await page.goto(`${WEB}${path}`, { waitUntil: "domcontentloaded" });
+      await page
+        .getByRole("heading", { level: 1, name: title })
+        .waitFor({ timeout: blocked ? 20_000 : 10_000 });
+      const seen = await page.evaluate(() => ({
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+        headings: document.querySelectorAll("h1").length,
+        generic: document.body.innerText.includes("Something went wrong"),
+      }));
+      const wayOut = await page.getByRole("link", { name: "Ir al resumen" }).count();
+      const wrong = [
+        seen.generic ? "salió «Something went wrong»" : null,
+        seen.overflow ? "se va de lado" : null,
+        seen.headings === 1 ? null : `${seen.headings} h1`,
+        wayOut === 1 ? null : "sin enlace al resumen",
+      ].filter(Boolean);
+
+      lines.push(
+        wrong.length === 0
+          ? `  ok   ${label.padEnd(10)} error: ${what}`
+          : ` FALLA ${label.padEnd(10)} error: ${what}: ${wrong.join(" · ")}`,
+      );
+    } catch (error) {
+      lines.push(` FALLA ${label.padEnd(10)} error: ${what}: ${error.message}`);
+    } finally {
+      if (blocked) await page.unroute(blocked);
+    }
+  }
+
+  return lines;
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -220,6 +286,13 @@ async function main() {
             steps.push(
               ` FALLA ${label.padEnd(10)} ${screen.pattern}: ${wrong.join(" · ")}`,
             );
+          }
+        }
+
+        if (signedIn) {
+          for (const line of await errorScreens(page, label)) {
+            if (line.startsWith(" FALLA")) failures += 1;
+            steps.push(line);
           }
         }
 

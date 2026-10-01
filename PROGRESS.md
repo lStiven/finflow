@@ -270,6 +270,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
+  desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
+  se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
+  muestra «Something went wrong!»: hay pantalla propia para sin conexión, algo
+  que ya no existe y fallo nuestro. En `master` y en `dev`.
 - 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
   huella de tarjeta y no de la cuenta donde quedó el movimiento, así que toda
   factura confirmada y todo gasto escrito a mano en una cuenta salía como «sin
@@ -308,11 +313,3 @@ AWS (ver Trabas).
   `src/personal_finance`, así que una rama de frontend construye la imagen que
   ya está desplegada y SAM lo reportaba como avería. Medido: las seis imágenes
   de esta rama y las que corre producción comparten id `86fb2af2a950`.
-- 2026-09-20 — **`sam build` ya no muere por el ayudante de credenciales.**
-  `deploy-dev` y `deploy-prod` construyen con `DOCKER_CONFIG` propio
-  (`.aws-sam/docker-config`), sin el `credsStore` que la extensión Dev
-  Containers escribe en `~/.docker/config.json`: ese ayudante no implementa
-  `list`, que es lo que el SDK de Docker llama antes de construir, así que
-  `docker build` a mano funcionaba y `sam build` no. Comprobado: las seis
-  imágenes construyen. El error y su explicación quedaron en `docs/deploy.md`,
-  que es donde se busca el texto que escupe.

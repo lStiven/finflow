@@ -319,9 +319,10 @@ async function main() {
     );
 
     // 2 · «Mes pasado» on one account is exactly that month on that account.
+    // The account is one that *had* movements last month: on the 1st, an
+    // account busy only this month exports nothing, and the dialog rightly
+    // refuses to download an empty file.
     const accounts = (await call("/financial/accounts")).accounts;
-    const account =
-      accounts.find((candidate) => candidate.movements_applied > 0) ?? accounts[0];
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone: "America/Bogota",
     }).format(new Date());
@@ -331,15 +332,25 @@ async function main() {
     const from = bogotaMidnight(`${lastMonth}-01`);
     const to = bogotaMidnight(`${today.slice(0, 7)}-01`);
 
+    let account = null;
+    let expected = [];
+    for (const candidate of accounts) {
+      const found = await everyPage(
+        call,
+        `account_id=${candidate.id}&from=${from}&to=${to}`,
+      );
+      if (found.length > 0) {
+        account = candidate;
+        expected = found;
+        break;
+      }
+    }
+
     if (account) {
       const scoped = await exportFrom(page, {
         choices: ["Mes pasado", "Todos", "CSV"],
         account: account.name,
       });
-      const expected = await everyPage(
-        call,
-        `account_id=${account.id}&from=${from}&to=${to}`,
-      );
       check(
         `«Mes pasado» en ${account.name}: los mismos movimientos que la API`,
         rowsOf(scoped.bytes).map((row) => row.ID),
@@ -348,8 +359,25 @@ async function main() {
       check(
         "todos en esa cuenta",
         [...new Set(rowsOf(scoped.bytes).map((row) => row.Cuenta))].filter(Boolean),
-        expected.length > 0 ? [account.name] : [],
+        [account.name],
       );
+    } else if (accounts[0]) {
+      await page.getByRole("button", { name: "Exportar" }).click();
+      const dialog = page.getByRole("dialog", { name: "Exportar movimientos" });
+      for (const label of ["Mes pasado", "Todos", "CSV"]) {
+        await dialog.getByRole("button", { name: label, exact: true }).click();
+      }
+      await dialog
+        .getByLabel("Cuenta", { exact: true })
+        .selectOption({ label: accounts[0].name });
+      await page.waitForLoadState("networkidle");
+      check(
+        "sin movimientos el mes pasado, no se descarga un archivo vacío",
+        await dialog.getByRole("button", { name: /^Descargar/ }).isDisabled(),
+        true,
+      );
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "detached" });
     }
 
     // 3 · A range that ends before it starts cannot be downloaded.

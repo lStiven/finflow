@@ -37,7 +37,9 @@ from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import
     DynamoDBDeliveryLog,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
+    DISMISSED_ATTRIBUTE,
     INBOX_PREFIX,
+    PAGE,
     DynamoDBInbox,
     DynamoDBRecipients,
 )
@@ -338,3 +340,101 @@ def test_monday_reads_the_real_ledger_and_writes_the_inbox(
     [summary] = stored
     assert summary.spent == Decimal("40000")
     assert summary.typical == Decimal("100000.00")
+
+
+# ------------------------------------------------------------- dismissing
+
+
+def test_a_dismissed_entry_stays_hidden_through_a_redelivery(
+    tables: DynamoDBClient,
+) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    at = PosixTime.now().as_epoch_seconds()
+    entry = _entry(USER, at)
+    inbox.record(entry)
+
+    assert inbox.dismiss(user_id=USER, entry_id=entry.entry_id) is True
+    inbox.record(entry)  # the same fact delivered again
+
+    assert inbox.recent(user_id=USER, limit=10) == []
+
+
+def test_dismissing_an_unknown_or_someone_elses_entry_finds_nothing(
+    tables: DynamoDBClient,
+) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    theirs = _entry(OTHER, PosixTime.now().as_epoch_seconds())
+    inbox.record(theirs)
+
+    assert inbox.dismiss(user_id=USER, entry_id=theirs.entry_id) is False
+    assert inbox.dismiss(user_id=USER, entry_id=uuid.uuid4()) is False
+    assert len(inbox.recent(user_id=OTHER, limit=10)) == 1
+
+
+def test_a_page_of_dismissed_entries_does_not_hide_the_ones_behind_it(
+    tables: DynamoDBClient,
+) -> None:
+    # `Limit` counts rows read, not rows kept: the newest three are dismissed
+    # and a limit of two must still find the two older ones.
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    now = PosixTime.now().as_epoch_seconds()
+    entries = [_entry(USER, now - offset) for offset in range(5)]
+    for entry in entries:
+        inbox.record(entry)
+    for entry in entries[:3]:
+        inbox.dismiss(user_id=USER, entry_id=entry.entry_id)
+
+    listed = inbox.recent(user_id=USER, limit=2)
+
+    assert [e.entry_id for e in listed] == [e.entry_id for e in entries[3:5]]
+
+
+def test_dismissing_all_hides_only_the_owners(tables: DynamoDBClient) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    now = PosixTime.now().as_epoch_seconds()
+    for offset in range(3):
+        inbox.record(_entry(USER, now - offset))
+    inbox.record(_entry(OTHER, now))
+
+    assert inbox.dismiss_all(user_id=USER) == 3
+    assert inbox.dismiss_all(user_id=USER) == 0
+    assert inbox.recent(user_id=USER, limit=10) == []
+    assert len(inbox.recent(user_id=OTHER, limit=10)) == 1
+
+
+def test_an_expired_entry_is_not_found_and_no_row_is_written_for_it(
+    tables: DynamoDBClient,
+) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    stale = _entry(USER, PosixTime.now().as_epoch_seconds() - 40 * 86_400)
+    inbox.record(stale)
+
+    assert inbox.dismiss(user_id=USER, entry_id=stale.entry_id) is False
+    assert inbox.dismiss_all(user_id=USER) == 0
+
+    rows = tables.query(
+        TableName=ALERTS_TABLE,
+        KeyConditionExpression=f"{PARTITION_KEY} = :user",
+        ExpressionAttributeValues={":user": {"S": f"USER#{USER.value}"}},
+    )["Items"]
+    assert len(rows) == 1
+    assert DISMISSED_ATTRIBUTE not in rows[0]
+
+
+def test_more_dismissed_rows_than_a_page_still_reach_the_one_behind_them(
+    tables: DynamoDBClient,
+) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    now = PosixTime.now().as_epoch_seconds()
+    behind = _entry(USER, now - 10_000)
+    inbox.record(behind)
+    for offset in range(PAGE + 20):
+        inbox.record(_entry(USER, now - offset))
+    inbox.dismiss_all(user_id=USER)
+    inbox.record(behind)  # redelivered: stays dismissed
+    survivor = _entry(USER, now - 20_000)
+    inbox.record(survivor)
+
+    assert [e.entry_id for e in inbox.recent(user_id=USER, limit=20)] == [
+        survivor.entry_id,
+    ]

@@ -1509,6 +1509,30 @@ way out, and still stores nothing.
 - **A transport outage fails the weekly run at the end, not halfway**, so
   Lambda's asynchronous retry runs it again; the delivery log and the inbox's
   conditional write make the retry send only what was missed.
+- **An alert about an erased movement is dropped when the inbox is read, not
+  deleted when the movement goes** (2026-10-01). Financial is asked which of
+  the page's movement ids still exist (`ExistingMovementsUseCase`, through the
+  adapter). Rejected: a `MovementDeleted` event that Alerts consumes to clean
+  up — the erasure and the alert travel on different queues, an alert
+  delivered after its erasure would survive, and it is a second contract to
+  keep in step. If the check fails the inbox is shown unfiltered: one stale
+  entry beats an inbox that does not load. When erasures leave a page short,
+  the read widens (up to 200 candidates) rather than answering "empty".
+- **Dismissing is a soft-delete (`dismissed_at`), never a `DeleteItem`.** A
+  deleted row lets the next SQS redelivery's conditional put write it back;
+  a marked row makes that put a no-op. Reads filter it in the query and page
+  100 rows at a time, because a `Limit` still counts filtered rows. The mark
+  is conditional on the row existing: an update creates what it does not
+  find, and a row the TTL sweep took mid-loop would return as a stub with no
+  expiry. Accepted: dismissing one entry scans the owner's partition for its
+  id, and «Borrar todo» is one write per row — 30 days of one person's alerts.
+- **A toast is only for what arrived.** When the last poll was a full page, an
+  unseen entry older than its oldest one came up from below (a dismissal or an
+  erasure above it) and is not toasted.
+- **Errors get the app's own screen**, as the router's
+  `defaultErrorComponent`/`defaultNotFoundComponent`, in three cases that ask
+  different things of the reader: no connection (retry), gone (404: go back,
+  no retry), ours (retry, "we're on it"). The error's own text is never shown.
 
 ### Deploying on every push (2026-09-30)
 

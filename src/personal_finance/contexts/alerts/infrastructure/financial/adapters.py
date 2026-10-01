@@ -22,6 +22,9 @@ from personal_finance.contexts.alerts.application.messages import (
     CategoryRise,
     WeeklySummary,
 )
+from personal_finance.contexts.financial.application.movement_presence import (
+    ExistingMovementsUseCase,
+)
 from personal_finance.contexts.financial.application.queries import (
     SummarizeSpendingUseCase,
 )
@@ -41,6 +44,21 @@ from personal_finance.shared.infrastructure.aws.session import get_dynamodb_clie
 from personal_finance.shared.infrastructure.config.settings import (
     get_financial_settings,
 )
+
+
+class FinancialMovementPresence:
+    """`MovementPresence` over Financial's `ExistingMovementsUseCase`."""
+
+    def __init__(self, *, use_case: ExistingMovementsUseCase) -> None:
+        self._use_case = use_case
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> frozenset[str]:
+        return self._use_case.execute(user_id=user_id, movement_ids=movement_ids)
 
 
 class FinancialWeeklySpending:
@@ -107,3 +125,9 @@ def build_weekly_spending(*, timezone: str) -> FinancialWeeklySpending:
         ),
         timezone=timezone,
     )
+
+
+def build_movement_presence() -> FinancialMovementPresence:
+    ledger, _ = _financial_parts()
+
+    return FinancialMovementPresence(use_case=ExistingMovementsUseCase(ledger=ledger))

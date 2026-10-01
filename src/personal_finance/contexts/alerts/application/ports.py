@@ -290,8 +290,38 @@ class Inbox(Protocol):
     def record(self, entry: InboxEntry) -> None: ...
 
     def recent(self, *, user_id: UserId, limit: int) -> Sequence[InboxEntry]:
-        """Newest first, this user's only."""
+        """Newest first, this user's only, leaving out what they dismissed."""
         ...
+
+    def dismiss(self, *, user_id: UserId, entry_id: uuid.UUID) -> bool:
+        """Hide one entry for good. False when this user has no such entry.
+
+        Hidden rather than deleted: delivery is at-least-once, and a
+        redelivery after a delete would write the entry back — the row that
+        stays is what makes the second copy a no-op.
+        """
+        ...
+
+    def dismiss_all(self, *, user_id: UserId) -> int:
+        """Hide every entry this user has. Returns how many it hid."""
+        ...
+
+
+class MovementPresence(Protocol):
+    """Which movements still exist, as Financial answers it.
+
+    An alert about a movement its owner erased points at nothing; the inbox
+    asks this at read time and leaves those out. An implementation may raise
+    on an outage, which the caller treats as "assume they all exist" — an
+    inbox with one stale entry beats an inbox that does not load.
+    """
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        movement_ids: Sequence[str],
+    ) -> frozenset[str]: ...
 
 
 class Recipients(Protocol):

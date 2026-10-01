@@ -176,20 +176,39 @@ export function describeEntry(entry: AlertsInboxEntry): Described {
   };
 }
 
+/** How many entries the watcher asks for on each poll. */
+export const INBOX_PAGE = 20;
+
 /**
  * The entries that arrived since the last look, oldest first.
  *
  * `seen` null is the first look after the page opened: everything already
  * there is history, not news, and toasting a page of it on every reload is
  * how a notification becomes noise.
+ *
+ * `previous` is what the last look listed. When it was a full page, an entry
+ * older than the oldest of it did not arrive — it came up from below because
+ * something above it was dismissed or its movement erased — and toasting it
+ * would announce a days-old purchase as new. A page that was not full showed
+ * everything, so whatever is new in the next one is new.
  */
 export function freshEntries(
   seen: ReadonlySet<string> | null,
   entries: readonly AlertsInboxEntry[],
+  previous: readonly AlertsInboxEntry[] | null = null,
+  page: number = INBOX_PAGE,
 ): AlertsInboxEntry[] {
   if (seen === null) return [];
 
-  return entries.filter((entry) => !seen.has(entry.id)).reverse();
+  const floor =
+    previous !== null && previous.length >= page
+      ? Math.min(...previous.map((entry) => entry.created_at))
+      : null;
+
+  return entries
+    .filter((entry) => !seen.has(entry.id))
+    .filter((entry) => floor === null || entry.created_at >= floor)
+    .reverse();
 }
 
 /** How many seen ids are remembered — more than the inbox ever lists. */

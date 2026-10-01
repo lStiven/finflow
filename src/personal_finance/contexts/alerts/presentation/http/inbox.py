@@ -14,19 +14,25 @@ from __future__ import annotations
 
 import functools
 from typing import Annotated, Literal
+import uuid
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
 from personal_finance.contexts.alerts.application.inbox import (
     DEFAULT_INBOX_PAGE,
     MAX_INBOX_PAGE,
     InboxEntry,
+    InboxEntryNotFoundError,
     ListInboxUseCase,
+    ManageInboxUseCase,
 )
 from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     WeeklySummary,
+)
+from personal_finance.contexts.alerts.infrastructure.financial.adapters import (
+    build_movement_presence,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
     DynamoDBInbox,
@@ -104,17 +110,29 @@ class InboxResponse(BaseModel):
 
 
 @functools.lru_cache(maxsize=1)
-def _build_list_inbox() -> ListInboxUseCase:
-    return ListInboxUseCase(
-        inbox=DynamoDBInbox(
-            client=get_dynamodb_client(),
-            table_name=get_alerts_settings().channels_table,
-        ),
+def _build_inbox() -> DynamoDBInbox:
+    return DynamoDBInbox(
+        client=get_dynamodb_client(),
+        table_name=get_alerts_settings().channels_table,
     )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_list_inbox() -> ListInboxUseCase:
+    return ListInboxUseCase(inbox=_build_inbox(), movements=build_movement_presence())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_inbox() -> ManageInboxUseCase:
+    return ManageInboxUseCase(inbox=_build_inbox())
 
 
 def get_list_inbox_use_case() -> ListInboxUseCase:
     return _build_list_inbox()
+
+
+def get_manage_inbox_use_case() -> ManageInboxUseCase:
+    return _build_manage_inbox()
 
 
 CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
@@ -136,6 +154,35 @@ def list_inbox(
             _entry(entry) for entry in use_case.execute(user_id=user_id, limit=limit)
         ],
     )
+
+
+@router.delete("/inbox/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_inbox_entry(
+    user_id: CurrentUser,
+    entry_id: uuid.UUID,
+    use_case: Annotated[ManageInboxUseCase, Depends(get_manage_inbox_use_case)],
+) -> None:
+    """Hide one alert from the app. 404 when this user has no such entry.
+
+    Hidden for good: an alert redelivered later lands on the same row and
+    stays hidden. Telegram is not touched — a message already sent stays sent.
+    """
+    try:
+        use_case.dismiss(user_id=user_id, entry_id=entry_id)
+    except InboxEntryNotFoundError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No such alert",
+        ) from error
+
+
+@router.delete("/inbox", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_inbox(
+    user_id: CurrentUser,
+    use_case: Annotated[ManageInboxUseCase, Depends(get_manage_inbox_use_case)],
+) -> None:
+    """Hide every alert this user has in the app."""
+    use_case.dismiss_all(user_id=user_id)
 
 
 def _entry(entry: InboxEntry) -> InboxEntryResponse:
