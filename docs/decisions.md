@@ -2529,6 +2529,15 @@ to whatever ends up serving the bundle, which the bundle is not told.
 
 ### Review findings worth remembering
 
+- **A field is read for what it says, not for what it usually coincides
+  with.** `MovementRecorded.unassigned` was `account_fingerprint is None`:
+  true for bank alerts routed by card, and wrong for every movement that lands
+  on an account without a card — a confirmed bill, one entered by hand — and
+  for an alert whose card nobody declared. Shipped 2026-09-14 and seen only
+  on 2026-10-01, when the in-app inbox put «Sin cuenta asignada» next to a
+  bill paid from savings. `TransactionRecorded` now carries `account_id`, and
+  `assign_to`/`unassign` restate the still-pending announcement, because a
+  movement is built before it is placed.
 - **IMAP `FETCH (RFC822)` marks a message `\Seen` on read**, before `ack()`
   runs — it defeated the "ack only after a durable write" design and could
   drop bank alerts on a mid-batch crash. Must stay `BODY.PEEK[]`.

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+import uuid
 
 import pytest
 
@@ -291,3 +292,86 @@ def test_erasing_leaves_the_movement_readable_for_the_caller() -> None:
 
     assert transaction.amount == _cop("50000")
     assert transaction.status is TransactionStatus.UNASSIGNED
+
+
+# ------------------------------------------- the announcement says where
+
+
+def _recorded(transaction: Transaction) -> TransactionRecorded:
+    [recorded] = [
+        event
+        for event in transaction.pull_events()
+        if isinstance(event, TransactionRecorded)
+    ]
+    return recorded
+
+
+def test_a_movement_entered_by_hand_on_an_account_announces_that_account() -> None:
+    # No fingerprint — nobody typed a card — and still on an account.
+    account = AccountId.new()
+    movement = Transaction.enter_manually(
+        user_id=USER,
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal("1577450"), currency=Currency.COP),
+        occurred_at=PURCHASE_TIME,
+        counterparty="Préstamo Bancolombia",
+        account_id=account,
+    )
+
+    recorded = _recorded(movement)
+
+    assert recorded.account_fingerprint is None
+    assert recorded.account_id == account
+
+
+def test_a_confirmed_bill_announces_the_account_it_was_paid_from() -> None:
+    # The case that showed it: a bill paid from savings, announced
+    # «sin cuenta asignada» while the balance moved.
+    account = AccountId.new()
+    charge = Transaction.confirm_scheduled(
+        user_id=USER,
+        bill_id=uuid.uuid4(),
+        period=datetime(2026, 10, 30, tzinfo=UTC).date(),
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal("1577450"), currency=Currency.COP),
+        occurred_at=PURCHASE_TIME,
+        counterparty="Préstamo Bancolombia",
+        account_id=account,
+    )
+
+    assert _recorded(charge).account_id == account
+
+
+def test_an_alert_placed_before_publishing_announces_where_it_landed() -> None:
+    account = AccountId.new()
+    alert = Transaction.from_alert(
+        user_id=USER,
+        bank="bancolombia",
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal("50000"), currency=Currency.COP),
+        occurred_at=PURCHASE_TIME,
+        counterparty="TIENDAS ARA",
+        instrument_kind="credit_card",
+        last_four="7653",
+    )
+
+    alert.assign_to(account)
+
+    assert _recorded(alert).account_id == account
+
+
+def test_a_published_announcement_is_history_and_is_not_rewritten() -> None:
+    alert = Transaction.from_alert(
+        user_id=USER,
+        bank="bancolombia",
+        direction=MovementDirection.OUTGOING,
+        amount=Money(amount=Decimal("50000"), currency=Currency.COP),
+        occurred_at=PURCHASE_TIME,
+        counterparty="TIENDAS ARA",
+    )
+    published = _recorded(alert)
+
+    alert.assign_to(AccountId.new())
+
+    assert published.account_id is None
+    assert not any(isinstance(e, TransactionRecorded) for e in alert.pull_events())

@@ -270,6 +270,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
+  huella de tarjeta y no de la cuenta donde quedó el movimiento, así que toda
+  factura confirmada y todo gasto escrito a mano en una cuenta salía como «sin
+  cuenta» (y una tarjeta sin cuenta declarada, al revés). El detalle ya nombra
+  los cuatro orígenes; decía «Alerta del banco» a un cobro de factura.
 - 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado.**
   Bancolombia avisa «Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto
   *5261»: una cuenta y una institución, nunca la tarjeta, así que entraba como
@@ -311,14 +316,3 @@ AWS (ver Trabas).
   `docker build` a mano funcionaba y `sam build` no. Comprobado: las seis
   imágenes construyen. El error y su explicación quedaron en `docs/deploy.md`,
   que es donde se busca el texto que escupe.
-- 2026-09-20 — **La barra del teléfono ya dice en qué pantalla estás.** No era
-  un descuido de diseño: el marcado existía y no se veía. El router *concatena*
-  la clase de `activeProps` en vez de fusionarla, así que `text-muted` y
-  `text-accent` acababan las dos en el elemento y ganaba la que Tailwind
-  emitiera después — la muted. Ahora el color apagado va en `inactiveProps`,
-  donde no puede chocar, y la entrada activa lleva además una pastilla teñida
-  detrás del icono, el mismo lenguaje del riel en la forma que cabe abajo. Y
-  **«Más» se enciende por lo que tapa**: cuatro de las siete secciones viven
-  detrás de ese botón, así que estar en Reportes ya no dejaba la barra
-  entera apagada. La regla (`inSheet`) es dato comprobable en
-  `navigation/destinations.ts`, con cinco pruebas.

@@ -11,6 +11,7 @@ import {
   Unlink,
 } from "lucide-react";
 import { type SubmitEvent, useEffect, useRef, useState } from "react";
+import { originLabel } from "@/accounts/kinds";
 import {
   type Account,
   accountsQuery,
@@ -143,11 +144,11 @@ function TransactionScreen() {
             {movement.status === "assigned" ? "En una cuenta" : "Sin asignar"}
           </Row>
           <Row label="Origen">
+            {/* Every origin by name: a confirmed bill read as «Alerta del
+                banco» when this only knew two of the four. */}
             {transfer?.basis === "counterpart"
               ? "Escrito por Finflow al marcar el traslado"
-              : movement.origin === "manual"
-                ? "Registrado a mano"
-                : "Alerta del banco"}
+              : originLabel(movement.origin)}
           </Row>
           {movement.bank ? <Row label="Banco">{movement.bank}</Row> : null}
           {movement.note ? <Row label="Nota">{movement.note}</Row> : null}
