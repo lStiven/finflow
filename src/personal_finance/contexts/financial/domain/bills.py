@@ -33,6 +33,22 @@ The one thing the ledger cannot answer is a charge that was *skipped* — the
 month the gym did not bill, the subscription that was already cancelled. No
 money moved, so there is no row to read, and that answer is stored on the bill.
 
+The second is a charge answered for by a movement that arrived on its own.
+The bank did announce it after all — a domiciled charge that started emailing
+again, or one the owner pays by hand from an account this app does read — and
+then the honest answer is "that movement is this charge", not a second row
+saying the same money left twice. That link cannot be derived, because the
+movement's identity is the bank's fingerprint, so it is stored too. What is
+*not* stored is whether the movement still exists: the link is read against
+the ledger, so erasing the movement un-pays the charge exactly as erasing a
+confirmed row does.
+
+**Charging itself is the one thing here a clock decides**, and it is off
+until somebody turns it on, bill by bill. It waits until the match window has
+closed rather than until the charge is merely late, because the mistake it
+could make is not "a day early" but "the same money twice" — see
+`MATCH_WINDOW_DAYS`. And it never reaches back past the day it was turned on.
+
 And a fourth that already exists and is none of these: `RecurringCharge` in
 `financing.py` is the insurance a credit carries every period.
 """
@@ -90,6 +106,31 @@ MAX_WINDOW_DAYS = 400
 # the skip somebody is asking for today is a screen with a button that does
 # nothing.
 MAX_SKIPPED_PERIODS = 240
+
+# How many periods of one bill can be settled by a movement that arrived on
+# its own. Same bound and same argument as the skipped periods above: the map
+# is stored, so it needs a ceiling, and forgetting the oldest link is visible
+# and harmless where refusing today's is a button that does nothing.
+MAX_LINKED_PERIODS = 240
+
+# How far from its expected day a movement may land and still be this charge.
+#
+# Five days, and deliberately wider than `GRACE_DAYS`. The grace answers "is
+# this late?", which is a question about the owner; this one answers "is that
+# the gym?", which is a question about a bank — and a domiciled charge is
+# presented by one business and posted by another, so a long weekend plus a
+# holiday is ordinary. Wider than this stops being a window and starts being
+# any charge of that size in the neighbourhood.
+MATCH_WINDOW_DAYS = 5
+
+# How far back an automatic charge may reach when nothing has run in a while.
+#
+# Thirty-five days: one month plus the slack of a month that is longer than
+# the last. It is what stops an app opened after a long absence from posting a
+# year of charges in one go — the periods past it stay overdue and are
+# confirmed by hand, which is the safe direction. An automatic charge is a
+# guess about money; a backlog of them is a guess nobody asked for.
+AUTOPAY_LOOKBACK_DAYS = 35
 
 
 class BillCadence(enum.Enum):
@@ -216,22 +257,40 @@ class OccurrenceState(enum.Enum):
 _SETTLED_STATES = frozenset({OccurrenceState.PAID, OccurrenceState.SKIPPED})
 
 
+class ChargeSource(enum.Enum):
+    """Which kind of ledger row is answering for this charge.
+
+    The difference is not decoration: it decides what undoing means. A
+    `CONFIRMED` row exists because this feature wrote it — by hand or by the
+    automatic charge — so taking the answer back means erasing money that only
+    this app ever recorded. A `MATCHED` row is the bank's own movement, which
+    was going to be there either way; taking that answer back only forgets the
+    link, and erasing the movement would throw away a fact.
+    """
+
+    #: The row this bill wrote, keyed on the bill and the period.
+    CONFIRMED = "confirmed"
+    #: A movement that arrived on its own and was linked to this charge.
+    MATCHED = "matched"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class ChargePayment(ValueObject):
-    """The ledger row that confirmed one charge, as this side of it reads.
+    """The ledger row that answers for one charge, as this side of it reads.
 
-    Carried rather than merely counted because the three fields answer three
-    different questions a screen asks, and none of them is on the bill. What
-    it actually cost may not be what the bill says — the gym raised its price
-    and the owner confirmed the real figure. When it actually moved is not the
-    day it was due — the 4th was a Saturday. And the movement's own id is what
-    lets somebody go and look at it, or delete it, which is the only way to
-    un-pay a charge.
+    Carried rather than merely counted because the fields answer questions a
+    screen asks, and none of them is on the bill. What it actually cost may
+    not be what the bill says — the gym raised its price and the owner
+    confirmed the real figure. When it actually moved is not the day it was
+    due — the 4th was a Saturday. And the movement's own id is what lets
+    somebody go and look at it, or delete it, which is the only way to un-pay
+    a charge this app wrote.
     """
 
     movement_id: str
     amount: Money
     occurred_at: PosixTime
+    source: ChargeSource = ChargeSource.CONFIRMED
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -304,6 +363,27 @@ class ScheduledBill(AggregateRoot[BillId]):
     #: because nothing else records them: a skip moves no money, so there is
     #: no ledger row to read the answer back off.
     skipped: frozenset[dt.date] = frozenset()
+    #: Whether this bill charges itself once its match window has closed.
+    #: **Off unless somebody turned it on**, bill by bill: every other write
+    #: in this feature happens because a person pressed something, and this is
+    #: the only one that happens because a clock said so.
+    autopay: bool = False
+    #: The day automatic charging was last turned on. What keeps it from
+    #: reaching backwards: a switch flipped today must not post the charge
+    #: that fell due last week, which somebody has been looking at as overdue
+    #: and may already have paid in a way this app cannot see. None whenever
+    #: `autopay` is off, and the two are only ever set together.
+    autopay_from: dt.date | None = None
+    #: Periods answered for by a movement that arrived on its own, keyed by
+    #: period. **The one thing about "paid" that has to be stored**, and for
+    #: the same reason a skip does: the derived-identity trick only works for
+    #: a row this bill wrote, and a bank's own movement is keyed on the bank's
+    #: fingerprint, which nothing here can derive. Deleting that movement
+    #: still un-pays the charge — the link is read against the ledger, and a
+    #: link pointing at a row that is gone answers nothing.
+    linked: dict[dt.date, str] = dataclasses.field(
+        default_factory=lambda: dict[dt.date, str](),
+    )
     created_at: PosixTime = dataclasses.field(default_factory=PosixTime.now)
 
     @classmethod
@@ -402,6 +482,55 @@ class ScheduledBill(AggregateRoot[BillId]):
     def resume(self) -> None:
         self.status = BillStatus.ACTIVE
 
+    def start_autopay(self, *, today: dt.date) -> None:
+        """Let this bill charge itself once a period's match window closes.
+
+        `today` is remembered rather than taken for granted later: it is what
+        makes turning the switch on a statement about what comes next and not
+        about what already happened. Turning it on again moves that line
+        forward, which is the honest reading — somebody who turned it off in
+        March and back on in June did not mean to authorise March.
+        """
+        self.autopay = True
+        self.autopay_from = today
+
+    def stop_autopay(self) -> None:
+        """Go back to charges being answered for by hand.
+
+        Clears the day as well, so nothing can charge on the strength of a
+        permission that was withdrawn.
+        """
+        self.autopay = False
+        self.autopay_from = None
+
+    def charges_itself_on(self, period: dt.date, *, today: dt.date) -> bool:
+        """Whether this app may write this charge without being asked to.
+
+        Four conditions, and every one of them is a refusal to guess:
+
+        * autopay is on, and the period falls after the day it was turned on;
+        * the bill is active — a paused bill charges nothing at all;
+        * the **match window has closed**. The whole point of waiting past the
+          grace period is that a movement arriving on the 8th for a charge due
+          on the 4th is the charge, not a second one, and there is no taking
+          back an expense the bank also reported;
+        * and the period is recent enough to still be this month's business.
+
+        It says nothing about whether the charge is already settled or whether
+        a movement out there matches it. Those are questions for whoever holds
+        the ledger, and this object holds none.
+        """
+        if not self.autopay or self.status is BillStatus.PAUSED:
+            return False
+
+        if self.autopay_from is None or period < self.autopay_from:
+            return False
+
+        if today <= period + dt.timedelta(days=MATCH_WINDOW_DAYS):
+            return False
+
+        return period >= today - dt.timedelta(days=AUTOPAY_LOOKBACK_DAYS)
+
     def charge_id(self, period: dt.date) -> MovementId:
         """What the ledger row for this period is, or would be, called.
 
@@ -417,6 +546,32 @@ class ScheduledBill(AggregateRoot[BillId]):
                 bill_id=self.id.value,
                 period=period,
             ),
+        )
+
+    def charges_around(self, day: dt.date) -> tuple[dt.date, ...]:
+        """Every charge of this bill close enough to that day to be it.
+
+        More than one is the case worth having a method for. A weekly bill's
+        charges are seven days apart and the match window reaches five days
+        either side, so one movement can sit inside two of them — and then
+        there is no honest answer to which one it paid. Whoever asks can see
+        that from the length and refuse to decide, which is the only safe way
+        to read a movement two charges both want.
+
+        Empty for a paused bill, which is charged nothing at all.
+        """
+        if self.status is BillStatus.PAUSED:
+            return ()
+
+        reach = dt.timedelta(days=MATCH_WINDOW_DAYS)
+
+        return tuple(
+            charge.due_on
+            for charge in self.occurrences(
+                since=day - reach,
+                until=day + reach,
+                today=day,
+            )
         )
 
     def occurs_on(self, period: dt.date) -> bool:
@@ -461,6 +616,58 @@ class ScheduledBill(AggregateRoot[BillId]):
         refusing to remove that would make it permanent.
         """
         self.skipped = self.skipped - {period}
+
+    def link(self, period: dt.date, movement_id: str) -> None:
+        """Say this charge is what that movement already paid for.
+
+        The other half of confirming, and the half that writes nothing: the
+        money left on its own and the bank said so, so there is a row in the
+        ledger already and the only thing missing is that nobody had tied it
+        to the charge it answers for. Writing a second row would be the
+        feature causing exactly the double count it exists to prevent.
+
+        **It takes a skip back.** A skip is the owner's guess that no charge
+        was coming; a movement is evidence that one did. Leaving both would
+        mean a charge at once settled and not going to happen.
+
+        Refused on a period this bill is not charged on, for the reason
+        `occurs_on` gives. Whether the movement is really a plausible match —
+        the right direction, the right currency, close to the day — is not
+        decided here: that needs the movement, and this object only ever sees
+        an id.
+        """
+        identity = movement_id.strip()
+
+        if not identity:
+            raise ValueError("A charge cannot be linked to a movement with no id")
+
+        if not self.occurs_on(period):
+            raise ValueError(f"This bill is not charged on {period.isoformat()}")
+
+        self.skipped = self.skipped - {period}
+        linked = {**self.linked, period: identity}
+
+        # Oldest first out, for the reason the skipped periods give.
+        self.linked = dict(sorted(linked.items())[-MAX_LINKED_PERIODS:])
+
+    def unlink(self, period: dt.date) -> None:
+        """Forget that a movement answered for this charge.
+
+        Erases nothing: the movement is the bank's fact and stays exactly
+        where it was, spent and counted. What goes away is the claim that it
+        was *this* charge, which is the only part this app made up.
+
+        No `occurs_on` check, for the reason `unskip` gives: amending the
+        bill's day can strand a link on a date the calendar no longer visits,
+        and refusing to remove it would make it permanent.
+        """
+        self.linked = {
+            day: movement for day, movement in self.linked.items() if day != period
+        }
+
+    def linked_movement(self, period: dt.date) -> str | None:
+        """The movement said to answer for this charge, if any was linked."""
+        return self.linked.get(period)
 
     def occurrences(
         self,

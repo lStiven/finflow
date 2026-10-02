@@ -26,12 +26,13 @@
  * unrelated rows — and now the place where each of those days is answered for.
  */
 
-import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   CalendarClock,
   Check,
   CircleSlash,
+  Link2,
   Loader2,
   Pause,
   Pencil,
@@ -40,25 +41,43 @@ import {
   Receipt,
   RotateCcw,
   Snowflake,
+  Sparkles,
   Trash2,
   Wallet,
   X,
+  Zap,
+  ZapOff,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   accountsQuery,
   type Bill,
   type BillCadence,
   type BillOccurrence,
+  type BillsSettlement,
   type BillTotal,
   billsQuery,
+  type ChargeProposal,
   categoriesQuery,
+  type RecurringSeries,
+  recurringQuery,
   useAmendBill,
   useDeclareBill,
   useForgetBill,
+  useLinkCharge,
   usePauseBill,
+  useSetBillAutopay,
   useSettleCharge,
+  useSettleDueCharges,
 } from "@/api/queries";
+import {
+  asDeclaration,
+  type Certainty,
+  certaintyOf,
+  evidenceLabel,
+  nextChargeLabel,
+  suggestions,
+} from "@/bills/detected";
 import { lookOf } from "@/bills/look";
 import {
   type BillState,
@@ -70,6 +89,7 @@ import {
   chargeVerbs,
   formatAmountInput,
   groupByDay,
+  isMatched,
   isSettled,
   parseAmount,
   settledShare,
@@ -109,6 +129,19 @@ function BillsScreen() {
   const { data: view } = useSuspenseQuery(billsQuery);
   const [declaring, setDeclaring] = useState(false);
   const today = todayIso();
+  const settlement = useSettleDueCharges();
+  const asked = useRef(false);
+
+  // Once per visit, as the screen opens. Nothing in this deployment can walk
+  // every user on a schedule yet, so the charges that fell due while nobody
+  // was looking are settled while somebody *is* — which is also the only
+  // moment an undo is worth anything. The ref is what stops React's double
+  // mount in development from asking twice.
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    settlement.mutate();
+  }, [settlement.mutate]);
 
   return (
     <AppShell>
@@ -124,6 +157,9 @@ function BillsScreen() {
         </header>
 
         <Forecast totals={view.totals} />
+
+        {settlement.data ? <Settled view={settlement.data} /> : null}
+        {settlement.data ? <Proposals view={settlement.data} /> : null}
 
         {declaring ? (
           <BillForm onClose={() => setDeclaring(false)} />
@@ -150,6 +186,8 @@ function BillsScreen() {
         {view.occurrences.length > 0 ? (
           <Timeline occurrences={view.occurrences} bills={view.bills} today={today} />
         ) : null}
+
+        <Detected today={today} />
       </div>
     </AppShell>
   );
@@ -257,6 +295,203 @@ function Empty() {
   );
 }
 
+/**
+ * What this visit settled on its own, with the way back.
+ *
+ * Only ever drawn when something happened, and it says **which** of the two
+ * things happened, because they are not the same event and their undos are
+ * not the same undo. «Se cobró sola» wrote a movement and moved a balance;
+ * «Ya estaba pagada» recognised money that was already there and wrote
+ * nothing at all.
+ *
+ * It is on the screen rather than only in the Telegram alert because the
+ * alert can be off, and an automatic charge nobody was told about is exactly
+ * the kind of surprise that makes somebody stop trusting a balance.
+ */
+function Settled({ view }: { view: BillsSettlement }) {
+  const settle = useSettleCharge();
+
+  if (view.settled.length === 0) return null;
+
+  return (
+    <Card lift={false} className="flex flex-col gap-3">
+      <SectionTitle count={view.settled.length}>Se resolvió solo</SectionTitle>
+      <ul className="flex flex-col gap-2">
+        {view.settled.map((each) => (
+          <li
+            key={`${each.bill.id}-${each.occurrence.due_on}`}
+            className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-sm">
+                {each.bill.name}
+                <span className="text-faint"> · </span>
+                <span className="text-muted">
+                  {formatIsoDayMonth(each.occurrence.due_on)}
+                </span>
+              </span>
+              <span className="text-faint text-xs">
+                {each.action === "charged"
+                  ? "Se cobró sola: quedó un movimiento nuevo."
+                  : "Ya estaba pagada por un movimiento tuyo. No se escribió nada."}
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              <Money
+                amount={chargedAmount(each.occurrence)}
+                currency={each.occurrence.currency}
+                size="sm"
+                tone={each.occurrence.direction === "incoming" ? "positive" : "plain"}
+              />
+              <ChargeAction
+                label={each.action === "charged" ? "Deshacer" : "No es este"}
+                on={each.bill.name}
+                icon={RotateCcw}
+                disabled={settle.isPending}
+                onClick={() =>
+                  settle.mutate({
+                    billId: each.bill.id,
+                    period: each.occurrence.due_on,
+                    action: each.action === "charged" ? "unpay" : "unlink",
+                    currency: each.occurrence.currency,
+                  })
+                }
+              />
+            </span>
+          </li>
+        ))}
+      </ul>
+      {settle.isError ? (
+        <span className="text-outgoing text-xs">{settle.error.message}</span>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * The charges the app refused to decide on its own.
+ *
+ * Two movements that could both be the gym, or one whose figure is nowhere
+ * near what the bill says. Linking one **writes nothing**: it says that the
+ * money already recorded is what this charge cost, which is the whole point —
+ * confirming instead would record the same money twice.
+ */
+function Proposals({ view }: { view: BillsSettlement }) {
+  if (view.proposals.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionTitle count={view.proposals.length}>¿Es este el cobro?</SectionTitle>
+      <p className="max-w-prose text-muted text-xs leading-relaxed">
+        Estos movimientos ya están en tu historial y se parecen a un cobro que nadie ha
+        respondido. Enlazarlo{" "}
+        <strong className="text-text">no escribe ningún movimiento</strong>: solo dice
+        que ese dinero es el de esta factura.
+      </p>
+      <div className="flex flex-col gap-3">
+        {view.proposals.map((proposal) => (
+          <Proposal
+            key={`${proposal.bill_id}-${proposal.occurrence.due_on}`}
+            proposal={proposal}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Proposal({ proposal }: { proposal: ChargeProposal }) {
+  const link = useLinkCharge();
+  const [linked, setLinked] = useState<string | null>(null);
+
+  // The question is answered, and the card has to stop asking it. The list it
+  // was drawn from is the one-shot answer of the sweep, which nothing
+  // invalidates — so without this the buttons stay live and a second tap
+  // quietly re-points the charge at a different movement.
+  if (linked !== null) {
+    const chosen = proposal.candidates.find((each) => each.movement_id === linked);
+
+    return (
+      <Card lift={false} className="flex flex-col gap-1">
+        <span className="text-sm">
+          {proposal.bill_name}
+          <span className="text-faint"> · </span>
+          <span className="text-muted">
+            {formatIsoDayMonth(proposal.occurrence.due_on)}
+          </span>
+        </span>
+        <span className="text-accent text-xs">
+          Enlazado con {chosen?.counterparty ?? "ese movimiento"}. No se escribió nada.
+        </span>
+      </Card>
+    );
+  }
+
+  return (
+    <Card lift={false} className="flex flex-col gap-2">
+      <span className="text-sm">
+        {proposal.bill_name}
+        <span className="text-faint"> · </span>
+        <span className="text-muted">
+          {formatIsoDayMonth(proposal.occurrence.due_on)}
+        </span>
+        <span className="text-faint"> · </span>
+        <span className="text-muted">
+          {chargeVerbs(proposal.occurrence).settle.toLowerCase()} pendiente
+        </span>
+      </span>
+
+      <ul className="flex flex-col gap-1.5">
+        {proposal.candidates.map((candidate) => (
+          <li
+            key={candidate.movement_id}
+            className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-sm" title={candidate.counterparty}>
+                {candidate.counterparty}
+              </span>
+              <span className="text-faint text-xs">
+                {formatIsoDayMonth(candidate.occurred_on)}
+                {candidate.quality === "certain" ? " · cuadra" : " · se parece"}
+              </span>
+            </span>
+            <span className="flex items-center gap-2">
+              <Money
+                amount={candidate.amount}
+                currency={candidate.currency}
+                size="sm"
+                tone="neutral"
+              />
+              <ChargeAction
+                label="Es este"
+                on={proposal.bill_name}
+                icon={Link2}
+                tone="accent"
+                disabled={link.isPending}
+                onClick={() =>
+                  link.mutate(
+                    {
+                      billId: proposal.bill_id,
+                      period: proposal.occurrence.due_on,
+                      movementId: candidate.movement_id,
+                    },
+                    { onSuccess: () => setLinked(candidate.movement_id) },
+                  )
+                }
+              />
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      {link.isError ? (
+        <span className="text-outgoing text-xs">{link.error.message}</span>
+      ) : null}
+    </Card>
+  );
+}
+
 /** What each state adds on top of the category's own look. */
 const STATE: Record<BillState, { label: string | null; chip: string }> = {
   active: { label: null, chip: "text-faint" },
@@ -287,8 +522,10 @@ const STATE: Record<BillState, { label: string | null; chip: string }> = {
 function BillCard({ bill, today }: { bill: Bill; today: string }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [arming, setArming] = useState(false);
   const pause = usePauseBill();
   const forget = useForgetBill();
+  const autopay = useSetBillAutopay();
   const state = billState(bill);
   const note = STATE[state];
   const paused = bill.status === "paused";
@@ -324,19 +561,65 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
           <Icon className="size-[1.125rem]" />
         </span>
 
-        {note.label ? (
-          <span
-            className={cn(
-              "shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem]",
-              note.chip,
-            )}
-          >
-            {note.label}
-          </span>
-        ) : null}
+        <span className="flex shrink-0 flex-col items-end gap-1">
+          {note.label ? (
+            <span
+              className={cn(
+                "rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem]",
+                note.chip,
+              )}
+            >
+              {note.label}
+            </span>
+          ) : null}
+          {bill.autopay ? (
+            <span
+              className="flex items-center gap-1 rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem] text-accent"
+              title="Se cobra sola unos días después de cada fecha, si ningún movimiento tuyo cuadra con el cobro."
+            >
+              <Zap className="size-3" />
+              Se cobra sola
+            </span>
+          ) : null}
+        </span>
       </div>
 
-      {confirming ? (
+      {arming ? (
+        <div className="flex flex-1 flex-col justify-end gap-2">
+          {/* The warning is the point of the step. Arming is the only switch
+              on this screen that ends in money moving without anybody
+              pressing anything, so it says what it will do before it does
+              it. */}
+          <span className="text-muted text-xs leading-relaxed">
+            Cada cobro <strong className="text-text">escribirá un movimiento</strong>:
+            mueve el saldo y cuenta como gasto del mes. Espera unos días por si el banco
+            te avisa, y empieza desde el próximo cobro.
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-accent text-xs"
+              disabled={autopay.isPending}
+              aria-label={`Sí, cobrar sola ${bill.name}`}
+              onClick={() =>
+                autopay.mutate(
+                  { billId: bill.id, enabled: true },
+                  { onSuccess: () => setArming(false) },
+                )
+              }
+            >
+              Sí, que se cobre sola
+            </Button>
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-xs"
+              onClick={() => setArming(false)}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      ) : confirming ? (
         <div className="flex flex-1 flex-col justify-end gap-2">
           <span className="text-muted text-xs leading-relaxed">
             ¿Borrar «{bill.name}»? No borra ningún movimiento.
@@ -400,6 +683,17 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
               on={bill.name}
               icon={Pencil}
               onClick={() => setEditing(true)}
+            />
+            <IconAction
+              label={bill.autopay ? "No cobrar sola" : "Cobrar sola"}
+              on={bill.name}
+              icon={bill.autopay ? ZapOff : Zap}
+              disabled={autopay.isPending || paused}
+              onClick={() =>
+                bill.autopay
+                  ? autopay.mutate({ billId: bill.id, enabled: false })
+                  : setArming(true)
+              }
             />
             <IconAction
               label={paused ? "Reanudar" : "Pausar"}
@@ -729,7 +1023,11 @@ function Charge({
   const paid = occurrence.state === "paid";
   const verbs = chargeVerbs(occurrence);
 
-  const run = (action: "pay" | "unpay" | "skip" | "unskip", amount?: string) =>
+  const matched = isMatched(occurrence);
+  const run = (
+    action: "pay" | "unpay" | "skip" | "unskip" | "unlink",
+    amount?: string,
+  ) =>
     settle.mutate(
       {
         billId: occurrence.bill_id,
@@ -783,6 +1081,15 @@ function Charge({
         />
       </div>
 
+      {matched ? (
+        // Worth a line of its own: this charge was answered by money that was
+        // already in the ledger, so there is no movement of this app's making
+        // behind it and «deshacer» does not erase anything.
+        <span className="text-faint text-xs">
+          Pagada con un movimiento tuyo. No se escribió nada.
+        </span>
+      ) : null}
+
       {settle.isError ? (
         <span className="text-outgoing text-xs">{settle.error.message}</span>
       ) : null}
@@ -802,7 +1109,7 @@ function Charge({
               on={name}
               icon={RotateCcw}
               disabled={settle.isPending}
-              onClick={() => run(paid ? "unpay" : "unskip")}
+              onClick={() => run(paid ? (matched ? "unlink" : "unpay") : "unskip")}
             />
           ) : (
             <>
@@ -866,8 +1173,31 @@ function PayForm({
     onConfirm(parsed === occurrence.amount ? undefined : parsed);
   };
 
+  const incoming = occurrence.direction === "incoming";
+
   return (
     <div className="flex flex-col gap-2 rounded-lg bg-surface-raised/60 p-3">
+      {/* Said here rather than once at the top of the screen, because this is
+          the moment it matters: the difference between «anoté cuánto me va a
+          costar» and «se movió mi plata» is exactly what somebody gets wrong
+          the first time they press this. And if planning is what they were
+          after, the screen that does it has a name. */}
+      <p className="text-faint text-xs leading-relaxed">
+        {incoming ? "Confirmar" : "Pagar"}{" "}
+        <strong className="text-text">escribe un movimiento nuevo</strong>: mueve el
+        saldo de la cuenta, {incoming ? "cuenta como ingreso" : "cuenta como gasto"} del
+        mes y te llega el aviso.{" "}
+        {incoming ? null : (
+          <>
+            ¿Solo querías apartar la plata del mes? Eso son los{" "}
+            <Link to="/presupuestos" className="text-accent hover:underline">
+              Presupuestos
+            </Link>
+            , y ahí nada se mueve.
+          </>
+        )}
+      </p>
+
       <label className="flex items-center gap-2 text-faint text-xs">
         <span className="shrink-0">{chargeVerbs(occurrence).amount}</span>
         <input
@@ -935,5 +1265,163 @@ function ChargeAction({
       <Icon className="size-3.5" />
       {label}
     </button>
+  );
+}
+
+/**
+ * What looks like it repeats, and is not declared yet.
+ *
+ * The other half of this feature, and the weaker one by design: everything
+ * above is somebody's own statement about their money, and this is the app
+ * guessing from what the ledger already holds. So it sits at the bottom, it
+ * proposes rather than does, and **accepting one is declaring a bill** —
+ * literally the same call the form above makes, with the figures filled in.
+ *
+ * It is an enrichment and it behaves like one. While it is loading there is
+ * nothing here, and if it fails there is nothing here either: a screen whose
+ * point is the month must not show an error about a suggestion.
+ *
+ * Empty means "not enough history yet" far more often than "you have no
+ * subscriptions" — three charges at one merchant is what it takes — so
+ * nothing is rendered rather than a line claiming there is nothing to find.
+ */
+function Detected({ today }: { today: string }) {
+  const { data } = useQuery(recurringQuery);
+  const found = suggestions(data?.series ?? []);
+
+  if (found.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <SectionTitle count={found.filter((each) => each.bill_id === null).length}>
+        Parece que se repiten
+      </SectionTitle>
+
+      <p className="max-w-prose text-muted text-sm leading-relaxed">
+        Cobros que ya están en tu historial y vuelven cada cierto tiempo. Esto es una
+        lectura de lo que ya pasó:{" "}
+        <strong className="text-text">no declara nada por su cuenta</strong> y no mueve
+        ningún saldo.
+      </p>
+
+      <Card lift={false} className="flex flex-col gap-0 p-0">
+        {found.map((series, index) => (
+          <Suggestion
+            key={series.key}
+            series={series}
+            today={today}
+            first={index === 0}
+          />
+        ))}
+      </Card>
+    </section>
+  );
+}
+
+/** How sure the detector is, in the one word a reader acts on. */
+const CERTAINTY: Record<Certainty, { label: string; tone: string }> = {
+  high: { label: "Muy probable", tone: "text-accent" },
+  medium: { label: "Probable", tone: "text-muted" },
+  low: { label: "Puede ser", tone: "text-faint" },
+};
+
+/**
+ * One suggestion: what it looks like, what it costs, and the evidence.
+ *
+ * The evidence line is the part that earns the trust. "4 cobros, ninguno
+ * faltó" is something somebody can check against their own bank in ten
+ * seconds; a percentage is a number they have to take on faith, which on a
+ * money screen is the same as ignoring it.
+ *
+ * A variable charge says so out loud — «≈ $88.900» — because "about ninety
+ * thousand" and "ninety thousand" are different promises, and declaring the
+ * second when the app meant the first puts a wrong figure into the month's
+ * forecast every month.
+ */
+function Suggestion({
+  series,
+  today,
+  first,
+}: {
+  series: RecurringSeries;
+  today: string;
+  first: boolean;
+}) {
+  const declare = useDeclareBill();
+  const look = lookOf({ category: series.category, direction: series.direction });
+  const Icon = look.icon;
+  const certainty = CERTAINTY[certaintyOf(series)];
+  const declared = series.bill_id !== null;
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 p-4 sm:flex-row sm:items-center",
+        !first && "border-line/60 border-t",
+        declared && "opacity-60",
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "grid size-10 shrink-0 place-items-center rounded-xl",
+          declared ? "bg-surface-raised text-faint" : look.badge,
+        )}
+      >
+        <Icon className="size-[1.125rem]" />
+      </span>
+
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="min-w-0 truncate font-medium text-sm" title={series.name}>
+            {series.name}
+          </span>
+          <span className={cn("shrink-0 text-[0.6875rem]", certainty.tone)}>
+            {certainty.label}
+          </span>
+        </span>
+        <span className="text-faint text-xs leading-relaxed">
+          {cadenceLabel(series.cadence)} ·{" "}
+          {nextChargeLabel(series, formatIsoDayMonth(series.next_due_on), today)} ·{" "}
+          {evidenceLabel(series)}
+        </span>
+      </div>
+
+      <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+        <span className="flex items-baseline gap-1">
+          {series.variable ? (
+            <span className="text-muted text-sm" title="El monto cambia cada vez">
+              ≈
+            </span>
+          ) : null}
+          <Money amount={series.amount} currency={series.currency} size="sm" />
+        </span>
+
+        {declared ? (
+          <span className="shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-faint text-[0.6875rem]">
+            Ya declarada
+          </span>
+        ) : (
+          <Button
+            variant="ghost"
+            className="shrink-0 px-3 py-1.5 text-xs"
+            aria-label={`Declarar ${series.name} como factura`}
+            disabled={declare.isPending}
+            onClick={() => declare.mutate(asDeclaration(series))}
+          >
+            {declare.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="size-3.5" />
+            )}
+            Declarar
+          </Button>
+        )}
+      </div>
+
+      {declare.isError ? (
+        <span className="text-outgoing text-xs">{declare.error.message}</span>
+      ) : null}
+    </div>
   );
 }

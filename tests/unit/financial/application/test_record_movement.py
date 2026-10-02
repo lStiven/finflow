@@ -398,3 +398,33 @@ def test_the_balance_delta_written_is_the_one_the_account_computed() -> None:
     assert result.account is not None
     assert delta == result.account.balance.signed_amount
     assert delta == Decimal("50000")
+
+
+# ---------------------------------------------------- where it landed
+
+
+def _announced(publisher: RecordingPublisher) -> TransactionRecorded:
+    [recorded] = [e for e in publisher.published if isinstance(e, TransactionRecorded)]
+    return recorded
+
+
+def test_an_alert_that_found_its_account_announces_that_account() -> None:
+    # Built before it is placed: without restating the pending announcement,
+    # every routed alert would be published as landing on no account.
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    declared = _declare(accounts)
+
+    _use_case(accounts, ledger, publisher).execute(_command())
+
+    assert _announced(publisher).account_id == declared.id
+
+
+def test_an_alert_whose_card_nobody_declared_announces_no_account() -> None:
+    # It has a fingerprint — the card is named — and still landed nowhere.
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+
+    _use_case(accounts, ledger, publisher).execute(_command())
+
+    recorded = _announced(publisher)
+    assert recorded.account_fingerprint is not None
+    assert recorded.account_id is None

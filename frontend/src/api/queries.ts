@@ -13,7 +13,9 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { hasPendingLink, LINK_POLL_MS } from "@/alerts/channels";
+import { INBOX_PAGE } from "@/alerts/inbox";
 import { api, unwrap } from "@/api/client";
+import { ApiError } from "@/api/errors";
 import type { components, paths } from "@/api/schema";
 import { DISPLAY_TIMEZONE } from "@/lib/dates";
 
@@ -65,7 +67,41 @@ export type BillOccurrence = components["schemas"]["BillOccurrenceResponse"];
 export type BillTotal = components["schemas"]["BillTotalResponse"];
 export type BillCadence = components["schemas"]["BillCadence"];
 export type BillCharge = components["schemas"]["BillChargeResponse"];
+export type BillsSettlement = components["schemas"]["BillsSettlementResponse"];
+export type ChargeProposal = components["schemas"]["ChargeProposalResponse"];
+export type ChargeCandidate = components["schemas"]["ChargeCandidateResponse"];
+export type AutomaticSettlement = components["schemas"]["AutomaticSettlementResponse"];
 export type DeclareBillBody = components["schemas"]["DeclareBillPayload"];
+/**
+ * A rhythm the detector found in the history, with how much to believe it.
+ *
+ * Never a bill. Accepting one is `useDeclareBill` with these figures, which
+ * is the same call the form makes — a heuristic does not get to create the
+ * thing that can charge money.
+ */
+/** A ceiling its owner put on one category. */
+export type Budget = components["schemas"]["BudgetResponse"];
+/** One cap and what the month has done to it — flat, so the ceiling and the
+ * traffic light cannot be rendered out of step. */
+export type BudgetProgress = components["schemas"]["BudgetProgressResponse"];
+export type BudgetsView = components["schemas"]["BudgetsResponse"];
+/** `ok` | `warning` | `over`, decided by the server so that two screens
+ * cannot say different things about the same category on the same day. */
+export type BudgetState = components["schemas"]["BudgetState"];
+/** Per currency, and never summed across them. */
+export type BudgetTotal = components["schemas"]["BudgetTotalsResponse"];
+/** Somewhere a cap is missing, ranked by what actually goes out there. */
+export type UncappedCategory = components["schemas"]["UncappedCategoryResponse"];
+export type BudgetBody = components["schemas"]["BudgetPayload"];
+/** What a budget watches: categories and accounts, empty meaning every one. */
+export type BudgetScope = components["schemas"]["BudgetScopeResponse"];
+/** What the month is supposed to look like, as its owner declared it. */
+export type MonthlyPlan = components["schemas"]["PlanResponse"];
+export type PlanBody = components["schemas"]["DeclarePlanPayload"];
+/** The figure and every piece of the subtraction that produced it. */
+export type Allowance = components["schemas"]["AllowanceResponse"];
+export type RecurringSeries = components["schemas"]["RecurringSeriesResponse"];
+export type RecurringView = components["schemas"]["RecurringResponse"];
 export type AmendBillBody = components["schemas"]["AmendBillPayload"];
 /** What a loan costs or an investment earns, and what it will do next. */
 export type Financing = components["schemas"]["FinancingResponse"];
@@ -99,7 +135,24 @@ export const queryKeys = {
   catalog: ["catalog"] as const,
   financing: ["financing"] as const,
   alertChannels: ["alert-channels"] as const,
+  // Not `inbox`, which is Identity's forwarding address: this is the alerts
+  // the app shows — every movement and Monday's summary.
+  alertsInbox: ["alerts-inbox"] as const,
   bills: ["bills"] as const,
+  recurring: ["recurring"] as const,
+  plan: ["plan"] as const,
+  // Deliberately *under* `summary`: the allowance is made of the month's
+  // spending, so everything that already invalidates the totals takes it
+  // along by prefix instead of every call site having to remember a second
+  // key. What it also needs — the declared bills — is added by hand in the
+  // few mutations that change those.
+  allowance: [...["summary"], "allowance"] as const,
+  // Under `summary` for the same reason the allowance is: what a cap is
+  // compared against *is* the month's spending, so every mutation that already
+  // invalidates the totals carries the budgets along by prefix. The month a
+  // screen is looking at is appended per query, so paging back through months
+  // does not fight over one cache entry.
+  budgets: [...["summary"], "budgets"] as const,
 };
 
 /* ---------------------------------------------------------------- catalogs */
@@ -689,6 +742,9 @@ export function useDeleteTransaction(
       // payment taken off a loan leaves its amortization describing a debt
       // that is no longer there.
       client.invalidateQueries({ queryKey: queryKeys.financing });
+      // Its alert goes with it: the inbox leaves out alerts about movements
+      // that no longer exist, and the bell should not wait for the next poll.
+      client.invalidateQueries({ queryKey: queryKeys.alertsInbox });
     },
   });
 }
@@ -1276,6 +1332,81 @@ export function useRevalue(
  * out — and `refetchInterval` returning false is what stops the timer once
  * there is nothing left to find out. The same shape `/ingestion/setup` uses.
  */
+export type AlertsInboxEntry = components["schemas"]["InboxEntryResponse"];
+export type AlertsInboxMovement = components["schemas"]["InboxMovementResponse"];
+export type AlertsInboxSummary = components["schemas"]["InboxSummaryResponse"];
+
+/** How often a visible tab asks for new alerts. Hidden tabs do not ask. */
+export const ALERTS_POLL_MS = 15_000;
+
+/**
+ * The alerts the app shows, newest first — what reached Telegram, and the
+ * same for somebody with no channel at all.
+ *
+ * Polled while the page is visible: a deployment without a socket gets as
+ * close to real time as a request every few seconds, and a hidden tab asking
+ * all afternoon would be reads nobody sees.
+ */
+export const alertsInboxQuery = queryOptions({
+  queryKey: queryKeys.alertsInbox,
+  queryFn: () =>
+    unwrap(api.GET("/alerts/inbox", { params: { query: { limit: INBOX_PAGE } } })),
+  refetchInterval: ALERTS_POLL_MS,
+  refetchIntervalInBackground: false,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000,
+});
+
+type InboxPage = { entries: AlertsInboxEntry[] };
+
+/**
+ * Hide one alert from the app. Taken off the list at once — the next poll
+ * would agree — and put back if the server refuses.
+ */
+export function useDismissAlert() {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: (entryId: string) =>
+      unwrap(
+        api.DELETE("/alerts/inbox/{entry_id}", {
+          params: { path: { entry_id: entryId } },
+        }),
+      ),
+    onMutate: async (entryId) => {
+      await client.cancelQueries({ queryKey: queryKeys.alertsInbox });
+      const before = client.getQueryData<InboxPage>(queryKeys.alertsInbox);
+      client.setQueryData<InboxPage>(queryKeys.alertsInbox, (page) =>
+        page ? { entries: page.entries.filter((entry) => entry.id !== entryId) } : page,
+      );
+      return { before };
+    },
+    onError: (_error, _entryId, context) => {
+      if (context?.before) client.setQueryData(queryKeys.alertsInbox, context.before);
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.alertsInbox }),
+  });
+}
+
+/** Hide every alert this user has in the app. */
+export function useDismissAllAlerts() {
+  const client = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/alerts/inbox")),
+    onMutate: async () => {
+      await client.cancelQueries({ queryKey: queryKeys.alertsInbox });
+      const before = client.getQueryData<InboxPage>(queryKeys.alertsInbox);
+      client.setQueryData<InboxPage>(queryKeys.alertsInbox, { entries: [] });
+      return { before };
+    },
+    onError: (_error, _vars, context) => {
+      if (context?.before) client.setQueryData(queryKeys.alertsInbox, context.before);
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: queryKeys.alertsInbox }),
+  });
+}
+
 export const alertChannelsQuery = queryOptions({
   queryKey: queryKeys.alertChannels,
   queryFn: () => unwrap(api.GET("/alerts/channels")),
@@ -1342,6 +1473,81 @@ export function useDeleteAlertChannel(): UseMutationResult<unknown, Error, strin
   });
 }
 
+/* ------------------------------------------------------------------- plan */
+
+/**
+ * «Nothing declared» read as an answer instead of as a failure.
+ *
+ * Both plan endpoints say 404 when the owner has not stated their month, and
+ * that is not an error: it is the state everybody starts in. Turning it into
+ * `null` here is what lets the card be **absent** rather than showing a zero
+ * — and a zero on this particular number reads as "you have nothing left to
+ * spend", which is the one wrong answer worse than no answer.
+ */
+async function orAbsent<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export const planQuery = queryOptions({
+  queryKey: queryKeys.plan,
+  queryFn: () => orAbsent(unwrap(api.GET("/financial/plan"))),
+  staleTime: 60_000,
+  // 404 is the ordinary answer here, and `orAbsent` has already turned it
+  // into one. Retrying would only slow down the screen that has to decide
+  // whether to draw the card.
+  retry: false,
+});
+
+/**
+ * What is left to spend this month, and what it is made of.
+ *
+ * The window is the server's business, read in `DISPLAY_TIMEZONE`: a month
+ * computed in the browser would start five hours early for anybody whose
+ * clock is not Bogotá, and being wrong on the 1st is being wrong on the day
+ * this is most likely to be read.
+ */
+export const allowanceQuery = queryOptions({
+  queryKey: queryKeys.allowance,
+  queryFn: () =>
+    orAbsent(
+      unwrap(
+        api.GET("/financial/allowance", {
+          params: { query: { timezone: DISPLAY_TIMEZONE } },
+        }),
+      ),
+    ),
+  retry: false,
+});
+
+export function useDeclarePlan(): UseMutationResult<MonthlyPlan, Error, PlanBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PlanBody) => unwrap(api.PUT("/financial/plan", { body })),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plan });
+      // The number is built out of the plan, so it is stale the instant the
+      // plan changes — and it is the one on screen.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
+export function useForgetPlan(): UseMutationResult<unknown, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => unwrap(api.DELETE("/financial/plan")),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.plan });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
 /* ------------------------------------------------------------------ bills */
 
 /**
@@ -1369,6 +1575,11 @@ export function useDeclareBill(): UseMutationResult<Bill, Error, DeclareBillBody
       unwrap(api.POST("/financial/bills", { body })),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // A suggestion that was just accepted has to come back marked as
+      // declared, or the list goes on offering what is already there.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1387,6 +1598,11 @@ export function useAmendBill(
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // The name is what the detector matches a declared bill on, so a
+      // rename can change which suggestions are marked.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1416,6 +1632,8 @@ export function usePauseBill(): UseMutationResult<
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // A paused bill predicts nothing, so what the month owes moves with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
@@ -1431,9 +1649,38 @@ export function useForgetBill(): UseMutationResult<unknown, Error, string> {
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: queryKeys.bills });
+      // Forgetting a bill un-declares what the detector had marked, so the
+      // suggestion is worth offering again.
+      void client.invalidateQueries({ queryKey: queryKeys.recurring });
+      // And what the month still owes changed with it.
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
     },
   });
 }
+
+/**
+ * What looks like it comes back, and is not declared yet.
+ *
+ * Its own query rather than a field on `billsQuery`, and that is a decision
+ * about cost as much as about shape: answering it reads thirteen months of
+ * movements, and the screen must not wait on a suggestion in order to show
+ * somebody what they already declared. It is an enrichment — when it fails,
+ * the section is simply not there.
+ *
+ * Invalidated by `useDeclareBill` as well as by the settle mutations: a
+ * suggestion that has just been accepted has to come back marked as declared,
+ * or the list keeps offering it.
+ */
+export const recurringQuery = queryOptions({
+  queryKey: queryKeys.recurring,
+  queryFn: () =>
+    unwrap(
+      api.GET("/financial/recurring", {
+        params: { query: { timezone: DISPLAY_TIMEZONE } },
+      }),
+    ),
+  staleTime: 5 * 60_000,
+});
 
 /**
  * Answering for one charge: it happened, it did not, or undo either.
@@ -1450,7 +1697,7 @@ export function useForgetBill(): UseMutationResult<unknown, Error, string> {
  * path rather than the body is what makes paying September and paying October
  * two different requests.
  */
-export type ChargeAction = "pay" | "unpay" | "skip" | "unskip";
+export type ChargeAction = "pay" | "unpay" | "skip" | "unskip" | "unlink";
 
 export type SettleChargeVariables = {
   billId: string;
@@ -1508,6 +1755,17 @@ export function useSettleCharge(): UseMutationResult<
         );
       }
 
+      // Not the same undo as `unpay`, and the difference is money: this one
+      // forgets a claim about which charge a movement paid, and leaves the
+      // movement itself exactly where the bank put it.
+      if (action === "unlink") {
+        return unwrap(
+          api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/link", {
+            params,
+          }),
+        );
+      }
+
       return unwrap(
         api.DELETE("/financial/bills/{bill_id}/occurrences/{period}/skip", { params }),
       );
@@ -1518,6 +1776,188 @@ export function useSettleCharge(): UseMutationResult<
       void client.invalidateQueries({ queryKey: queryKeys.summary });
       void client.invalidateQueries({ queryKey: queryKeys.trends });
       void client.invalidateQueries({ queryKey: queryKeys.accounts });
+    },
+  });
+}
+
+/**
+ * Arm a bill to charge itself, or disarm it.
+ *
+ * The timezone goes with it because the day it was armed is what the server
+ * writes down, and that day is the earliest charge the switch may ever reach.
+ */
+export function useSetBillAutopay(): UseMutationResult<
+  Bill,
+  Error,
+  { billId: string; enabled: boolean }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, enabled }: { billId: string; enabled: boolean }) =>
+      unwrap(
+        api.POST("/financial/bills/{bill_id}/autopay", {
+          params: { path: { bill_id: billId } },
+          body: { enabled, timezone: DISPLAY_TIMEZONE },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+    },
+  });
+}
+
+/**
+ * Say a movement already in the ledger is what this charge cost.
+ *
+ * **It writes nothing**, which is why its invalidations are narrower than
+ * `useSettleCharge`'s: no balance moved and no row was added, so the accounts
+ * and the summary are as true as they were a second ago. What changed is what
+ * the month still owes.
+ */
+export function useLinkCharge(): UseMutationResult<
+  BillCharge,
+  Error,
+  { billId: string; period: string; movementId: string }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ billId, period, movementId }) =>
+      unwrap(
+        api.POST("/financial/bills/{bill_id}/occurrences/{period}/link", {
+          params: { path: { bill_id: billId, period } },
+          body: { movement_id: movementId },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
+/**
+ * Settle what can be settled, as the screen opens.
+ *
+ * A mutation and not a query, because it can write: a bill that charges
+ * itself writes its charge here. Lazy on purpose — nothing in this
+ * deployment can walk every user yet, so the work happens while its owner is
+ * looking, which is also the only moment an undo is worth anything.
+ *
+ * Everything it can touch is invalidated, because in the worst case it wrote
+ * a movement: the same list `useSettleCharge` gives, for the same reason.
+ */
+export function useSettleDueCharges(): UseMutationResult<BillsSettlement, Error, void> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/financial/bills/settle", {
+          body: { timezone: DISPLAY_TIMEZONE },
+        }),
+      ),
+    onSuccess: (view) => {
+      if (view.settled.length === 0) {
+        return;
+      }
+
+      void client.invalidateQueries({ queryKey: queryKeys.bills });
+      void client.invalidateQueries({ queryKey: queryKeys.transactions });
+      void client.invalidateQueries({ queryKey: queryKeys.summary });
+      void client.invalidateQueries({ queryKey: queryKeys.trends });
+      void client.invalidateQueries({ queryKey: queryKeys.accounts });
+      void client.invalidateQueries({ queryKey: queryKeys.allowance });
+    },
+  });
+}
+
+/* --------------------------------------------------------------- budgets */
+
+/**
+ * The caps that govern a month, and what the ledger did to them.
+ *
+ * `month` left out asks for the calendar month in `DISPLAY_TIMEZONE`, which is
+ * the only month the dashboard ever wants. The budgets screen names one so it
+ * can page back, and the key carries it — two months are two answers and must
+ * not overwrite each other in the cache.
+ *
+ * Never 404: an empty list of ceilings is an ordinary state, unlike an
+ * undeclared month. So there is no `orAbsent` here and no `retry: false` —
+ * a failure is a failure.
+ */
+export function budgetsQuery(month?: string | null) {
+  return queryOptions({
+    queryKey: [...queryKeys.budgets, month ?? "current"],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/budgets", {
+          params: {
+            query: {
+              timezone: DISPLAY_TIMEZONE,
+              ...(month ? { month } : {}),
+            },
+          },
+        }),
+      ),
+  });
+}
+
+export function useDeclareBudget(): UseMutationResult<Budget, Error, BudgetBody> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BudgetBody) => unwrap(api.POST("/financial/budgets", { body })),
+    onSuccess: () => {
+      // Every month, not just the one on screen: a recurring budget changes
+      // what every month reads, and the key carries the month as its last
+      // segment.
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
+    },
+  });
+}
+
+/**
+ * Restate one budget whole.
+ *
+ * Every field, never a subset — the same shape the endpoint demands, because a
+ * ceiling and the point it warns at are one statement.
+ */
+export function useAmendBudget(): UseMutationResult<
+  Budget,
+  Error,
+  { id: string; body: BudgetBody }
+> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: BudgetBody }) =>
+      unwrap(
+        api.PUT("/financial/budgets/{budget_id}", {
+          params: { path: { budget_id: id } },
+          body,
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
+    },
+  });
+}
+
+/**
+ * Drop one budget, by its id.
+ *
+ * There is nothing to disambiguate any more: December's exception and the
+ * usual ceiling are two budgets with two ids, so dropping one cannot reach
+ * the other.
+ */
+export function useForgetBudget(): UseMutationResult<unknown, Error, string> {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      unwrap(
+        api.DELETE("/financial/budgets/{budget_id}", {
+          params: { path: { budget_id: id } },
+        }),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.budgets });
     },
   });
 }

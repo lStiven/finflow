@@ -54,6 +54,7 @@ FINGERPRINT = AccountFingerprint(value="bancolombia:savings:5261")
 def _recorded(
     *,
     fingerprint: AccountFingerprint | None = FINGERPRINT,
+    account_id: AccountId | None = ACCOUNT_ID,
 ) -> TransactionRecorded:
     return TransactionRecorded(
         movement_id=MOVEMENT_ID,
@@ -66,6 +67,7 @@ def _recorded(
         bank="bancolombia",
         origin=TransactionOrigin.BANK_ALERT,
         account_fingerprint=fingerprint,
+        account_id=account_id,
     )
 
 
@@ -125,7 +127,29 @@ def test_the_event_id_is_carried_through_for_deduplication() -> None:
 
 def test_a_movement_that_found_no_account_says_so_without_naming_the_key() -> None:
     event = FinancialIntegrationEventTranslator().translate(
-        _recorded(fingerprint=None),
+        _recorded(fingerprint=None, account_id=None),
+    )
+
+    assert event is not None
+    assert event.payload["unassigned"] is True
+
+
+def test_a_movement_on_an_account_is_not_unassigned_whatever_its_fingerprint() -> None:
+    # A confirmed bill and a movement entered by hand sit on an account and
+    # carry no fingerprint: reading the fingerprint called every one of them
+    # «sin cuenta asignada».
+    event = FinancialIntegrationEventTranslator().translate(
+        _recorded(fingerprint=None, account_id=ACCOUNT_ID),
+    )
+
+    assert event is not None
+    assert event.payload["unassigned"] is False
+
+
+def test_an_alert_whose_card_nobody_declared_is_unassigned() -> None:
+    # The other half of the same mistake: a fingerprint and no account.
+    event = FinancialIntegrationEventTranslator().translate(
+        _recorded(fingerprint=FINGERPRINT, account_id=None),
     )
 
     assert event is not None

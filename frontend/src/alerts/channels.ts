@@ -69,6 +69,15 @@ export function hasPendingLink(
   );
 }
 
+/** Monday's summary. Absent means the channel never said, and the default is on. */
+export function weeklyPreference(
+  channel: AlertChannel | undefined,
+): AlertPreference | undefined {
+  return channel?.preferences.find(
+    (preference) => preference.alert_type === "weekly_summary",
+  );
+}
+
 export function movementPreference(
   channel: AlertChannel | undefined,
 ): AlertPreference | undefined {

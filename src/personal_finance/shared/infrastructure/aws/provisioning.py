@@ -112,6 +112,14 @@ FINANCIAL_EVENTS_TARGET_ID = "financial-events-queue"
 
 ALERTS_EVENTS_RULE = "finflow-alerts-movements"
 ALERTS_EVENTS_TARGET_ID = "alerts-events-queue"
+
+# How long a movement waits on Alerts' queue before anybody reads it. A
+# hand-written movement is committed first and its category filed right
+# after, in the same request — on purpose, so a hiccup naming the merchant can
+# never lose the money — and an alert read in between would name no budget
+# over that category. Five seconds is ample for that and still "segundos
+# después" to whoever is waiting for the message.
+ALERTS_DELIVERY_DELAY_SECONDS = 5
 MAX_RECEIVE_COUNT = 5
 # Long enough for a parse plus the LLM fallback, short enough that a crashed
 # worker releases the message quickly.
@@ -1031,6 +1039,10 @@ def provision() -> ProvisionedResources:
             "source": [FINANCIAL_SOURCE],
             "detail-type": [MOVEMENT_RECORDED],
         },
+    )
+    get_sqs_client().set_queue_attributes(
+        QueueUrl=alerts_events_url,
+        Attributes={"DelaySeconds": str(ALERTS_DELIVERY_DELAY_SECONDS)},
     )
     _done(started)
 

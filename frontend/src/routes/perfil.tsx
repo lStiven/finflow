@@ -21,6 +21,7 @@ import {
   linkedChannel,
   movementPreference,
   parseMinimumAmount,
+  weeklyPreference,
 } from "@/alerts/channels";
 import { ApiError } from "@/api/client";
 import type { AlertChannel } from "@/api/queries";
@@ -235,6 +236,7 @@ function TelegramCard() {
   const state = channelState(channels);
   const linked = linkedChannel(channels);
   const preference = movementPreference(linked);
+  const weekly = weeklyPreference(linked);
 
   // El enlace deja de tener sentido en cuanto el canal queda vinculado.
   if (state === "linked" && link !== null) setLink(null);
@@ -269,6 +271,21 @@ function TelegramCard() {
           enabled,
           minimum_amount: preference?.minimum_amount ?? null,
           minimum_currency: preference?.minimum_currency ?? "COP",
+        },
+      }),
+    );
+  }
+
+  async function onToggleWeekly(enabled: boolean) {
+    if (!linked) return;
+    await guard(() =>
+      update.mutateAsync({
+        channelId: linked.channel_id,
+        body: {
+          alert_type: "weekly_summary",
+          enabled,
+          minimum_amount: null,
+          minimum_currency: "COP",
         },
       }),
     );
@@ -352,6 +369,22 @@ function TelegramCard() {
               checked={preference?.enabled ?? true}
               disabled={update.isPending}
               onChange={(e) => void onToggle(e.target.checked)}
+            />
+          </label>
+
+          <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
+            <span className="min-w-0">
+              <span className="block font-medium text-sm">Resumen de la semana</span>
+              <span className="block text-faint text-xs">
+                Los lunes: cuánto gastaste, contra tu semana normal.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              className="size-5 shrink-0 accent-violet"
+              checked={weekly?.enabled ?? true}
+              disabled={update.isPending}
+              onChange={(e) => void onToggleWeekly(e.target.checked)}
             />
           </label>
 

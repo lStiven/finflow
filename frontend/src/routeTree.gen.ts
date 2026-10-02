@@ -14,6 +14,7 @@ import { Route as ConectarRouteImport } from './routes/conectar'
 import { Route as FacturasRouteImport } from './routes/facturas'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PerfilRouteImport } from './routes/perfil'
+import { Route as PresupuestosRouteImport } from './routes/presupuestos'
 import { Route as RecuperarRouteImport } from './routes/recuperar'
 import { Route as RestablecerRouteImport } from './routes/restablecer'
 import { Route as ComerciosIndexRouteImport } from './routes/comercios/index'
@@ -53,6 +54,11 @@ const LoginRoute = LoginRouteImport.update({
 const PerfilRoute = PerfilRouteImport.update({
   id: '/perfil',
   path: '/perfil',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PresupuestosRoute = PresupuestosRouteImport.update({
+  id: '/presupuestos',
+  path: '/presupuestos',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RecuperarRoute = RecuperarRouteImport.update({
@@ -141,6 +147,7 @@ export interface FileRoutesByFullPath {
   '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/presupuestos': typeof PresupuestosRoute
   '/recuperar': typeof RecuperarRoute
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
@@ -163,6 +170,7 @@ export interface FileRoutesByTo {
   '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/presupuestos': typeof PresupuestosRoute
   '/recuperar': typeof RecuperarRoute
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
@@ -186,6 +194,7 @@ export interface FileRoutesById {
   '/facturas': typeof FacturasRoute
   '/login': typeof LoginRoute
   '/perfil': typeof PerfilRoute
+  '/presupuestos': typeof PresupuestosRoute
   '/recuperar': typeof RecuperarRoute
   '/restablecer': typeof RestablecerRoute
   '/comercios/$merchantId': typeof ComerciosMerchantIdRoute
@@ -210,6 +219,7 @@ export interface FileRouteTypes {
     | '/facturas'
     | '/login'
     | '/perfil'
+    | '/presupuestos'
     | '/recuperar'
     | '/restablecer'
     | '/comercios/$merchantId'
@@ -232,6 +242,7 @@ export interface FileRouteTypes {
     | '/facturas'
     | '/login'
     | '/perfil'
+    | '/presupuestos'
     | '/recuperar'
     | '/restablecer'
     | '/comercios/$merchantId'
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
     | '/facturas'
     | '/login'
     | '/perfil'
+    | '/presupuestos'
     | '/recuperar'
     | '/restablecer'
     | '/comercios/$merchantId'
@@ -277,6 +289,7 @@ export interface RootRouteChildren {
   FacturasRoute: typeof FacturasRoute
   LoginRoute: typeof LoginRoute
   PerfilRoute: typeof PerfilRoute
+  PresupuestosRoute: typeof PresupuestosRoute
   RecuperarRoute: typeof RecuperarRoute
   RestablecerRoute: typeof RestablecerRoute
   ComerciosMerchantIdRoute: typeof ComerciosMerchantIdRoute
@@ -329,6 +342,13 @@ declare module '@tanstack/react-router' {
       path: '/perfil'
       fullPath: '/perfil'
       preLoaderRoute: typeof PerfilRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/presupuestos': {
+      id: '/presupuestos'
+      path: '/presupuestos'
+      fullPath: '/presupuestos'
+      preLoaderRoute: typeof PresupuestosRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/recuperar': {
@@ -445,6 +465,7 @@ const rootRouteChildren: RootRouteChildren = {
   FacturasRoute: FacturasRoute,
   LoginRoute: LoginRoute,
   PerfilRoute: PerfilRoute,
+  PresupuestosRoute: PresupuestosRoute,
   RecuperarRoute: RecuperarRoute,
   RestablecerRoute: RestablecerRoute,
   ComerciosMerchantIdRoute: ComerciosMerchantIdRoute,

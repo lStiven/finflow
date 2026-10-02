@@ -507,6 +507,24 @@ def normalize_counterparty(value: str) -> str:
     return folded or " ".join(stripped.casefold().split())
 
 
+def counterparty_key(counterparty: str, merchant_id: str | None) -> str:
+    """Who a movement was with, as one comparable string.
+
+    The merchant when one owns the spelling, because that is what makes the
+    same gym recognisable through `PAGO GYM SA` one month and `GYMSA*BOG` the
+    next; the folded text otherwise, which is all there is for a name nothing
+    has ever attributed.
+
+    **Prefixed, so the two spaces cannot collide.** A merchant id and a piece
+    of normalized text are different kinds of answer, and a key that could be
+    either would call them equal the day one looked like the other.
+    """
+    if merchant_id is not None:
+        return f"merchant:{merchant_id}"
+
+    return f"text:{normalize_counterparty(counterparty)}"
+
+
 def _canonical_amount(amount: Money) -> str:
     """`50000` and `50000.00` are the same money and must fingerprint alike.
 

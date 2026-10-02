@@ -24,6 +24,7 @@ import {
   transactionsQuery,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
+import { ExportButton } from "@/components/ExportDialog";
 import { Money } from "@/components/Money";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -228,13 +229,35 @@ function TransactionsScreen() {
               {active > 0 ? " con los filtros aplicados" : ""}
             </p>
           </div>
-          <Link
-            to="/transacciones/nueva"
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
-          >
-            <Plus className="size-4" />
-            Agregar
-          </Link>
+          <div className="flex items-center gap-2">
+            {/* Starts from what the list has selected; the dialog decides. */}
+            <ExportButton
+              selection={search}
+              accounts={accounts.accounts}
+              categories={categories.categories}
+              merchantName={
+                merchants.merchants.find((merchant) => merchant.id === search.merchant)
+                  ?.display_name
+              }
+              originName={
+                search.origin
+                  ? originLabel(
+                      search.origin,
+                      catalog.transaction_origins.find(
+                        (option) => option.value === search.origin,
+                      )?.label ?? search.origin,
+                    )
+                  : undefined
+              }
+            />
+            <Link
+              to="/transacciones/nueva"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
+            >
+              <Plus className="size-4" />
+              Agregar
+            </Link>
+          </div>
         </header>
 
         {/*

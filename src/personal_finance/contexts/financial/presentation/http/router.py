@@ -22,11 +22,27 @@ from decimal import Decimal
 import functools
 import logging
 from typing import Annotated
+import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, model_validator
 
+from personal_finance.contexts.financial.application.allowance import (
+    DeclarePlanCommand,
+    ManageMonthlyPlanUseCase,
+    MonthlyAllowance,
+    ReadAllowanceQuery,
+    ReadMonthlyAllowanceUseCase,
+)
+from personal_finance.contexts.financial.application.autopay import (
+    AutomaticSettlement,
+    ChargeProposal,
+    SettleDueChargesCommand,
+    SettleDueChargesUseCase,
+    SettlementAction,
+    SettlementView,
+)
 from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
     BillSummary,
@@ -39,6 +55,17 @@ from personal_finance.contexts.financial.application.bills import (
     NoSuchBillError,
     SettleBillChargeUseCase,
     SettledCharge,
+)
+from personal_finance.contexts.financial.application.budgets import (
+    AmendBudgetCommand,
+    BudgetLine,
+    BudgetNotFoundError,
+    BudgetsView,
+    BudgetTotals,
+    DeclareBudgetCommand,
+    ManageBudgetsUseCase,
+    ReadBudgetsQuery,
+    ReadBudgetsUseCase,
 )
 from personal_finance.contexts.financial.application.commands import (
     AccrueFinancingCommand,
@@ -60,6 +87,12 @@ from personal_finance.contexts.financial.application.commands import (
     SetLoanTermsCommand,
     UnlinkInstrumentCommand,
 )
+from personal_finance.contexts.financial.application.export import (
+    EXPORT_TOO_LARGE,
+    MAX_EXPORT_ROWS,
+    ExportTooLargeError,
+    ExportTransactionsUseCase,
+)
 from personal_finance.contexts.financial.application.financing import (
     DEFAULT_SCHEDULE_PERIODS,
     MAX_SCHEDULE_PERIODS,
@@ -80,7 +113,10 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageTransactionsUseCase,
     TransactionNotFoundError,
 )
-from personal_finance.contexts.financial.application.ports import MerchantDirectory
+from personal_finance.contexts.financial.application.ports import (
+    AccountRepository,
+    MerchantDirectory,
+)
 from personal_finance.contexts.financial.application.queries import (
     DEFAULT_HISTORY_MONTHS,
     DEFAULT_PAGE_SIZE,
@@ -121,6 +157,12 @@ from personal_finance.contexts.financial.application.queries import (
     TrendQuery,
     TrendSeries,
 )
+from personal_finance.contexts.financial.application.recurring import (
+    DetectedSeries,
+    DetectRecurringQuery,
+    DetectRecurringSeriesUseCase,
+    RecurringView,
+)
 from personal_finance.contexts.financial.application.transfers import (
     DeclareTransferCommand,
     DeclareTransferUseCase,
@@ -132,7 +174,23 @@ from personal_finance.contexts.financial.domain.bills import (
     BillId,
     BillOccurrence,
     BillStatus,
+    ChargeSource,
     OccurrenceState,
+)
+from personal_finance.contexts.financial.domain.budgets import (
+    DEFAULT_WARN_PERCENT,
+    MAX_ICON_LENGTH,
+    # Aliased: this module already has a `MAX_NAME_LENGTH`, for names that are
+    # not a budget's and are twice as long.
+    MAX_NAME_LENGTH as MAX_BUDGET_NAME_LENGTH,
+    MAX_SCOPE_CATEGORIES,
+    MAX_WARN_PERCENT,
+    MIN_WARN_PERCENT,
+    MONTH_KEY,
+    Budget,
+    BudgetId,
+    BudgetScope,
+    BudgetState,
 )
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.exceptions import (
@@ -161,6 +219,15 @@ from personal_finance.contexts.financial.domain.financing import (
     RecurringCharge,
     ScheduledPayment,
 )
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
+from personal_finance.contexts.financial.domain.reconciliation import (
+    ChargeCandidate,
+    MatchQuality,
+)
+from personal_finance.contexts.financial.domain.recurring import (
+    HISTORY_MONTHS,
+    SeriesState,
+)
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountCategory,
     AccountId,
@@ -179,8 +246,17 @@ from personal_finance.contexts.financial.infrastructure.merchant.merchant_direct
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
+    DynamoDBBudgetRepository,
+    DynamoDBMonthlyPlanRepository,
     DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
+)
+from personal_finance.contexts.financial.presentation.http.export import (
+    MEDIA_TYPES as EXPORT_MEDIA_TYPES,
+    ExportFormat,
+    encode as encode_export,
+    export_rows,
+    file_name as export_file_name,
 )
 from personal_finance.contexts.identity.presentation.http.router import (
     get_current_user_id,
@@ -1276,6 +1352,18 @@ def _build_list_transactions() -> ListTransactionsUseCase:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_export_transactions() -> ExportTransactionsUseCase:
+    directory = build_merchant_directory()
+
+    return ExportTransactionsUseCase(
+        ledger=build_ledger(),
+        accounts=build_accounts(),
+        merchants=directory,
+        categories=directory,
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def _build_get_transaction() -> GetTransactionUseCase:
     return GetTransactionUseCase(
         ledger=build_ledger(),
@@ -1343,6 +1431,10 @@ def get_list_transactions_use_case() -> ListTransactionsUseCase:
 
 def get_transaction_use_case() -> GetTransactionUseCase:
     return _build_get_transaction()
+
+
+def get_export_transactions_use_case() -> ExportTransactionsUseCase:
+    return _build_export_transactions()
 
 
 def get_read_trend_use_case() -> ReadSpendingTrendUseCase:
@@ -2032,6 +2124,103 @@ def list_transactions(
         total=page.total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get(
+    "/export",
+    response_class=Response,
+    responses={
+        status.HTTP_200_OK: {
+            "content": {media_type: {} for media_type in EXPORT_MEDIA_TYPES.values()},
+            "description": "The movements, as a file to download.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": (
+                f"`detail.code` is `{EXPORT_TOO_LARGE}` when more than "
+                f"{MAX_EXPORT_ROWS} movements match; any other 422 is a filter "
+                "the API refused."
+            ),
+        },
+    },
+)
+def export_transactions(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ExportTransactionsUseCase,
+        Depends(get_export_transactions_use_case),
+    ],
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    file_format: Annotated[ExportFormat, Query(alias="format")] = ExportFormat.CSV,
+    account_id: Annotated[str | None, Query()] = None,
+    unassigned: Annotated[bool | None, Query()] = None,
+    origin: Annotated[TransactionOrigin | None, Query()] = None,
+    direction: Annotated[MovementDirection | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=MAX_TEXT_LENGTH)] = None,
+    merchant_id: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    since: Annotated[
+        int | None,
+        Query(alias="from", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    until: Annotated[
+        int | None,
+        Query(alias="to", ge=MIN_EPOCH_SECONDS, le=MAX_EPOCH_SECONDS),
+    ] = None,
+    transfers: Annotated[TransferView, Query()] = TransferView.INCLUDE,
+    currency: Annotated[Currency | None, Query()] = None,
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> Response:
+    """Every movement the same filters as `/financial/transactions` match.
+
+    Newest first, and all of them rather than a page: a file is where somebody
+    takes their data to keep it, so a silent cut would be the one wrong
+    answer. Past the ceiling the request is refused and asks for a shorter
+    range instead. Dates are written in `timezone`, the one the screen shows.
+    """
+    zone = ZoneInfo(_known_timezone(timezone))
+
+    try:
+        export = use_case.execute(
+            _movement_filter(
+                user_id=user_id,
+                account_id=account_id,
+                unassigned=unassigned,
+                origin=origin,
+                direction=direction,
+                search=search,
+                merchant_id=merchant_id,
+                category=_known_category(category, merchants, user_id=user_id),
+                since=since,
+                until=until,
+                transfers=transfers,
+                currency=currency,
+            ),
+        )
+    except ExportTooLargeError as error:
+        # Structured, because an unknown category or a malformed filter is a
+        # 422 too, and only this one is answered by asking for fewer dates.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": EXPORT_TOO_LARGE,
+                "message": str(error),
+                "matched": error.matched,
+                "limit": error.limit,
+            },
+        ) from error
+
+    name = export_file_name(file_format, today=dt.datetime.now(tz=zone).date())
+
+    return Response(
+        content=encode_export(file_format, export_rows(export, zone=zone)),
+        media_type=EXPORT_MEDIA_TYPES[file_format],
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            # Somebody's whole ledger: nothing between here and the browser
+            # gets to keep a copy.
+            "Cache-Control": "no-store",
+        },
     )
 
 
@@ -3340,13 +3529,21 @@ class BillOccurrenceResponse(BaseModel):
     # screen in somebody's browser.
     direction: MovementDirection
     state: OccurrenceState
-    #: The ledger row that confirmed this charge. Present exactly when `state`
-    #: is `paid`, and what an undo needs in order to erase the movement.
+    #: The ledger row that answers for this charge. Present exactly when
+    #: `state` is `paid`, and what an undo needs in order to erase the
+    #: movement — when it is a movement this app wrote. See `settled_by`.
     movement_id: str | None = None
     #: What actually moved, which may not be what the bill says.
     settled_amount: str | None = None
     #: When it actually moved, in epoch seconds.
     settled_at: int | None = None
+    #: **Which kind of row is answering, and therefore how to take it back.**
+    #: `confirmed` is the row this bill wrote: undoing means erasing it, and
+    #: the account gets its money back. `matched` is a movement that arrived
+    #: on its own: undoing means forgetting the link, and the movement stays
+    #: exactly where it is. A screen that offered one button for both would
+    #: erase the bank's own fact half the time.
+    settled_by: ChargeSource | None = None
 
 
 class BillResponse(BaseModel):
@@ -3360,6 +3557,15 @@ class BillResponse(BaseModel):
     account_id: str | None
     category: str | None
     status: BillStatus
+    #: Whether this bill charges itself once a charge's match window has
+    #: closed and nothing in the ledger looks like it. Off unless somebody
+    #: turned it on, bill by bill.
+    autopay: bool
+    #: The day it was turned on. Nothing before it is ever charged
+    #: automatically, so a switch flipped today cannot reach last week's
+    #: charge — which its owner has been looking at as overdue and may
+    #: already have paid where this app cannot see.
+    autopay_from: dt.date | None
     #: Its account is closed. Derived from the account, never stored — an
     #: account is closed and never deleted, so reopening one un-freezes its
     #: bills without anything having to remember to.
@@ -3409,6 +3615,86 @@ class BillsResponse(BaseModel):
     totals: list[BillTotalResponse]
 
 
+class AutopayPayload(BaseModel):
+    """Arm this bill to charge itself, or disarm it.
+
+    The timezone is not decoration: turning it on writes down the day it was
+    turned on, and that day is the earliest charge it may ever reach. Read in
+    UTC it would already be tomorrow for the whole Bogotá evening, and a
+    charge due today would fall outside a permission granted a minute ago.
+    """
+
+    enabled: bool
+    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=64)
+
+
+class LinkChargePayload(BaseModel):
+    """The movement that already paid this charge."""
+
+    movement_id: str = Field(min_length=1, max_length=128)
+
+
+class SettleChargesPayload(BaseModel):
+    """Nothing but where the caller is, because everything else is derived."""
+
+    timezone: str = Field(default=DEFAULT_TIMEZONE, max_length=64)
+
+
+class ChargeCandidateResponse(BaseModel):
+    """A movement that could be answering for a charge.
+
+    Carries what a person needs in order to recognise it — who it was with,
+    how much and when — because "is this the gym?" is not a question an id
+    can answer.
+    """
+
+    movement_id: str
+    counterparty: str
+    amount: str
+    currency: Currency
+    occurred_on: dt.date
+    #: `certain` is the right merchant for about the right money, and is what
+    #: gets linked without asking when it is the only one. `likely` is one of
+    #: the two, and is only ever shown.
+    quality: MatchQuality
+
+
+class ChargeProposalResponse(BaseModel):
+    """A charge with movements that could be it, and no clear answer.
+
+    What the app refuses to decide on its own: two plausible movements, or
+    one whose figure is nowhere near the bill's. Linking it is one tap and
+    ignoring it is none.
+    """
+
+    bill_id: str
+    bill_name: str
+    occurrence: BillOccurrenceResponse
+    candidates: list[ChargeCandidateResponse]
+
+
+class AutomaticSettlementResponse(BaseModel):
+    """One charge this run answered for, and how.
+
+    `matched` means a movement the ledger already held was recognised as this
+    charge: **nothing was written**, and taking it back only forgets the link.
+    `charged` means the bill charged itself and a real movement now exists,
+    which an undo erases.
+    """
+
+    action: SettlementAction
+    bill: BillResponse
+    occurrence: BillOccurrenceResponse
+
+
+class BillsSettlementResponse(BaseModel):
+    today: dt.date
+    #: What was settled, either way. Empty is the ordinary answer.
+    settled: list[AutomaticSettlementResponse]
+    #: What needs a person. Never acted on by anything here.
+    proposals: list[ChargeProposalResponse]
+
+
 @functools.lru_cache(maxsize=1)
 def build_bills() -> DynamoDBScheduledBillRepository:
     return DynamoDBScheduledBillRepository(
@@ -3452,8 +3738,31 @@ def _build_settle_charge() -> SettleBillChargeUseCase:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _build_settle_due_charges() -> SettleDueChargesUseCase:
+    """The lazy sweep, wired to read widely and write through one door.
+
+    It reads the ledger through `build_ledger()` — which satisfies the
+    listing port and nothing narrower exists — and writes only through
+    `_build_settle_charge()`, the very object the two buttons on the screen
+    use. An automatic charge taking a path of its own would be a second way
+    for money to appear here.
+    """
+    return SettleDueChargesUseCase(
+        bills=build_bills(),
+        charges=build_ledger(),
+        ledger=build_ledger(),
+        settle=_build_settle_charge(),
+        merchants=build_merchant_directory(),
+    )
+
+
 def get_manage_bills_use_case() -> ManageBillsUseCase:
     return _build_manage_bills()
+
+
+def get_settle_due_charges_use_case() -> SettleDueChargesUseCase:
+    return _build_settle_due_charges()
 
 
 def get_list_bills_use_case() -> ListBillsUseCase:
@@ -3468,6 +3777,10 @@ ManageBills = Annotated[ManageBillsUseCase, Depends(get_manage_bills_use_case)]
 SettleCharge = Annotated[
     SettleBillChargeUseCase,
     Depends(get_settle_charge_use_case),
+]
+SettleDueCharges = Annotated[
+    SettleDueChargesUseCase,
+    Depends(get_settle_due_charges_use_case),
 ]
 
 
@@ -3616,6 +3929,84 @@ def resume_bill(
     return _bill_summary_response(summary)
 
 
+@router.post("/bills/{bill_id}/autopay", response_model=BillResponse)
+def set_bill_autopay(
+    user_id: CurrentUser,
+    bill_id: str,
+    payload: AutopayPayload,
+    use_case: ManageBills,
+) -> BillResponse:
+    """Let this bill charge itself, or stop it.
+
+    **Off until this is called**, bill by bill, and that is the whole design:
+    every other write in this feature happens because somebody pressed
+    something, and this is the one that happens because a clock said so. An
+    automatic charge is not a confirmation — in the manual path the owner
+    knows the money moved, here it is the calendar that assumes it — so the
+    app waits until the charge's **match window has closed** before writing
+    anything, and answers the charge with a movement instead whenever one in
+    the ledger looks like it.
+
+    Turning it on is not retroactive. The day it was turned on is remembered,
+    and nothing due before it is ever charged automatically: a switch flipped
+    today must not take money for a charge somebody has been looking at as
+    overdue for a week, and may already have paid in a way this app cannot
+    see.
+    """
+    with _domain_errors():
+        summary = use_case.set_autopay(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            enabled=payload.enabled,
+            timezone=_known_timezone(payload.timezone),
+        )
+
+    return _bill_summary_response(summary)
+
+
+@router.post("/bills/settle", response_model=BillsSettlementResponse)
+def settle_due_charges(
+    user_id: CurrentUser,
+    payload: SettleChargesPayload,
+    use_case: SettleDueCharges,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+) -> BillsSettlementResponse:
+    """Answer for the charges nobody has answered for, as far as is safe.
+
+    What the bills screen calls when it opens, the same shape `POST
+    /financial/accrue` has and for the same reason: nothing in this
+    deployment can walk every user yet, so the work happens when its owner is
+    there — which is also the moment an undo is worth anything.
+
+    Three outcomes, and evidence decides which:
+
+    * a movement already in the ledger is recognised as the charge, and
+      **nothing is written** — this happens for any active bill, armed or
+      not, because recognising money that is already recorded is not acting
+      on somebody's behalf;
+    * a bill that charges itself, whose charge nothing matched and whose
+      match window has closed, writes the charge exactly as the button does;
+    * anything less clear comes back as a proposal and is left alone.
+
+    Safe to call again: a charge already answered for is not answered twice,
+    and a charge written by a previous run is found by its own id rather than
+    written a second time.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            SettleDueChargesCommand(
+                user_id=user_id,
+                timezone=_known_timezone(payload.timezone),
+            ),
+        )
+
+    for settlement in view.settled:
+        if settlement.action is SettlementAction.CHARGED:
+            _file_charge_merchant(settlement.settled, merchants, user_id=user_id)
+
+    return _settlement_response(view)
+
+
 @router.post(
     "/bills/{bill_id}/occurrences/{period}/pay", response_model=BillChargeResponse
 )
@@ -3758,6 +4149,71 @@ def undo_bill_skip(
     return _bill_charge_response(settled)
 
 
+@router.post(
+    "/bills/{bill_id}/occurrences/{period}/link",
+    response_model=BillChargeResponse,
+)
+def link_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    payload: LinkChargePayload,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Say a movement already in the ledger is what this charge cost.
+
+    The month the bank *did* send the email. The money is recorded, the
+    balance already moved, and the only thing missing was that nobody had
+    said which charge it answers for. **It writes nothing**: confirming
+    instead would record the same money twice, which is the exact drift this
+    feature exists to remove.
+
+    Refused when the charge is already confirmed — two answers pointing at
+    different money — and for a movement this app wrote itself, a transfer
+    between the owner's own accounts, the opposite direction, another
+    currency, or one already answering for some other charge. One payment
+    settles one thing.
+    """
+    with _domain_errors():
+        settled = use_case.link(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+            movement_id=payload.movement_id,
+        )
+
+    return _bill_charge_response(settled)
+
+
+@router.delete(
+    "/bills/{bill_id}/occurrences/{period}/link",
+    response_model=BillChargeResponse,
+)
+def unlink_bill_charge(
+    user_id: CurrentUser,
+    bill_id: str,
+    period: dt.date,
+    use_case: SettleCharge,
+) -> BillChargeResponse:
+    """Take back the claim that a movement answered for this charge.
+
+    **Erases nothing**, which is the whole difference from undoing a
+    confirmation: the movement is the bank's own fact and stays where it is,
+    spent and counted. What goes away is only this app's claim about which
+    charge it paid.
+
+    Silent when nothing was linked, like every undo here.
+    """
+    with _domain_errors():
+        settled = use_case.unlink(
+            user_id=user_id,
+            bill_id=_bill_id(bill_id),
+            period=period,
+        )
+
+    return _bill_charge_response(settled)
+
+
 @router.delete("/bills/{bill_id}", status_code=status.HTTP_204_NO_CONTENT)
 def forget_bill(user_id: CurrentUser, bill_id: str, use_case: ManageBills) -> None:
     """Forget a bill entirely.
@@ -3816,6 +4272,8 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         account_id=None if bill.account_id is None else str(bill.account_id.value),
         category=bill.category,
         status=bill.status,
+        autopay=bill.autopay,
+        autopay_from=bill.autopay_from,
         frozen=summary.frozen,
         next_occurrence=(
             None
@@ -3838,6 +4296,7 @@ def _occurrence_response(occurrence: BillOccurrence) -> BillOccurrenceResponse:
         movement_id=None if payment is None else payment.movement_id,
         settled_amount=None if payment is None else str(payment.amount.amount),
         settled_at=None if payment is None else payment.occurred_at.as_epoch_seconds(),
+        settled_by=None if payment is None else payment.source,
     )
 
 
@@ -3845,6 +4304,42 @@ def _bill_charge_response(settled: SettledCharge) -> BillChargeResponse:
     return BillChargeResponse(
         bill=_bill_summary_response(settled.bill),
         occurrence=_occurrence_response(settled.occurrence),
+    )
+
+
+def _settlement_response(view: SettlementView) -> BillsSettlementResponse:
+    return BillsSettlementResponse(
+        today=view.today,
+        settled=[_settled_response(each) for each in view.settled],
+        proposals=[_proposal_response(each) for each in view.proposals],
+    )
+
+
+def _settled_response(settlement: AutomaticSettlement) -> AutomaticSettlementResponse:
+    return AutomaticSettlementResponse(
+        action=settlement.action,
+        bill=_bill_summary_response(settlement.settled.bill),
+        occurrence=_occurrence_response(settlement.settled.occurrence),
+    )
+
+
+def _proposal_response(proposal: ChargeProposal) -> ChargeProposalResponse:
+    return ChargeProposalResponse(
+        bill_id=str(proposal.bill_id.value),
+        bill_name=proposal.bill_name,
+        occurrence=_occurrence_response(proposal.occurrence),
+        candidates=[_candidate_response(each) for each in proposal.candidates],
+    )
+
+
+def _candidate_response(candidate: ChargeCandidate) -> ChargeCandidateResponse:
+    return ChargeCandidateResponse(
+        movement_id=candidate.movement_id,
+        counterparty=candidate.counterparty,
+        amount=str(candidate.amount.amount),
+        currency=candidate.amount.currency,
+        occurred_on=candidate.occurred_on,
+        quality=candidate.quality,
     )
 
 
@@ -3880,3 +4375,884 @@ def _file_charge_merchant(
         )
     except Exception:
         _logger.exception("could not file a confirmed bill charge's merchant")
+
+
+# ------------------------------------------------------------ recurring
+#
+# What the history says comes back, guessed rather than declared — and the
+# weaker half of this feature on purpose. **Nothing under this heading
+# writes.** A suggestion is accepted by declaring a bill, through `POST
+# /financial/bills` like any other, because a heuristic has no authority to
+# move money or even to create the thing that will.
+#
+# Read every time from the ledger and never stored, which is what makes it
+# correct itself: a charge that lands tomorrow fixes today's guess with
+# nothing to re-process, and a subscription somebody cancelled stops being
+# proposed on its own.
+
+
+class RecurringSeriesResponse(BaseModel):
+    """One rhythm found in the history, with how much to believe it.
+
+    `amount` is what the **next** charge is expected to cost, which for a
+    variable series — the phone bill, the electricity — is a median and not a
+    figure anybody has ever been charged. `variable` is what says so: "about
+    $90.000" and "$90.000" are different promises and a screen has to be able
+    to tell them apart.
+
+    `bill_id` is the mark that matters. A suggestion to declare something
+    already declared is worse than no suggestion, because it teaches the
+    reader to distrust the rest of the list.
+    """
+
+    #: Stable across calls for the same group, so a screen can key on it.
+    key: str
+    name: str
+    merchant_id: str | None
+    category: str | None
+    # The enums themselves rather than their strings, like the bills
+    # responses: the generated TypeScript turns these into unions, so a screen
+    # cannot invent a state the server never sends.
+    direction: MovementDirection
+    cadence: BillCadence
+    amount: str
+    currency: Currency
+    variable: bool
+    #: From 0 to 1. Something to sort by and to show — never a threshold
+    #: anything acts on by itself.
+    confidence: str
+    sightings: int
+    #: Expected charges that never turned up inside the stretch that was seen.
+    missed: int
+    first_seen: dt.date
+    last_seen: dt.date
+    next_due_on: dt.date
+    state: SeriesState
+    #: The account these charges mostly landed on, for a suggestion to
+    #: prefill. Null when none of them landed on a declared account.
+    account_id: str | None
+    #: The declared bill already covering this, when there is one.
+    bill_id: str | None
+
+
+class RecurringResponse(BaseModel):
+    """The suggestions, and the stretch of history they were read from.
+
+    The window is answered so a screen can say what "nothing found" was looked
+    for in. An empty list is the ordinary answer for somebody who connected
+    their bank last week, and it means "not enough history yet" rather than
+    "you have no subscriptions".
+    """
+
+    since: dt.date
+    until: dt.date
+    #: How many months back the detector reads, so nobody has to derive it
+    #: from the two dates above.
+    months: int
+    series: list[RecurringSeriesResponse]
+
+
+@functools.lru_cache(maxsize=1)
+def _build_detect_recurring() -> DetectRecurringSeriesUseCase:
+    return DetectRecurringSeriesUseCase(
+        ledger=build_ledger(),
+        bills=build_bills(),
+        merchants=build_merchant_directory(),
+    )
+
+
+def get_detect_recurring_use_case() -> DetectRecurringSeriesUseCase:
+    return _build_detect_recurring()
+
+
+@router.get("/recurring", response_model=RecurringResponse)
+def list_recurring(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        DetectRecurringSeriesUseCase,
+        Depends(get_detect_recurring_use_case),
+    ],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> RecurringResponse:
+    """What looks like it comes back every so often, and is not declared yet.
+
+    A proposal and nothing more. Accepting one is `POST /financial/bills` with
+    these figures — the same call anybody declares a bill with — so that the
+    thing which ends up able to charge money is always something a person
+    stated, never something this guessed.
+
+    Charges this application wrote itself are left out: the interest a credit
+    accrues every cut is perfectly monthly and would head the ranking, and a
+    confirmed bill charge would have the detector reading its own handwriting.
+    Transfers too — paying the card from savings every month is the most
+    regular charge anybody has and it is not a subscription.
+
+    The day of each charge is read in `timezone`, like every other date here:
+    a purchase at nine in the evening in Bogotá is the 15th there and the 16th
+    in UTC, and a series whose days alternate between the two has no cadence
+    left to find.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            DetectRecurringQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    return _recurring_response(view)
+
+
+def _recurring_response(view: RecurringView) -> RecurringResponse:
+    return RecurringResponse(
+        since=view.since,
+        until=view.until,
+        months=HISTORY_MONTHS,
+        series=[_series_response(found) for found in view.series],
+    )
+
+
+def _series_response(found: DetectedSeries) -> RecurringSeriesResponse:
+    series = found.series
+
+    return RecurringSeriesResponse(
+        key=found.key,
+        name=found.name,
+        merchant_id=found.merchant_id,
+        category=found.category,
+        direction=series.direction,
+        cadence=series.cadence,
+        amount=str(series.amount.amount),
+        currency=series.amount.currency,
+        variable=series.variable,
+        # A string like every other decimal that crosses this boundary: a
+        # JSON float is the wrong shape for a figure with fixed places, and
+        # having two conventions in one payload is how one of them gets read
+        # with the other's parser.
+        confidence=str(series.confidence),
+        sightings=series.sightings,
+        missed=series.missed,
+        first_seen=series.first_seen,
+        last_seen=series.last_seen,
+        next_due_on=series.next_due_on,
+        state=series.state,
+        account_id=(
+            None if series.account_id is None else str(series.account_id.value)
+        ),
+        bill_id=None if found.bill_id is None else str(found.bill_id.value),
+    )
+
+
+# ------------------------------------------------------------------ plan
+#
+# «¿Cuánto puedo gastar?» — the number the rest of this context was building
+# towards, and the most dangerous one here: if it lies once, nobody looks at
+# it again.
+#
+# So it is **declared, never discovered**, like an account: what somebody
+# expects to earn and how much of it they mean to keep are statements about
+# the future, and the future has not happened. With nothing declared there is
+# no number — 404 rather than a zero, because a zero reads as "you have
+# nothing left to spend".
+#
+# And it always travels with its parts. A figure somebody cannot take apart is
+# a figure they cannot check, and the first time it disagrees with their own
+# arithmetic they stop believing it.
+
+
+class DeclarePlanPayload(BaseModel):
+    """What the month is supposed to bring in, and what is not to be spent.
+
+    One currency for both. Subtracting a target in dollars from an income in
+    pesos needs a rate this app does not have, and treating the two as
+    comparable is the kind of wrong that looks right.
+    """
+
+    expected_income: Decimal = Field(gt=0, le=MAX_MONEY)
+    currency: Currency = Currency.COP
+    #: Optional, and zero is the ordinary answer. Never larger than the
+    #: income: a plan that is short before a peso is spent is not a warning
+    #: anybody can act on.
+    savings_target: Decimal = Field(default=Decimal(0), ge=0, le=MAX_MONEY)
+
+
+class PlanResponse(BaseModel):
+    expected_income: str
+    savings_target: str
+    currency: Currency
+    #: When it was last stated, in epoch seconds. A plan is a guess that gets
+    #: corrected, so how old it is matters.
+    updated_at: int
+
+
+class AllowanceResponse(BaseModel):
+    """The figure and every piece of the subtraction that produced it.
+
+    The components are not decoration. `available` is
+    `expected_income` less `savings_target`, `spent` and `committed`, and a screen that
+    could only show the result would be asking somebody to trust arithmetic
+    they cannot see.
+
+    `committed` is what is **still owed** of this month's declared bills, never
+    what the month costs: a charge already confirmed is in `spent`, through the
+    ledger row confirming it wrote, and counting it here too would discount it
+    twice.
+    """
+
+    currency: Currency
+    expected_income: str
+    savings_target: str
+    spent: str
+    committed: str
+    #: Can be negative, and is reported negative rather than floored at zero —
+    #: somebody who has overspent needs to see by how much.
+    available: str
+    since: dt.date
+    until: dt.date
+    #: Today included: it is a day somebody still has to get through.
+    days_left: int
+
+
+@functools.lru_cache(maxsize=1)
+def build_plans() -> DynamoDBMonthlyPlanRepository:
+    return DynamoDBMonthlyPlanRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_plan() -> ManageMonthlyPlanUseCase:
+    return ManageMonthlyPlanUseCase(plans=build_plans())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_read_allowance() -> ReadMonthlyAllowanceUseCase:
+    """Wired to the very objects behind `/summary` and `/bills`.
+
+    Handed over whole rather than re-created: a second instance would be a
+    second set of rules about what counts as spending, and the allowance would
+    quietly disagree with the two screens it is made of.
+    """
+    return ReadMonthlyAllowanceUseCase(
+        plans=build_plans(),
+        spending=_build_summarize_spending(),
+        bills=_build_list_bills(),
+    )
+
+
+def get_manage_plan_use_case() -> ManageMonthlyPlanUseCase:
+    return _build_manage_plan()
+
+
+def get_read_allowance_use_case() -> ReadMonthlyAllowanceUseCase:
+    return _build_read_allowance()
+
+
+ManagePlan = Annotated[ManageMonthlyPlanUseCase, Depends(get_manage_plan_use_case)]
+
+
+@router.put("/plan", response_model=PlanResponse)
+def declare_plan(
+    user_id: CurrentUser,
+    payload: DeclarePlanPayload,
+    use_case: ManagePlan,
+) -> PlanResponse:
+    """State what the month is supposed to look like, or restate it.
+
+    A `PUT` and not a `PATCH`, deliberately: a plan is two figures that are
+    both guesses, and replacing it whole is what makes it impossible to leave
+    a savings target standing against an income it was never set against.
+
+    Nothing is recorded as earned or spent. This writes two numbers and a
+    currency, and no balance moves.
+    """
+    with _domain_errors():
+        plan = use_case.declare(
+            DeclarePlanCommand(
+                user_id=user_id,
+                expected_income=Money(
+                    amount=payload.expected_income,
+                    currency=payload.currency,
+                ),
+                savings_target=Money(
+                    amount=payload.savings_target,
+                    currency=payload.currency,
+                ),
+            ),
+        )
+
+    return _plan_response(plan)
+
+
+@router.get("/plan", response_model=PlanResponse)
+def read_plan(user_id: CurrentUser, use_case: ManagePlan) -> PlanResponse:
+    """What is declared, or 404 when nothing is.
+
+    Missing rather than an empty body: "no plan" is a different thing from "a
+    plan of zero", and only one of them is a state somebody can be in.
+    """
+    plan = use_case.read(user_id)
+
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No monthly plan declared",
+        )
+
+    return _plan_response(plan)
+
+
+@router.delete("/plan", status_code=status.HTTP_204_NO_CONTENT)
+def forget_plan(user_id: CurrentUser, use_case: ManagePlan) -> None:
+    """Take the plan back. The card disappears and nothing else changes.
+
+    Silent when there was nothing to forget, like every other undo here: a 404
+    on the second press of a button somebody is unsure about is a worse answer
+    than nothing. The plan never wrote anything, so there is nothing left
+    behind to explain.
+    """
+    use_case.forget(user_id)
+
+
+@router.get("/allowance", response_model=AllowanceResponse)
+def read_allowance(
+    user_id: CurrentUser,
+    use_case: Annotated[
+        ReadMonthlyAllowanceUseCase,
+        Depends(get_read_allowance_use_case),
+    ],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+) -> AllowanceResponse:
+    """What is left to spend this month, and the four figures behind it.
+
+    404 with no plan declared, for the reason `GET /plan` gives: the card is
+    absent rather than showing a zero that reads like an answer.
+
+    The month is the calendar month in `timezone`, read there and not in UTC —
+    a Bogotá month starting five hours early would count the last evening of
+    the previous one, and being wrong on the 1st is being wrong on the day
+    this is most likely to be looked at.
+    """
+    with _domain_errors():
+        allowance = use_case.execute(
+            ReadAllowanceQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+            ),
+        )
+
+    if allowance is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No monthly plan declared",
+        )
+
+    return _allowance_response(allowance)
+
+
+def _plan_response(plan: MonthlyPlan) -> PlanResponse:
+    return PlanResponse(
+        expected_income=str(plan.expected_income.amount),
+        savings_target=str(plan.savings_target.amount),
+        currency=plan.currency,
+        updated_at=plan.updated_at.as_epoch_seconds(),
+    )
+
+
+def _allowance_response(allowance: MonthlyAllowance) -> AllowanceResponse:
+    return AllowanceResponse(
+        currency=allowance.currency,
+        expected_income=str(allowance.expected_income),
+        savings_target=str(allowance.savings_target),
+        spent=str(allowance.spent),
+        committed=str(allowance.committed),
+        available=str(allowance.available),
+        since=allowance.since,
+        until=allowance.until,
+        days_left=allowance.days_left,
+    )
+
+
+# --------------------------------------------------------------- budgets
+#
+# A ceiling on one category, and a traffic light against it. Deliberately not
+# the method of assigning every peso somewhere: that asks somebody to allocate
+# a whole income before the app is worth anything, which is the entry curve
+# this app is trying not to have.
+#
+# Declared, never discovered — like an account and like the month. And what is
+# *spent* against a cap is never stored: it is read off the ledger through the
+# very use case that draws the breakdown on the summary screen, so the budgets
+# screen and Reportes cannot disagree about the same category on the same day.
+#
+# Two things the build plan expected and this does not do, both on purpose.
+#
+# There is no `BudgetThresholdCrossed` on the bus and no Telegram message. A
+# movement has **no category at the moment it is recorded**: Financial stores
+# the counterparty text the bank wrote and joins it to a merchant when the
+# answer is read, which is what makes a correction retroactive and is also why
+# nothing at write time knows which cap a purchase belongs to. Announcing a
+# crossing needs a trigger that walks users, which this deployment does not
+# have — the same thing that has the monthly credit accrual blocked.
+#
+# And a cap is not a partition of the month. `/summary` buckets movements no
+# merchant owns yet under a key of `null` — unknown, which is not the
+# `uncategorized` category — so the caps do not add up to the month's outgoing.
+# The screen says so; folding one bucket into the other to make the arithmetic
+# look tidy would file spending under a category nobody chose.
+
+
+class BudgetPayload(BaseModel):
+    """A ceiling, what it watches, and which months it governs.
+
+    **Empty lists mean every one**, on both axes, which is the domain's rule
+    and not a convenience here: `categories: []` is «todo el mes», and that is
+    the budget somebody declares first, before they have looked at a single
+    category.
+
+    `month` absent governs every month, which is the ordinary answer: a ceiling
+    that has to be re-declared every 1st is one that is gone by March. A key
+    like `2026-09` governs that month only, **beside** the recurring ones
+    rather than instead of them — there is no shadowing any more, because
+    scopes that overlap on purpose give no honest answer about which hides
+    which.
+    """
+
+    name: str = Field(min_length=1, max_length=MAX_BUDGET_NAME_LENGTH)
+    limit: Decimal = Field(gt=0, le=MAX_MONEY)
+    currency: Currency = Currency.COP
+    #: Empty watches every category, including spending no merchant owns yet.
+    categories: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_SCOPE_CATEGORIES,
+    )
+    #: Empty watches every account.
+    accounts: list[uuid.UUID] = Field(default_factory=list[uuid.UUID])
+    #: A slug the app maps to a drawing. Empty means «pick one for me», which
+    #: is a question about drawings and is answered in the browser.
+    icon: str = Field(default="", max_length=MAX_ICON_LENGTH)
+    month: str | None = Field(default=None, pattern=MONTH_KEY.pattern)
+    #: Where the bar turns amber. Strictly inside the ceiling: at 100 there is
+    #: no amber band at all and at 0 the bar is never once green.
+    warn_at: int = Field(
+        default=DEFAULT_WARN_PERCENT,
+        ge=MIN_WARN_PERCENT,
+        le=MAX_WARN_PERCENT,
+    )
+
+
+class BudgetScopeResponse(BaseModel):
+    """What a budget watches, as the screen needs to draw it.
+
+    `total` is sent rather than left to the client to infer from an empty list.
+    Two clients inferring the same thing is two places for it to be inferred
+    differently, and this one decides whether a card says «todo el mes».
+    """
+
+    categories: list[str]
+    accounts: list[uuid.UUID]
+    #: True when it watches every category — the kind that needs no category to
+    #: be judged, and therefore the only kind an alert could ever reach.
+    total: bool
+    every_account: bool
+
+
+class BudgetResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    icon: str
+    scope: BudgetScopeResponse
+    currency: Currency
+    limit: str
+    #: None when it governs every month.
+    month: str | None
+    recurring: bool
+    warn_at: int
+    #: When it was last stated, in epoch seconds. A ceiling is a guess that
+    #: gets corrected, so how old it is matters.
+    updated_at: int
+
+
+class BudgetProgressResponse(BaseModel):
+    """One budget and what the month has done to it.
+
+    Flat rather than a budget nested inside a reading, so a client cannot
+    render the ceiling and the state out of step. `state` is the enum itself,
+    not its string, so the generated TypeScript is a union a screen cannot
+    invent a member of.
+    """
+
+    id: uuid.UUID
+    name: str
+    icon: str
+    scope: BudgetScopeResponse
+    currency: Currency
+    limit: str
+    #: What went out of this scope this month, transfers excluded.
+    spent: str
+    #: Can be negative, and is reported negative rather than floored at zero —
+    #: somebody who went over needs to see by how much.
+    remaining: str
+    warn_at: int
+    state: BudgetState
+    month: str | None
+    recurring: bool
+    #: True when **every** category this names is gone from its owner's
+    #: vocabulary. The budget is still reported — it is the record of a
+    #: decision — but nothing will ever be spent against it, so the screen
+    #: offers to drop it. A budget over everything can never be retired.
+    retired: bool
+    #: The categories it names that no longer exist. Non-empty without
+    #: `retired` is the partial case, where the screen marks the category
+    #: rather than the budget.
+    missing: list[str]
+
+
+class BudgetTotalsResponse(BaseModel):
+    """Every budget of one currency, added up, and how the three states split.
+
+    One entry per currency and never summed across them: there is no exchange
+    rate anywhere in this app. The counts are what a summary says out loud
+    («3 de 5 en verde»), computed once so two screens cannot tally differently.
+
+    **The added-up ceiling is not what the month allows**: budgets may overlap,
+    so two of them can count the same peso.
+    """
+
+    currency: Currency
+    limit: str
+    spent: str
+    remaining: str
+    ok: int
+    warning: int
+    over: int
+
+
+class UncappedCategoryResponse(BaseModel):
+    """Somewhere a budget is missing, ranked by what actually goes out there.
+
+    Offered, never created — the same rule the recurring detector follows. The
+    figure lands in an editable field and nothing here declares anything.
+    """
+
+    category: str
+    currency: Currency
+    spent: str
+
+
+class BudgetsResponse(BaseModel):
+    month: str
+    since: dt.date
+    until: dt.date
+    #: Worst first: the closest to its ceiling leads, because it is the only
+    #: one with something to do about it.
+    budgets: list[BudgetProgressResponse]
+    totals: list[BudgetTotalsResponse]
+    suggestions: list[UncappedCategoryResponse]
+
+
+@functools.lru_cache(maxsize=1)
+def build_budgets() -> DynamoDBBudgetRepository:
+    return DynamoDBBudgetRepository(
+        client=get_dynamodb_client(),
+        table_name=get_financial_settings().accounts_table,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _build_manage_budgets() -> ManageBudgetsUseCase:
+    return ManageBudgetsUseCase(budgets=build_budgets())
+
+
+@functools.lru_cache(maxsize=1)
+def _build_read_budgets() -> ReadBudgetsUseCase:
+    """Wired to the very object behind `/summary`.
+
+    Handed over whole rather than re-created, for the reason the allowance
+    gives: a second instance would be a second set of rules about what counts
+    as spending, and this screen would quietly disagree with the one it is
+    made of.
+    """
+    return ReadBudgetsUseCase(
+        budgets=build_budgets(),
+        spending=_build_summarize_spending(),
+        merchants=build_merchant_directory(),
+    )
+
+
+def get_manage_budgets_use_case() -> ManageBudgetsUseCase:
+    return _build_manage_budgets()
+
+
+def get_read_budgets_use_case() -> ReadBudgetsUseCase:
+    return _build_read_budgets()
+
+
+ManageBudgets = Annotated[
+    ManageBudgetsUseCase,
+    Depends(get_manage_budgets_use_case),
+]
+
+
+@router.post(
+    "/budgets",
+    response_model=BudgetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def declare_budget(
+    user_id: CurrentUser,
+    payload: BudgetPayload,
+    use_case: ManageBudgets,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    accounts: Annotated[AccountRepository, Depends(build_accounts)],
+) -> BudgetResponse:
+    """Put a ceiling on part of somebody's spending.
+
+    A `POST` and not a `PUT`, which is this iteration's change and not a
+    stylistic one: a budget has a generated id now, so declaring the same
+    scope twice creates two budgets. That is the point — «Salidas» and
+    «Restaurantes» overlap because somebody meant them to — and a `PUT` with
+    no id in the path could not say it.
+
+    Nothing is recorded as spent. This writes a number, a scope and a month,
+    and no balance moves.
+    """
+    with _domain_errors():
+        budget = use_case.declare(
+            DeclareBudgetCommand(
+                user_id=user_id,
+                name=payload.name,
+                limit=Money(amount=payload.limit, currency=payload.currency),
+                scope=_budget_scope(payload, merchants, accounts, user_id=user_id),
+                icon=payload.icon,
+                month=payload.month,
+                warn_at=payload.warn_at,
+            ),
+        )
+
+    return _budget_response(budget)
+
+
+@router.put("/budgets/{budget_id}", response_model=BudgetResponse)
+def amend_budget(
+    user_id: CurrentUser,
+    budget_id: uuid.UUID,
+    payload: BudgetPayload,
+    use_case: ManageBudgets,
+    merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
+    accounts: Annotated[AccountRepository, Depends(build_accounts)],
+) -> BudgetResponse:
+    """Restate one budget whole.
+
+    Every field, never a subset, which is why this is a `PUT`: a ceiling and
+    the point it warns at are one statement, and half an update leaves a
+    warning standing against a ceiling it was never set against.
+
+    404 when it is not this person's budget, which is the same answer as one
+    that does not exist — a uuid is something somebody could paste, and a
+    different code here would confirm that somebody else's budget is real.
+    """
+    with _domain_errors():
+        try:
+            budget = use_case.amend(
+                AmendBudgetCommand(
+                    user_id=user_id,
+                    budget_id=BudgetId(value=budget_id),
+                    name=payload.name,
+                    limit=Money(amount=payload.limit, currency=payload.currency),
+                    scope=_budget_scope(payload, merchants, accounts, user_id=user_id),
+                    icon=payload.icon,
+                    month=payload.month,
+                    warn_at=payload.warn_at,
+                ),
+            )
+        except BudgetNotFoundError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No such budget",
+            ) from None
+
+    return _budget_response(budget)
+
+
+@router.get("/budgets", response_model=BudgetsResponse)
+def read_budgets(
+    user_id: CurrentUser,
+    use_case: Annotated[ReadBudgetsUseCase, Depends(get_read_budgets_use_case)],
+    timezone: Annotated[str, Query(max_length=64)] = DEFAULT_TIMEZONE,
+    month: Annotated[str | None, Query(pattern=MONTH_KEY.pattern)] = None,
+) -> BudgetsResponse:
+    """Every budget that governs a month, and what the ledger did to each.
+
+    200 with empty lists when nothing is capped, never a 404: unlike the
+    monthly plan, an empty list of ceilings is a real and ordinary state and
+    reads as exactly what it is.
+
+    The month is the calendar month in `timezone` unless one is named, read
+    there and not in UTC — a Bogotá month starting five hours early would count
+    the last evening of the previous one, and being wrong on the 1st is being
+    wrong on the day this is most likely to be looked at.
+
+    A budget whose categories its owner has since deleted comes back `retired`
+    rather than taking the screen down with it. Merchant publishes nothing on a
+    delete that this context could listen for, so degrading on read is the only
+    place it can be handled.
+    """
+    with _domain_errors():
+        view = use_case.execute(
+            ReadBudgetsQuery(
+                user_id=user_id,
+                timezone=_known_timezone(timezone),
+                month=month,
+            ),
+        )
+
+    return _budgets_response(view)
+
+
+@router.delete("/budgets/{budget_id}", status_code=status.HTTP_204_NO_CONTENT)
+def forget_budget(
+    user_id: CurrentUser,
+    budget_id: uuid.UUID,
+    use_case: ManageBudgets,
+) -> None:
+    """Drop one budget. The card disappears and nothing else changes.
+
+    Silent when there was nothing to drop, like every other undo here: a 404 on
+    the second press of a button somebody is unsure about is a worse answer
+    than nothing. A budget never wrote anything, so there is nothing left
+    behind to explain.
+    """
+    with _domain_errors():
+        use_case.forget(user_id=user_id, budget_id=BudgetId(value=budget_id))
+
+
+def _budget_scope(
+    payload: BudgetPayload,
+    merchants: MerchantDirectory,
+    accounts: AccountRepository,
+    *,
+    user_id: UserId,
+) -> BudgetScope:
+    """The scope a payload asks for, with everything in it checked to exist.
+
+    Checked here and not in the domain, because neither list is the domain's to
+    know: the vocabulary is Merchant's and half of it is whatever this person
+    wrote, and the accounts are rows. A value that names nothing would store a
+    budget no spending is ever attributed to — a ceiling that reads as «no has
+    gastado nada aquí», which on a money screen is the one wrong answer worse
+    than an error.
+
+    **The vocabulary is read once**, not once per category: `_known_category`
+    asks the Merchant adapter every time it is called, and a scope of twenty
+    would be twenty identical queries. `ReadBudgetsUseCase` hoists the same
+    call for the same reason.
+
+    An account is checked against its owner, so a uuid somebody pasted is a
+    422 rather than a budget quietly scoped to nothing.
+
+    Empty lists are not checked against anything: they mean every one, so there
+    is nothing to look up.
+    """
+    if payload.categories:
+        vocabulary = merchants.categories(user_id=user_id)
+
+        for category in payload.categories:
+            if category not in vocabulary:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"Unknown category: {category!r}",
+                )
+
+    watched = frozenset(AccountId(value=value) for value in payload.accounts)
+
+    for account in watched:
+        if accounts.find(user_id=user_id, account_id=account) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Unknown account: {account.value}",
+            )
+
+    return BudgetScope.of(
+        categories=frozenset(payload.categories),
+        accounts=watched,
+    )
+
+
+def _budget_scope_response(scope: BudgetScope) -> BudgetScopeResponse:
+    return BudgetScopeResponse(
+        # Sorted so two reads of an unchanged budget are the same bytes: a
+        # frozenset has no order, and a list that reshuffles between requests
+        # is a diff in a client's cache for a budget nobody touched.
+        categories=sorted(scope.categories),
+        accounts=sorted((account.value for account in scope.accounts), key=str),
+        total=scope.total,
+        every_account=scope.every_account,
+    )
+
+
+def _budget_response(budget: Budget) -> BudgetResponse:
+    return BudgetResponse(
+        id=budget.id.value,
+        name=budget.name,
+        icon=budget.icon,
+        scope=_budget_scope_response(budget.scope),
+        currency=budget.currency,
+        limit=str(budget.limit.amount),
+        month=budget.month,
+        recurring=budget.recurring,
+        warn_at=budget.warn_at,
+        updated_at=budget.updated_at.as_epoch_seconds(),
+    )
+
+
+def _budgets_response(view: BudgetsView) -> BudgetsResponse:
+    return BudgetsResponse(
+        month=view.month,
+        since=view.since,
+        until=view.until,
+        budgets=[_budget_progress_response(line) for line in view.budgets],
+        totals=[_budget_totals_response(total) for total in view.totals],
+        suggestions=[
+            UncappedCategoryResponse(
+                category=offer.category,
+                currency=offer.currency,
+                spent=str(offer.spent),
+            )
+            for offer in view.suggestions
+        ],
+    )
+
+
+def _budget_progress_response(line: BudgetLine) -> BudgetProgressResponse:
+    progress = line.progress
+
+    return BudgetProgressResponse(
+        id=progress.budget_id.value,
+        name=progress.name,
+        icon=progress.icon,
+        scope=_budget_scope_response(progress.scope),
+        currency=progress.currency,
+        limit=str(progress.limit),
+        spent=str(progress.spent),
+        remaining=str(progress.remaining),
+        warn_at=progress.warn_at,
+        state=progress.state,
+        month=progress.month,
+        recurring=progress.recurring,
+        retired=line.retired,
+        missing=sorted(line.missing),
+    )
+
+
+def _budget_totals_response(total: BudgetTotals) -> BudgetTotalsResponse:
+    return BudgetTotalsResponse(
+        currency=total.currency,
+        limit=str(total.limit),
+        spent=str(total.spent),
+        remaining=str(total.remaining),
+        ok=total.ok,
+        warning=total.warning,
+        over=total.over,
+    )

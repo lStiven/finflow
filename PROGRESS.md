@@ -9,6 +9,11 @@ arrancar: se busca dentro cuando hay una duda concreta).
 
 Última verificación contra el código y contra AWS: **2026-09-04**.
 La verificación local de los avisos por Telegram: **2026-09-14**.
+Los presupuestos se comprobaron contra la pila local el **2026-09-18**, con
+`just e2e-budgets`, `just check-all` y en el navegador, después de rehacerlos
+sobre el modelo de alcance.
+**2026-09-30:** las cinco e2e (`just e2e`) y las 21 pantallas a 390 y 1280 px,
+en `dev` y en `master`, sin errores ni desbordes.
 
 ## Qué hace hoy la aplicación
 
@@ -80,31 +85,96 @@ Todo el backend de la versión 1 está terminado y probado:
   mes que un cobro no llegó se salta, y eso no escribe nada. La pantalla lee
   dos cifras: lo que cuesta el mes y lo que falta por pagar. Un ingreso
   declarado —la nómina— usa los mismos botones con otras palabras: llega, no
-  se paga.
+  se paga. Al confirmar, la pantalla recuerda que eso **escribe un movimiento
+  nuevo** y que si lo que uno quería era apartar la plata del mes, eso son los
+  Presupuestos.
+
+- **Y se pueden cobrar solas, factura por factura.** Apagado hasta que alguien
+  lo encienda. Una factura armada **no cobra el día que vence**: espera a que
+  se cierre la ventana de cinco días, porque un cobro domiciliado lo presenta
+  un negocio y lo asienta un banco, y escribir antes es apuntar dos veces la
+  misma plata. Y **no cobra hacia atrás**: se guarda desde qué día se armó, así
+  que encenderlo hoy no toca el cobro que llevaba una semana vencido. Antes de
+  escribir nada, la app **mira si el movimiento ya está**: si en el historial
+  hay uno que cuadra —el mismo comercio, más o menos el mismo monto, cerca del
+  día—, el cobro queda pagado **por ese movimiento** y no se escribe nada; eso
+  pasa con todas las facturas activas, armadas o no, y es lo que evita cobrar
+  dos veces cuando el banco sí avisó. Si hay dos que podrían serlo, o uno que
+  solo se parece, no decide nadie: la pantalla lo propone y basta un toque
+  para enlazarlo —o para enlazar a mano cualquier movimiento con cualquier
+  cobro—. Desenlazar **no borra nada**: el movimiento es del banco y se queda
+  donde está; deshacer un cobro automático sí borra el que escribió la app, y
+  además lo marca como saltado para que no vuelva solo esa misma tarde.
+
+- **Y la app propone las que uno no declaró.** Mira los últimos dos años de
+  movimientos y, cuando algo se repite —el mismo comercio, el mismo día del
+  mes, tres veces o más—, lo ofrece en `/facturas` con qué tan seguro está y
+  con la evidencia a la vista («4 cobros, ninguno faltó»). Aceptar es declarar
+  la factura con esas cifras: **el detector nunca declara ni cobra nada por su
+  cuenta**. No propone lo que la propia app escribió (los intereses de un
+  crédito, un cobro de factura ya confirmado), ni los traslados, ni lo que
+  lleva dos cobros sin aparecer —una suscripción cancelada que sigue
+  recordándose es peor que no tener detector—. La nómina sí se detecta, con su
+  dirección, pero no se ofrece: E3 la necesita, la pantalla no.
+
+- **Y dice cuánto queda para gastar.** Quien diga cuánto espera que entre
+  este mes —y cuánto quiere guardar— ve arriba del Resumen un solo número:
+  lo declarado, menos lo que ya se gastó, menos lo que las facturas todavía
+  deben. **Una factura pagada se descuenta una sola vez**: al confirmarla sale
+  de lo que se debe y entra en lo gastado, y el número no se mueve. La tarjeta
+  enseña la resta completa —nadie cree un número que no puede comprobar— y
+  reparte lo que queda entre los días que faltan. Sin declarar nada **no hay
+  tarjeta**, no un cero: «no me has dicho cómo es tu mes» y «no te queda nada»
+  son cosas distintas. La nómina que el detector ya reconoció se ofrece para
+  rellenar el ingreso de un toque.
+
+- **Y se le puede poner tope a lo que quieras.** En `/presupuestos` se declara
+  un tope con su nombre y lo que vigila: **todo el mes** (sin elegir ninguna
+  categoría, que es el más fácil de empezar), una categoría, o varias juntas
+  —«Salidas» son restaurantes y bares y domicilios—. La pantalla enseña una
+  barra contra lo que llevas gastado: verde, ámbar al 80 % —el punto lo eliges
+  tú— y rojo al pasarlo. **Poner un tope no mueve ningún saldo y no bloquea
+  nada**: informa, y decides tú. Cada tope se repite todos los meses o vale
+  solo para uno concreto, y los dos **conviven**: el de diciembre se lee al
+  lado del de siempre, no en su lugar, porque dos topes pueden solaparse a
+  propósito. Un tope se corrige entero —nombre, techo, alcance, aviso— sin
+  perder su identidad. Un tope cuyas categorías se borraron después no rompe
+  la pantalla: sale marcado y se puede quitar, y si solo desapareció una de
+  varias lo dice sin retirar el tope. Y donde más se te va sin tope, la
+  pantalla lo ofrece. En Resumen queda un resumen —«2 de 4 en verde»— debajo
+  de las cuentas.
+
+- **Los movimientos se exportan a CSV o Excel.** Desde Transacciones se elige
+  el periodo, gastos o ingresos, la cuenta, la categoría y si entran los
+  traslados; sale el archivo con todas las páginas, no solo la que se ve. Ninguna
+  celda se vuelve fórmula aunque el banco escriba `=…`.
+
+- **Lo que llega a Telegram se ve también en la app**, tenga o no canal: cada
+  movimiento aparece como notificación flotante mientras la pestaña está
+  abierta (se consulta cada 15 s) y una campana lista los últimos. Bajo una
+  compra va **lo que queda de cada presupuesto que la cubre** —solo si alguno la
+  cubre—, igual en Telegram. Y **cada lunes**, el resumen de la semana contra la
+  semana normal de uno mismo, a Telegram y a la campana.
 
 Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
-**Estado técnico:** 73 operaciones de API en cinco contextos, seis procesos en
-la nube, 2021 pruebas de Python y 377 del frontend, todas en verde. Siete
-tablas: la séptima, `throttle`, cuenta los intentos contra las puertas que se
-pueden adivinar y se vacía sola por TTL.
-El contrato de la API y los tipos del frontend están sincronizados. Hay trabajo
-sin confirmar en el árbol (desenlazar tarjeta, reabrir cuenta, el lector de
-cola compartido, la paginación de notificaciones, las categorías propias, y el
-contexto `alerts` entero).
+**Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
+la nube, 2455 pruebas de Python y 473 del frontend, todas en verde, y cinco
+e2e en el navegador (`just e2e`). El contrato de la API y los tipos del
+frontend están sincronizados.
 
-**Pantallas:** veinte, y están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
-cuatro guías, más **Facturas** desde el 2026-09-14. Las entradas del menú
-anunciadas sin pantalla son dos: **Presupuestos** —que existe en `dev` y aquí
-sale deshabilitada, con su «Pronto», para que se vea que viene— y
-**Configuración**, que no existe en ninguna rama.
+cuatro guías, más **Facturas** desde el 2026-09-14 y **Presupuestos** desde el
+2026-09-18. La única entrada del menú anunciada sin pantalla es
+**Configuración**.
 Las dieciocho se revisaron una por una en un navegador el 2026-09-03, y las
 cifras se comprobaron contra la API. La diecinueve, la guía de avisos, se
 revisó el 2026-09-14. Facturas se revisó en el navegador el 2026-09-14, con
-`just e2e-bills` y a ojo.
+`just e2e-bills` y a ojo. Presupuestos, el 2026-09-18, con `just e2e-budgets`
+y a 320, 390 y 1280 px.
 
 **En cualquier pantalla, del teléfono más pequeño al monitor.** Comprobado a
 320, 360, 390, 430, 768, 1024 y 1440 px, y con el teléfono acostado: ninguna
@@ -113,32 +183,23 @@ dirección. Abajo de 1024 px la barra inferior lleva Resumen, Transacciones,
 Cuentas y **Más**, que abre el resto —Reportes, Comercios, Guías, la cuenta y
 cerrar sesión—; de 1024 para arriba, la columna de la izquierda de siempre.
 
-## Lo publicado, medido el 2026-09-20
+## Lo publicado, medido el 2026-09-30
 
-Medido contra AWS y contra el `openapi.json` que sirve cada API, no recordado:
-
-| | Operaciones | Estado |
+| | Código | Estado |
 |---|---|---|
-| Contrato de la rama `dev` | 79 | — |
-| API desarrollo (`finflow-dev`) | 75 | `UPDATE_COMPLETE` 2026-09-15 |
-| API producción (`finflow`) | 70 | `UPDATE_COMPLETE` 2026-09-15 |
-| Web producción (`finflow-apk.pages.dev`) | — | responde 200 |
-| Web desarrollo (`finflow-dev-2tc.pages.dev`) | — | responde 200 |
+| Desarrollo — API y web | `dev` (5474b9c), 88 operaciones | publicado el 2026-09-30, `UPDATE_COMPLETE` |
+| Producción — API y web | 43 operaciones, web anterior al 2 de septiembre | sin cambios |
+| Rama `master` | exportar + avisos en la app + resumen semanal, **sin presupuestos** | lista para producción, sin publicar |
 
-El despliegue del 2026-09-15 sí entró: las seis funciones están en pie en
-producción, `AlertsFunction` incluida, así que **el hueco de
-`lambda:PutFunctionConcurrency` está resuelto** y ya no es una traba.
+`master` lleva la exportación y las notificaciones pero no los presupuestos, la
+mesada ni las facturas propuestas: esos siguen solo en `dev`. Por eso en
+producción el aviso saldrá **sin** la línea de presupuesto; se enciende sola el
+día que presupuestos llegue a `master`.
 
-Lo que le falta a producción son las nueve operaciones de lo último: la
-mesada (`/financial/allowance`), los presupuestos (`/financial/budgets`), el
-plan (`/financial/plan`) y las facturas propuestas (`/financial/recurring`).
-Son exactamente los commits que `dev` tiene y esta rama no.
-
-**Publicar la web sí está trabado**, y por el contenedor, no por Cloudflare:
-`wrangler` no tiene credenciales aquí (`wrangler whoami` dice que no), y
-`wrangler login` no puede terminar porque su callback OAuth escucha en
-`localhost:8976` y el DevContainer sólo publica 5173 y 8000. Se resuelve con
-un API token de Cloudflare en `CLOUDFLARE_API_TOKEN`, que no abre navegador.
+**Publicar la web ya no está trabado:** `wrangler` tiene sesión (OAuth) con la
+cuenta de Cloudflare. Y `just deploy-*` **pide confirmar el changeset** en la
+terminal (`confirm_changeset = true`): sin nadie que responda aborta sin tocar
+nada, y el changeset queda creado para revisarlo y ejecutarlo.
 
 | | Nombre | Buzón | Revisa cada |
 |---|---|---|---|
@@ -151,16 +212,13 @@ AWS (ver Trabas).
 
 ## Lo siguiente, en orden
 
-1. **Publicar lo que ya está hecho.** Es lo único que separa el trabajo de estar
-   en manos de quien lo usa. En desarrollo primero: `just deploy-dev` y, **en la
-   misma sentada**, `just web-publish-dev` — si la web queda vieja frente a una
-   API nueva, la pantalla se rompe (ya pasó el 2026-09-01). Cuando desarrollo
-   corra unos días sin sorpresas, lo mismo en producción con `just deploy-prod`,
-   `just web-publish` y `just smoke-prod`. Desplegar ya aprovisiona primero,
-   así que el índice nuevo de las notificaciones queda antes que el código que
-   lo consulta. Cuando el despliegue esté arriba, borrar a mano el índice viejo
-   `by_user` de la tabla de notificaciones: ya no lo consulta nadie y se sigue
-   pagando.
+1. **Publicar `master` en producción.** Está lista y probada: `just deploy-prod`
+   (confirmar el changeset), `just web-publish` en la misma sentada —una web
+   vieja frente a una API nueva rompe la pantalla, ya pasó el 2026-09-01— y
+   `just smoke-prod`. Trae una función nueva, `WeeklySummaryFunction`, que sale
+   los lunes a las 8:00. Después, borrar a mano el índice viejo `by_user` de la
+   tabla de notificaciones. Presupuestos, mesada y facturas propuestas siguen
+   solo en `dev` hasta que se decida llevarlos.
 
 2. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
    plantilla reconoce llama a Gemini, y no hay ningún límite. Es lo único de esta
@@ -173,9 +231,7 @@ AWS (ver Trabas).
    un usuario de una vez; falta el disparador diario en la nube, que necesita algo
    que hoy no existe: una forma de recorrer todos los usuarios.
 
-4. **La pantalla de Configuración**, la única anunciada sin existir en ninguna
-   rama. La otra que el menú anuncia aquí, Presupuestos, ya está construida en
-   `dev` y llega con la mezcla.
+4. **La pantalla de Configuración**, la última que falta.
 
 5. **Terminar de conectar los avisos en producción.** En desarrollo ya está
    cerrado y comprobado el 2026-09-14: los dos secretos están en SSM, el
@@ -186,10 +242,23 @@ AWS (ver Trabas).
    último, vincular parece funcionar y no pasa nada. Todo en
    [docs/alerts.md](docs/alerts.md).
 
-6. **Seguir con el segundo feature: facturas y pagos recurrentes** (E2).
-   Las entregas A y B están completas —declarar, ver venir, y confirmar o
-   saltar el cobro a mano—. Siguen C (que se cargue solo, con ventana de
-   conciliación), D (que el detector proponga) y E (avisar antes del cobro).
+6. **Lo que queda de los features en curso.** De las facturas (E2) están
+   A, B, C y D —declarar, confirmar o saltar a mano, que se cobren solas con
+   su ventana de conciliación, y que el detector proponga—; falta solo **E**
+   (avisar *antes* del cobro), **aplazada a propósito**. El tercer
+   feature (E3, el disponible del mes) está entregado, y el cuarto (E4, los
+   presupuestos) también salvo su aviso por Telegram — que **no depende de
+   E1**, como el plan creía, sino del punto 3 de esta misma lista: un
+   movimiento no tiene categoría cuando se registra, así que anunciar que se
+   cruzó un tope necesita el recorrido de usuarios que hoy no existe.
+   **El cuarto (E4) se rehízo el 2026-09-18**: un presupuesto pasó de ser una
+   categoría a ser un *alcance* con id propio, siguiendo el modelo de
+   TimelyBills. Quedan tres iteraciones de eso: periodos libres (semanal,
+   anual, un rango para un viaje), arrastre del sobrante al mes siguiente, y
+   las alertas. La de alertas tiene un atajo que este archivo no había visto:
+   **un tope sobre todo el mes no necesita categoría**, así que ese sí se
+   puede evaluar al escribir el movimiento, sin el recorrido de usuarios del
+   punto 3. Los de categoría siguen esperándolo.
    El plan completo —las cinco entregas, los riesgos y los cuatro nombres que
    se parecen— está en el artefacto, no aquí.
    **Al desplegar esto, `alerts` va primero:** Financial ya publica
@@ -197,20 +266,17 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente.** Hoy todo se construye y se despliega a mano
-   desde el contenedor. Nada está sin probar, pero un arreglo puede quedarse
-   olvidado en el computador mientras producción sigue vieja — que es exactamente
-   lo que está pasando ahora mismo (punto 1).
+7. **Publicar automáticamente: construido el 2026-09-30, falta encenderlo.**
+   `.github/workflows/pipeline.yml`: un push a `master` despliega producción y
+   uno a `dev` desarrollo, después de `check-all`, `infra-check`, `just verify`
+   y todas las e2e (pantallas incluidas) contra la pila local en el runner; el
+   smoke va después del despliegue y, si falla, vuelve sola a la versión
+   anterior. Falta lo que solo puede hacer el dueño: el proveedor OIDC y los dos
+   roles en AWS, y los entornos, variables y secretos en GitHub —la lista está
+   en [docs/ci.md](docs/ci.md)—.
 
 ## Huecos conocidos, sin urgencia
 
-- **Una prueba de la mesada se cae cinco horas al día.**
-  `test_it_answers_for_the_calendar_month_and_counts_today` compara
-  `days_left` contra un `today()` que el propio test calcula en UTC, mientras
-  `allowance.py` lo calcula en `America/Bogota` (`today_in(zone)`). Entre las
-  00:00 y las 05:00 UTC —19:00 a 24:00 en Bogotá— las dos fechas no coinciden
-  y `just prepare` se pone rojo sin que nada esté mal en la aplicación. El
-  arreglo es una línea en el helper del test.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
@@ -266,55 +332,20 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
-- 2026-09-26 — **Un pago a otra entidad ya se puede marcar como traslado.**
-  Bancolombia avisa «Pagaste $X a BANCO COMERCIAL AV VILLAS desde tu producto
-  *5261»: una cuenta y una institución, nunca la tarjeta, así que entraba como
-  gasto y el patrimonio quedaba mal por todo el pago. Ahora esa frase tiene
-  plantilla (lee exactamente lo que leía el modelo, para no darle otra
-  identidad a lo ya registrado) y el movimiento se declara traslado de tres
-  formas: emparejado con el que el otro banco sí avisó, escribiendo el abono en
-  una cuenta tuya, o hacia fuera de Finflow. Todo en un solo write, y todo se
-  deshace. Traído a `master` desde `dev` antes que los presupuestos; aquí no
-  hay rechazo por factura vinculada porque ese vínculo (E2·C) aún no existe.
-  El seed trae los dos casos para probarlo en local.
-- 2026-09-22 — **Las puertas que se pueden adivinar ahora se cansan.** Login,
-  registro, el correo de verificación, la recuperación, el cambio de
-  contraseña y el secreto del webhook de Telegram cuentan intentos por
-  dirección y, donde hay cuenta, también por cuenta. La distinción que
-  sostiene todo lo demás: **la cuenta es una cerradura** —cinco claves malas
-  por cuarto de hora, comprobadas *antes* de verificar, que es lo único que
-  impide seguir adivinando— y **la dirección es un freno** —veinte por
-  minuto, que se suelta solo—. Entrar bien no gasta nada y perdona lo
-  anterior, así que una casa o una oficina detrás de una sola IP nunca paga
-  por usar la app. Los contadores viven en DynamoDB con TTL, porque en Lambda
-  un contador en memoria no cuenta nada; y **fallan abiertos y rápidos**: sin
-  tabla, un login sigue tardando lo que tarda bcrypt en vez de colgarse un
-  minuto. Dos falsos positivos los encontró la propia suite: la primera
-  versión del freno rechazaba una clave *correcta* durante quince minutos
-  tras una ráfaga ajena, y el webhook rechazaba a Telegram con el secreto
-  bueno cuando alguien había gastado la puerta.
-- 2026-09-21 — **Desplegar sin cambios de backend ya no es un error.**
-  `fail_on_empty_changeset = false` en los dos entornos de
-  `infra/samconfig.toml`. La imagen solo lleva `pyproject.toml`, `uv.lock` y
-  `src/personal_finance`, así que una rama de frontend construye la imagen que
-  ya está desplegada y SAM lo reportaba como avería. Medido: las seis imágenes
-  de esta rama y las que corre producción comparten id `86fb2af2a950`.
-- 2026-09-20 — **`sam build` ya no muere por el ayudante de credenciales.**
-  `deploy-dev` y `deploy-prod` construyen con `DOCKER_CONFIG` propio
-  (`.aws-sam/docker-config`), sin el `credsStore` que la extensión Dev
-  Containers escribe en `~/.docker/config.json`: ese ayudante no implementa
-  `list`, que es lo que el SDK de Docker llama antes de construir, así que
-  `docker build` a mano funcionaba y `sam build` no. Comprobado: las seis
-  imágenes construyen. El error y su explicación quedaron en `docs/deploy.md`,
-  que es donde se busca el texto que escupe.
-- 2026-09-20 — **La barra del teléfono ya dice en qué pantalla estás.** No era
-  un descuido de diseño: el marcado existía y no se veía. El router *concatena*
-  la clase de `activeProps` en vez de fusionarla, así que `text-muted` y
-  `text-accent` acababan las dos en el elemento y ganaba la que Tailwind
-  emitiera después — la muted. Ahora el color apagado va en `inactiveProps`,
-  donde no puede chocar, y la entrada activa lleva además una pastilla teñida
-  detrás del icono, el mismo lenguaje del riel en la forma que cabe abajo. Y
-  **«Más» se enciende por lo que tapa**: cuatro de las siete secciones viven
-  detrás de ese botón, así que estar en Reportes ya no dejaba la barra
-  entera apagada. La regla (`inSheet`) es dato comprobable en
-  `navigation/destinations.ts`, con cinco pruebas.
+- 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
+  desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
+  se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
+  muestra «Something went wrong!»: hay pantalla propia para sin conexión, algo
+  que ya no existe y fallo nuestro. En `master` y en `dev`.
+- 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
+  huella de tarjeta y no de la cuenta donde quedó el movimiento; el detalle ya
+  nombra los cuatro orígenes.
+- 2026-09-30 — **`master` lista para producción** con la exportación y los
+  avisos en la app, sin presupuestos (no existen ahí); `dev` publicada entera
+  en desarrollo, API y web.
+- 2026-09-30 — **Los avisos llegan también a la app**: notificación flotante,
+  campana, línea de presupuesto bajo la compra y resumen semanal los lunes.
+  Una cola que espera 5 s es lo que deja clasificar el comercio antes de leer
+  su presupuesto.
+- 2026-09-30 — **Exportar movimientos a CSV o Excel**, eligiendo qué entra, sin
+  cortar nunca el archivo y sin que una celda se vuelva fórmula.

@@ -2,9 +2,12 @@
 
 One table, partitioned by user, with the sort key carrying the record type:
 
-    ACCOUNT#<id>        the account, its balance a signed running total
-    FINGERPRINT#<print> a bank/instrument pair -> the account it reaches
-    MOVEMENT#<id>       one ledger row, assigned or not
+    ACCOUNT#<id>         the account, its balance a signed running total
+    FINGERPRINT#<print>  a bank/instrument pair -> the account it reaches
+    MOVEMENT#<id>        one ledger row, assigned or not
+    BILL#<id>            a charge its owner declared, never a ledger row
+    BUDGET#<id>          a spending cap over a scope; months are a field
+    PLAN                 the one declared month, at a fixed place
 
 Two things here are load-bearing and neither is incidental.
 
@@ -41,6 +44,11 @@ from personal_finance.contexts.financial.domain.bills import (
     BillStatus,
     ScheduledBill,
 )
+from personal_finance.contexts.financial.domain.budgets import (
+    Budget,
+    BudgetId,
+    BudgetScope,
+)
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
 from personal_finance.contexts.financial.domain.financing import (
     AmortizationStyle,
@@ -51,6 +59,7 @@ from personal_finance.contexts.financial.domain.financing import (
     RateBasis,
     RecurringCharge,
 )
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -89,6 +98,15 @@ ACCOUNT_PREFIX = "ACCOUNT#"
 FINGERPRINT_PREFIX = "FINGERPRINT#"
 MOVEMENT_PREFIX = "MOVEMENT#"
 BILL_PREFIX = "BILL#"
+# The month comes before the category, which is the whole reason a month of
+# budgets is one query: `_query_prefix` can only do `begins_with`, so keying
+# the other way round would make "every cap of September" a read of every cap
+# ever declared.
+BUDGET_PREFIX = "BUDGET#"
+# Not a prefix: the whole sort key. There is exactly one plan per person, so
+# its row sits at a fixed place in their partition rather than under a
+# generated id — which also means no listing, no paging and no key to guess.
+PLAN_KEY = "PLAN"
 
 # How many times a throttled `BatchGetItem` is re-sent before giving up, and
 # how long the first wait is — doubling each time, so five attempts spread
@@ -1647,6 +1665,26 @@ def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
         # the stored row does not churn on a rewrite that changed nothing else.
         item["skipped"] = {"SS": sorted(day.isoformat() for day in bill.skipped)}
 
+    if bill.autopay:
+        item["autopay"] = {"BOOL": True}
+
+    if bill.autopay_from is not None:
+        # ISO and not epoch, for the reason `starts_on` gives: it is a
+        # calendar day, and a day stored as an instant is a different day
+        # depending on where it is read.
+        item["autopay_from"] = {"S": bill.autopay_from.isoformat()}
+
+    if bill.linked:
+        # A map rather than a set, because both halves are needed: which
+        # period, and which movement answered for it. Absent on the ordinary
+        # bill, whose charges are all either confirmed or still coming.
+        item["linked"] = {
+            "M": {
+                day.isoformat(): {"S": movement}
+                for day, movement in sorted(bill.linked.items())
+            },
+        }
+
     return item
 
 
@@ -1667,6 +1705,7 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         raise CorruptFinancialItemError("Stored bill is missing its amount or age")
 
     account_id = _string(item, ACCOUNT_ID_ATTRIBUTE)
+    autopay_from = _string(item, "autopay_from")
 
     return ScheduledBill(
         id=BillId.from_string(sort_value.removeprefix(BILL_PREFIX)),
@@ -1689,6 +1728,15 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         skipped=frozenset(
             dt.date.fromisoformat(day) for day in item.get("skipped", {}).get("SS", [])
         ),
+        autopay=item.get("autopay", {}).get("BOOL", False),
+        autopay_from=(
+            None if autopay_from is None else dt.date.fromisoformat(autopay_from)
+        ),
+        linked={
+            dt.date.fromisoformat(day): movement
+            for day, stored in item.get("linked", {}).get("M", {}).items()
+            if (movement := stored.get("S"))
+        },
         created_at=PosixTime.from_epoch_seconds(int(_number(item, "created_at"))),
     )
 
@@ -1741,6 +1789,276 @@ class DynamoDBScheduledBillRepository:
         response = self._client.delete_item(
             TableName=self._table_name,
             Key=_key(user_id, f"{BILL_PREFIX}{bill_id.value}"),
+            ReturnValues="ALL_OLD",
+        )
+
+        return bool(response.get("Attributes"))
+
+
+def plan_to_item(plan: MonthlyPlan) -> dict[str, AttributeValueTypeDef]:
+    """One row, at the one place a plan can be.
+
+    The savings target is always written, zero included: absent it would read
+    back as zero anyway, but a row whose shape depends on whether somebody
+    wanted to save is a row two readers can disagree about.
+    """
+    return {
+        PARTITION_KEY: {"S": str(plan.user_id.value)},
+        SORT_KEY: {"S": PLAN_KEY},
+        # Money as a string, like everywhere else that leaves this process.
+        "expected_income": {"N": str(plan.expected_income.amount)},
+        "savings_target": {"N": str(plan.savings_target.amount)},
+        "currency": {"S": plan.currency.value},
+        "updated_at": {"N": str(plan.updated_at.as_epoch_seconds())},
+    }
+
+
+def plan_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> MonthlyPlan:
+    user_id = _string(item, PARTITION_KEY)
+
+    # `_number` answers 0 for an attribute that is not there, which for these
+    # two is an income the domain refuses and a date in 1970 — both of which
+    # would read as an ordinary plan rather than as the corrupt row they are.
+    if user_id is None or "expected_income" not in item or "updated_at" not in item:
+        raise CorruptFinancialItemError("Stored plan is missing its identity or age")
+
+    currency = _enum(Currency, _string(item, "currency") or "", "currency")
+
+    return MonthlyPlan(
+        id=UserId.from_string(user_id),
+        expected_income=Money(
+            amount=_number(item, "expected_income"),
+            currency=currency,
+        ),
+        savings_target=Money(
+            amount=_number(item, "savings_target"),
+            currency=currency,
+        ),
+        updated_at=PosixTime.from_epoch_seconds(int(_number(item, "updated_at"))),
+    )
+
+
+class DynamoDBMonthlyPlanRepository:
+    """`MonthlyPlanRepository` over the same table as everything else here.
+
+    A whole-item put, like the bills repository and safe for the same reason:
+    no field of a plan is a running total another writer moves, so there is no
+    half of the row this could discard.
+    """
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def find(self, *, user_id: UserId) -> MonthlyPlan | None:
+        item = self._client.get_item(
+            TableName=self._table_name,
+            Key=_key(user_id, PLAN_KEY),
+        ).get("Item")
+
+        return plan_to_entity(item) if item else None
+
+    def save(self, plan: MonthlyPlan) -> None:
+        self._client.put_item(TableName=self._table_name, Item=plan_to_item(plan))
+
+    def remove(self, *, user_id: UserId) -> bool:
+        """Delete, and say whether there was anything there.
+
+        `ReturnValues="ALL_OLD"` rather than a read and then a delete, for the
+        reason the bills repository gives: two calls would report "deleted"
+        for a row somebody else removed in between.
+        """
+        response = self._client.delete_item(
+            TableName=self._table_name,
+            Key=_key(user_id, PLAN_KEY),
+            ReturnValues="ALL_OLD",
+        )
+
+        return bool(response.get("Attributes"))
+
+
+# ----------------------------------------------------------------------
+# Category budgets
+# ----------------------------------------------------------------------
+
+
+#: Stands where a month key goes for a budget that governs all of them. A
+#: storage encoding and nothing more — it cannot collide with a real month,
+#: which is only ever digits and a dash. It lives here rather than in the
+#: domain because the domain says `None` and only this file needs a string.
+EVERY_MONTH = "EVERY"
+
+
+def budget_sort_value(budget_id: BudgetId) -> str:
+    """Where one budget lives inside its owner's partition.
+
+    Just the id now. The month used to lead this key so that one month's caps
+    were a `begins_with` away, and the category closed it because a cap *was*
+    its category — neither is true any more. A budget names a scope that can
+    hold twenty categories and governs months by a field, so the only thing
+    left that identifies one is its id.
+    """
+    return f"{BUDGET_PREFIX}{budget_id}"
+
+
+def budget_to_item(budget: Budget) -> dict[str, AttributeValueTypeDef]:
+    """One row per budget.
+
+    **An empty scope writes no attribute at all.** DynamoDB refuses an empty
+    string set, so «every category» cannot be stored as `SS: []` — and the
+    absence reads back as exactly what the domain means by an empty scope. The
+    alternative, a sentinel member like `ALL`, would be a category value that
+    somebody could also type.
+    """
+    item: dict[str, AttributeValueTypeDef] = {
+        PARTITION_KEY: {"S": str(budget.user_id.value)},
+        SORT_KEY: {"S": budget_sort_value(budget.id)},
+        "name": {"S": budget.name},
+        # `EVERY` rather than a missing attribute: a row whose shape depends on
+        # whether the budget recurs is a row two readers can disagree about.
+        "month": {"S": budget.month or EVERY_MONTH},
+        # A string, like money everywhere else that leaves this process: a JSON
+        # float rounds a cent away and a ceiling is compared to the cent.
+        "limit": {"N": str(budget.limit.amount)},
+        "currency": {"S": budget.currency.value},
+        "warn_at": {"N": str(budget.warn_at)},
+        "updated_at": {"N": str(budget.updated_at.as_epoch_seconds())},
+    }
+
+    if budget.icon:
+        item["icon"] = {"S": budget.icon}
+
+    if budget.scope.categories:
+        item["categories"] = {"SS": sorted(budget.scope.categories)}
+
+    if budget.scope.accounts:
+        item["accounts"] = {
+            # `str(account.value)`, never `str(account)`: `AccountId` has no
+            # `__str__`, so the latter stores the dataclass repr and the row
+            # reads back as an id nothing can parse.
+            "SS": sorted(str(account.value) for account in budget.scope.accounts),
+        }
+
+    return item
+
+
+def budget_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> Budget:
+    user_id = _string(item, PARTITION_KEY)
+    sort_key = _string(item, SORT_KEY)
+    name = _string(item, "name")
+    month = _string(item, "month")
+
+    # `_number` answers 0 for an attribute that is not there, and a ceiling of
+    # zero is one the domain refuses — it would read back as an ordinary budget
+    # already over on the first peso rather than as the corrupt row it is.
+    if (
+        user_id is None
+        or sort_key is None
+        or name is None
+        or month is None
+        or "limit" not in item
+        or "warn_at" not in item
+        or "updated_at" not in item
+    ):
+        raise CorruptFinancialItemError("Stored budget is missing part of itself")
+
+    return Budget(
+        id=BudgetId.from_string(sort_key.removeprefix(BUDGET_PREFIX)),
+        user_id=UserId.from_string(user_id),
+        name=name,
+        limit=Money(
+            amount=_number(item, "limit"),
+            currency=_enum(Currency, _string(item, "currency") or "", "currency"),
+        ),
+        scope=BudgetScope(
+            categories=frozenset(_string_set(item, "categories")),
+            accounts=frozenset(
+                AccountId.from_string(value) for value in _string_set(item, "accounts")
+            ),
+        ),
+        icon=_string(item, "icon") or "",
+        warn_at=int(_number(item, "warn_at")),
+        month=None if month == EVERY_MONTH else month,
+        updated_at=PosixTime.from_epoch_seconds(int(_number(item, "updated_at"))),
+    )
+
+
+def _string_set(
+    item: Mapping[str, AttributeValueTypeDef],
+    key: str,
+) -> Sequence[str]:
+    """A stored string set, or nothing when the attribute is absent.
+
+    Absent is the ordinary case and not a defect: an empty scope writes no
+    attribute, because DynamoDB has no empty string set to write.
+    """
+    value = item.get(key)
+
+    if value is None:
+        return ()
+
+    return tuple(value.get("SS", ()))
+
+
+class DynamoDBBudgetRepository:
+    """`BudgetRepository` over the same table as everything else here.
+
+    A whole-item put, like the bills and plan repositories and safe for the
+    same reason: no field of a budget is a running total another writer moves.
+    What is *spent* against it is not a field at all — it is read off the
+    ledger every time, so there is no figure here to drift.
+    """
+
+    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+        self._client = client
+        self._table_name = table_name
+
+    def list_for_user(self, *, user_id: UserId) -> Sequence[Budget]:
+        """One query on the whole prefix.
+
+        This used to be two `begins_with` queries, one per kind of cap, to
+        avoid reading every month anybody ever made an exception for. That
+        optimisation died with the sort key it depended on — and it was pricing
+        a risk that is not there: budgets are a handful of rows somebody typed
+        by hand, not a log that grows on its own.
+        """
+        return [
+            budget_to_entity(item)
+            for item in _query_prefix(
+                self._client,
+                table_name=self._table_name,
+                user_id=user_id,
+                prefix=BUDGET_PREFIX,
+            )
+        ]
+
+    def get(self, *, user_id: UserId, budget_id: BudgetId) -> Budget | None:
+        """One budget, keyed by its owner *and* its id.
+
+        Both halves of the key, always: a budget id is a uuid somebody could
+        paste, and a read on the id alone would hand one person another's row.
+        """
+        response = self._client.get_item(
+            TableName=self._table_name,
+            Key=_key(user_id, budget_sort_value(budget_id)),
+        )
+        item = response.get("Item")
+
+        return budget_to_entity(item) if item else None
+
+    def save(self, budget: Budget) -> None:
+        self._client.put_item(TableName=self._table_name, Item=budget_to_item(budget))
+
+    def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:
+        """Delete, and say whether there was anything there.
+
+        `ReturnValues="ALL_OLD"` rather than a read followed by a delete, for
+        the reason the bills repository gives: two calls would report "deleted"
+        for a row somebody else removed in between.
+        """
+        response = self._client.delete_item(
+            TableName=self._table_name,
+            Key=_key(user_id, budget_sort_value(budget_id)),
             ReturnValues="ALL_OLD",
         )
 

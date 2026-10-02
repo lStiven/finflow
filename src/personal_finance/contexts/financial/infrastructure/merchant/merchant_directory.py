@@ -80,6 +80,11 @@ class MerchantContextDirectory:
     def categories(self, *, user_id: UserId) -> frozenset[str]:
         return frozenset(choice.key.value for choice in self._catalog.list(user_id))
 
+    def category_labels(self, *, user_id: UserId) -> Mapping[str, str]:
+        return {
+            choice.key.value: choice.label for choice in self._catalog.list(user_id)
+        }
+
     def classify(
         self,
         *,

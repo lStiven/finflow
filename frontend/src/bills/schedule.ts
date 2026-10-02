@@ -219,6 +219,17 @@ export function chargeLabel(occurrence: BillOccurrence): string | null {
   return null;
 }
 
+/**
+ * Whether the charge was answered by a movement that was already there.
+ *
+ * The difference decides what the undo does, which is why it is a question
+ * worth asking before drawing a button: taking back a confirmation erases a
+ * movement this app wrote, and taking back a link erases nothing at all.
+ */
+export function isMatched(occurrence: BillOccurrence): boolean {
+  return occurrence.settled_by === "matched";
+}
+
 /** The three words the buttons on a charge use, in its own direction. */
 export type ChargeVerbs = {
   /** Confirm it happened. */
@@ -230,6 +241,15 @@ export type ChargeVerbs = {
 };
 
 export function chargeVerbs(occurrence: BillOccurrence): ChargeVerbs {
+  if (isMatched(occurrence)) {
+    // «Deshacer el pago» would be a lie here: nothing is erased, and the
+    // movement stays exactly where the bank put it. What goes away is this
+    // app's claim about which charge it paid.
+    return occurrence.direction === "incoming"
+      ? { settle: "Ya llegó", undo: "No es este", amount: "Llegó" }
+      : { settle: "Pagar", undo: "No es este", amount: "Salió" };
+  }
+
   return occurrence.direction === "incoming"
     ? { settle: "Ya llegó", undo: "Deshacer", amount: "Llegó" }
     : { settle: "Pagar", undo: "Deshacer el pago", amount: "Salió" };

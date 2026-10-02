@@ -181,6 +181,15 @@ alerts-worker-prod: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.alerts.presentation.cli.run_alerts_worker
 
+# Monday's spending summary, once, for the week before today — or for the
+# week containing a date, e.g. `just weekly-summary 2026-09-21`. In the cloud
+# a schedule runs it at 08:00 Bogotá; running it twice sends nothing twice.
+#
+# Send the weekly summaries now, to Telegram and to the in-app inbox.
+weekly-summary *args: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.alerts.presentation.cli.run_weekly_summary {{args}}
+
 # Telegram cannot reach a laptop and `setWebhook` wants a public HTTPS name,
 # so the inbound half of linking is the one part the network will not allow
 # locally. Everything else stays real. Pass the `start=` payload from the
@@ -703,6 +712,64 @@ shot *args:
 # balances before and after and refuses to pass if declaring a bill moved one.
 e2e-bills *args:
     cd {{frontend_dir}} && node scripts/e2e-bills.mjs {{args}}
+
+# The dashboard's allowance, in a real browser and against the real stack.
+# Declares a month, then checks the figure is exactly what `/summary` and
+# `/bills` add up to — never what `/allowance` says its own parts are — and
+# that confirming a bill moves it from "owed" to "spent" without moving the
+# total. Needs `just up` and `just web`.
+#
+# Drive the allowance card and check its arithmetic.
+e2e-allowance *args:
+    cd {{frontend_dir}} && node scripts/e2e-allowance.mjs {{args}}
+
+# The budgets screen, in a real browser and against the real stack.
+# Declares a budget from the page, and reads every balance, the net worth and
+# the ledger's row count before and after to refuse to pass if doing so moved a
+# peso. Then checks the traffic light against `/summary` rather than against
+# the budgets endpoint's own figures, that a budget for one month is read
+# *beside* the recurring one rather than instead of it — there is no shadowing
+# any more — and that one over every category counts every category.
+# Needs `just up` and `just web`.
+e2e-budgets *args:
+    cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
+
+# The Transacciones export, in a real browser and against the real stack.
+# Drives the export dialog and checks the file against the API: «Todo» +
+# «Gastos» carries every outgoing movement `/financial/transactions` pages
+# through — same ids, same amounts — not the page on screen; «Mes pasado» on
+# one account is that month on that account; a range that ends before it
+# starts cannot be downloaded; the workbook is a real xlsx; a counterparty
+# starting with `=` comes back as text; and exporting moved no balance.
+# Needs `just up` and `just web`.
+#
+# Download the export from the screen and check it against the API.
+e2e-export *args:
+    cd {{frontend_dir}} && node scripts/e2e-export.mjs {{args}}
+
+# The in-app alerts, in a real browser and against the real stack.
+# Writes a purchase under a budget through the API and waits for the page —
+# polling — to show it as a floating notification, with the budget line equal
+# to what `/financial/budgets` reports; then «Ver», the bell's unseen count,
+# and an income with no budget line. Needs `just up` (the workers too) and
+# `just web`.
+#
+# Watch a movement reach the open page as a notification.
+e2e-alerts *args:
+    cd {{frontend_dir}} && node scripts/e2e-alerts.mjs {{args}}
+
+# Every screen, on a phone and on a desktop, in a real browser. The screens
+# are read from `frontend/src/routes`, so a new one is covered the day it
+# lands; each fails on a JavaScript or console error, an API answer of 400+
+# (bar the 404s the app asks for), sideways scroll, not exactly one h1, or a
+# redirect. Needs `just up` and `just web`.
+#
+# Open every screen and refuse to pass if any of them is broken.
+e2e-views *args:
+    cd {{frontend_dir}} && node scripts/e2e-views.mjs {{args}}
+
+# The browser suites, in order.
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-alerts e2e-views
 
 # Format check, lint and typecheck the frontend.
 web-check:

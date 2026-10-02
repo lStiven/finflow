@@ -18,8 +18,10 @@ import re
 from zoneinfo import ZoneInfo
 
 from personal_finance.contexts.alerts.application.messages import (
+    BudgetStanding,
     MovementAlert,
     MovementDirection,
+    WeeklySummary,
 )
 from personal_finance.shared.domain.value_objects import Currency, Money, PosixTime
 
@@ -31,6 +33,51 @@ MAX_COUNTERPARTY_LENGTH = 64
 
 # The bank name is short by nature; anything longer is not a bank name.
 MAX_BANK_LENGTH = 32
+
+# A budget's name is its owner's own words, kept to one short line.
+MAX_BUDGET_NAME_LENGTH = 40
+
+# More budget lines than this under one purchase stops being a message.
+MAX_BUDGET_LINES = 3
+
+# The shipped categories reach Alerts under their stable value; a message in
+# Spanish restates them, the same table the frontend keeps in
+# `@/merchants/categories`. A category somebody wrote keeps their own name.
+CATEGORY_COPY = {
+    "uncategorized": "Sin categoría",
+    "groceries": "Mercado",
+    "restaurants": "Restaurantes",
+    "transport": "Transporte",
+    "fuel": "Combustible",
+    "shopping": "Compras",
+    "entertainment": "Entretenimiento",
+    "subscriptions": "Suscripciones",
+    "utilities": "Servicios",
+    "health": "Salud",
+    "education": "Educación",
+    "travel": "Viajes",
+    "fees": "Comisiones",
+    "transfers": "Transferencias",
+    "income": "Ingresos",
+    "other": "Otros",
+}
+
+_EN_DASH = "\u2013"
+
+_MONTHS = (
+    "ene",
+    "feb",
+    "mar",
+    "abr",
+    "may",
+    "jun",
+    "jul",
+    "ago",
+    "sep",
+    "oct",
+    "nov",
+    "dic",
+)
 
 # What a bank's name is made of. Deliberately excludes `:` and `/`, which is
 # what stops an injected URL from surviving into a message its reader trusts.
@@ -134,6 +181,112 @@ def compose_movement_alert(
         # Worth saying: the movement is real and counted nowhere, which is
         # the one thing the owner can act on from here.
         lines.append("Sin cuenta asignada")
+
+    lines.extend(compose_budget_lines(alert.budgets))
+
+    return "\n".join(lines)
+
+
+def compose_budget_lines(budgets: tuple[BudgetStanding, ...]) -> list[str]:
+    """What is left of each budget the purchase counts against.
+
+    Only budgets that cover it — Financial decided which — so a purchase under
+    no budget says nothing more than it always did. The distance to the cap is
+    said plainly, and past it by how much: no alarm words, because the tone of
+    this app is to inform and let its owner decide.
+    """
+    if not budgets:
+        return []
+
+    lines = [_budget_line(budget) for budget in budgets[:MAX_BUDGET_LINES]]
+    extra = len(budgets) - MAX_BUDGET_LINES
+
+    if extra > 0:
+        lines.append(f"y {extra} {'presupuesto' if extra == 1 else 'presupuestos'} más")
+
+    return ["", *lines]
+
+
+def _budget_line(budget: BudgetStanding) -> str:
+    name = clean_line(budget.name, limit=MAX_BUDGET_NAME_LENGTH) or "Presupuesto"
+    limit = format_money(Money(amount=budget.limit, currency=budget.currency))
+
+    if budget.remaining > 0:
+        left = format_money(Money(amount=budget.remaining, currency=budget.currency))
+        return f"{name}: te quedan {left} de {limit}"
+
+    if budget.remaining == 0:
+        return f"{name}: llegaste al tope de {limit}"
+
+    over = format_money(Money(amount=-budget.remaining, currency=budget.currency))
+    return f"{name}: vas {over} por encima del tope de {limit}"
+
+
+def category_name(category: str, label: str) -> str:
+    return CATEGORY_COPY.get(category) or clean_line(
+        label, limit=MAX_BUDGET_NAME_LENGTH
+    )
+
+
+def format_week(summary: WeeklySummary) -> str:
+    """`22-28 sep`, or `29 sep - 5 oct` across a month, with an en dash."""
+    start, end = summary.week_start, summary.week_end
+
+    if start.month == end.month:
+        return f"{start.day}{_EN_DASH}{end.day} {_MONTHS[end.month - 1]}"
+
+    return (
+        f"{start.day} {_MONTHS[start.month - 1]} {_EN_DASH} "
+        f"{end.day} {_MONTHS[end.month - 1]}"
+    )
+
+
+def compose_weekly_summary(summary: WeeklySummary) -> str:
+    """Monday's look back, compared with its owner and nobody else.
+
+    Never «bien» or «mal»: a number against their own normal, and the one
+    category that moved the most. Somebody who spent more has a reason this
+    message cannot know.
+    """
+    currency = summary.currency
+    spent = format_money(Money(amount=summary.spent, currency=currency))
+    lines = [f"Tu semana ({format_week(summary)})"]
+
+    if summary.movements == 0:
+        lines.append("No registraste gastos esta semana.")
+    else:
+        count = "gasto" if summary.movements == 1 else "gastos"
+        lines.append(f"Gastaste {spent} en {summary.movements} {count}.")
+
+    if summary.movements == 0 and summary.typical:
+        typical = format_money(Money(amount=summary.typical, currency=currency))
+        lines.append(f"Tu semana normal es de {typical}.")
+    elif summary.typical is None:
+        lines.append(
+            "Es tu primera semana: desde la próxima te la comparo con las anteriores."
+        )
+    elif summary.typical == 0:
+        lines.append("Las semanas anteriores no habías registrado gastos.")
+    else:
+        typical = format_money(Money(amount=summary.typical, currency=currency))
+        change = (summary.spent - summary.typical) / summary.typical * 100
+        rounded = int(change.to_integral_value())
+
+        if rounded == 0:
+            lines.append(f"Casi igual que tu semana normal ({typical}).")
+        elif rounded < 0:
+            lines.append(f"{-rounded} % menos que tu semana normal ({typical}).")
+        else:
+            lines.append(f"{rounded} % más que tu semana normal ({typical}).")
+
+    if summary.rise is not None:
+        rise = summary.rise
+        spent_there = format_money(Money(amount=rise.spent, currency=currency))
+        usual = format_money(Money(amount=rise.typical, currency=currency))
+        lines.append(
+            f"Lo que más subió: {category_name(rise.category, rise.label)}, "
+            f"{spent_there} (normalmente {usual}).",
+        )
 
     return "\n".join(lines)
 

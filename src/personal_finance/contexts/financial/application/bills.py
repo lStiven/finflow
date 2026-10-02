@@ -54,6 +54,7 @@ from personal_finance.contexts.financial.application.financing import (
 from personal_finance.contexts.financial.application.handlers import (
     AccountNotFoundError,
     ManageTransactionsUseCase,
+    TransactionNotFoundError,
 )
 from personal_finance.contexts.financial.application.ports import (
     AccountLookup,
@@ -67,6 +68,7 @@ from personal_finance.contexts.financial.domain.bills import (
     BillOccurrence,
     BillStatus,
     ChargePayment,
+    ChargeSource,
     OccurrenceState,
     ScheduledBill,
 )
@@ -226,6 +228,53 @@ class ManageBillsUseCase:
 
         return self._summarize(bill)
 
+    def set_autopay(
+        self,
+        *,
+        user_id: UserId,
+        bill_id: BillId,
+        enabled: bool,
+        timezone: str,
+    ) -> BillSummary:
+        """Turn charging itself on or off for one bill.
+
+        The timezone is not a detail here: turning it on writes down the day
+        it was turned on, and that day decides which charges the switch may
+        ever reach. Read in UTC it would be tomorrow for half the evening in
+        Bogotá, and a charge due today would fall outside a permission granted
+        minutes ago.
+
+        Refused on a bill charged to a closed account, for the same reason
+        confirming one is: a charge that cannot be paid into anything must not
+        be armed to pay itself.
+        """
+        bill = self._load(user_id, bill_id)
+
+        if enabled:
+            self._require_open_account(bill)
+            bill.start_autopay(today=today_in(zone_of(timezone)))
+        else:
+            bill.stop_autopay()
+
+        self._bills.save(bill)
+
+        return self._summarize(bill)
+
+    def _require_open_account(self, bill: ScheduledBill) -> None:
+        if bill.account_id is None:
+            return
+
+        account = self._accounts.find(
+            user_id=bill.user_id,
+            account_id=bill.account_id,
+        )
+
+        if account is not None and account.is_closed:
+            raise AccountClosedError(
+                "This bill comes out of a closed account. Point it at another "
+                "one, or reopen that account, before it charges itself",
+            )
+
     def forget(self, *, user_id: UserId, bill_id: BillId) -> None:
         if not self._bills.remove(user_id=user_id, bill_id=bill_id):
             raise NoSuchBillError(f"No such bill: {bill_id.value}")
@@ -243,7 +292,7 @@ class ManageBillsUseCase:
             if bill.account_id is None
             else self._accounts.find(user_id=bill.user_id, account_id=bill.account_id)
         )
-        payments = _read_payments(
+        payments = read_payments(
             _near_charges([bill], today=today),
             user_id=bill.user_id,
             charges=self._charges,
@@ -351,9 +400,9 @@ class ListBillsUseCase:
             for account in self._accounts.list_by_user(query.user_id)
             if account.is_closed
         }
-        payments = _read_payments(
+        payments = read_payments(
             [
-                *_charges_between(bills, since=since, until=until, today=today),
+                *charges_between(bills, since=since, until=until, today=today),
                 # The charges just past today as well: the window may be a
                 # month somebody scrolled back to, and `next_occurrence` is
                 # always about now.
@@ -462,7 +511,7 @@ def _next_from_today(
     )
 
 
-def _charges_between(
+def charges_between(
     bills: Sequence[ScheduledBill],
     *,
     since: dt.date,
@@ -489,7 +538,7 @@ def _near_charges(
     asking would put a year of weekly keys behind every screen that renders a
     bill.
     """
-    return _charges_between(
+    return charges_between(
         bills,
         since=today,
         until=today + dt.timedelta(days=SETTLEMENT_HORIZON_DAYS),
@@ -497,7 +546,7 @@ def _near_charges(
     )
 
 
-def _read_payments(
+def read_payments(
     pairs: Sequence[tuple[ScheduledBill, dt.date]],
     *,
     user_id: UserId,
@@ -505,16 +554,31 @@ def _read_payments(
 ) -> dict[BillId, dict[dt.date, ChargePayment]]:
     """What the ledger holds for these charges, in one lookup.
 
-    The bill derives each row's id from the period, so this is a plain
-    existence question over a set of known keys — no index, no scan, and no
-    stored "paid" flag anywhere to disagree with the row itself.
+    Two keys per charge, at most. The bill derives the id of the row it would
+    have written itself, so that half is a plain existence question over known
+    keys — no index, no scan, and no stored "paid" flag to disagree with the
+    row itself. The other half is the movement somebody linked, whose id is
+    the bank's own fingerprint and could never be derived; it is stored, and
+    **it is still read against the ledger**, so a link pointing at a movement
+    that has since been erased answers nothing, exactly as an erased
+    confirmation does.
+
+    When both exist for one period — which the use cases refuse to create,
+    but two tabs could race into — the row this app wrote wins. It is the one
+    that moved a balance, and it is the one an undo has to be able to erase.
     """
-    wanted = {
-        bill.charge_id(period).value: (bill.id, period)
-        for bill, period in pairs
+    wanted: dict[str, tuple[BillId, dt.date, ChargeSource]] = {}
+
+    for bill, period in pairs:
         # A paused bill charges nothing, so there is nothing to ask about.
-        if bill.status is not BillStatus.PAUSED
-    }
+        if bill.status is BillStatus.PAUSED:
+            continue
+
+        wanted[bill.charge_id(period).value] = (bill.id, period, ChargeSource.CONFIRMED)
+        linked = bill.linked_movement(period)
+
+        if linked is not None:
+            wanted.setdefault(linked, (bill.id, period, ChargeSource.MATCHED))
 
     if not wanted:
         return {}
@@ -528,11 +592,18 @@ def _read_payments(
         if asked is None:
             continue
 
-        bill_id, period = asked
-        found.setdefault(bill_id, {})[period] = ChargePayment(
+        bill_id, period, source = asked
+        settled = found.setdefault(bill_id, {})
+        already = settled.get(period)
+
+        if already is not None and already.source is ChargeSource.CONFIRMED:
+            continue
+
+        settled[period] = ChargePayment(
             movement_id=movement_id,
             amount=movement.amount,
             occurred_at=movement.occurred_at,
+            source=source,
         )
 
     return found
@@ -684,9 +755,17 @@ class SettleBillChargeUseCase:
         come off the bill, so an invented period is money moving for a charge
         that does not exist. The other two refuse what the screen is already
         not offering, so a stale tab cannot do what a fresh one cannot.
+
+        **And refused for a charge a movement already answered for.** That one
+        is not symmetry with `link`, it is the whole point of the feature:
+        writing here would record the same money twice, which is the drift
+        this exists to remove with the sign flipped. The conditional write
+        cannot catch it — the bank's row is keyed on the bank's fingerprint,
+        so the two never collide.
         """
         bill = self._load(command.user_id, command.bill_id)
         self._chargeable(bill, command.period)
+        self._unmatched(bill, command.period)
         amount = self._charged_amount(bill, command.amount)
 
         movement = self._transactions.confirm_scheduled(
@@ -751,9 +830,102 @@ class SettleBillChargeUseCase:
                 ),
             )
 
+        # Only when a row of this app's own was actually erased. A charge
+        # answered by a *movement* is undone by unlinking, and skipping it
+        # here would leave the bill at once linked and skipped for one period
+        # — the state `link` clears on purpose — so the charge would vanish
+        # from what the month owes the moment somebody unlinked it.
+        if movement_id in found and bill.autopay and bill.occurs_on(period):
+            # Otherwise the next sweep writes it straight back. With autopay
+            # on, "expected" means "will be charged", so an undo that left the
+            # charge expected would be a button that undoes nothing — the
+            # money would return within the hour, and the person would be
+            # watching a screen argue with them. Skipping says what taking the
+            # charge back means here: this one is not going to happen. It is
+            # stored, visible on the card, and taken back in one tap.
+            bill.skip(period)
+            self._bills.save(bill)
+
         # No re-read: the row is gone, or was never there. Asking again would
         # be asking an eventually consistent index whether a write that just
         # happened has landed, and the honest answer is already in hand.
+        return self._settled(bill, period, payment=None)
+
+    def link(
+        self,
+        *,
+        user_id: UserId,
+        bill_id: BillId,
+        period: dt.date,
+        movement_id: str,
+    ) -> SettledCharge:
+        """Say a movement already in the ledger is what this charge cost.
+
+        The answer for the month the bank *did* send the email: the money is
+        recorded, the balance already moved, and what was missing is only that
+        nobody had said which charge it was for. **It writes nothing to the
+        ledger**, which is the entire point — writing would be this feature
+        producing the double count it exists to prevent.
+
+        Refused when the charge is already confirmed. Both answers claim the
+        same charge was paid and they point at different money; undoing the
+        confirmation first is what to do, and the refusal says so.
+
+        Refused for a movement this app wrote itself — an accrual, another
+        bill's charge — and for one already answering for some other charge.
+        The first would let the feature confirm itself; the second would let
+        one payment settle three months.
+        """
+        bill = self._load(user_id, bill_id)
+        self._chargeable(bill, period)
+
+        settled = self._payment_for(bill, period)
+
+        if settled is not None and settled.source is ChargeSource.CONFIRMED:
+            raise ValueError(
+                "This charge is already paid. Undo the payment before linking "
+                "a movement to it",
+            )
+
+        movement = self._movement(user_id, movement_id)
+        self._linkable(bill, movement)
+        self._unclaimed(bill, period, movement_id=movement.id.value)
+
+        bill.link(period, movement.id.value)
+        self._bills.save(bill)
+
+        return self._settled(
+            bill,
+            period,
+            payment=ChargePayment(
+                movement_id=movement.id.value,
+                amount=movement.amount,
+                occurred_at=movement.occurred_at,
+                source=ChargeSource.MATCHED,
+            ),
+        )
+
+    def unlink(
+        self,
+        *,
+        user_id: UserId,
+        bill_id: BillId,
+        period: dt.date,
+    ) -> SettledCharge:
+        """Take back the claim that a movement answered for this charge.
+
+        **Erases nothing.** The movement is the bank's fact and stays where it
+        is, spent and counted; what goes away is the claim about which charge
+        it paid, which is the only part this app made up. That is the whole
+        difference from undoing a confirmation, and it is why the two are
+        separate operations rather than one "undo" that guesses.
+
+        Silent when there is nothing linked, for the reason every undo here is.
+        """
+        bill = self._load(user_id, bill_id)
+        bill.unlink(period)
+        self._bills.save(bill)
+
         return self._settled(bill, period, payment=None)
 
     def skip(
@@ -773,9 +945,18 @@ class SettleBillChargeUseCase:
         bill = self._load(user_id, bill_id)
         self._chargeable(bill, period)
 
-        if self._payment_for(bill, period) is not None:
+        settled = self._payment_for(bill, period)
+
+        if settled is not None:
+            # Two ways to be paid, two ways to take it back, and the message
+            # has to name the right one: a confirmation is undone by erasing
+            # the row it wrote, a linked movement by forgetting the link —
+            # erasing that one would throw away the bank's own fact.
             raise ValueError(
-                "This charge is already paid. Undo the payment before skipping it",
+                "This charge is already paid. Undo the payment before skipping it"
+                if settled.source is ChargeSource.CONFIRMED
+                else "This charge is already paid by a movement. Unlink it "
+                "before skipping it",
             )
 
         bill.skip(period)
@@ -828,7 +1009,7 @@ class SettleBillChargeUseCase:
             else payment
         )
         near = dict(
-            _read_payments(
+            read_payments(
                 _near_charges([bill], today=today),
                 user_id=bill.user_id,
                 charges=self._charges,
@@ -864,7 +1045,7 @@ class SettleBillChargeUseCase:
         period: dt.date,
     ) -> ChargePayment | None:
         return (
-            _read_payments(
+            read_payments(
                 [(bill, period)],
                 user_id=bill.user_id,
                 charges=self._charges,
@@ -898,6 +1079,107 @@ class SettleBillChargeUseCase:
                 "This bill comes out of a closed account. Point it at another "
                 "one, or reopen that account, before confirming a charge",
             )
+
+    def _unmatched(self, bill: ScheduledBill, period: dt.date) -> None:
+        """Refuse to write a charge a movement is already answering for.
+
+        Read rather than assumed from the stored link: a link pointing at a
+        movement somebody has since erased answers nothing, and refusing on
+        the strength of it would leave a charge that can never be confirmed.
+        """
+        settled = self._payment_for(bill, period)
+
+        if settled is not None and settled.source is ChargeSource.MATCHED:
+            raise ValueError(
+                "This charge is already paid by a movement. Unlink it before "
+                "confirming it, or the same money is recorded twice",
+            )
+
+    def _movement(self, user_id: UserId, movement_id: str) -> Transaction:
+        """The movement about to be linked, read back from the ledger.
+
+        Read rather than trusted: the id comes off a screen, and a link to
+        something that is not there would be a charge reading paid with
+        nothing behind it. Asking through the same lookup as everything else
+        here is also what keeps it this user's — one person's charge can never
+        be settled by another person's money.
+        """
+        identity = movement_id.strip()
+        found = self._charges.find_many(user_id=user_id, movement_ids=[identity])
+        movement = found.get(identity)
+
+        if movement is None:
+            raise TransactionNotFoundError(f"No such movement: {movement_id}")
+
+        return movement
+
+    def _linkable(self, bill: ScheduledBill, movement: Transaction) -> None:
+        """Whether this movement could be this bill's charge at all.
+
+        The refusals that no screen may talk anybody out of. A row this app
+        wrote is this feature confirming itself. A transfer between the
+        owner's own accounts is not spending, so calling it a paid bill would
+        put money in the month's total that nobody spent. The direction and
+        the currency are the charge being a different fact altogether: a
+        salary arriving does not pay the gym, and 40 dollars is not 40 000
+        pesos whatever the day's rate is.
+
+        How *close* it has to be — the day, the figure, the merchant — is
+        deliberately not asked here. That is what proposes a link; this is
+        what a person is allowed to assert.
+        """
+        if movement.origin.is_self_written:
+            raise ValueError(
+                "This movement is one this app wrote itself, so it cannot be "
+                "what paid a charge",
+            )
+
+        if movement.is_transfer:
+            raise ValueError(
+                "A transfer between your own accounts is not a payment of a bill",
+            )
+
+        if movement.direction is not bill.direction:
+            raise ValueError(
+                "This movement goes the other way, so it cannot be this charge",
+            )
+
+        if movement.amount.currency is not bill.amount.currency:
+            raise ValueError(
+                f"This bill is in {bill.amount.currency.value}, so a movement "
+                f"in {movement.amount.currency.value} cannot be its charge",
+            )
+
+    def _unclaimed(
+        self,
+        bill: ScheduledBill,
+        period: dt.date,
+        *,
+        movement_id: str,
+    ) -> None:
+        """Refuse a movement already answering for some other charge.
+
+        One payment settles one thing. Without this, one Netflix charge could
+        be linked to January, February and March, and three months would read
+        paid on the strength of one figure — the double count again, arrived
+        at from the other side.
+
+        Re-linking the same movement to the same charge is not a conflict: it
+        is the answer that is already there, and a screen retrying a request
+        it is unsure about must not be told off for it.
+        """
+        for other in self._bills.list_by_user(bill.user_id):
+            for day, linked in other.linked.items():
+                if linked != movement_id:
+                    continue
+
+                if other.id == bill.id and day == period:
+                    continue
+
+                raise ValueError(
+                    f"That movement is already the charge of «{other.name}» "
+                    f"on {day.isoformat()}",
+                )
 
     def _charged_amount(self, bill: ScheduledBill, stated: Money | None) -> Money:
         """What actually moved, defaulting to what the bill says.

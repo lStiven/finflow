@@ -48,11 +48,13 @@ class ChannelStatus(enum.Enum):
 class AlertType(enum.Enum):
     """What a channel can be told about.
 
-    Explicit string values because they are persisted. One member today;
-    E2 adds the recurring charge and E4 the budget threshold.
+    Explicit string values because they are persisted. `MOVEMENT` is every
+    purchase and income as it happens; `WEEKLY_SUMMARY` is Monday's look back
+    at the week before, against its owner's own normal.
     """
 
     MOVEMENT = "movement"
+    WEEKLY_SUMMARY = "weekly_summary"
 
     @property
     def enabled_by_default(self) -> bool:

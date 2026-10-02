@@ -1826,6 +1826,117 @@
           "response": []
         },
         {
+          "name": "Declare the monthly plan",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expected_income\": \"5000000\",\n  \"currency\": \"COP\",\n  \"savings_target\": \"1000000\"\n}"
+            },
+            "description": "Two guesses about the month: what it is supposed to bring in, and how much of that is not to be spent. One currency for both — subtracting a target in dollars from an income in pesos needs a rate this app does not have, and treating the two as comparable is the kind of wrong that looks right. `expected_income` must be greater than zero; `savings_target` is optional, defaults to 0 and is never larger than the income, because a plan that is short before a peso is spent is not a warning anybody can act on. A `PUT` and not a `PATCH` on purpose: a plan is two figures that are both guesses, and replacing it whole is what stops a savings target outliving the income it was set against. **Nothing is recorded as earned or spent** — this writes two numbers and a currency, no ledger row and no balance."
+          },
+          "response": []
+        },
+        {
+          "name": "Read the monthly plan",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "description": "What is declared, plus `updated_at` in epoch seconds — a plan is a guess that gets corrected, so how old it is matters. **404 when nothing is declared**, deliberately: \"no plan\" is a different thing from \"a plan of zero\", and only one of them is a state somebody can be in. A zero would read as \"you have nothing left to spend\"."
+          },
+          "response": []
+        },
+        {
+          "name": "Forget the monthly plan",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/plan",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "plan"
+              ]
+            },
+            "description": "Take the plan back: 204, and silent when there was nothing to forget — a 404 on the second press of a button somebody is unsure about is a worse answer than nothing. Nothing else changes, because the plan never wrote anything: no movement, no balance, nothing left behind to explain. The allowance goes back to 404 along with it."
+          },
+          "response": []
+        },
+        {
+          "name": "Monthly allowance",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/allowance?timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "allowance"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Decides which month 'this month' is."
+                }
+              ]
+            },
+            "description": "What is left to spend this month, and every piece of the subtraction behind it: `available` is `expected_income` less `savings_target`, `spent` and `committed`. The parts are not decoration — a figure nobody can take apart is one they stop believing the first time it disagrees with their own arithmetic. `committed` is what this month's declared bills **still owe**, never what the month costs: a charge already confirmed is counted in `spent`, through the ledger row confirming it wrote, and counting it here too would discount it twice. `available` can be negative and is reported negative rather than floored at zero, because somebody who overspent needs to see by how much. `since` and `until` are the calendar month read in `timezone` and not in UTC — a Bogotá month starting five hours early would count the last evening of the previous one; `days_left` includes today, which is still a day to get through. 404 when no plan is declared, for the reason `GET /financial/plan` gives."
+          },
+          "response": []
+        },
+        {
           "name": "Spending summary",
           "request": {
             "method": "GET",
@@ -2208,6 +2319,108 @@
             "description": "Newest first, each movement carrying the canonical `merchant` behind its counterparty text (null while no merchant owns that spelling). `unassigned=true` is the queue somebody works through after declaring an account — or the whole ledger, for somebody who declared none."
           },
           "response": []
+        },
+        {
+          "name": "Export transactions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/export?format=xlsx",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "xlsx",
+                  "description": "csv (default) | xlsx. Save the response to a file — Postman's \"Send and Download\""
+                },
+                {
+                  "key": "account_id",
+                  "value": "",
+                  "description": "Only this account's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "unassigned",
+                  "value": "",
+                  "description": "true exports only what no account claimed",
+                  "disabled": true
+                },
+                {
+                  "key": "origin",
+                  "value": "",
+                  "description": "bank_alert | manual | accrual | scheduled",
+                  "disabled": true
+                },
+                {
+                  "key": "direction",
+                  "value": "",
+                  "description": "incoming | outgoing — outgoing is the spending",
+                  "disabled": true
+                },
+                {
+                  "key": "search",
+                  "value": "",
+                  "description": "Matched against the counterparty",
+                  "disabled": true
+                },
+                {
+                  "key": "merchant_id",
+                  "value": "",
+                  "description": "Only this merchant's movements",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "Any value GET /merchants/categories lists for this caller",
+                  "disabled": true
+                },
+                {
+                  "key": "from",
+                  "value": "",
+                  "description": "Epoch seconds, included",
+                  "disabled": true
+                },
+                {
+                  "key": "to",
+                  "value": "",
+                  "description": "Epoch seconds, excluded",
+                  "disabled": true
+                },
+                {
+                  "key": "transfers",
+                  "value": "",
+                  "description": "include (default) | exclude | only",
+                  "disabled": true
+                },
+                {
+                  "key": "currency",
+                  "value": "",
+                  "description": "COP | USD ...",
+                  "disabled": true
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "Dates in the file are written in this zone",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Every movement the same filters as List transactions match, as a CSV (UTF-8 with BOM, comma-separated) or an Excel workbook. Not paginated: past 10 000 matching movements it answers 422 and asks for a shorter range rather than cutting the file. Text a spreadsheet would evaluate as a formula is neutralised."
+          }
         },
         {
           "name": "Enter transaction",
@@ -2616,6 +2829,73 @@
           "response": []
         },
         {
+          "name": "Arm a bill to charge itself",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/autopay",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "autopay"
+              ]
+            },
+            "description": "Let this bill charge itself, or stop it. **Off until this is called**, bill by bill: every other write under `/bills` happens because somebody pressed something, and this is the one that happens because a clock said so. An armed bill does not write on its due date — it waits until the charge's *match window* has closed (five days), so a movement arriving late is recognised as the charge instead of becoming a second one. It is not retroactive either: the day it was armed is stored, and nothing due before it is ever charged automatically. `timezone` decides what that day is, so leaving it out reads the switch in UTC and can push it a day forward. 409 when the bill's account is closed.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"timezone\": \"America/Bogota\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Settle what is due",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/settle",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "settle"
+              ]
+            },
+            "description": "What the bills screen calls when it opens, the same shape as `POST /financial/accrue` and for the same reason: nothing can walk every user on a schedule yet, so the work happens while its owner is there. Three outcomes, decided by evidence rather than by a setting. A movement already in the ledger that clearly is the charge answers it — **nothing is written** — and that happens for every active bill, armed or not. An armed bill whose charge nothing matched and whose window has closed writes the charge, exactly as the button does. Anything less clear comes back under `proposals` and is left alone. Safe to call again: a charge already answered for is not answered twice.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"timezone\": \"America/Bogota\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Pause a bill",
           "request": {
             "method": "POST",
@@ -2788,6 +3068,70 @@
           "response": []
         },
         {
+          "name": "Link a movement to a charge",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/link",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "link"
+              ]
+            },
+            "description": "Say a movement already in the ledger is what this charge cost — the month the bank *did* send the email. **It writes nothing**: the money is recorded and the balance already moved, and confirming instead would record the same money twice. Refused when the charge is already confirmed (undo that first), and for a movement this app wrote itself, a transfer between the owner's own accounts, the opposite direction, another currency, or one already answering for some other charge — one payment settles one thing. 404 when the movement is not this user's.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"movement_id\": \"{{movement_id}}\"\n}"
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unlink a movement from a charge",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/bills/{{bill_id}}/occurrences/{{bill_period}}/link",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "bills",
+                "{{bill_id}}",
+                "occurrences",
+                "{{bill_period}}",
+                "link"
+              ]
+            },
+            "description": "Take back the claim that a movement answered for this charge. **Erases nothing** — that is the whole difference from `DELETE .../pay`: the movement is the bank's own fact and stays where it is, spent and counted. Silent when nothing was linked, like every undo here."
+          },
+          "response": []
+        },
+        {
           "name": "Forget a bill",
           "request": {
             "method": "DELETE",
@@ -2809,6 +3153,179 @@
               ]
             },
             "description": "A real delete, unlike closing an account: a closed account still explains movements in the ledger, and a bill explains nothing because it never wrote anything. Pausing is for the one worth keeping. 204, or 404 when there was nothing there."
+          },
+          "response": []
+        },
+        {
+          "name": "Detected recurring series",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/recurring?timezone=America/Bogota",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "recurring"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota",
+                  "description": "IANA name. Decides which day each charge fell on: nine at night in Bogotá is the 15th there and the 16th in UTC, and a series whose days alternate between the two has no cadence left to find."
+                }
+              ]
+            },
+            "description": "The detector half of bills: what looks like it comes back every so often and is nobody's declared bill yet, read off thirteen months of movements. A proposal and nothing more — this writes nothing, and accepting one is `POST /financial/bills` with these figures, the same call anybody declares a bill with, so whatever ends up able to charge money is always something a person stated.\n\nThe window (`since`, `until`, `months`) comes back so a screen can say what \"nothing found\" was looked for in: an empty list is the ordinary answer for somebody two weeks in, and it means \"not enough history yet\", not \"you have no subscriptions\".\n\nLeft out on purpose: charges this app wrote itself — the interest a credit accrues every cut is perfectly monthly and would head the ranking, and a confirmed bill charge would be the detector reading its own handwriting — and transfers, because paying the card from savings every month is the most regular charge anybody has and it is not a subscription. Dormant series (two expected charges missed) are dropped rather than proposed; a list that suggests declaring a cancelled subscription is one nobody reads twice.\n\n`bill_id` is the mark that matters: non-null means this series is already declared, and the screen should not offer it again. `amount` is what the *next* charge is expected to cost, a median when `variable` is true, so \"about $90.000\" and \"$90.000\" stay different promises. Ordered by `confidence` (0 to 1) — it ranks a list read top-down and decides nothing, which is why there is no threshold anywhere in this feature. At most 40 series, a bound rather than a page."
+          },
+          "response": []
+        },
+        {
+          "name": "Declare a budget",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets"
+              ]
+            },
+            "description": "Answers 201 with the budget's id. Two declares of the same scope are two budgets, on purpose: «Salidas» and «Restaurantes» overlap because somebody meant them to.\n\n`categories: []` watches every category — «todo el mes» — and `accounts: []` watches every account. Empty means every one on both axes; there is no flag to set.\n\n`month: null` governs every month. A key like `2026-12` governs that one only, beside the recurring ones rather than instead of them.\n\nDeclaring moves no money.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Salidas\",\n  \"limit\": \"600000\",\n  \"currency\": \"COP\",\n  \"categories\": [\n    \"restaurants\"\n  ],\n  \"accounts\": [],\n  \"icon\": \"\",\n  \"month\": null,\n  \"warn_at\": 80\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Amend a budget",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets/{{budget_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets",
+                "{{budget_id}}"
+              ]
+            },
+            "description": "Restates one budget whole — every field, never a subset, because a ceiling and the point it warns at are one statement.\n\n404 when it is not this person's budget, which is the same answer as one that does not exist: an id is a uuid somebody could paste.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Salidas\",\n  \"limit\": \"900000\",\n  \"currency\": \"COP\",\n  \"categories\": [\n    \"restaurants\",\n    \"transport\"\n  ],\n  \"accounts\": [],\n  \"icon\": \"\",\n  \"month\": null,\n  \"warn_at\": 70\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Budgets of a month",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets?timezone=America/Bogota&month={{budget_month}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets"
+              ],
+              "query": [
+                {
+                  "key": "timezone",
+                  "value": "America/Bogota"
+                },
+                {
+                  "key": "month",
+                  "value": "{{budget_month}}"
+                }
+              ]
+            },
+            "description": "200 with empty lists when nothing is capped — never a 404, unlike the monthly plan: no budgets is an ordinary state.\n\nEvery budget that governs the month comes back, with what the ledger did to it. `retired` marks one whose categories have all been deleted; `missing` lists the ones that vanished when only some did."
+          },
+          "response": []
+        },
+        {
+          "name": "Forget a budget",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/financial/budgets/{{budget_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "budgets",
+                "{{budget_id}}"
+              ]
+            },
+            "description": "204 and silence, including when there was nothing to drop: a 404 on the second press of a button somebody is unsure about is a worse answer than nothing. A budget never wrote anything."
           },
           "response": []
         }
@@ -2894,6 +3411,107 @@
               ]
             },
             "description": "Every channel this caller owns, bound or still waiting. The screen polls this while a link is outstanding: binding happens inside Telegram, where the page cannot see it.\n\nNever carries the link, and never the full chat id — `chat_hint` is its last few characters, which is all the owner needs to recognise which account is bound. Every alert type appears in `preferences`, including ones nobody has expressed an opinion about yet, so a screen can draw a switch for each without guessing the default."
+          },
+          "response": []
+        },
+        {
+          "name": "Inbox",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox?limit=20",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "1-50, newest first"
+                }
+              ]
+            },
+            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification. An alert about a movement that has since been deleted is left out."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const entries = pm.response.json().entries;",
+                  "    // The newest, for Alerts > Dismiss inbox alert.",
+                  "    if (entries.length > 0) pm.environment.set('alert_entry_id', entries[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dismiss inbox alert",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox/:entryId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox",
+                ":entryId"
+              ],
+              "variable": [
+                {
+                  "key": "entryId",
+                  "value": "{{alert_entry_id}}",
+                  "description": "An entry's `id` from GET /alerts/inbox"
+                }
+              ]
+            },
+            "description": "Removes one alert from the app's inbox. It stays removed if the same event is delivered again. 204 on success, 404 for an entry that is not yours or no longer there. Telegram is untouched: what was sent there stays sent."
+          },
+          "response": []
+        },
+        {
+          "name": "Dismiss every inbox alert",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/alerts/inbox",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "alerts",
+                "inbox"
+              ]
+            },
+            "description": "Empties the app's inbox for the signed-in user. 204, even when it was already empty."
           },
           "response": []
         },

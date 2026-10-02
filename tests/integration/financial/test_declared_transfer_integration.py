@@ -19,6 +19,11 @@ from decimal import Decimal
 from mypy_boto3_dynamodb.client import DynamoDBClient
 import pytest
 
+from personal_finance.contexts.financial.application.bills import (
+    DeclareBillCommand,
+    ManageBillsUseCase,
+    SettleBillChargeUseCase,
+)
 from personal_finance.contexts.financial.application.commands import (
     EnterTransferLegCommand,
     OpenAccountCommand,
@@ -41,6 +46,7 @@ from personal_finance.contexts.financial.application.transfers import (
     DeclareTransferCommand,
     DeclareTransferUseCase,
 )
+from personal_finance.contexts.financial.domain.bills import BillCadence
 from personal_finance.contexts.financial.domain.entities import Account
 from personal_finance.contexts.financial.domain.exceptions import (
     TransferDeclarationError,
@@ -601,6 +607,59 @@ def test_undoing_a_pair_puts_both_movements_back(
 
 
 # ----------------------------------------------------------------- refusals
+
+
+def test_a_movement_a_bill_counts_as_its_charge_is_refused(
+    manage_accounts: ManageAccountsUseCase,
+    record: RecordMovementUseCase,
+    transfers: DeclareTransferUseCase,
+    accounts: DynamoDBAccountRepository,
+    ledger: DynamoDBTransactionLedger,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    savings = _open_savings(manage_accounts)
+    card = _open_card(manage_accounts)
+    movement_id = _bancolombia_alert(record)
+    bill = ManageBillsUseCase(bills=bills, accounts=accounts, charges=ledger).declare(
+        DeclareBillCommand(
+            user_id=USER_ID,
+            name="Tarjeta AV Villas",
+            amount=_cop(PAYMENT),
+            cadence=BillCadence.MONTHLY,
+            starts_on=dt.date(2025, 12, 30),
+            account_id=savings.id,
+        ),
+    )
+    SettleBillChargeUseCase(
+        bills=bills,
+        accounts=accounts,
+        charges=ledger,
+        transactions=ManageTransactionsUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            event_publisher=RecordingPublisher(),
+        ),
+    ).link(
+        user_id=USER_ID,
+        bill_id=bill.bill.id,
+        period=dt.date(2025, 12, 30),
+        movement_id=movement_id,
+    )
+
+    options = transfers.options(user_id=USER_ID, transaction_id=movement_id)
+
+    with pytest.raises(TransferDeclarationError, match="bill"):
+        transfers.declare(
+            DeclareTransferCommand(
+                user_id=USER_ID,
+                transaction_id=movement_id,
+                counterpart_account_id=card.id,
+            ),
+        )
+
+    assert options.refusal is not None
+    assert options.refusal.value == "linked_to_bill"
+    assert _balance(accounts, card) == Decimal(PAYMENT)
 
 
 def test_a_transfer_entered_as_one_cannot_be_undone(

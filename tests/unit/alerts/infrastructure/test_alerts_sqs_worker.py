@@ -284,3 +284,43 @@ def test_an_unreadable_body_says_what_it_could_not_read(
 
     [record] = caplog.records
     assert record.refused == "(root):json_invalid"  # type: ignore[attr-defined]
+
+
+# ----------------------------------------------------------------------
+# The movement's id and when it was recorded
+# ----------------------------------------------------------------------
+
+
+def test_the_movement_id_and_the_recording_time_travel_into_the_command() -> None:
+    use_case = StubUseCase()
+
+    _worker(use_case).handle(_body(movement_id="4f2a9c0d1e"))
+
+    [command] = use_case.commands
+    assert command.alert.movement_id == "4f2a9c0d1e"
+    # The envelope's time — stable across redeliveries — not the movement's.
+    assert command.recorded_at is not None
+    assert command.recorded_at.as_epoch_seconds() == 1_757_999_999
+
+
+def test_a_payload_from_before_movements_carried_their_id_is_still_announced() -> None:
+    use_case = StubUseCase()
+
+    assert _worker(use_case).handle(_body()) is MessageOutcome.HANDLED
+
+    [command] = use_case.commands
+    assert command.alert.movement_id is None
+
+
+@pytest.mark.parametrize(
+    "movement_id",
+    ["../../etc", "abc def", "x" * 129, "https://evil.example", ""],
+)
+def test_a_movement_id_that_is_not_one_is_refused(movement_id: str) -> None:
+    use_case = StubUseCase()
+
+    assert (
+        _worker(use_case).handle(_body(movement_id=movement_id))
+        is MessageOutcome.DISCARDED
+    )
+    assert use_case.commands == []

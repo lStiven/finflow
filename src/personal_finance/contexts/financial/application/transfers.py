@@ -522,15 +522,12 @@ class DeclareTransferUseCase:
         )
 
     def _linked_to_bills(self, user_id: UserId) -> frozenset[str]:
-        """Every movement a bill counts as one of its charges.
-
-        None on this branch: linking a movement to a bill's charge arrives
-        with E2·C, and until then no bill can count one. The port stays so
-        that merge only has to fill this in.
-        """
-        del user_id
-
-        return frozenset()
+        """Every movement a bill counts as one of its charges."""
+        return frozenset(
+            movement_id
+            for bill in self._bills.list_by_user(user_id)
+            for movement_id in bill.linked.values()
+        )
 
     def _find(self, user_id: UserId, transaction_id: str) -> Transaction:
         movement = self._ledger.find(user_id=user_id, transaction_id=transaction_id)

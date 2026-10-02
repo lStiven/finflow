@@ -722,9 +722,7 @@ about twenty thousand tokens. Search it for the specific "why" in question.
     `counterpart` is erased with its balance. A stated transfer is refused —
     it has no earlier self — and `DELETE` stays the way to remove it.
   * **A movement a bill counts as its charge is refused**, keeping the
-    existing rule that a transfer is not a bill payment. On `master` this
-    shipped before bill↔movement links (E2·C), so there `_linked_to_bills`
-    answers empty until that merge fills it in.
+    existing rule that a transfer is not a bill payment.
   * **Risk knowingly accepted:** the declaration is a conditional `Update` of
     the marker, but `save` and `remove` are the unconditional whole-row writes
     they always were. An edit or adoption that read the row *before* a
@@ -1408,6 +1406,324 @@ way out, and still stores nothing.
   worth looking at while building this becomes the one nobody ever sees. It is
   re-runnable without checking anything, because the charge's id makes the
   second write DynamoDB's problem.
+
+### A bill that charges itself, and the movement that answers one (2026-09-21)
+
+- **The match window closes *before* anything is written, and it is wider
+  than the grace** (2026-09-21). `GRACE_DAYS` (3) answers "is this late?",
+  which is a question about the owner; `MATCH_WINDOW_DAYS` (5) answers "is
+  that the gym?", which is a question about a bank — a domiciled charge is
+  presented by one business and posted by another, so a long weekend plus a
+  holiday is ordinary. An automatic charge therefore waits until day + 5, not
+  day + 3: for two days the screen says "sin pagar" and nothing acts, on
+  purpose. Writing on the grace boundary would take money for a charge whose
+  own bank movement arrives on the fourth day, and there is no undo for an
+  expense the bank also reported.
+
+- **Only a movement that is unambiguous is linked without asking**
+  (2026-09-21). `CERTAIN` is the bill's merchant *and* an amount within a
+  tenth; anything else is `LIKELY` and only ever proposed. Two `CERTAIN`
+  candidates link nothing: picking one would be guessing which of somebody's
+  movements paid for what, and being wrong files a real charge as another.
+  Considered and rejected: nearest-date wins, which reads well until a weekly
+  bill — charges seven days apart, window five each side — has one movement
+  inside two windows and the loser gets charged automatically for money that
+  already left. A contested movement is `LIKELY` for **both** periods
+  (`ScheduledBill.charges_around`), so neither acts.
+
+- **Recognising a movement happens for every active bill; writing one happens
+  only for an armed bill** (2026-09-21). The switch is about this app
+  *creating* money, and reading what the ledger already holds creates nothing
+  — it is also what keeps somebody from confirming a charge the bank had
+  already reported, which is the same double count from the other side. So
+  reconciliation is unconditional and posting is opt-in, bill by bill.
+
+- **The link is stored; "paid" still is not** (2026-09-21). The derived-id
+  trick only works for a row this app wrote — a bank's movement is keyed on
+  the bank's fingerprint, which nothing here can derive — so the (period →
+  movement) map lives on the bill, bounded like `skipped`. What is *not*
+  stored is whether that movement still exists: the map is read against the
+  ledger on every listing, so erasing the movement un-pays the charge exactly
+  as erasing a confirmed row does, and a stale link answers nothing rather
+  than blocking a confirmation for ever.
+
+- **Arming is not retroactive** (2026-09-21). `autopay_from` is the day the
+  switch was flipped, and nothing due before it is ever charged
+  automatically. A charge that has been on screen as overdue for a week may
+  already have been paid in a way this app cannot see, and taking the money
+  now would be the app inventing an expense out of a setting. The cost is
+  that turning it on does nothing visible until the next charge, which is the
+  honest reading of what was agreed to. A second bound,
+  `AUTOPAY_LOOKBACK_DAYS` (35), stops an app opened after three months from
+  posting a quarter of charges in one go.
+
+- **Undoing an automatic charge marks the period skipped — but only a charge
+  this app wrote** (2026-09-21). With autopay on, "expected" means "will be
+  charged", so an undo that left the charge expected would be a button that
+  undoes nothing: the next visit writes it straight back. Skipping is what
+  taking the charge back *means* here, it is visible on the card, and it is
+  one tap to reverse. A **linked** charge is undone by unlinking instead, and
+  a skip there would leave the bill at once linked and skipped for one period
+  — the state `link` clears on purpose — so the charge would vanish from the
+  month the moment somebody unlinked it. Found by the review.
+
+- **Confirming is refused when a movement already answers the charge**
+  (2026-09-21). Not symmetry with `link`: the two rows are keyed in different
+  spaces, so the ledger's conditional write — the thing that makes pressing
+  "Pagar" twice safe — cannot see the collision at all. Without the check the
+  feature produces exactly the double count it exists to remove. Found by the
+  review, reproduced against the repo's own fakes.
+
+- **Lazy, at `POST /financial/bills/settle`, not scheduled** (2026-09-21).
+  The same shape as `POST /financial/accrue` and for the same reason: nothing
+  in this deployment can walk every user yet. It also means the charge lands
+  while its owner is looking at the screen, which is the only moment an undo
+  is worth anything. The sweep catches every refusal per charge and leaves
+  that one alone — it runs on every visit, so one unlucky charge must not be
+  able to fail the page — while letting anything that is not a refusal
+  through: a table that is not answering must not read as "nothing was due".
+
+- **The confirmation dialog says what confirming *does*, and names
+  Presupuestos** (2026-09-21). Asked for by the owner. The difference between
+  "I wrote down what this will cost me" and "my money moved" is the thing
+  somebody gets wrong the first time they press Pagar, and the answer to
+  wanting the first is a screen that already exists.
+
+### Spending budgets (2026-09-18)
+
+- **The Telegram alert at 80 % is deferred, and not for the reason the plan
+  gave** (2026-09-18). The build plan had it waiting on E1, the notification
+  channel; E1 shipped on 2026-09-14 and the alert still cannot be built. What
+  actually blocks it is that **a movement has no category at the moment it is
+  recorded**: Financial stores the counterparty text the bank wrote and joins
+  it to a merchant when the answer is *read*, which is precisely what makes
+  renaming a merchant correct every past movement for free. So nothing on the
+  write path knows which cap a purchase belongs to — and the financial worker
+  has neither the Merchant adapter wired nor IAM to reach its table.
+  Considered and rejected: evaluating the crossing lazily when the budgets are
+  read, which works and would have shipped in an hour. It was rejected because
+  this project already made that call once, against itself — accrued interest
+  is deliberately **not** announced because it arrives four at a time when
+  somebody opens the credit screen, and announcing things that only happen
+  when you open the app is what makes people turn alerts off. An alert that
+  fires while you are already looking at the screen that says it is not an
+  alert. What unblocks it is the same thing that has the monthly credit
+  accrual blocked: a way to walk every user from a scheduled trigger.
+
+- **The crossing is derived, never stored and never published** (2026-09-18).
+  Following from the above, `Budget` records no domain event and there
+  is no `BudgetThresholdCrossed` anywhere. Considered and rejected: recording
+  the event now and leaving it unpublished for later, which is how a dead code
+  path gets mistaken for a working one. The state is computed in
+  `CategoryBudget.progress` on the way out, the same shape as "paid" being
+  read off the ledger row — and for the same reason: a stored answer would be
+  the copy that survives somebody editing the movement underneath it. Whoever
+  builds the alert will need an announced-once marker at that point, and *not
+  before*: without a trigger there is nothing to make idempotent.
+  **Revised 2026-09-18:** the scope rework opened one door the entry above
+  closes for everything else. A budget that watches *every* category needs no
+  category to be judged, so that kind — and only that kind — can be evaluated
+  on the write path, without the user walk. The category-scoped ones still
+  wait for it.
+
+- **A budget is a scope with a generated id, and that reverses what came
+  first** (2026-09-18, revised the same day). The first version had no
+  generated id: a cap *was* its category and its month
+  (`BUDGET#<month>#<cat>`), on the argument that two caps on the same pair are
+  one cap declared twice, and a month's own cap **shadowed** the recurring one.
+  Both were rewritten when budgets grew a scope. The argument only held while a
+  cap watched exactly one category — once «Salidas» (restaurants, bars,
+  delivery) and «Restaurantes» can both exist, overlapping deliberately, two
+  budgets over restaurants are two budgets, and there is no honest answer to
+  which of two partly-overlapping scopes hides the other. So: `BUDGET#<id>`,
+  every budget that governs a month applies, and December's exception is read
+  *beside* the usual ceiling rather than instead of it. What the reversal
+  bought is `amend`: while the identity was the content, correcting a cap
+  meant writing a second row under a new identity and leaving the first
+  unreachable — a save that looked like it had done nothing. What it cost is
+  the two bounded `begins_with` queries the old sort key allowed; the read is
+  now one query over the whole `BUDGET#` prefix, which is fine because budgets
+  are a handful of rows somebody typed rather than a log that grows on its own.
+  **No migration was needed, and only by luck**: the endpoints had never been
+  deployed, so not one `BUDGET#` row existed outside a local emulator.
+
+- **An empty scope means *every* one, and is stored as an absent attribute**
+  (2026-09-18). `BudgetScope` holds categories and accounts, and empty means
+  all of them on both axes. Considered and rejected: a boolean beside each set
+  (`all_categories` next to `categories`), which stores two ways to say the
+  same thing and lets them contradict each other. The storage side is forced
+  rather than chosen — DynamoDB has no empty string set, so «todo el mes»
+  cannot be written as `SS: []` and the attribute is simply omitted; the
+  absence reads back as exactly what the domain means. A sentinel member like
+  `ALL` was rejected because it is a category value somebody could also type.
+  This is checked against the real table, not a double: an in-memory fake
+  holds an empty set happily and the client refuses to write one.
+
+- **The screen is its own, against the build plan** (2026-09-18). The plan
+  said the traffic light belonged "inside the breakdown by category the
+  summary screen already draws, and the editable cap where the spending is
+  seen, not in a separate settings screen". The second half of that is
+  honoured — `/presupuestos` shows every cap *against that month's spending*
+  and is not a settings panel — but it is a screen rather than a section,
+  because Resumen is asked four plainer questions first (what do I have, what
+  came in, what went out, what do I owe) and a second per-category table under
+  them buries all four. Resumen gets a one-line summary and a link. Decided by
+  the owner, who also moved E3's allowance card below the accounts on the same
+  argument.
+
+### Exporting movements (2026-09-30)
+
+- **The server writes the file, not the browser.** The Transacciones screen
+  holds one page of 25; a client-side export would either be that page or a
+  loop over every page with its own chance to stop short. `GET
+  /financial/export` takes the same filters as `/financial/transactions`,
+  through the same `_movement_filter`, and reuses `ListTransactionsUseCase`,
+  so the file behind a filter is that list — the e2e compares ids against a
+  full walk of the list.
+- **Refused past 10 000 rows, never cut.** A Lambda answer stops at 6 MB and
+  a file that silently ends early is the one wrong answer for somebody
+  keeping their data. The refusal is a 422 whose `detail.code` is
+  `export_too_large`, because a deleted category or a malformed filter is a
+  422 too and only this one is fixed by picking fewer dates. The dialog
+  counts first (`/transactions?limit=1`), so the ceiling is seen, not hit.
+- **Every text cell is untrusted.** Counterparty, note, merchant name,
+  account name and a user's own category label can all start with `=`. The
+  CSV prefixes `'` on `= + - @ \t \r` (OWASP's CSV-injection advice); the
+  workbook is written with `strings_to_formulas` off *and* `write_string`, so
+  no library option can turn a cell back into a formula. Amounts and dates
+  are written by the server and are never neutralised — a `-` there is a
+  number.
+- **Two formats on purpose.** CSV is RFC 4180 with a point decimal and a BOM
+  (without the BOM Excel reads UTF-8 as mojibake) — for tools. A
+  Spanish-locale Excel expects `;` and a comma decimal, so the answer for
+  Excel is the `.xlsx`, not a CSV dialect: real dates, real numbers, a
+  frozen header and a filter.
+- **Category names are restated in Spanish from the value.** Merchant's
+  catalogue labels the shipped categories in English by contract; the export
+  keeps a copy of the frontend's table and falls back to the catalogue's label
+  for a user's own category. `category_labels` is a separate port
+  (`CategoryNamer`), not a method on `MerchantDirectory`, so none of the fakes
+  implementing the directory had to change.
+- **XlsxWriter over openpyxl**: write-only is all this needs, it has no
+  dependencies, and it prints a `Decimal` digit for digit (`{:.16G}` on the
+  Decimal itself) rather than through a float.
+- **The dialog is portalled to `<body>`.** The screen's content sits in an
+  animated container, and a transformed ancestor makes `position: fixed`
+  relative to it: the dialog opened a page below the viewport. Only a real
+  browser showed it.
+
+### Budgets in the alert, the in-app inbox, and Monday's summary (2026-09-30)
+
+- **The budget line is asked of Financial, by Alerts, at delivery.** E1 had
+  refused to put anything but the payload in a message, so an alert would not
+  depend on two more things being up. That still holds where it matters: the
+  lookup is an enrichment and a failure sends the alert without the line
+  (`DeliverMovementAlertUseCase._with_budgets`, broad `except` on purpose).
+  What changed is the argument about *where* it is computed. Putting the
+  standing in the `MovementRecorded` payload would freeze a number at write
+  time — before Merchant has attributed the counterparty — and would make
+  Financial compute budgets for every movement of everybody, including the
+  ones nobody alerts. Asking at delivery reads the category a few seconds
+  later, which is exactly the delay that makes it known for a merchant seen
+  before. It goes through Financial's published `ReadMovementBudgetsUseCase`
+  via `alerts/infrastructure/financial/adapters.py`, the integration CLAUDE.md
+  allows; AlertsFunction gained read-only access to the financial and merchant
+  tables for it.
+- **"Covers" means "would count it", and nothing looser.** Same rules as
+  `ReadBudgetsUseCase` and the same figures, so the message can never disagree
+  with the budgets screen: outgoing, not a transfer, the category a budget
+  names *or* a budget over every category, the account if the budget narrows
+  to some, same currency, the movement's own month in Bogotá. A movement no
+  merchant owns yet has no category — only whole-month budgets cover it. The
+  owner asked for «solo si un presupuesto cubre esa categoría»; a whole-month
+  budget does cover every category, so it is named too. That is a reading of
+  the request, recorded here in case it was not the intended one.
+- **The inbox is for everybody, not a mirror of Telegram.** Every movement
+  Alerts would announce (accruals excluded, same rule) is kept 30 days whether
+  or not a channel exists, because «¿cuál fue mi último movimiento?» is asked
+  from inside the app. The per-channel minimum amount does not apply to it —
+  that floor is about waking a phone.
+- **Keyed by when the fact was recorded, not when the worker saw it.** The
+  envelope's `occurred_at` is the same on every redelivery; a key with "now"
+  in it would make each redelivery a second row. The weekly entry uses a fixed
+  instant (the Monday after, 13:00 UTC) for the same reason. The newest-first
+  read is then a `Query` with `ScanIndexForward=False` and a `Limit`, which is
+  what a poll every 15 s can afford.
+- **Polling, not a socket.** API Gateway WebSockets or AppSync would be the
+  real-time answer and neither is worth a second piece of infrastructure for
+  a handful of users: a visible tab asks every 15 s, a hidden one does not ask
+  at all. What the page had when it opened is history and never toasted.
+- **Toasts at the bottom.** On a phone the bell floats top-right and a toast
+  across the top covered it — the control listing what the toast was about
+  was untappable while it showed. Found by the e2e, not by looking.
+- **The watcher and the toaster live in the root route, not in `AppShell`.**
+  Every screen draws its own shell, so a toaster there was unmounted on each
+  navigation and a notification vanished mid-read.
+- **Monday's summary walks Alerts' own recipients.** Walking users was the
+  blocker for the credits' monthly charge and the per-category budget alert;
+  it is not solved in general. Alerts keeps a `RECIPIENTS` partition, written
+  whenever it hears about somebody's movement, which is enough for a summary
+  that only makes sense for people with movements. The comparison is against
+  the average of the four weeks before, counting only weeks after the
+  person's first movement — averaging in weeks before they arrived would call
+  every week of theirs expensive. Currencies are ordered by movement count,
+  never by amount.
+- **A transport outage fails the weekly run at the end, not halfway**, so
+  Lambda's asynchronous retry runs it again; the delivery log and the inbox's
+  conditional write make the retry send only what was missed.
+- **An alert about an erased movement is dropped when the inbox is read, not
+  deleted when the movement goes** (2026-10-01). Financial is asked which of
+  the page's movement ids still exist (`ExistingMovementsUseCase`, through the
+  adapter). Rejected: a `MovementDeleted` event that Alerts consumes to clean
+  up — the erasure and the alert travel on different queues, an alert
+  delivered after its erasure would survive, and it is a second contract to
+  keep in step. If the check fails the inbox is shown unfiltered: one stale
+  entry beats an inbox that does not load. When erasures leave a page short,
+  the read widens (up to 200 candidates) rather than answering "empty".
+- **Dismissing is a soft-delete (`dismissed_at`), never a `DeleteItem`.** A
+  deleted row lets the next SQS redelivery's conditional put write it back;
+  a marked row makes that put a no-op. Reads filter it in the query and page
+  100 rows at a time, because a `Limit` still counts filtered rows. The mark
+  is conditional on the row existing: an update creates what it does not
+  find, and a row the TTL sweep took mid-loop would return as a stub with no
+  expiry. Accepted: dismissing one entry scans the owner's partition for its
+  id, and «Borrar todo» is one write per row — 30 days of one person's alerts.
+- **A toast is only for what arrived.** When the last poll was a full page, an
+  unseen entry older than its oldest one came up from below (a dismissal or an
+  erasure above it) and is not toasted.
+- **Errors get the app's own screen**, as the router's
+  `defaultErrorComponent`/`defaultNotFoundComponent`, in three cases that ask
+  different things of the reader: no connection (retry), gone (404: go back,
+  no retry), ours (retry, "we're on it"). The error's own text is never shown.
+
+### Deploying on every push (2026-09-30)
+
+- **Everything that can prove the new code runs before AWS is touched.**
+  `check-all`, `infra-check`, `just verify` and every e2e run against the
+  emulator in the runner, so a failure there costs nothing. The smoke cannot
+  move before the deploy: it drives the API that *is* deployed, and before the
+  deploy that is the old code. So it runs after, with a rollback behind it.
+- **The rollback is the same script over the previous release**, found by the
+  `deployed/<env>` tag the last green run moved. A second, rollback-only path
+  would be exercised only on the worst day. Provisioning is not rolled back: it
+  only creates or adjusts, and the older code ignores what it does not know.
+- **No manual approval before production**, by the owner's decision: the gate
+  is the tests, not a person. `master` should be protected so that only a
+  branch whose checks passed can reach it.
+- **OIDC, one role per GitHub environment, trusted by environment and not by
+  branch.** Development and production share an AWS account, so the only
+  thing keeping a push to `dev` from production is which role it may assume.
+  The `sub` claim of a job that names an environment is
+  `repo:…:environment:<name>`, and each environment only deploys from its
+  branch — two locks instead of one. No AWS key is stored in GitHub.
+- **Named profiles kept in CI.** Every recipe reads a named profile (the one
+  thing that stops a dev command from reading production by default), so CI
+  writes the OIDC credentials under that name instead of teaching each recipe
+  a second way to authenticate.
+- **`verify_flow.py` had gone stale** — it read `total` from
+  `/ingestion/notifications` after pagination replaced it with `has_more` —
+  and nobody noticed because nothing ran it. Putting it in the gate is what
+  found it.
 
 ### Operations
 
@@ -2111,8 +2427,9 @@ to whatever ends up serving the bundle, which the bundle is not told.
   real finding: the only setting that exists and has no home is the display
   timezone, and it is not even per-user yet (`ALERTS_DISPLAY_TIMEZONE` is one
   value for the whole deployment, and Financial's endpoints take it as a query
-  default). Deleting your account and exporting your data are the other two
-  things a reader expects there and that do not exist in any form. So the
+  default). Deleting your account is the other thing a reader expects there
+  and that does not exist in any form; exporting does since 2026-09-30, but
+  from Transacciones, beside the filters that decide what goes into the file. So the
   screen stays announced and unbuilt on purpose: it earns its place when E2 and
   E4 turn one kind of alert into three and the Telegram card can no longer hold
   "what to announce" beside "where to send it". Categories stay inside
@@ -2398,6 +2715,15 @@ to whatever ends up serving the bundle, which the bundle is not told.
 
 ### Review findings worth remembering
 
+- **A field is read for what it says, not for what it usually coincides
+  with.** `MovementRecorded.unassigned` was `account_fingerprint is None`:
+  true for bank alerts routed by card, and wrong for every movement that lands
+  on an account without a card — a confirmed bill, one entered by hand — and
+  for an alert whose card nobody declared. Shipped 2026-09-14 and seen only
+  on 2026-10-01, when the in-app inbox put «Sin cuenta asignada» next to a
+  bill paid from savings. `TransactionRecorded` now carries `account_id`, and
+  `assign_to`/`unassign` restate the still-pending announcement, because a
+  movement is built before it is placed.
 - **IMAP `FETCH (RFC822)` marks a message `\Seen` on read**, before `ack()`
   runs — it defeated the "ack only after a durable write" design and could
   drop bank alerts on a mid-batch crash. Must stay `BODY.PEEK[]`.

@@ -29,6 +29,12 @@
  *   table refuses the second write. A count in the use case would pass every
  *   unit test and fail here.
  *
+ * And one more, added with the detector: **a suggestion is not a bill until
+ * somebody says so.** The section at the foot of the screen proposes what the
+ * seeded history repeats, and accepting one has to produce an ordinary
+ * declared bill — through the same endpoint the form uses — without moving a
+ * peso, and has to come back marked so it is never offered twice.
+ *
  * Neither can be checked against a double, which is why this script exists.
  *
  * Exits non-zero on the first mismatch, with what it expected and what it
@@ -47,7 +53,12 @@ const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de v
 /** Unmistakable in a seeded database, and never a real merchant's name. */
 const PREFIX = "E2E Gimnasio";
 const NAME = `${PREFIX} ${Date.now()}`;
+/** The bill used for the reconciliation half, kept apart so the cleanup can
+ * find both by their shared prefix. */
+const MATCHED_NAME = `${PREFIX} conciliado ${Date.now()}`;
 const AMOUNT = "120.000";
+/** What `just seed` leaves four months of, and declares no bill for. */
+const DETECTED = "SPOTIFY COL";
 const AMENDED = "135.000";
 
 const steps = [];
@@ -192,7 +203,27 @@ async function main() {
   const problems = [];
   page.on("pageerror", (error) => problems.push(`error: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") problems.push(`console: ${message.text()}`);
+    if (message.type() !== "error") return;
+
+    // The browser logs a failed request as a console error without saying
+    // which one, and this app asks for 404s on purpose: «no hay plan
+    // declarado» is the answer both plan endpoints give. So the generic line
+    // is ignored here and the responses themselves are watched below — where
+    // the URL *is* known, so a real missing resource still fails.
+    if (message.text().includes("404 (Not Found)")) return;
+
+    problems.push(`console: ${message.text()}`);
+  });
+
+  // The 404s this app asks for, by path. Anything else answering 404 is a
+  // regression and is reported with the URL that caused it.
+  const EXPECTED_404 = ["/financial/plan", "/financial/allowance"];
+  page.on("response", (response) => {
+    if (response.status() !== 404) return;
+    const path = new URL(response.url()).pathname;
+    if (EXPECTED_404.includes(path)) return;
+
+    problems.push(`404 inesperado: ${path}`);
   });
 
   let call;
@@ -224,7 +255,10 @@ async function main() {
     // row count — a balance that moved by the wrong amount is the failure
     // worth catching, and an unassigned charge cannot show it.
     await page.getByLabel("Sale de").selectOption({ index: 1 });
-    await page.getByRole("button", { name: "Declarar" }).click();
+    // `exact`, and not by accident: the suggestions section at the foot of
+    // this screen has buttons called «Declarar SPOTIFY COL como factura», and
+    // Playwright matches an accessible name by substring unless told not to.
+    await page.getByRole("button", { name: "Declarar", exact: true }).click();
 
     // It shows twice on purpose — once as a declared bill and once as a
     // charge of this month — so the locator has to say which.
@@ -387,6 +421,164 @@ async function main() {
     billId = null;
     check("borrar tampoco movió saldos", await moneyState(call), before);
 
+    // ------------------------------------------------ reconciliation, UI
+    // The safety net under the automatic charge, and the one property no
+    // unit test can prove: when a movement that *is* the charge is already
+    // in the ledger, opening the screen has to answer the charge **with that
+    // movement** and write nothing. A second row here is the double count
+    // this whole feature exists to remove, produced by the feature itself.
+    const period = firstOfThisMonth();
+    const matched = await call("/financial/bills", {
+      method: "POST",
+      body: JSON.stringify({
+        name: MATCHED_NAME,
+        amount: "120000",
+        currency: "COP",
+        cadence: "monthly",
+        starts_on: period,
+      }),
+    });
+    billId = matched.id;
+    const alreadyPaid = await call("/financial/transactions", {
+      method: "POST",
+      body: JSON.stringify({
+        direction: "outgoing",
+        amount: "120000",
+        currency: "COP",
+        // Noon UTC on the charge's own day: the same instant the confirmed
+        // charge would carry, and the same calendar day in every zone this
+        // is read in.
+        occurred_at: Math.floor(Date.parse(`${period}T12:00:00Z`) / 1000),
+        counterparty: MATCHED_NAME,
+      }),
+    });
+
+    // Taken *after* the movement exists: what must not change from here is
+    // the number of rows, which is the whole question.
+    const withMovement = await moneyState(call);
+
+    await page.goto(`${WEB}/facturas`, { waitUntil: "networkidle" });
+    const settled = await untilCharge(
+      call,
+      "conciliar el cobro",
+      (charge) => charge?.state === "paid",
+      15_000,
+      MATCHED_NAME,
+    );
+    check(
+      "el cobro queda pagado por el movimiento que ya estaba",
+      settled?.state,
+      "paid",
+    );
+    check("y la pantalla dice que no escribió nada", settled?.settled_by, "matched");
+    check(
+      "conciliar no escribió ningún movimiento",
+      await moneyState(call),
+      withMovement,
+    );
+    check(
+      "y la pantalla lo cuenta",
+      await page
+        .getByText("Ya estaba pagada por un movimiento tuyo", { exact: false })
+        .first()
+        .isVisible()
+        .catch(() => false),
+      true,
+    );
+
+    // And the way back, which is not the same undo: forgetting the link must
+    // leave the bank's own movement exactly where it is.
+    await page
+      .getByRole("button", { name: `No es este ${MATCHED_NAME}` })
+      .first()
+      .click();
+    const unlinked = await untilCharge(
+      call,
+      "desenlazar el cobro",
+      (charge) => charge?.state !== "paid",
+      10_000,
+      MATCHED_NAME,
+    );
+    check("desenlazar deja el cobro sin pagar", unlinked?.state !== "paid", true);
+    check("y no borra el movimiento", await moneyState(call), withMovement);
+
+    // ------------------------------------------------------- autopay, UI
+    await page.getByRole("button", { name: `Cobrar sola ${MATCHED_NAME}` }).click();
+    check(
+      "armar el cobro automático avisa antes de que escriba plata",
+      await page
+        .getByText("escribirá un movimiento", { exact: false })
+        .first()
+        .isVisible(),
+      true,
+    );
+    await page.getByRole("button", { name: `Sí, cobrar sola ${MATCHED_NAME}` }).click();
+    const armed = await until(
+      call,
+      "armar el cobro automático",
+      (bill) => bill?.autopay === true,
+      10_000,
+      MATCHED_NAME,
+    );
+    check("queda armada en el servidor", armed?.autopay, true);
+    check("y guarda desde cuándo", typeof armed?.autopay_from, "string");
+    check("armarla no cobró nada", await moneyState(call), withMovement);
+
+    await call(`/financial/bills/${matched.id}`, { method: "DELETE" });
+    await call(`/financial/transactions/${alreadyPaid.id}`, {
+      method: "DELETE",
+    });
+    billId = null;
+
+    // ------------------------------------------------- suggestions, UI
+    // The detector's half. `just seed` leaves four months of SPOTIFY COL in
+    // the ledger and declares no bill for it, so the section has to be
+    // proposing it — and accepting has to produce an ordinary declared bill
+    // without moving a peso, because a guess may not be what moves money.
+    await page.goto(`${WEB}/facturas`, { waitUntil: "networkidle" });
+    const suggestion = page.getByRole("button", {
+      name: `Declarar ${DETECTED} como factura`,
+    });
+    // Waited for rather than asked about: the suggestions are a separate,
+    // slower read that is deliberately not blocking the screen, so a bare
+    // `isVisible` races it and reports "no había sugerencia" for a section
+    // that was still on its way.
+    const proposed = await suggestion
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (proposed) {
+      await suggestion.click();
+      const accepted = await until(
+        call,
+        "aceptar la sugerencia",
+        (bill) => bill !== undefined,
+        10_000,
+        DETECTED,
+      );
+      check("aceptar una sugerencia declara la factura", accepted?.name, DETECTED);
+      check("con la cadencia que el detector leyó", accepted?.cadence, "monthly");
+      check("y sin mover un peso", await moneyState(call), before);
+
+      // Guarded: `until` answers `undefined` when it gives up, and reaching
+      // into that turns a clear FALLA into a TypeError that swallows every
+      // check below it.
+      if (accepted !== undefined) {
+        const marked = await call("/financial/recurring");
+        const back = marked.series.find((each) => each.name === DETECTED);
+        check(
+          "y la sugerencia vuelve marcada como ya declarada",
+          back?.bill_id,
+          accepted.id,
+        );
+
+        await call(`/financial/bills/${accepted.id}`, { method: "DELETE" });
+      }
+    } else {
+      note(`no había sugerencia para ${DETECTED} — ¿corriste 'just seed'?`);
+    }
+
     check("la pantalla no registró errores", problems, []);
   } catch (error) {
     failures += 1;
@@ -399,7 +591,9 @@ async function main() {
     if (call) {
       try {
         const view = await call("/financial/bills");
-        const mine = view.bills.filter((bill) => bill.name.startsWith(PREFIX));
+        const mine = view.bills.filter(
+          (bill) => bill.name.startsWith(PREFIX) || bill.name === DETECTED,
+        );
 
         for (const bill of mine) {
           await call(`/financial/bills/${bill.id}`, { method: "DELETE" });
@@ -438,12 +632,12 @@ function firstOfThisMonth() {
  * fails on a cold Vite module — which is exactly what it did. Waiting for the
  * condition is both faster and the only version that means anything.
  */
-async function until(call, describe, predicate, timeoutMs = 10_000) {
+async function until(call, describe, predicate, timeoutMs = 10_000, name = NAME) {
   const deadline = Date.now() + timeoutMs;
   let last;
 
   while (Date.now() < deadline) {
-    last = await find(call, NAME);
+    last = await find(call, name);
 
     if (predicate(last)) return last;
 
@@ -463,13 +657,13 @@ async function find(call, name) {
 }
 
 /** `until`, but watching one charge of the window rather than the bill. */
-async function untilCharge(call, describe, predicate, timeoutMs = 10_000) {
+async function untilCharge(call, describe, predicate, timeoutMs = 10_000, name = NAME) {
   const deadline = Date.now() + timeoutMs;
   let last;
 
   while (Date.now() < deadline) {
     const view = await call("/financial/bills");
-    const bill = view.bills.find((each) => each.name === NAME);
+    const bill = view.bills.find((each) => each.name === name);
     last = view.occurrences.find((charge) => charge.bill_id === bill?.id);
 
     if (predicate(last)) return last;

@@ -11,13 +11,17 @@ import {
 import {
   type Account,
   accountsQuery,
+  allowanceQuery,
+  budgetsQuery,
   categoriesQuery,
+  planQuery,
   type SpendingTotals,
   type SummaryGroup,
   summaryQuery,
   type Transaction,
   transactionsQuery,
 } from "@/api/queries";
+import { BudgetSummaryCard } from "@/budgets/BudgetSummaryCard";
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
 import { Donut, type Slice } from "@/components/charts/Donut";
@@ -37,6 +41,7 @@ import {
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
 import { categoryGroupLabel, categoryLabels } from "@/merchants/categories";
+import { AllowanceCard } from "@/plan/AllowanceCard";
 
 const RECENT_LIMIT = 6;
 /** Beyond this the ring stops being readable; the rest becomes one wedge. */
@@ -107,6 +112,18 @@ export const Route = createFileRoute("/")({
         ...transactionsQuery({ limit: RECENT_LIMIT }),
         staleTime: "static",
       }),
+      // Both answer 404 until somebody declares their month, which the query
+      // turns into `null` — so this loads a real answer either way and the
+      // card never flashes in after the rest of the screen has painted.
+      // Caught, because the card is the one piece of this screen that is
+      // optional: anything else failing is a broken dashboard, and this
+      // failing should only be a missing card.
+      context.queryClient.query(planQuery).catch(() => null),
+      context.queryClient.query(allowanceQuery).catch(() => null),
+      // Caught for the same reason, though this one never 404s: the budgets
+      // card is optional, and a 5xx behind it must cost a card rather than the
+      // dashboard.
+      context.queryClient.query(budgetsQuery()).catch(() => null),
     ]);
   },
   component: Dashboard,
@@ -293,6 +310,17 @@ function Dashboard() {
         </div>
 
         <AccountList accounts={accounts.accounts} currency={currency} />
+
+        {/* Below the accounts, and that is a correction rather than a tidy-up.
+            This card used to sit above the tiles, on the argument that «qué me
+            queda» is the question somebody opens this screen with. Watching it
+            get used said otherwise: what this screen is first asked is the four
+            plain facts — cuánto tengo, cuánto entró, cuánto gasté, cuánto debo —
+            and a card that starts as a form asking for two figures nobody has
+            typed yet is a wall in front of them. Both of these draw nothing
+            until something is declared. */}
+        <AllowanceCard />
+        <BudgetSummaryCard />
       </div>
     </AppShell>
   );

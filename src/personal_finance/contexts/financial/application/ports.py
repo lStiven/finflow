@@ -6,7 +6,9 @@ from decimal import Decimal
 from typing import Protocol
 
 from personal_finance.contexts.financial.domain.bills import BillId, ScheduledBill
+from personal_finance.contexts.financial.domain.budgets import Budget, BudgetId
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.plan import MonthlyPlan
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -433,6 +435,88 @@ class ScheduledBillRepository(Protocol):
         ...
 
 
+class MonthlyPlanRepository(Protocol):
+    """Persistence port for `MonthlyPlan`.
+
+    No id anywhere, and that is the shape of the thing rather than an
+    omission: nobody has two plans, so the owner *is* the identity. There is
+    nothing to list and nothing to page, and no key a caller could guess their
+    way into.
+    """
+
+    def find(self, *, user_id: UserId) -> MonthlyPlan | None:
+        """This user's plan, or None when they have not declared one.
+
+        None is a real answer the whole way up: the screen shows no card
+        rather than a zero, because a zero reads as "nothing left to spend".
+        """
+        ...
+
+    def save(self, plan: MonthlyPlan) -> None:
+        """Store a plan, new or restated.
+
+        A plain put, like a bill: nothing else writes this row and none of its
+        fields is a running total, so there is no half of the record a write
+        could quietly discard.
+        """
+        ...
+
+    def remove(self, *, user_id: UserId) -> bool:
+        """Forget the plan. False when there was nothing to forget."""
+        ...
+
+
+class BudgetRepository(Protocol):
+    """Persistence port for `Budget`.
+
+    Keyed by a generated id, which reverses what this port used to say. A
+    budget's identity used to *be* its category and its month, on the argument
+    that two caps on the same pair are one cap declared twice — an argument
+    that only held while a cap watched exactly one category. Scopes overlap on
+    purpose now, so two budgets over restaurants are two budgets.
+
+    `list_for_user` replaces `list_for_month` because of the same change. A
+    month can no longer be a key: a budget names a scope, and which months it
+    governs is a field on it rather than a segment of where it is stored.
+    Somebody's budgets are a handful of rows — the screen reads them all and
+    the domain decides which ones the month concerns.
+    """
+
+    def list_for_user(self, *, user_id: UserId) -> Sequence[Budget]:
+        """Every budget this person declared, whichever month it governs.
+
+        Unfiltered on purpose. Which of them a month concerns is
+        `Budget.governs`, applied above this line — a repository that already
+        resolved it could not tell a screen that the ceiling it is showing is
+        this month's exception rather than the usual one.
+        """
+        ...
+
+    def get(self, *, user_id: UserId, budget_id: BudgetId) -> Budget | None:
+        """One budget, or None. Scoped to its owner and never to the id alone:
+        a uuid is something somebody could paste, and loading by id would let
+        one person amend another's ceiling."""
+        ...
+
+    def save(self, budget: Budget) -> None:
+        """Store a budget, new or restated.
+
+        A plain put, like a bill and like the plan: nothing else writes these
+        rows and none of their fields is a running total, so there is no half
+        of the record a write could quietly discard. What is spent against the
+        budget is not here at all — it is read off the ledger.
+        """
+        ...
+
+    def remove(self, *, user_id: UserId, budget_id: BudgetId) -> bool:
+        """Forget a budget. False when there was nothing to forget.
+
+        Deleting is right here for the reason it is right on a bill: a budget
+        never wrote anything, so there is nothing left behind to explain.
+        """
+        ...
+
+
 class ChargeLookup(Protocol):
     """Which of a handful of named movements the ledger already holds.
 
@@ -462,6 +546,21 @@ class ChargeLookup(Protocol):
         would put a round trip per charge behind a screen somebody opens to
         read two numbers.
         """
+        ...
+
+
+class MovementHistory(Protocol):
+    """Everything one user has, for reading rather than for writing.
+
+    Narrow like `ChargeLookup` and `AccountLookup`, and for the same reason:
+    the detector's whole job is to look at the past and propose, so handing it
+    the full `TransactionLedger` would put `record` and `remove` within reach
+    of a heuristic. `DynamoDBTransactionLedger` satisfies this already, so
+    nothing extra is wired up.
+    """
+
+    def list_all(self, user_id: UserId) -> Sequence[Transaction]:
+        """Every movement this user has, assigned or not, in no order."""
         ...
 
 

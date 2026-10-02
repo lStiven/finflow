@@ -65,6 +65,53 @@ export interface paths {
         patch: operations["update_preference_alerts_channels__channel_id__patch"];
         trace?: never;
     };
+    "/alerts/inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Inbox
+         * @description The newest alerts, this user's only, newest first.
+         */
+        get: operations["list_inbox_alerts_inbox_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss Inbox
+         * @description Hide every alert this user has in the app.
+         */
+        delete: operations["dismiss_inbox_alerts_inbox_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/alerts/inbox/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss Inbox Entry
+         * @description Hide one alert from the app. 404 when this user has no such entry.
+         *
+         *     Hidden for good: an alert redelivered later lands on the same row and
+         *     stays hidden. Telegram is not touched — a message already sent stays sent.
+         */
+        delete: operations["dismiss_inbox_entry_alerts_inbox__entry_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/alerts/telegram/webhook": {
         parameters: {
             query?: never;
@@ -455,6 +502,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/allowance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Allowance
+         * @description What is left to spend this month, and the four figures behind it.
+         *
+         *     404 with no plan declared, for the reason `GET /plan` gives: the card is
+         *     absent rather than showing a zero that reads like an answer.
+         *
+         *     The month is the calendar month in `timezone`, read there and not in UTC —
+         *     a Bogotá month starting five hours early would count the last evening of
+         *     the previous one, and being wrong on the 1st is being wrong on the day
+         *     this is most likely to be looked at.
+         */
+        get: operations["read_allowance_financial_allowance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/bills": {
         parameters: {
             query?: never;
@@ -496,6 +571,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/bills/settle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Settle Due Charges
+         * @description Answer for the charges nobody has answered for, as far as is safe.
+         *
+         *     What the bills screen calls when it opens, the same shape `POST
+         *     /financial/accrue` has and for the same reason: nothing in this
+         *     deployment can walk every user yet, so the work happens when its owner is
+         *     there — which is also the moment an undo is worth anything.
+         *
+         *     Three outcomes, and evidence decides which:
+         *
+         *     * a movement already in the ledger is recognised as the charge, and
+         *       **nothing is written** — this happens for any active bill, armed or
+         *       not, because recognising money that is already recorded is not acting
+         *       on somebody's behalf;
+         *     * a bill that charges itself, whose charge nothing matched and whose
+         *       match window has closed, writes the charge exactly as the button does;
+         *     * anything less clear comes back as a proposal and is left alone.
+         *
+         *     Safe to call again: a charge already answered for is not answered twice,
+         *     and a charge written by a previous run is found by its own id rather than
+         *     written a second time.
+         */
+        post: operations["settle_due_charges_financial_bills_settle_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/bills/{bill_id}": {
         parameters: {
             query?: never;
@@ -528,6 +642,84 @@ export interface paths {
          *     is for.
          */
         patch: operations["amend_bill_financial_bills__bill_id__patch"];
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/autopay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Bill Autopay
+         * @description Let this bill charge itself, or stop it.
+         *
+         *     **Off until this is called**, bill by bill, and that is the whole design:
+         *     every other write in this feature happens because somebody pressed
+         *     something, and this is the one that happens because a clock said so. An
+         *     automatic charge is not a confirmation — in the manual path the owner
+         *     knows the money moved, here it is the calendar that assumes it — so the
+         *     app waits until the charge's **match window has closed** before writing
+         *     anything, and answers the charge with a movement instead whenever one in
+         *     the ledger looks like it.
+         *
+         *     Turning it on is not retroactive. The day it was turned on is remembered,
+         *     and nothing due before it is ever charged automatically: a switch flipped
+         *     today must not take money for a charge somebody has been looking at as
+         *     overdue for a week, and may already have paid in a way this app cannot
+         *     see.
+         */
+        post: operations["set_bill_autopay_financial_bills__bill_id__autopay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/bills/{bill_id}/occurrences/{period}/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Link Bill Charge
+         * @description Say a movement already in the ledger is what this charge cost.
+         *
+         *     The month the bank *did* send the email. The money is recorded, the
+         *     balance already moved, and the only thing missing was that nobody had
+         *     said which charge it answers for. **It writes nothing**: confirming
+         *     instead would record the same money twice, which is the exact drift this
+         *     feature exists to remove.
+         *
+         *     Refused when the charge is already confirmed — two answers pointing at
+         *     different money — and for a movement this app wrote itself, a transfer
+         *     between the owner's own accounts, the opposite direction, another
+         *     currency, or one already answering for some other charge. One payment
+         *     settles one thing.
+         */
+        post: operations["link_bill_charge_financial_bills__bill_id__occurrences__period__link_post"];
+        /**
+         * Unlink Bill Charge
+         * @description Take back the claim that a movement answered for this charge.
+         *
+         *     **Erases nothing**, which is the whole difference from undoing a
+         *     confirmation: the movement is the bank's own fact and stays where it is,
+         *     spent and counted. What goes away is only this app's claim about which
+         *     charge it paid.
+         *
+         *     Silent when nothing was linked, like every undo here.
+         */
+        delete: operations["unlink_bill_charge_financial_bills__bill_id__occurrences__period__link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/financial/bills/{bill_id}/occurrences/{period}/pay": {
@@ -655,6 +847,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/financial/budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Budgets
+         * @description Every budget that governs a month, and what the ledger did to each.
+         *
+         *     200 with empty lists when nothing is capped, never a 404: unlike the
+         *     monthly plan, an empty list of ceilings is a real and ordinary state and
+         *     reads as exactly what it is.
+         *
+         *     The month is the calendar month in `timezone` unless one is named, read
+         *     there and not in UTC — a Bogotá month starting five hours early would count
+         *     the last evening of the previous one, and being wrong on the 1st is being
+         *     wrong on the day this is most likely to be looked at.
+         *
+         *     A budget whose categories its owner has since deleted comes back `retired`
+         *     rather than taking the screen down with it. Merchant publishes nothing on a
+         *     delete that this context could listen for, so degrading on read is the only
+         *     place it can be handled.
+         */
+        get: operations["read_budgets_financial_budgets_get"];
+        put?: never;
+        /**
+         * Declare Budget
+         * @description Put a ceiling on part of somebody's spending.
+         *
+         *     A `POST` and not a `PUT`, which is this iteration's change and not a
+         *     stylistic one: a budget has a generated id now, so declaring the same
+         *     scope twice creates two budgets. That is the point — «Salidas» and
+         *     «Restaurantes» overlap because somebody meant them to — and a `PUT` with
+         *     no id in the path could not say it.
+         *
+         *     Nothing is recorded as spent. This writes a number, a scope and a month,
+         *     and no balance moves.
+         */
+        post: operations["declare_budget_financial_budgets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/budgets/{budget_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Amend Budget
+         * @description Restate one budget whole.
+         *
+         *     Every field, never a subset, which is why this is a `PUT`: a ceiling and
+         *     the point it warns at are one statement, and half an update leaves a
+         *     warning standing against a ceiling it was never set against.
+         *
+         *     404 when it is not this person's budget, which is the same answer as one
+         *     that does not exist — a uuid is something somebody could paste, and a
+         *     different code here would confirm that somebody else's budget is real.
+         */
+        put: operations["amend_budget_financial_budgets__budget_id__put"];
+        post?: never;
+        /**
+         * Forget Budget
+         * @description Drop one budget. The card disappears and nothing else changes.
+         *
+         *     Silent when there was nothing to drop, like every other undo here: a 404 on
+         *     the second press of a button somebody is unsure about is a worse answer
+         *     than nothing. A budget never wrote anything, so there is nothing left
+         *     behind to explain.
+         */
+        delete: operations["forget_budget_financial_budgets__budget_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/financial/catalog": {
         parameters: {
             query?: never;
@@ -671,6 +947,31 @@ export interface paths {
          *     that a session is created from.
          */
         get: operations["get_catalog_financial_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Transactions
+         * @description Every movement the same filters as `/financial/transactions` match.
+         *
+         *     Newest first, and all of them rather than a page: a file is where somebody
+         *     takes their data to keep it, so a silent cut would be the one wrong
+         *     answer. Past the ceiling the request is refused and asks for a shorter
+         *     range instead. Dates are written in `timezone`, the one the screen shows.
+         */
+        get: operations["export_transactions_financial_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -728,6 +1029,85 @@ export interface paths {
          *     they are watching what comes in and goes out, not a net position.
          */
         get: operations["get_net_worth_financial_net_worth_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Plan
+         * @description What is declared, or 404 when nothing is.
+         *
+         *     Missing rather than an empty body: "no plan" is a different thing from "a
+         *     plan of zero", and only one of them is a state somebody can be in.
+         */
+        get: operations["read_plan_financial_plan_get"];
+        /**
+         * Declare Plan
+         * @description State what the month is supposed to look like, or restate it.
+         *
+         *     A `PUT` and not a `PATCH`, deliberately: a plan is two figures that are
+         *     both guesses, and replacing it whole is what makes it impossible to leave
+         *     a savings target standing against an income it was never set against.
+         *
+         *     Nothing is recorded as earned or spent. This writes two numbers and a
+         *     currency, and no balance moves.
+         */
+        put: operations["declare_plan_financial_plan_put"];
+        post?: never;
+        /**
+         * Forget Plan
+         * @description Take the plan back. The card disappears and nothing else changes.
+         *
+         *     Silent when there was nothing to forget, like every other undo here: a 404
+         *     on the second press of a button somebody is unsure about is a worse answer
+         *     than nothing. The plan never wrote anything, so there is nothing left
+         *     behind to explain.
+         */
+        delete: operations["forget_plan_financial_plan_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial/recurring": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Recurring
+         * @description What looks like it comes back every so often, and is not declared yet.
+         *
+         *     A proposal and nothing more. Accepting one is `POST /financial/bills` with
+         *     these figures — the same call anybody declares a bill with — so that the
+         *     thing which ends up able to charge money is always something a person
+         *     stated, never something this guessed.
+         *
+         *     Charges this application wrote itself are left out: the interest a credit
+         *     accrues every cut is perfectly monthly and would head the ranking, and a
+         *     confirmed bill charge would have the detector reading its own handwriting.
+         *     Transfers too — paying the card from savings every month is the most
+         *     regular charge anybody has and it is not a subscription.
+         *
+         *     The day of each charge is read in `timezone`, like every other date here:
+         *     a purchase at nine in the evening in Bogotá is the 15th there and the 16th
+         *     in UTC, and a series whose days alternate between the two has no cadence
+         *     left to find.
+         */
+        get: operations["list_recurring_financial_recurring_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1730,11 +2110,12 @@ export interface components {
          * AlertType
          * @description What a channel can be told about.
          *
-         *     Explicit string values because they are persisted. One member today;
-         *     E2 adds the recurring charge and E4 the budget threshold.
+         *     Explicit string values because they are persisted. `MOVEMENT` is every
+         *     purchase and income as it happens; `WEEKLY_SUMMARY` is Monday's look back
+         *     at the week before, against its owner's own normal.
          * @enum {string}
          */
-        AlertType: "movement";
+        AlertType: "movement" | "weekly_summary";
         /**
          * AliasResponse
          * @description One child: a spelling that resolves to this merchant.
@@ -1754,6 +2135,45 @@ export interface components {
             root_key: string;
             /** Times Seen */
             times_seen: number;
+        };
+        /**
+         * AllowanceResponse
+         * @description The figure and every piece of the subtraction that produced it.
+         *
+         *     The components are not decoration. `available` is
+         *     `expected_income` less `savings_target`, `spent` and `committed`, and a screen that
+         *     could only show the result would be asking somebody to trust arithmetic
+         *     they cannot see.
+         *
+         *     `committed` is what is **still owed** of this month's declared bills, never
+         *     what the month costs: a charge already confirmed is in `spent`, through the
+         *     ledger row confirming it wrote, and counting it here too would discount it
+         *     twice.
+         */
+        AllowanceResponse: {
+            /** Available */
+            available: string;
+            /** Committed */
+            committed: string;
+            currency: components["schemas"]["Currency"];
+            /** Days Left */
+            days_left: number;
+            /** Expected Income */
+            expected_income: string;
+            /** Savings Target */
+            savings_target: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /** Spent */
+            spent: string;
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
         };
         /**
          * AmendBillPayload
@@ -1796,6 +2216,38 @@ export interface components {
          * @enum {string}
          */
         AmortizationStyle: "french" | "constant_principal" | "interest_only";
+        /**
+         * AutomaticSettlementResponse
+         * @description One charge this run answered for, and how.
+         *
+         *     `matched` means a movement the ledger already held was recognised as this
+         *     charge: **nothing was written**, and taking it back only forgets the link.
+         *     `charged` means the bill charged itself and a real movement now exists,
+         *     which an undo erases.
+         */
+        AutomaticSettlementResponse: {
+            action: components["schemas"]["SettlementAction"];
+            bill: components["schemas"]["BillResponse"];
+            occurrence: components["schemas"]["BillOccurrenceResponse"];
+        };
+        /**
+         * AutopayPayload
+         * @description Arm this bill to charge itself, or disarm it.
+         *
+         *     The timezone is not decoration: turning it on writes down the day it was
+         *     turned on, and that day is the earliest charge it may ever reach. Read in
+         *     UTC it would already be tomorrow for the whole Bogotá evening, and a
+         *     charge due today would fall outside a permission granted a minute ago.
+         */
+        AutopayPayload: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Timezone
+             * @default America/Bogota
+             */
+            timezone: string;
+        };
         /**
          * BillCadence
          * @description How often the charge comes back.
@@ -1848,6 +2300,7 @@ export interface components {
             settled_amount?: string | null;
             /** Settled At */
             settled_at?: number | null;
+            settled_by?: components["schemas"]["ChargeSource"] | null;
             state: components["schemas"]["OccurrenceState"];
         };
         /** BillResponse */
@@ -1856,6 +2309,10 @@ export interface components {
             account_id: string | null;
             /** Amount */
             amount: string;
+            /** Autopay */
+            autopay: boolean;
+            /** Autopay From */
+            autopay_from: string | null;
             cadence: components["schemas"]["BillCadence"];
             /** Category */
             category: string | null;
@@ -1921,6 +2378,198 @@ export interface components {
             since: string;
             /** Totals */
             totals: components["schemas"]["BillTotalResponse"][];
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
+        /** BillsSettlementResponse */
+        BillsSettlementResponse: {
+            /** Proposals */
+            proposals: components["schemas"]["ChargeProposalResponse"][];
+            /** Settled */
+            settled: components["schemas"]["AutomaticSettlementResponse"][];
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
+        };
+        /**
+         * BudgetPayload
+         * @description A ceiling, what it watches, and which months it governs.
+         *
+         *     **Empty lists mean every one**, on both axes, which is the domain's rule
+         *     and not a convenience here: `categories: []` is «todo el mes», and that is
+         *     the budget somebody declares first, before they have looked at a single
+         *     category.
+         *
+         *     `month` absent governs every month, which is the ordinary answer: a ceiling
+         *     that has to be re-declared every 1st is one that is gone by March. A key
+         *     like `2026-09` governs that month only, **beside** the recurring ones
+         *     rather than instead of them — there is no shadowing any more, because
+         *     scopes that overlap on purpose give no honest answer about which hides
+         *     which.
+         */
+        BudgetPayload: {
+            /** Accounts */
+            accounts?: string[];
+            /** Categories */
+            categories?: string[];
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /**
+             * Icon
+             * @default
+             */
+            icon: string;
+            /** Limit */
+            limit: number | string;
+            /** Month */
+            month?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Warn At
+             * @default 80
+             */
+            warn_at: number;
+        };
+        /**
+         * BudgetProgressResponse
+         * @description One budget and what the month has done to it.
+         *
+         *     Flat rather than a budget nested inside a reading, so a client cannot
+         *     render the ceiling and the state out of step. `state` is the enum itself,
+         *     not its string, so the generated TypeScript is a union a screen cannot
+         *     invent a member of.
+         */
+        BudgetProgressResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Icon */
+            icon: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Limit */
+            limit: string;
+            /** Missing */
+            missing: string[];
+            /** Month */
+            month: string | null;
+            /** Name */
+            name: string;
+            /** Recurring */
+            recurring: boolean;
+            /** Remaining */
+            remaining: string;
+            /** Retired */
+            retired: boolean;
+            scope: components["schemas"]["BudgetScopeResponse"];
+            /** Spent */
+            spent: string;
+            state: components["schemas"]["BudgetState"];
+            /** Warn At */
+            warn_at: number;
+        };
+        /** BudgetResponse */
+        BudgetResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Icon */
+            icon: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Limit */
+            limit: string;
+            /** Month */
+            month: string | null;
+            /** Name */
+            name: string;
+            /** Recurring */
+            recurring: boolean;
+            scope: components["schemas"]["BudgetScopeResponse"];
+            /** Updated At */
+            updated_at: number;
+            /** Warn At */
+            warn_at: number;
+        };
+        /**
+         * BudgetScopeResponse
+         * @description What a budget watches, as the screen needs to draw it.
+         *
+         *     `total` is sent rather than left to the client to infer from an empty list.
+         *     Two clients inferring the same thing is two places for it to be inferred
+         *     differently, and this one decides whether a card says «todo el mes».
+         */
+        BudgetScopeResponse: {
+            /** Accounts */
+            accounts: string[];
+            /** Categories */
+            categories: string[];
+            /** Every Account */
+            every_account: boolean;
+            /** Total */
+            total: boolean;
+        };
+        /**
+         * BudgetState
+         * @description How a period is doing against one cap.
+         *
+         *     The three the screen draws, decided here and not there, so the card on the
+         *     dashboard and the row on the budgets screen can never disagree.
+         *
+         *     Explicit string values: they cross the HTTP boundary as the enum itself,
+         *     so reordering the members must not change what a client reads.
+         * @enum {string}
+         */
+        BudgetState: "ok" | "warning" | "over";
+        /**
+         * BudgetTotalsResponse
+         * @description Every budget of one currency, added up, and how the three states split.
+         *
+         *     One entry per currency and never summed across them: there is no exchange
+         *     rate anywhere in this app. The counts are what a summary says out loud
+         *     («3 de 5 en verde»), computed once so two screens cannot tally differently.
+         *
+         *     **The added-up ceiling is not what the month allows**: budgets may overlap,
+         *     so two of them can count the same peso.
+         */
+        BudgetTotalsResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Limit */
+            limit: string;
+            /** Ok */
+            ok: number;
+            /** Over */
+            over: number;
+            /** Remaining */
+            remaining: string;
+            /** Spent */
+            spent: string;
+            /** Warning */
+            warning: number;
+        };
+        /** BudgetsResponse */
+        BudgetsResponse: {
+            /** Budgets */
+            budgets: components["schemas"]["BudgetProgressResponse"][];
+            /** Month */
+            month: string;
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /** Suggestions */
+            suggestions: components["schemas"]["UncappedCategoryResponse"][];
+            /** Totals */
+            totals: components["schemas"]["BudgetTotalsResponse"][];
             /**
              * Until
              * Format: date
@@ -2044,6 +2693,29 @@ export interface components {
          */
         ChargeBasis: "fixed" | "outstanding_balance" | "original_principal" | "insured_value" | "earnings";
         /**
+         * ChargeCandidateResponse
+         * @description A movement that could be answering for a charge.
+         *
+         *     Carries what a person needs in order to recognise it — who it was with,
+         *     how much and when — because "is this the gym?" is not a question an id
+         *     can answer.
+         */
+        ChargeCandidateResponse: {
+            /** Amount */
+            amount: string;
+            /** Counterparty */
+            counterparty: string;
+            currency: components["schemas"]["Currency"];
+            /** Movement Id */
+            movement_id: string;
+            /**
+             * Occurred On
+             * Format: date
+             */
+            occurred_on: string;
+            quality: components["schemas"]["MatchQuality"];
+        };
+        /**
          * ChargePayload
          * @description One thing charged every period besides the interest.
          *
@@ -2077,6 +2749,23 @@ export interface components {
             rate?: number | string | null;
         };
         /**
+         * ChargeProposalResponse
+         * @description A charge with movements that could be it, and no clear answer.
+         *
+         *     What the app refuses to decide on its own: two plausible movements, or
+         *     one whose figure is nowhere near the bill's. Linking it is one tap and
+         *     ignoring it is none.
+         */
+        ChargeProposalResponse: {
+            /** Bill Id */
+            bill_id: string;
+            /** Bill Name */
+            bill_name: string;
+            /** Candidates */
+            candidates: components["schemas"]["ChargeCandidateResponse"][];
+            occurrence: components["schemas"]["BillOccurrenceResponse"];
+        };
+        /**
          * ChargeResponse
          * @description One thing charged every period besides the interest.
          */
@@ -2093,6 +2782,19 @@ export interface components {
             /** Rate */
             rate: string | null;
         };
+        /**
+         * ChargeSource
+         * @description Which kind of ledger row is answering for this charge.
+         *
+         *     The difference is not decoration: it decides what undoing means. A
+         *     `CONFIRMED` row exists because this feature wrote it — by hand or by the
+         *     automatic charge — so taking the answer back means erasing money that only
+         *     this app ever recorded. A `MATCHED` row is the bank's own movement, which
+         *     was going to be there either way; taking that answer back only forgets the
+         *     link, and erasing the movement would throw away a fact.
+         * @enum {string}
+         */
+        ChargeSource: "confirmed" | "matched";
         /**
          * ConfirmChargePayload
          * @description What actually happened, where it differs from what the bill projected.
@@ -2174,6 +2876,25 @@ export interface components {
              * Format: date
              */
             starts_on: string;
+        };
+        /**
+         * DeclarePlanPayload
+         * @description What the month is supposed to bring in, and what is not to be spent.
+         *
+         *     One currency for both. Subtracting a target in dollars from an income in
+         *     pesos needs a rate this app does not have, and treating the two as
+         *     comparable is the kind of wrong that looks right.
+         */
+        DeclarePlanPayload: {
+            /** @default COP */
+            currency: components["schemas"]["Currency"];
+            /** Expected Income */
+            expected_income: number | string;
+            /**
+             * Savings Target
+             * @default 0
+             */
+            savings_target: number | string;
         };
         /**
          * DeclareTransferPayload
@@ -2323,6 +3044,11 @@ export interface components {
             role: components["schemas"]["TransferRole"];
         };
         /**
+         * ExportFormat
+         * @enum {string}
+         */
+        ExportFormat: "csv" | "xlsx";
+        /**
          * FinancialCatalogResponse
          * @description Every vocabulary this context's endpoints accept.
          *
@@ -2408,6 +3134,83 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** InboxBudgetResponse */
+        InboxBudgetResponse: {
+            /** Currency */
+            currency: string;
+            /** Limit */
+            limit: string;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: string;
+            /** Spent */
+            spent: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "warning" | "over";
+        };
+        /** InboxEntryResponse */
+        InboxEntryResponse: {
+            /** Created At */
+            created_at: number;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "movement" | "weekly_summary";
+            movement: components["schemas"]["InboxMovementResponse"] | null;
+            summary: components["schemas"]["InboxSummaryResponse"] | null;
+        };
+        /** InboxMovementResponse */
+        InboxMovementResponse: {
+            /** Amount */
+            amount: string;
+            /** Bank */
+            bank: string;
+            /** Budgets */
+            budgets: components["schemas"]["InboxBudgetResponse"][];
+            /** Counterparty */
+            counterparty: string;
+            /** Currency */
+            currency: string;
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "outgoing" | "incoming";
+            /** Movement Id */
+            movement_id: string | null;
+            /** Occurred At */
+            occurred_at: number;
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "bank_alert" | "manual" | "accrual" | "scheduled";
+            /** Unassigned */
+            unassigned: boolean;
+        };
+        /** InboxResponse */
+        InboxResponse: {
+            /** Entries */
+            entries: components["schemas"]["InboxEntryResponse"][];
+        };
+        /** InboxRiseResponse */
+        InboxRiseResponse: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Spent */
+            spent: string;
+            /** Typical */
+            typical: string;
+        };
         /**
          * InboxSendersPayload
          * @description The senders approved for the caller's one forwarding address.
@@ -2435,6 +3238,22 @@ export interface components {
             steps: components["schemas"]["SetupStepResponse"][];
             /** Unapproved Senders */
             unapproved_senders: string[];
+        };
+        /** InboxSummaryResponse */
+        InboxSummaryResponse: {
+            /** Currency */
+            currency: string;
+            /** Movements */
+            movements: number;
+            rise: components["schemas"]["InboxRiseResponse"] | null;
+            /** Spent */
+            spent: string;
+            /** Typical */
+            typical: string | null;
+            /** Week End */
+            week_end: string;
+            /** Week Start */
+            week_start: string;
         };
         /**
          * IngestionCatalogResponse
@@ -2546,6 +3365,14 @@ export interface components {
             statement_day: number;
         };
         /**
+         * LinkChargePayload
+         * @description The movement that already paid this charge.
+         */
+        LinkChargePayload: {
+            /** Movement Id */
+            movement_id: string;
+        };
+        /**
          * LinkInstrumentPayload
          * @description Teach an account another of the names its alerts arrive under.
          *
@@ -2654,6 +3481,16 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * MatchQuality
+         * @description How much this movement looks like the charge.
+         *
+         *     Explicit strings: it crosses the API to a screen that renders the two
+         *     differently, so reordering the members must not change what a client
+         *     reads.
+         * @enum {string}
+         */
+        MatchQuality: "certain" | "likely";
         /**
          * MerchantCatalogResponse
          * @description Every vocabulary this context's endpoints accept or return.
@@ -2872,6 +3709,16 @@ export interface components {
             /** Totals */
             totals: components["schemas"]["SpendingTotalsResponse"][];
         };
+        /** PlanResponse */
+        PlanResponse: {
+            currency: components["schemas"]["Currency"];
+            /** Expected Income */
+            expected_income: string;
+            /** Savings Target */
+            savings_target: string;
+            /** Updated At */
+            updated_at: number;
+        };
         /** PreferencePayload */
         PreferencePayload: {
             alert_type: components["schemas"]["AlertType"];
@@ -2954,6 +3801,88 @@ export interface components {
             monthly: string;
             /** Value */
             value: string;
+        };
+        /**
+         * RecurringResponse
+         * @description The suggestions, and the stretch of history they were read from.
+         *
+         *     The window is answered so a screen can say what "nothing found" was looked
+         *     for in. An empty list is the ordinary answer for somebody who connected
+         *     their bank last week, and it means "not enough history yet" rather than
+         *     "you have no subscriptions".
+         */
+        RecurringResponse: {
+            /** Months */
+            months: number;
+            /** Series */
+            series: components["schemas"]["RecurringSeriesResponse"][];
+            /**
+             * Since
+             * Format: date
+             */
+            since: string;
+            /**
+             * Until
+             * Format: date
+             */
+            until: string;
+        };
+        /**
+         * RecurringSeriesResponse
+         * @description One rhythm found in the history, with how much to believe it.
+         *
+         *     `amount` is what the **next** charge is expected to cost, which for a
+         *     variable series — the phone bill, the electricity — is a median and not a
+         *     figure anybody has ever been charged. `variable` is what says so: "about
+         *     $90.000" and "$90.000" are different promises and a screen has to be able
+         *     to tell them apart.
+         *
+         *     `bill_id` is the mark that matters. A suggestion to declare something
+         *     already declared is worse than no suggestion, because it teaches the
+         *     reader to distrust the rest of the list.
+         */
+        RecurringSeriesResponse: {
+            /** Account Id */
+            account_id: string | null;
+            /** Amount */
+            amount: string;
+            /** Bill Id */
+            bill_id: string | null;
+            cadence: components["schemas"]["BillCadence"];
+            /** Category */
+            category: string | null;
+            /** Confidence */
+            confidence: string;
+            currency: components["schemas"]["Currency"];
+            direction: components["schemas"]["MovementDirection"];
+            /**
+             * First Seen
+             * Format: date
+             */
+            first_seen: string;
+            /** Key */
+            key: string;
+            /**
+             * Last Seen
+             * Format: date
+             */
+            last_seen: string;
+            /** Merchant Id */
+            merchant_id: string | null;
+            /** Missed */
+            missed: number;
+            /** Name */
+            name: string;
+            /**
+             * Next Due On
+             * Format: date
+             */
+            next_due_on: string;
+            /** Sightings */
+            sightings: number;
+            state: components["schemas"]["SeriesState"];
+            /** Variable */
+            variable: boolean;
         };
         /**
          * RegisterPayload
@@ -3054,6 +3983,17 @@ export interface components {
             starts_on: string;
         };
         /**
+         * SeriesState
+         * @description Whether this rhythm is still going.
+         *
+         *     `DORMANT` is the important one and it is why a detector needs a state at
+         *     all: a cancelled subscription that keeps proposing itself, or keeps
+         *     reminding, is worse than no detector — it teaches its owner to ignore the
+         *     one screen that was supposed to be worth reading.
+         * @enum {string}
+         */
+        SeriesState: "active" | "late" | "dormant";
+        /**
          * SetCreditLimitPayload
          * @description State or restate what a card may owe. `null` clears it.
          */
@@ -3061,6 +4001,23 @@ export interface components {
             /** Credit Limit */
             credit_limit?: number | string | null;
         };
+        /**
+         * SettleChargesPayload
+         * @description Nothing but where the caller is, because everything else is derived.
+         */
+        SettleChargesPayload: {
+            /**
+             * Timezone
+             * @default America/Bogota
+             */
+            timezone: string;
+        };
+        /**
+         * SettlementAction
+         * @description What this run did about one charge.
+         * @enum {string}
+         */
+        SettlementAction: "matched" | "charged";
         /**
          * SetupStepResponse
          * @description One step of connecting a bank.
@@ -3475,6 +4432,20 @@ export interface components {
             totals: components["schemas"]["SpendingTotalsResponse"][];
         };
         /**
+         * UncappedCategoryResponse
+         * @description Somewhere a budget is missing, ranked by what actually goes out there.
+         *
+         *     Offered, never created — the same rule the recurring detector follows. The
+         *     figure lands in an editable field and nothing here declares anything.
+         */
+        UncappedCategoryResponse: {
+            /** Category */
+            category: string;
+            currency: components["schemas"]["Currency"];
+            /** Spent */
+            spent: string;
+        };
+        /**
          * UpdateProfilePayload
          * @description Only the name: the email is the account's identity, not a field.
          */
@@ -3687,6 +4658,84 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChannelResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_inbox_alerts_inbox_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dismiss_inbox_alerts_inbox_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    dismiss_inbox_entry_alerts_inbox__entry_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -4301,6 +5350,37 @@ export interface operations {
             };
         };
     };
+    read_allowance_financial_allowance_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AllowanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_bills_financial_bills_get: {
         parameters: {
             query?: {
@@ -4367,6 +5447,39 @@ export interface operations {
             };
         };
     };
+    settle_due_charges_financial_bills_settle_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettleChargesPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillsSettlementResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     forget_bill_financial_bills__bill_id__delete: {
         parameters: {
             query?: never;
@@ -4418,6 +5531,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_bill_autopay_financial_bills__bill_id__autopay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutopayPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    link_bill_charge_financial_bills__bill_id__occurrences__period__link_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LinkChargePayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unlink_bill_charge_financial_bills__bill_id__occurrences__period__link_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bill_id: string;
+                period: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillChargeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4625,6 +5841,135 @@ export interface operations {
             };
         };
     };
+    read_budgets_financial_budgets_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+                month?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    declare_budget_financial_budgets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    amend_budget_financial_budgets__budget_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_budget_financial_budgets__budget_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                budget_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_catalog_financial_catalog_get: {
         parameters: {
             query?: never;
@@ -4642,6 +5987,48 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["FinancialCatalogResponse"];
                 };
+            };
+        };
+    };
+    export_transactions_financial_export_get: {
+        parameters: {
+            query?: {
+                format?: components["schemas"]["ExportFormat"];
+                account_id?: string | null;
+                unassigned?: boolean | null;
+                origin?: components["schemas"]["TransactionOrigin"] | null;
+                direction?: components["schemas"]["MovementDirection"] | null;
+                search?: string | null;
+                merchant_id?: string | null;
+                category?: string | null;
+                from?: number | null;
+                to?: number | null;
+                transfers?: components["schemas"]["TransferView"];
+                currency?: components["schemas"]["Currency"] | null;
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The movements, as a file to download. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": unknown;
+                    "text/csv; charset=utf-8": unknown;
+                };
+            };
+            /** @description `detail.code` is `export_too_large` when more than 10000 movements match; any other 422 is a filter the API refused. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -4693,6 +6080,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NetWorthResponse"][];
+                };
+            };
+        };
+    };
+    read_plan_financial_plan_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanResponse"];
+                };
+            };
+        };
+    };
+    declare_plan_financial_plan_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeclarePlanPayload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forget_plan_financial_plan_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_recurring_financial_recurring_get: {
+        parameters: {
+            query?: {
+                timezone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecurringResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

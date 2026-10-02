@@ -15,6 +15,12 @@ from decimal import Decimal
 
 import pytest
 
+from personal_finance.contexts.financial.application.autopay import (
+    SettleDueChargesCommand,
+    SettleDueChargesUseCase,
+    SettlementAction,
+    SettlementView,
+)
 from personal_finance.contexts.financial.application.bills import (
     AmendBillCommand,
     BillsView,
@@ -26,14 +32,20 @@ from personal_finance.contexts.financial.application.bills import (
     NoSuchBillError,
     SettleBillChargeUseCase,
 )
+from personal_finance.contexts.financial.application.financing import (
+    today_in,
+    zone_of,
+)
 from personal_finance.contexts.financial.application.handlers import (
     AccountNotFoundError,
     ManageTransactionsUseCase,
+    TransactionNotFoundError,
 )
 from personal_finance.contexts.financial.domain.bills import (
     BillCadence,
     BillId,
     BillStatus,
+    ChargeSource,
     OccurrenceState,
     ScheduledBill,
 )
@@ -1072,3 +1084,640 @@ def test_the_next_charge_steps_over_the_one_just_confirmed() -> None:
 
     assert settled.bill.next_occurrence is not None
     assert settled.bill.next_occurrence.due_on == today + dt.timedelta(days=7)
+
+
+# ----------------------------------------------------------------------
+# A movement that answered for a charge
+# ----------------------------------------------------------------------
+
+
+def _moved(
+    *,
+    counterparty: str = "Gimnasio",
+    amount: str = "120000",
+    currency: Currency = Currency.COP,
+    day: dt.date = dt.date(2026, 9, 4),
+    direction: MovementDirection = MovementDirection.OUTGOING,
+    user_id: UserId = USER,
+) -> Transaction:
+    """A movement the bank announced, as the ledger already holds it."""
+    return Transaction.enter_manually(
+        user_id=user_id,
+        direction=direction,
+        amount=_money(amount, currency),
+        occurred_at=PosixTime.from_epoch_seconds(
+            int(dt.datetime.combine(day, dt.time(hour=12), tzinfo=dt.UTC).timestamp()),
+        ),
+        counterparty=counterparty,
+    )
+
+
+def test_linking_answers_the_charge_without_writing_anything() -> None:
+    """The whole point. Confirming instead would record the same money twice
+    — the drift this feature exists to remove, with the sign flipped."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    before = len(charges.rows)
+
+    settled = settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    assert settled.occurrence.state is OccurrenceState.PAID
+    assert settled.occurrence.payment is not None
+    assert settled.occurrence.payment.source is ChargeSource.MATCHED
+    assert settled.movement is None
+    assert len(charges.rows) == before
+
+
+def test_a_linked_charge_reads_paid_on_the_next_listing() -> None:
+    """Not just in the answer to the write: the link is stored on the bill
+    and read back against the ledger, so a reload agrees."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved(amount="126000")
+    charges.add(paid)
+
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+    view = _view(
+        bills, charges=charges, since=dt.date(2026, 9, 1), until=dt.date(2026, 9, 30)
+    )
+
+    assert [each.state for each in view.occurrences] == [OccurrenceState.PAID]
+    assert view.totals[0].expected == Decimal("126000")
+    assert view.totals[0].outstanding == Decimal("0")
+
+
+def test_erasing_the_movement_un_pays_a_linked_charge() -> None:
+    """The same property a confirmed charge has, and for the same reason: the
+    link is read against the ledger rather than believed."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    charges.rows.pop((USER, paid.id.value))
+    view = _view(
+        bills, charges=charges, since=dt.date(2026, 9, 1), until=dt.date(2026, 9, 30)
+    )
+
+    assert [each.state for each in view.occurrences] != [OccurrenceState.PAID]
+
+
+def test_unlinking_forgets_the_claim_and_erases_nothing() -> None:
+    """The difference from undoing a confirmation: the movement is the bank's
+    fact, and it stays spent and counted."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    settled = settle.unlink(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    assert settled.occurrence.state is not OccurrenceState.PAID
+    assert (USER, paid.id.value) in charges.rows
+
+
+def test_unlinking_what_was_never_linked_is_silent() -> None:
+    settle, bills, _, _ = _settling()
+    bill = _keep(bills)
+
+    settled = settle.unlink(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    assert settled.occurrence.state is not OccurrenceState.PAID
+
+
+def test_a_charge_already_confirmed_cannot_also_be_linked() -> None:
+    """Two answers claiming the same charge was paid, pointing at different
+    money."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    settle.confirm(
+        ConfirmChargeCommand(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4)),
+    )
+    paid = _moved()
+    charges.add(paid)
+
+    with pytest.raises(ValueError, match="already paid"):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+            movement_id=paid.id.value,
+        )
+
+
+def test_a_movement_this_app_wrote_cannot_answer_for_a_charge() -> None:
+    """Another bill's charge settling this one would be the feature
+    confirming itself."""
+    settle, bills, charges, _ = _settling()
+    other = _keep(bills, name="Arriendo")
+    bill = _keep(bills)
+    settle.confirm(
+        ConfirmChargeCommand(
+            user_id=USER, bill_id=other.id, period=dt.date(2026, 9, 4)
+        ),
+    )
+    written = charges.rows[(USER, other.charge_id(dt.date(2026, 9, 4)).value)]
+
+    with pytest.raises(ValueError, match="wrote itself"):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+            movement_id=written.id.value,
+        )
+
+
+def test_money_going_the_other_way_cannot_be_this_charge() -> None:
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    arrived = _moved(direction=MovementDirection.INCOMING)
+    charges.add(arrived)
+
+    with pytest.raises(ValueError, match="other way"):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+            movement_id=arrived.id.value,
+        )
+
+
+def test_a_movement_in_another_currency_cannot_be_this_charge() -> None:
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    abroad = _moved(amount="40", currency=Currency.USD)
+    charges.add(abroad)
+
+    with pytest.raises(ValueError, match="cannot be its charge"):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+            movement_id=abroad.id.value,
+        )
+
+
+def test_a_movement_that_is_not_there_is_refused_as_missing() -> None:
+    settle, bills, _, _ = _settling()
+    bill = _keep(bills)
+
+    with pytest.raises(TransactionNotFoundError):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 9, 4),
+            movement_id="nothing",
+        )
+
+
+def test_one_movement_cannot_pay_three_months() -> None:
+    """Without this, one charge linked to January, February and March would
+    read as three months paid on the strength of one figure."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    with pytest.raises(ValueError, match="already the charge"):
+        settle.link(
+            user_id=USER,
+            bill_id=bill.id,
+            period=dt.date(2026, 10, 4),
+            movement_id=paid.id.value,
+        )
+
+
+def test_linking_the_same_movement_to_the_same_charge_again_is_not_an_error() -> None:
+    """A screen retrying a request it is unsure about must not be told off:
+    the answer is the one already there."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+    again = settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    assert again.occurrence.state is OccurrenceState.PAID
+
+
+def test_a_charge_paid_by_a_movement_cannot_be_skipped_before_unlinking() -> None:
+    """And the refusal names the right undo: erasing that movement would
+    throw away the bank's own fact."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    with pytest.raises(ValueError, match="Unlink it"):
+        settle.skip(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+
+# ----------------------------------------------------------------------
+# Arming a bill
+# ----------------------------------------------------------------------
+
+
+def test_arming_a_bill_records_the_day_it_was_armed() -> None:
+    use_case, bills, _ = _manage()
+    bill = use_case.declare(_declare()).bill
+
+    armed = use_case.set_autopay(
+        user_id=USER,
+        bill_id=bill.id,
+        enabled=True,
+        timezone=TIMEZONE,
+    ).bill
+
+    assert armed.autopay is True
+    assert armed.autopay_from is not None
+    assert bills.find(user_id=USER, bill_id=bill.id) is armed
+
+
+def test_a_bill_on_a_closed_account_cannot_be_armed() -> None:
+    """A charge that cannot be paid into anything must not be armed to pay
+    itself."""
+    account = _account(closed=True)
+    use_case, _, _ = _manage(accounts=FakeAccounts([account]))
+    bill = use_case.declare(_declare()).bill
+    bill.account_id = account.id
+
+    with pytest.raises(AccountClosedError):
+        use_case.set_autopay(
+            user_id=USER,
+            bill_id=bill.id,
+            enabled=True,
+            timezone=TIMEZONE,
+        )
+
+
+def test_undoing_an_automatic_charge_stops_it_coming_straight_back() -> None:
+    """With autopay on, "expected" means "will be charged", so an undo that
+    left the charge expected would be a button that undoes nothing."""
+    settle, bills, _, _ = _settling()
+    bill = _keep(bills)
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+    period = dt.date(2026, 9, 4)
+    settle.confirm(ConfirmChargeCommand(user_id=USER, bill_id=bill.id, period=period))
+
+    settled = settle.undo_confirmation(user_id=USER, bill_id=bill.id, period=period)
+
+    assert settled.occurrence.state is OccurrenceState.SKIPPED
+    assert period in bills.rows[(USER, bill.id)].skipped
+
+
+def test_undoing_a_charge_on_an_unarmed_bill_leaves_it_expected() -> None:
+    """Nothing is going to write it back, so nothing has to be said about
+    it."""
+    settle, bills, _, _ = _settling()
+    bill = _keep(bills)
+    period = dt.date(2026, 9, 4)
+    settle.confirm(ConfirmChargeCommand(user_id=USER, bill_id=bill.id, period=period))
+
+    settled = settle.undo_confirmation(user_id=USER, bill_id=bill.id, period=period)
+
+    assert settled.occurrence.state is not OccurrenceState.SKIPPED
+    assert bills.rows[(USER, bill.id)].skipped == frozenset()
+
+
+# ----------------------------------------------------------------------
+# Settling what is due, when the screen opens
+# ----------------------------------------------------------------------
+
+
+class FakeHistory:
+    """`MovementHistory`, over the same rows the ledger fake holds."""
+
+    def __init__(self, charges: FakeCharges) -> None:
+        self.charges = charges
+
+    def list_all(self, user_id: UserId) -> list[Transaction]:
+        return [
+            row for (owner, _), row in self.charges.rows.items() if owner == user_id
+        ]
+
+
+def _sweeping() -> tuple[
+    SettleDueChargesUseCase,
+    FakeBills,
+    FakeCharges,
+    SettleBillChargeUseCase,
+]:
+    settle, bills, charges, _ = _settling()
+
+    return (
+        SettleDueChargesUseCase(
+            bills=bills,
+            charges=charges,
+            ledger=FakeHistory(charges),
+            settle=settle,
+        ),
+        bills,
+        charges,
+        settle,
+    )
+
+
+def _today() -> dt.date:
+    """Read the way the use case reads it, so the two never disagree."""
+    return today_in(zone_of(TIMEZONE))
+
+
+def _sweep(use_case: SettleDueChargesUseCase) -> SettlementView:
+    return use_case.execute(SettleDueChargesCommand(user_id=USER, timezone=TIMEZONE))
+
+
+def test_an_armed_bill_charges_itself_once_its_window_has_closed() -> None:
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+
+    view = _sweep(sweep)
+
+    assert [each.action for each in view.settled] == [SettlementAction.CHARGED]
+    assert (USER, bill.charge_id(due).value) in charges.rows
+
+
+def test_a_charge_whose_window_is_still_open_is_left_alone() -> None:
+    """Waiting is the safety: a movement arriving four days late is the
+    charge, and writing before then records the same money twice."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=2)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert (USER, bill.charge_id(due).value) not in charges.rows
+
+
+def test_an_unarmed_bill_is_never_charged_by_the_sweep() -> None:
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert (USER, bill.charge_id(due).value) not in charges.rows
+
+
+def test_running_it_twice_charges_once() -> None:
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+
+    _sweep(sweep)
+    second = _sweep(sweep)
+
+    assert second.settled == ()
+    assert (
+        len([row for row in charges.rows if row[1] == bill.charge_id(due).value]) == 1
+    )
+
+
+def test_a_movement_that_looks_like_the_charge_answers_it_instead() -> None:
+    """The safety net: the bank did announce it, so the charge is answered by
+    that movement and nothing is written."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+    paid = _moved(day=due + dt.timedelta(days=2))
+    charges.add(paid)
+    before = len(charges.rows)
+
+    view = _sweep(sweep)
+
+    assert [each.action for each in view.settled] == [SettlementAction.MATCHED]
+    assert len(charges.rows) == before
+    assert bills.rows[(USER, bill.id)].linked_movement(due) == paid.id.value
+
+
+def test_recognising_a_movement_does_not_need_the_bill_to_be_armed() -> None:
+    """Recognising money that is already recorded is not acting on somebody's
+    behalf — and it is what keeps them from confirming it a second time."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    charges.add(_moved(day=due))
+
+    view = _sweep(sweep)
+
+    assert [each.action for each in view.settled] == [SettlementAction.MATCHED]
+    assert bills.rows[(USER, bill.id)].linked_movement(due) is not None
+
+
+def test_two_plausible_movements_are_a_proposal_and_nothing_else() -> None:
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+    charges.add(_moved(day=due))
+    charges.add(_moved(day=due - dt.timedelta(days=1), amount="119000"))
+    before = len(charges.rows)
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert len(view.proposals) == 1
+    assert len(view.proposals[0].candidates) == 2
+    assert len(charges.rows) == before
+    assert bills.rows[(USER, bill.id)].linked == {}
+
+
+def test_a_movement_that_only_half_matches_blocks_the_automatic_charge() -> None:
+    """The same merchant for a figure nowhere near the bill's: it may well be
+    the charge, and writing another one would be the double count."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+    charges.add(_moved(day=due, amount="260000"))
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert [each.occurrence.due_on for each in view.proposals] == [due]
+    assert (USER, bill.charge_id(due).value) not in charges.rows
+
+
+def test_a_paused_bill_is_neither_charged_nor_matched() -> None:
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(bills, starts_on=due)
+    bill.start_autopay(today=due - dt.timedelta(days=1))
+    bill.pause()
+    charges.add(_moved(day=due))
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert view.proposals == ()
+
+
+def test_one_movement_does_not_answer_two_bills_in_one_run() -> None:
+    """One payment settles one thing, and the second bill has to come back
+    unanswered rather than share it."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    _keep(bills, name="Gimnasio", starts_on=due)
+    _keep(bills, name="Gimnasio", starts_on=due)
+    charges.add(_moved(day=due))
+
+    view = _sweep(sweep)
+
+    assert len(view.settled) == 1
+
+
+def test_a_charge_a_movement_already_paid_cannot_also_be_confirmed() -> None:
+    """The refusal that keeps the feature from causing the double count it
+    exists to remove: the bank's row and this app's row are keyed in
+    different spaces, so nothing else would have stopped the second one."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+    before = len(charges.rows)
+
+    with pytest.raises(ValueError, match="already paid by a movement"):
+        settle.confirm(
+            ConfirmChargeCommand(
+                user_id=USER,
+                bill_id=bill.id,
+                period=dt.date(2026, 9, 4),
+            ),
+        )
+
+    assert len(charges.rows) == before
+
+
+def test_a_link_whose_movement_is_gone_does_not_block_confirming() -> None:
+    """Read against the ledger rather than believed. A stored link pointing
+    at an erased movement answers nothing, and refusing on it would leave a
+    charge nobody could ever confirm."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+    charges.rows.pop((USER, paid.id.value))
+
+    settled = settle.confirm(
+        ConfirmChargeCommand(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4)),
+    )
+
+    assert settled.occurrence.state is OccurrenceState.PAID
+
+
+def test_undoing_a_linked_charge_on_an_armed_bill_does_not_skip_it() -> None:
+    """`unpay` erases a row this app wrote; a linked charge has none. Writing
+    a skip here would leave the bill linked *and* skipped for one period, and
+    the charge would vanish from the month the moment it was unlinked."""
+    settle, bills, charges, _ = _settling()
+    bill = _keep(bills)
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+    paid = _moved()
+    charges.add(paid)
+    settle.link(
+        user_id=USER,
+        bill_id=bill.id,
+        period=dt.date(2026, 9, 4),
+        movement_id=paid.id.value,
+    )
+
+    settle.undo_confirmation(user_id=USER, bill_id=bill.id, period=dt.date(2026, 9, 4))
+
+    stored = bills.rows[(USER, bill.id)]
+    assert stored.skipped == frozenset()
+    assert stored.linked_movement(dt.date(2026, 9, 4)) == paid.id.value
+
+
+def test_a_movement_the_lookup_no_longer_holds_does_not_break_the_screen() -> None:
+    """The sweep runs on every visit, so one unlucky charge must not 404 the
+    whole page. The listing and the lookup are two reads and can disagree —
+    an index catching up, or a movement deleted a second ago."""
+
+    class Vanishing(FakeHistory):
+        """Lists a movement the ledger lookup will not find."""
+
+        def __init__(self, charges: FakeCharges, ghost: Transaction) -> None:
+            super().__init__(charges)
+            self.ghost = ghost
+
+        def list_all(self, user_id: UserId) -> list[Transaction]:
+            return [*super().list_all(user_id), self.ghost]
+
+    settle, bills, charges, _ = _settling()
+    due = _today() - dt.timedelta(days=10)
+    _keep(bills, starts_on=due)
+    sweep = SettleDueChargesUseCase(
+        bills=bills,
+        charges=charges,
+        ledger=Vanishing(charges, _moved(day=due)),
+        settle=settle,
+    )
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()

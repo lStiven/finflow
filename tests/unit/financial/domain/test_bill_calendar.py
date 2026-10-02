@@ -14,7 +14,10 @@ from decimal import Decimal
 import pytest
 
 from personal_finance.contexts.financial.domain.bills import (
+    AUTOPAY_LOOKBACK_DAYS,
     GRACE_DAYS,
+    MATCH_WINDOW_DAYS,
+    MAX_LINKED_PERIODS,
     MAX_NAME_LENGTH,
     MAX_SKIPPED_PERIODS,
     MAX_WINDOW_DAYS,
@@ -587,3 +590,157 @@ def test_two_bills_charged_on_one_day_are_two_charges() -> None:
     rent = _bill(name="Arriendo", account_id=account)
 
     assert gym.charge_id(dt.date(2026, 9, 4)) != rent.charge_id(dt.date(2026, 9, 4))
+
+
+# ----------------------------------------------------------------------
+# Charging itself
+# ----------------------------------------------------------------------
+
+
+def test_a_bill_does_not_charge_itself_until_somebody_says_so() -> None:
+    """The default that makes the rest of this safe: every other write in
+    this feature happens because a person pressed something."""
+    bill = _bill()
+
+    assert bill.autopay is False
+    assert bill.autopay_from is None
+    assert (
+        bill.charges_itself_on(dt.date(2026, 9, 4), today=dt.date(2026, 9, 30)) is False
+    )
+
+
+def test_an_armed_bill_waits_until_the_match_window_has_closed() -> None:
+    """Not merely until the charge is late. A movement arriving four days
+    after the day it was due is the charge, and writing before then is how the
+    same money gets recorded twice."""
+    bill = _bill()
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+    period = dt.date(2026, 9, 4)
+
+    assert bill.charges_itself_on(period, today=period) is False
+    assert (
+        bill.charges_itself_on(period, today=period + dt.timedelta(days=GRACE_DAYS))
+        is False
+    )
+    assert (
+        bill.charges_itself_on(
+            period,
+            today=period + dt.timedelta(days=MATCH_WINDOW_DAYS),
+        )
+        is False
+    )
+    assert (
+        bill.charges_itself_on(
+            period,
+            today=period + dt.timedelta(days=MATCH_WINDOW_DAYS + 1),
+        )
+        is True
+    )
+
+
+def test_arming_a_bill_does_not_reach_charges_that_already_fell_due() -> None:
+    """A switch flipped today must not take money for a charge somebody has
+    been looking at as overdue, and may already have paid where this app
+    cannot see it."""
+    bill = _bill(starts_on=dt.date(2026, 8, 4))
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+
+    assert (
+        bill.charges_itself_on(dt.date(2026, 8, 4), today=dt.date(2026, 9, 20)) is False
+    )
+    assert (
+        bill.charges_itself_on(dt.date(2026, 9, 4), today=dt.date(2026, 9, 20)) is True
+    )
+
+
+def test_an_armed_bill_does_not_post_a_backlog_after_a_long_absence() -> None:
+    """An app opened after three months must not write a quarter of charges
+    in one go: past the lookback they stay overdue and are answered by hand."""
+    bill = _bill(starts_on=dt.date(2026, 1, 4))
+    bill.start_autopay(today=dt.date(2026, 1, 1))
+    today = dt.date(2026, 9, 21)
+    stale = today - dt.timedelta(days=AUTOPAY_LOOKBACK_DAYS + 1)
+
+    assert bill.charges_itself_on(stale, today=today) is False
+
+
+def test_a_paused_bill_charges_nothing_however_armed_it_is() -> None:
+    bill = _bill()
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+    bill.pause()
+
+    assert (
+        bill.charges_itself_on(dt.date(2026, 9, 4), today=dt.date(2026, 9, 30)) is False
+    )
+
+
+def test_disarming_forgets_the_day_it_was_armed() -> None:
+    """Nothing may charge on the strength of a permission that was withdrawn
+    and granted again earlier."""
+    bill = _bill()
+    bill.start_autopay(today=dt.date(2026, 9, 1))
+    bill.stop_autopay()
+
+    assert bill.autopay is False
+    assert bill.autopay_from is None
+
+
+# ----------------------------------------------------------------------
+# A movement that answered for a charge
+# ----------------------------------------------------------------------
+
+
+def test_a_charge_can_be_answered_by_a_movement_that_arrived_on_its_own() -> None:
+    bill = _bill()
+    bill.link(dt.date(2026, 9, 4), "movement-1")
+
+    assert bill.linked_movement(dt.date(2026, 9, 4)) == "movement-1"
+    assert bill.linked_movement(dt.date(2026, 10, 4)) is None
+
+
+def test_linking_takes_a_skip_back() -> None:
+    """A skip is a guess that no charge was coming; a movement is evidence
+    that one did. Both at once would be a charge settled and not happening."""
+    bill = _bill()
+    period = dt.date(2026, 9, 4)
+    bill.skip(period)
+
+    bill.link(period, "movement-1")
+
+    assert period not in bill.skipped
+
+
+def test_a_charge_the_calendar_does_not_have_cannot_be_linked() -> None:
+    with pytest.raises(ValueError, match="not charged on"):
+        _bill().link(dt.date(2026, 9, 5), "movement-1")
+
+
+def test_a_link_needs_a_movement() -> None:
+    with pytest.raises(ValueError, match="no id"):
+        _bill().link(dt.date(2026, 9, 4), "   ")
+
+
+def test_unlinking_a_charge_the_calendar_no_longer_visits_is_allowed() -> None:
+    """Amending the day can strand a link, and refusing to remove it would
+    make it permanent — the same reason `unskip` asks nothing."""
+    bill = _bill()
+    bill.link(dt.date(2026, 9, 4), "movement-1")
+
+    bill.amend(starts_on=dt.date(2026, 9, 9))
+    bill.unlink(dt.date(2026, 9, 4))
+
+    assert bill.linked == {}
+
+
+def test_one_bill_remembers_a_bounded_number_of_links() -> None:
+    """Stored, so it needs a ceiling. The oldest goes rather than today's
+    being refused."""
+    bill = _bill(cadence=BillCadence.WEEKLY, starts_on=dt.date(2020, 1, 1))
+    periods = [dt.date(2020, 1, 1) + dt.timedelta(days=7 * week) for week in range(300)]
+
+    for index, period in enumerate(periods):
+        bill.link(period, f"movement-{index}")
+
+    assert len(bill.linked) == MAX_LINKED_PERIODS
+    assert periods[-1] in bill.linked
+    assert periods[0] not in bill.linked

@@ -418,9 +418,30 @@ def _check_reads(client: httpx2.Client, session: Session, report: Report) -> Non
         "/financial/summary",
         "/merchants",
         "/ingestion/notifications",
+        "/alerts/inbox",
     ):
         ok = client.get(path, headers=session.headers).status_code == 200
         report.record(ok=ok, name=f"GET {path}")
+
+    # The export answers a file rather than JSON, which is exactly what a
+    # deployment can get wrong where no test runs: the adapter in front of
+    # the function has to hand back its bytes and its content type intact.
+    for file_format, media_type in (
+        ("csv", "text/csv"),
+        ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    ):
+        exported = client.get(
+            "/financial/export",
+            params={"format": file_format},
+            headers=session.headers,
+        )
+        report.record(
+            ok=exported.status_code == 200
+            and exported.headers.get("content-type", "").startswith(media_type)
+            and (file_format != "xlsx" or exported.content[:2] == b"PK"),
+            name=f"GET /financial/export ({file_format})",
+            detail=str(exported.status_code),
+        )
 
     # Somebody else's account is missing, never forbidden: whether it exists
     # is not something this API tells a stranger.
