@@ -6,6 +6,13 @@ sigue funcionando. Es `.github/workflows/pipeline.yml`, y lo que corre son las
 mismas recetas de `just` que se corren a mano: el pipeline no tiene un camino
 propio.
 
+## Cuándo no corre
+
+Un push que solo toca texto —cualquier `.md` y lo que hay en `docs/`— no corre
+nada: ninguna prueba lo lee y nada lo despliega. La excepción es
+`docs/openapi.json`, que es el contrato de la API y sí cuenta. Un push que mezcla
+texto y código corre entero. *Run workflow* corre siempre.
+
 ## Qué corre, en orden
 
 | Trabajo | Qué hace | Si falla |
@@ -61,7 +68,10 @@ Desarrollo y producción viven en la misma cuenta (ver Trabas en
 que cada rol solo lo puede asumir **su** entorno de GitHub. Las políticas de
 confianza ya están escritas: `infra/iam/github-oidc-trust-production.json` y
 `...-development.json`.
-Cada una exige el entorno de GitHub **y** la rama (`master` o `dev`): la regla
+El `sub` lleva los identificadores numéricos de la cuenta y del repo
+(`lStiven@25795990/finflow@1342916879`), que es como GitHub lo emite para este
+repo: si el repo se renombra o se recrea con el mismo nombre, el número cambia y
+AWS deja de confiar en él. Cada una exige el entorno de GitHub **y** la rama (`master` o `dev`): la regla
 de ramas del entorno vive en GitHub, y esta es la misma cerradura del lado de
 AWS, por si aquella se cambia algún día.
 

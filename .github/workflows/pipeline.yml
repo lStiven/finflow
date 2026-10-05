@@ -17,6 +17,18 @@ name: Validar y desplegar
 on:
   push:
     branches: [master, dev]
+    # A push that only touches prose runs nothing: no check reads it and
+    # nothing deploys it. Everything else runs, including files nobody listed
+    # here yet — the filter names what to skip, not what to run, so a new kind
+    # of file costs a run rather than an unchecked deploy. `docs/openapi.json`
+    # is the one file under docs/ that is code: `openapi-check` compares it
+    # against the routers. Later lines win, which is what lets it back in.
+    paths:
+      - "**"
+      - "!**.md"
+      - "!docs/**"
+      - "docs/openapi.json"
+  # A run asked for by hand always runs, whatever changed.
   workflow_dispatch:
 
 # One pipeline per branch at a time, never cancelled halfway: a deploy stopped
