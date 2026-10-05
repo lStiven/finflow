@@ -76,14 +76,27 @@ describe("resolving onboarding", () => {
     expect(doneIds(state)).toEqual(["senders"]);
   });
 
-  it("closes the forwarding step when Google confirms", () => {
+  it("keeps the forwarding step open after Google confirms, for the filter", () => {
+    // The confirmation is only the first half. Closing on it collapsed the
+    // step before anybody read how to make the filter that forwards.
     const state = resolveOnboarding(
       setup({ sendersApproved: true, forwardingConfirmed: true }),
       acks({ introSeen: true, addressCopied: true }),
     );
 
-    expect(state.current).toBe("first-alert");
+    expect(state.current).toBe("forwarding");
     expect(state.addressStatus).toBe("confirmed");
+  });
+
+  it("closes the forwarding step once confirmed and the filter is made", () => {
+    const state = resolveOnboarding(
+      setup({ sendersApproved: true, forwardingConfirmed: true }),
+      acks({ introSeen: true, addressCopied: true, gmailSubmitted: true }),
+    );
+
+    expect(state.current).toBe("first-alert");
+    // The filter is the person's word, so the tick says so.
+    expect(state.stages.find((stage) => stage.id === "forwarding")?.proof).toBe("you");
   });
 
   it("saying the Gmail rule is set up does not close the step by itself", () => {
@@ -197,8 +210,9 @@ describe("resolving onboarding", () => {
   });
 
   it("labels who vouches for each stage", () => {
-    // The two reading stages are the user's word; the other three are the
-    // API's. The screen says which, so a tick means the same thing twice.
+    // The two reading stages are the user's word, and so is the filter until
+    // an alert proves it; the rest are the API's. The screen says which, so a
+    // tick means the same thing twice.
     const state = resolveOnboarding(setup(), acks());
     const proofs = Object.fromEntries(
       state.stages.map((stage) => [stage.id, stage.proof]),
@@ -208,7 +222,7 @@ describe("resolving onboarding", () => {
       intro: "you",
       address: "you",
       senders: "verified",
-      forwarding: "verified",
+      forwarding: "you",
       "first-alert": "verified",
     });
   });

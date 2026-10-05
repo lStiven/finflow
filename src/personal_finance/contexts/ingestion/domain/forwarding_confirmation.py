@@ -43,13 +43,16 @@ from personal_finance.shared.domain.value_objects import ValueObject
 # Google has ever mailed anybody, and this is the one that means this.
 GOOGLE_FORWARDING_SENDER = EmailAddress("forwarding-noreply@google.com")
 
-CONFIRMATION_HOST = "mail-settings.google.com"
+# Google sends the link on either host — both observed in real mail, days
+# apart, for the same request. Accepting only one dropped the other in silence:
+# not a confirmation, and not from an approved sender either.
+CONFIRMATION_HOSTS = frozenset({"mail-settings.google.com", "mail.google.com"})
 
 # `vf-` is confirm and `uf-` is cancel — the same mail carries both, one
 # sentence apart. Matching the prefix loosely would make the feature undo
 # itself, silently, on every message it handled.
 _CONFIRMATION_URL = re.compile(
-    r"https://mail-settings\.google\.com/mail/vf-[A-Za-z0-9%_.\-]+",
+    r"https://mail(?:-settings)?\.google\.com/mail/vf-[A-Za-z0-9%_.\-]+",
 )
 
 

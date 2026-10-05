@@ -427,11 +427,32 @@ def test_mail_forging_googles_address_still_cannot_reach_the_ledger() -> None:
 
     result = use_case.execute()
 
-    # No confirmation link in it, so it falls through to the ordinary path —
-    # where Google is not an approved sender, so it is filed and ignored.
+    # No confirmation link in it, and it never reaches the ordinary path
+    # either — not even for a user who approved `google.com`.
     assert confirmer.confirmed == []
     assert result.confirmations == 0
+    assert result.refused_confirmations == 1
+    assert result.accepted == 0
     assert queue.enqueued == []
+    assert len(reader.acked) == 1
+
+
+def test_a_link_on_gmails_own_host_is_confirmed_too() -> None:
+    """Google also sends the link on `mail.google.com`. Reading only the other
+    host dropped that mail in silence, and the user's step never finished.
+    """
+    url = "https://mail.google.com/mail/vf-%5BANGjdJ-abc%5D-def"
+    email = dataclasses.replace(
+        _confirmation_email(),
+        raw_content=f"haz clic en el siguiente vínculo:\n{url}\n",
+    )
+    confirmer = FakeConfirmer()
+    use_case, _ = _make(FakeReader(email), confirmer=confirmer)
+
+    result = use_case.execute()
+
+    assert confirmer.confirmed == [url]
+    assert result.confirmations == 1
 
 
 def test_unreadable_mail_does_not_abandon_the_rest_of_the_batch(

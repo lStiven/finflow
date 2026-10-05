@@ -79,6 +79,17 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   the only mailbox this deployment reads, on the say-so of an email, so the
   alias is now resolved to a registered inbox first and the rest are
   acknowledged and counted (`unclaimed_confirmations`) without a fetch.
+- **A forwarding confirmation is judged by Gmail's page, not its status**
+  (2026-10-04). A POST answered with 2xx marked a real user confirmed while
+  Gmail still listed the address pending. Success now means the answer is a
+  Gmail-host page that no longer holds the form; Gmail saying no (a page
+  without the form at the link) is final, while anything else on Google — a
+  sign-in, an unusual-traffic check, a 5xx — leaves the mail unacknowledged
+  for the next poll. Accepted risk: there is no retry cap, so if Google keeps
+  answering a datacenter address that way the mail is retried every poll
+  until somebody deletes it; the warning logs make it visible. The link comes
+  on `mail-settings.google.com` or `mail.google.com` — reading only the first
+  dropped the second in silence.
 - **Email forwarding, not Gmail OAuth** (2026-08-22, reversal to the original
   plan). Every user forwards bank mail to `finflowingest+<user_id>@gmail.com`,
   one shared account read over IMAP + App Password. Killed the entire OAuth
