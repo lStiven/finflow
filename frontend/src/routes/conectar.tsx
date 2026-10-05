@@ -24,6 +24,7 @@ import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/dates";
+import { gmailFromFilter } from "@/lib/forwarding";
 import { STAGE_COPY } from "@/onboarding/copy";
 import type { AddressStatus, StageId } from "@/onboarding/steps";
 import { useOnboarding } from "@/onboarding/useOnboarding";
@@ -681,6 +682,15 @@ function SendersBody() {
   );
 }
 
+/**
+ * The two things done in Gmail, in the order Gmail allows them: the filter's
+ * "Reenviarlo a" list only offers an address once it is verified, so the
+ * filter half says so and watches the same status the screen already polls.
+ *
+ * Every label is Gmail's own, in its Spanish wording, because this is read
+ * with Gmail open beside it: a step that names a button Gmail does not show
+ * is where somebody stops.
+ */
 function ForwardingBody({
   address,
   status,
@@ -693,60 +703,155 @@ function ForwardingBody({
   onDone: () => void;
 }) {
   const { data: setup } = useSuspenseQuery(setupQuery);
+  const { data: inbox } = useSuspenseQuery(inboxQuery);
   const confirmedAt = setup.steps.find(
     (step) => step.key === "forwarding_confirmed",
   )?.at;
+  const fromFilter = gmailFromFilter(inbox.allowed_domains, inbox.allowed_addresses);
+  const verified = status !== "unverified" || complete;
 
   return (
-    <div className="flex flex-col gap-5">
-      <ol className="flex flex-col gap-3 text-sm leading-relaxed">
-        <Instruction n={1}>
-          En Gmail: <strong>Configuración</strong> (⚙️) →{" "}
-          <strong>Ver toda la configuración</strong> → pestaña{" "}
-          <strong>Reenvío y correo POP/IMAP</strong>.
-        </Instruction>
-        <Instruction n={2}>
-          <strong>Agregar una dirección de reenvío</strong> y pega la tuya:
-          <code className="mt-2 block break-all rounded-lg border border-line bg-ink px-3 py-2 text-xs">
-            {address}
-          </code>
-        </Instruction>
-        <Instruction n={3}>
-          Google manda un correo de confirmación a esa dirección.{" "}
-          <strong>No tienes que hacer nada</strong>: Finflow lo recibe y lo confirma
-          solo, en su siguiente pasada (aproximadamente un minuto).
-        </Instruction>
-        <Instruction n={4}>
-          Crea un filtro: <strong>De</strong> = la dirección de tu banco →{" "}
-          <strong>Reenviar a</strong> la dirección de arriba. Así solo se reenvía lo del
-          banco, no tu correo personal.
-        </Instruction>
-      </ol>
+    <div className="flex flex-col gap-6">
+      <p className="rounded-xl border border-line bg-ink p-4 text-sm leading-relaxed">
+        Hazlo <strong>desde un computador</strong>, en gmail.com. La app de Gmail del
+        teléfono no tiene estas opciones. Son dos partes y se hacen una sola vez.
+      </p>
 
-      {status === "unverified" && !complete ? (
-        <div className="flex flex-col gap-4 rounded-xl border border-line bg-ink p-4">
-          <div className="flex items-center gap-2.5 text-muted text-sm">
-            <Loader2 className="size-4 animate-spin text-cyan" />
-            {STAGE_COPY.forwarding.waiting}
-          </div>
-          <p className="text-faint text-xs">
-            Esta pantalla se entera sola cuando llegue. Si pasa un rato largo, revisa
-            que la dirección quedó bien pegada en Gmail.
+      <section className="flex flex-col gap-3">
+        <h3 className="font-medium text-sm">
+          Parte 1 · Autoriza tu dirección de Finflow
+        </h3>
+        <ol className="flex flex-col gap-3 text-sm leading-relaxed">
+          <Instruction n={1}>
+            Arriba a la derecha, <strong>Configuración</strong> (⚙️) →{" "}
+            <strong>Ver toda la configuración</strong> → pestaña{" "}
+            <strong>Reenvío y correo POP/IMAP</strong>.
+          </Instruction>
+          <Instruction n={2}>
+            Pulsa <strong>Agregar una dirección de reenvío</strong>, pega la tuya y
+            pulsa <strong>Siguiente</strong> → <strong>Continuar</strong> →{" "}
+            <strong>Aceptar</strong>. Google puede pedirte tu contraseña para dejarte
+            seguir.
+            <span className="mt-2 flex items-start gap-2">
+              <code className="block min-w-0 flex-1 break-all rounded-lg border border-line bg-ink px-3 py-2 text-xs">
+                {address}
+              </code>
+              <CopyButton value={address} />
+            </span>
+          </Instruction>
+          <Instruction n={3}>
+            Google manda un correo de verificación a esa dirección.{" "}
+            <strong>No tienes que abrirlo</strong>: Finflow lo recibe y lo confirma
+            solo, en aproximadamente un minuto, y aquí abajo lo verás confirmado. Gmail
+            no se actualiza solo: <strong>recarga la página</strong> y tu dirección debe
+            dejar de decir que la verificación está pendiente. Si a los pocos minutos lo
+            sigue diciendo, pulsa{" "}
+            <strong>Volver a enviar correo de verificación</strong> ahí mismo.
+          </Instruction>
+          <Instruction n={4}>
+            En esa misma pestaña, <strong>deja marcado «Inhabilitar el reenvío»</strong>
+            . La otra opción, «Reenviar una copia del correo entrante», mandaría todo tu
+            correo, también el personal. Lo que se reenvía lo decide el filtro de la
+            parte 2.
+          </Instruction>
+        </ol>
+
+        {verified ? (
+          <p className="flex items-center gap-2 text-incoming text-sm">
+            <BadgeCheck className="size-4" />
+            {confirmedAt
+              ? `Google confirmó tu dirección: ${formatDateTime(confirmedAt)}`
+              : "El correo ya está llegando, así que el camino funciona."}
           </p>
+        ) : (
+          <div className="flex flex-col gap-4 rounded-xl border border-line bg-ink p-4">
+            <div className="flex items-center gap-2.5 text-muted text-sm">
+              <Loader2 className="size-4 animate-spin text-cyan" />
+              {STAGE_COPY.forwarding.waiting}
+            </div>
+            <p className="text-faint text-xs">
+              Esta pantalla se entera sola. Si pasa un rato largo, revisa que la
+              dirección quedó bien pegada en Gmail, sin espacios.
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h3 className="font-medium text-sm">
+          Parte 2 · Crea el filtro que reenvía solo lo de tu banco
+        </h3>
+        {!verified ? (
+          <p className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-sm leading-relaxed">
+            Espera a que la parte 1 quede confirmada. Antes de eso, Gmail no muestra tu
+            dirección de Finflow en la lista de «Reenviarlo a» y el filtro no se puede
+            terminar.
+          </p>
+        ) : null}
+        <ol className="flex flex-col gap-3 text-sm leading-relaxed">
+          <Instruction n={5}>
+            En la caja de búsqueda de Gmail, arriba, pulsa{" "}
+            <strong>Mostrar opciones de búsqueda</strong>: el icono de la derecha de la
+            caja, con tres rayas.
+          </Instruction>
+          <Instruction n={6}>
+            En el campo <strong>De</strong> pega esto tal cual, y deja los demás campos
+            vacíos:
+            {fromFilter ? (
+              <span className="mt-2 flex items-start gap-2">
+                <code className="block min-w-0 flex-1 break-all rounded-lg border border-line bg-ink px-3 py-2 text-xs">
+                  {fromFilter}
+                </code>
+                <CopyButton value={fromFilter} />
+              </span>
+            ) : (
+              <span className="mt-2 block text-faint text-xs">
+                Aparece aquí cuando apruebes a tu banco en el paso anterior.
+              </span>
+            )}
+            <span className="mt-2 block">
+              No necesitas saber desde qué dirección exacta te escribe tu banco: el{" "}
+              <code>@</code> delante de un dominio quiere decir «cualquier dirección que
+              termine así», y <code>OR</code> junta todos tus bancos en un solo filtro.
+            </span>
+          </Instruction>
+          <Instruction n={7}>
+            <strong>Compruébalo antes de guardar</strong>: pulsa <strong>Buscar</strong>
+            . Deben aparecer correos de tu banco que ya tengas. Si tienes alertas del
+            banco y no aparece ninguna, abre una, copia la dirección del remitente
+            completa (la que va entre «&lt;» y «&gt;») y apruébala en el paso{" "}
+            <strong>{STAGE_COPY.senders.title}</strong>: el texto de arriba se actualiza
+            solo.
+          </Instruction>
+          <Instruction n={8}>
+            Vuelve a abrir <strong>Mostrar opciones de búsqueda</strong> (lo que pegaste
+            sigue ahí) y pulsa <strong>Crear filtro</strong>.
+          </Instruction>
+          <Instruction n={9}>
+            Marca <strong>Reenviarlo a:</strong> y elige tu dirección de Finflow en la
+            lista. Si no aparece, es que todavía no está verificada: vuelve al paso 3.
+          </Instruction>
+          <Instruction n={10}>
+            Pulsa <strong>Crear filtro</strong>. Listo. El filtro solo reenvía los
+            correos que lleguen <strong>de ahora en adelante</strong>; los que ya tienes
+            no, aunque marques «Aplicar el filtro también a las conversaciones que
+            coinciden».
+          </Instruction>
+        </ol>
+        <p className="text-faint text-xs leading-relaxed">
+          Si más adelante apruebas otro banco, actualiza el filtro: en Gmail,{" "}
+          <strong>Configuración</strong> → <strong>Ver toda la configuración</strong> →{" "}
+          <strong>Filtros y direcciones bloqueadas</strong> → <strong>Editar</strong> en
+          tu filtro, y reemplaza el campo «De» por el texto nuevo de aquí.
+        </p>
+        {verified && !complete ? (
           <div>
             <Button variant="ghost" onClick={onDone}>
-              Ya lo configuré
+              Ya creé el filtro
             </Button>
           </div>
-        </div>
-      ) : (
-        <p className="flex items-center gap-2 text-incoming text-sm">
-          <BadgeCheck className="size-4" />
-          {confirmedAt
-            ? `Google confirmó el reenvío el ${formatDateTime(confirmedAt)}.`
-            : "El correo ya está llegando, así que el camino funciona."}
-        </p>
-      )}
+        ) : null}
+      </section>
     </div>
   );
 }

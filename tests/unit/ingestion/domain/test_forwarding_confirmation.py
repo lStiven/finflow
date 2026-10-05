@@ -97,3 +97,41 @@ def test_the_value_object_refuses_a_url_it_did_not_recognise() -> None:
     """The last refusal before an adapter makes a network call with this."""
     with pytest.raises(ValueError, match="forwarding confirmation URL"):
         ForwardingConfirmation(url="https://evil.test/mail/vf-abc")
+
+
+# The shape of the 2026-10-04 request: the same mail, with both links on
+# `mail.google.com`. The token is made up; the soft breaks are where Google
+# put them.
+GMAIL_HOST_EMAIL = """Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+haz clic en el siguiente v=C3=ADnculo para confirmar la solicitud:
+
+https://mail.google.com/mail/vf-%5BANGjdJ-M-R91hP-4Ky-SLQaZicMILIOtvuwpVsr5=
+wg475IMJpuEuLYWOHil4VL7TpO7FVhziImwIPYrJYP9d2E9ODxboy160howkjj7TO4rd2rU3ZMz=
+DHKTTRxQsL_J-TbXSghcKUWpOe8JGMsB5%5D-tVtNSigrxWnRJPdZeGYkXlADYq0
+
+v=C3=ADnculo para cancelar la
+verificaci=C3=B3n:
+https://mail.google.com/mail/uf-%5BANGjdJ9EPBVmkDEPcFN7dHDhiqyecn6483uIezgh=
+yH9MRPDvU7UtQLCgwcZ9M7rmeGuyymP_E_JIQ-MyjwY8fJW5y3B60hPIbbW5vmskGnPX6U8QgoV=
+tA2hysoh2t_qQPCmlKTC58GL0VEaq6NXF%5D-tVtNSigrxWnRJPdZeGYkXlADYq0
+"""
+
+
+def test_a_link_on_gmails_own_host_is_recognised() -> None:
+    """Reading only `mail-settings` dropped this one in silence."""
+    confirmation = _from(GMAIL_HOST_EMAIL)
+
+    assert confirmation is not None
+    assert confirmation.url.startswith("https://mail.google.com/mail/vf-")
+    assert confirmation.url.endswith("tVtNSigrxWnRJPdZeGYkXlADYq0")
+
+
+def test_a_lookalike_of_gmails_own_host_is_not_followed() -> None:
+    forged = GMAIL_HOST_EMAIL.replace(
+        "https://mail.google.com/mail/vf-",
+        "https://mail.google.com.evil.test/mail/vf-",
+    )
+
+    assert _from(forged) is None
