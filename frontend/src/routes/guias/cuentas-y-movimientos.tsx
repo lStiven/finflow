@@ -218,9 +218,14 @@ function AccountsGuide() {
           delay={315}
         >
           <Case title="No llega nada">
-            El problema está antes de las cuentas: o el reenvío no está activo, o el
-            remitente de tu banco no está aprobado —y lo que llega de alguien sin
-            aprobar se descarta sin leerse—.{" "}
+            El problema está antes de las cuentas. Revisa, en este orden: que tu
+            dirección de Finflow esté verificada en Gmail; que exista el filtro que
+            reenvía (en Gmail,{" "}
+            <strong className="text-text">Filtros y direcciones bloqueadas</strong>);
+            que su campo «De» encuentre los correos de tu banco cuando lo buscas; y que
+            ese remitente esté aprobado aquí —lo que llega de alguien sin aprobar se
+            descarta sin leerse—. Un filtro nuevo solo reenvía lo que llegue después de
+            crearlo.{" "}
             <Link to="/conectar" className="text-cyan underline underline-offset-4">
               Revísalo en la guía de conexión
             </Link>

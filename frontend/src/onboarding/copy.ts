@@ -25,7 +25,8 @@ export const STAGE_COPY: Record<
   },
   forwarding: {
     title: "Activa el reenvío en tu correo",
-    blurb: "Una regla en Gmail y listo. Nosotros confirmamos por ti.",
+    blurb:
+      "Dos partes en Gmail, desde un computador: autorizar tu dirección y crear un filtro.",
     waiting: "Esperando la confirmación de Google…",
   },
   "first-alert": {

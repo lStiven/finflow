@@ -88,13 +88,16 @@ export function resolveOnboarding(
       { id: "senders", done: sendersApproved, proof: "verified" },
       {
         id: "forwarding",
-        // A confirmed rule is the usual way mail gets here, not the only
-        // one: somebody forwarding each alert by hand never gets a
-        // confirmation, and their first alert is the better proof that the
-        // route works. Without this they would sit on this stage forever
-        // with movements already on screen.
-        done: forwardingConfirmed || firstAlert,
-        proof: "verified",
+        // Google's confirmation is half of this stage, not all of it: the
+        // filter that actually forwards is made afterwards, and closing the
+        // stage on the confirmation alone collapsed it before anybody read
+        // the half that matters. Nothing outside Gmail can see a filter, so
+        // that half is the person's word — and labelled as such — until the
+        // first alert proves the whole route. That alert also settles it for
+        // somebody forwarding by hand, who never gets a confirmation and
+        // would otherwise sit here with movements already on screen.
+        done: (forwardingConfirmed && acks.gmailSubmitted) || firstAlert,
+        proof: firstAlert ? "verified" : "you",
       },
       { id: "first-alert", done: firstAlert, proof: "verified" },
     ] satisfies Stage[]

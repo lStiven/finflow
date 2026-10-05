@@ -28,6 +28,7 @@ from personal_finance.contexts.ingestion.application.ports import (
     UserInboxRepository,
 )
 from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
+    GOOGLE_FORWARDING_SENDER,
     ForwardingConfirmation,
 )
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
@@ -167,7 +168,8 @@ class PollResult:
     # from `refused_confirmations` because only this one means a user's
     # forwarding is actually set up.
     confirmations: int = 0
-    # Links Google turned down — expired, already used. Acknowledged rather
+    # Links Google turned down — expired, already used — and Google mail that
+    # carried no link this recognises. Acknowledged rather
     # than retried, but counted on their own: reporting them as confirmations
     # would tell an operator that somebody's setup finished when it did not.
     refused_confirmations: int = 0
@@ -230,6 +232,20 @@ class PollIngestMailboxUseCase:
                     extra={"message_id": email.message_id.value},
                 )
                 failed += 1
+
+                continue
+
+            if confirmation is None and email.sender == GOOGLE_FORWARDING_SENDER:
+                # Google's own mail with no link this recognises: a new layout
+                # or a new host. Never a bank alert, so it does not go down
+                # that path — where it would be thrown away in silence, or
+                # worse, offered to the user as a sender worth approving.
+                _logger.warning(
+                    "forwarding mail carried no recognisable confirmation link",
+                    extra={"recipient": email.recipient.value},
+                )
+                refused_confirmations += 1
+                handled.append(email)
 
                 continue
 

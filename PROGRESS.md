@@ -332,6 +332,12 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
+  con un 200 aunque Gmail siguiera pendiente, y un enlace en `mail.google.com`
+  se perdía sin rastro. La guía del reenvío se rehízo en dos partes —autorizar
+  la dirección, crear el filtro— y el paso ya no se cierra con la sola
+  confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
+  guía hace comprobarlo buscando antes de guardar. En el árbol, sin commit.
 - 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
   desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
   se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
@@ -347,5 +353,3 @@ AWS (ver Trabas).
   campana, línea de presupuesto bajo la compra y resumen semanal los lunes.
   Una cola que espera 5 s es lo que deja clasificar el comercio antes de leer
   su presupuesto.
-- 2026-09-30 — **Exportar movimientos a CSV o Excel**, eligiendo qué entra, sin
-  cortar nunca el archivo y sin que una celda se vuelva fórmula.
