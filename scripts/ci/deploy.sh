@@ -33,10 +33,16 @@ just "$provision"
 just _docker-config
 docker_config="$(just --evaluate docker_config)"
 
+# Absolute, like `sam_config` in the justfile and for the same reason: `sam
+# build` resolves a relative `--config-file` against the template's directory
+# and `sam deploy` does not, so `infra/samconfig.toml` sent build looking in
+# infra/infra/. Taken after the `cd`, so a rollback reads the older tree's own.
+sam_config="$(pwd)/infra/samconfig.toml"
+
 DOCKER_CONFIG="$docker_config" sam build --config-env "$config" \
-  --config-file infra/samconfig.toml --template infra/template.yaml
+  --config-file "$sam_config" --template infra/template.yaml
 DOCKER_CONFIG="$docker_config" sam deploy --config-env "$config" \
-  --config-file infra/samconfig.toml \
+  --config-file "$sam_config" \
   --no-confirm-changeset --no-fail-on-empty-changeset
 
 just "$web"

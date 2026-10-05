@@ -6,12 +6,32 @@ sigue funcionando. Es `.github/workflows/pipeline.yml`, y lo que corre son las
 mismas recetas de `just` que se corren a mano: el pipeline no tiene un camino
 propio.
 
+## Qué corre en cada caso
+
+| Evento | Validaciones | Flujos y pantallas | Despliegue |
+|---|---|---|---|
+| Push a `dev` | sí | no | desarrollo |
+| PR hacia `master` | sí | no | no |
+| Merge (push) a `master` | sí | sí | producción, solo si las dos pasan |
+
+Las e2e corren después del merge, no en el PR: si un PR rompe un flujo del
+navegador, producción no se toca, pero `master` queda con el error hasta el
+siguiente arreglo. Es un costo aceptado a cambio de minutos de GitHub; llevarlas
+al PR es cambiar la condición del trabajo `e2e`.
+
+Un push que solo toca texto —cualquier `.md` y lo que hay en `docs/`— no corre
+nada: ninguna prueba lo lee y nada lo despliega. La excepción es
+`docs/openapi.json`, que es el contrato de la API y sí cuenta. Un push que mezcla
+texto y código corre entero. Un PR corre siempre, aunque solo traiga texto: es
+la validación que espera la protección de `master`, y una que no corre nunca
+responde. *Run workflow* corre siempre.
+
 ## Qué corre, en orden
 
 | Trabajo | Qué hace | Si falla |
 |---|---|---|
 | **Validaciones** | `just check-all` —formato, lint, tipos, las pruebas unitarias y de integración, el contrato de la API y el frontend con sus pruebas— y `just infra-check`, que la plantilla sea desplegable en los dos entornos | Nada llega a AWS |
-| **Flujos y pantallas** | Levanta la pila local entera en el runner (moto, datos de prueba, API, workers y Vite) y corre `just verify` —dos usuarios de punta a punta, con integridad y aislamiento— y `just e2e`: cada suite del navegador de esa rama y `e2e-views`, que abre todas las pantallas en teléfono y escritorio | Nada llega a AWS; los logs quedan como artefacto |
+| **Flujos y pantallas** (solo en `master`) | Levanta la pila local entera en el runner (moto, datos de prueba, API, workers y Vite) y corre `just verify` —dos usuarios de punta a punta, con integridad y aislamiento— y `just e2e`: cada suite del navegador de esa rama y `e2e-views`, que abre todas las pantallas en teléfono y escritorio | Nada llega a AWS; los logs quedan como artefacto |
 | **Desplegar y comprobar** | Aprovisiona, despliega el backend, publica la web y corre el smoke contra lo desplegado: `smoke-prod` (solo lee) en producción, `smoke` en desarrollo | Vuelve sola a la versión anterior —backend y web— y la ejecución termina en rojo |
 
 Todo lo de los dos primeros trabajos corre **antes** de tocar AWS y contra el
@@ -61,6 +81,12 @@ Desarrollo y producción viven en la misma cuenta (ver Trabas en
 que cada rol solo lo puede asumir **su** entorno de GitHub. Las políticas de
 confianza ya están escritas: `infra/iam/github-oidc-trust-production.json` y
 `...-development.json`.
+El `sub` lleva los identificadores numéricos de la cuenta y del repo
+(`lStiven@25795990/finflow@1342916879`), que es como GitHub lo emite para este
+repo: si el repo se renombra o se recrea con el mismo nombre, el número cambia y
+AWS deja de confiar en él. Cada una exige el entorno de GitHub **y** la rama (`master` o `dev`): la regla
+de ramas del entorno vive en GitHub, y esta es la misma cerradura del lado de
+AWS, por si aquella se cambia algún día.
 
 ```bash
 aws iam create-role --role-name finflow-deploy-github-production \
@@ -93,14 +119,18 @@ En *Settings → Environments*, `production` y `development`:
 
 ### 4. Recomendado: proteger `master`
 
-*Settings → Branches*: exigir que pasen **Validaciones** y **Flujos y
-pantallas** antes de mezclar a `master`. Así lo que llega a `master` —y por
-tanto a producción— ya pasó por el pipeline en su rama.
+*Settings → Rules → Rulesets* (o *Branches*) para `master`: exigir un PR, que
+pase **Validaciones (check-all)** y que la rama esté al día con `master` antes
+de mezclar. Solo esa: **Flujos y pantallas** no corre en los PR, y exigirla
+dejaría todo PR esperando para siempre.
 
 ## Probarlo sin esperar un push
 
 *Actions → Validar y desplegar → Run workflow*, eligiendo la rama. Y en local,
-lo mismo que corre el trabajo de flujos:
+lo mismo que corre el trabajo de flujos (sin `.env`, el script lo arma con
+`scripts/ci/local-env.sh`: el ejemplo más las dos claves que deja vacías a
+propósito y sin las que la pila no arranca —el secreto de los tokens, que se
+genera en cada corrida, y una dirección de buzón que nadie lee—):
 
 ```bash
 scripts/ci/local-stack.sh start
