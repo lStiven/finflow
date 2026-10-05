@@ -155,6 +155,24 @@ jobs:
           uv sync --frozen
           npm ci --prefix frontend
 
+      # What GitHub will present to AWS, so a refused role can be compared
+      # against its trust policy field by field. Claims only: the token
+      # itself is a credential and is never printed.
+      - name: Qué dice el token de GitHub
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken("sts.amazonaws.com");
+            const claims = JSON.parse(
+              Buffer.from(token.split(".")[1], "base64url").toString(),
+            );
+            for (const key of ["aud", "sub", "ref", "environment", "repository"]) {
+              core.info(`${key}: ${claims[key]}`);
+            }
+            core.info(`rol pedido: ${process.env.ROLE || "(AWS_ROLE_ARN vacío)"}`);
+        env:
+          ROLE: ${{ vars.AWS_ROLE_ARN }}
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
