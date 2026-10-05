@@ -100,7 +100,10 @@ tanto a producción— ya pasó por el pipeline en su rama.
 ## Probarlo sin esperar un push
 
 *Actions → Validar y desplegar → Run workflow*, eligiendo la rama. Y en local,
-lo mismo que corre el trabajo de flujos:
+lo mismo que corre el trabajo de flujos (sin `.env`, el script lo arma con
+`scripts/ci/local-env.sh`: el ejemplo más las dos claves que deja vacías a
+propósito y sin las que la pila no arranca —el secreto de los tokens, que se
+genera en cada corrida, y una dirección de buzón que nadie lee—):
 
 ```bash
 scripts/ci/local-stack.sh start

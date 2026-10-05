@@ -54,9 +54,10 @@ jobs:
           npm ci --prefix frontend
 
       # The local settings, which point at the in-process emulator: nothing
-      # here talks to AWS.
+      # here talks to AWS. The script also makes the run's own token secret,
+      # which `.env.example` leaves empty on purpose.
       - name: Configuración local
-        run: cp .env.example .env
+        run: scripts/ci/local-env.sh
 
       - name: Formato, lint, tipos, pruebas, contrato y frontend
         run: just check-all

@@ -266,14 +266,17 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente: construido el 2026-09-30, falta encenderlo.**
-   `.github/workflows/pipeline.yml`: un push a `master` despliega producción y
-   uno a `dev` desarrollo, después de `check-all`, `infra-check`, `just verify`
-   y todas las e2e (pantallas incluidas) contra la pila local en el runner; el
-   smoke va después del despliegue y, si falla, vuelve sola a la versión
-   anterior. Falta lo que solo puede hacer el dueño: el proveedor OIDC y los dos
-   roles en AWS, y los entornos, variables y secretos en GitHub —la lista está
-   en [docs/ci.md](docs/ci.md)—.
+7. **Publicar automáticamente: validaciones y e2e en verde, el despliegue
+   no puede pasar todavía.** `.github/workflows/pipeline.yml` corre en GitHub.
+   Los dos primeros trabajos fallaban porque `.env.example` deja vacías dos
+   claves sin las que nada arranca; `scripts/ci/local-env.sh` las llena, y el
+   2026-10-05 los dos pasaron en una copia limpia del repo sin credenciales.
+   **El despliegue falla seguro en su primer paso de AWS**: los roles
+   `finflow-deploy-github-production` y `…-development` no existen (medido el
+   2026-10-05). Falta lo que solo puede hacer el dueño —el proveedor OIDC, los
+   dos roles y, en GitHub, los entornos con `AWS_ROLE_ARN`,
+   `CLOUDFLARE_ACCOUNT_ID`, `ENV_FILE` y `CLOUDFLARE_API_TOKEN`—, en
+   [docs/ci.md](docs/ci.md).
 
 ## Huecos conocidos, sin urgencia
 
@@ -332,12 +335,14 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
+  el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
 - 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
   con un 200 aunque Gmail siguiera pendiente, y un enlace en `mail.google.com`
   se perdía sin rastro. La guía del reenvío se rehízo en dos partes —autorizar
   la dirección, crear el filtro— y el paso ya no se cierra con la sola
   confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
-  guía hace comprobarlo buscando antes de guardar. En el árbol, sin commit.
+  guía hace comprobarlo buscando antes de guardar.
 - 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
   desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
   se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
@@ -349,7 +354,3 @@ AWS (ver Trabas).
 - 2026-09-30 — **`master` lista para producción** con la exportación y los
   avisos en la app, sin presupuestos (no existen ahí); `dev` publicada entera
   en desarrollo, API y web.
-- 2026-09-30 — **Los avisos llegan también a la app**: notificación flotante,
-  campana, línea de presupuesto bajo la compra y resumen semanal los lunes.
-  Una cola que espera 5 s es lo que deja clasificar el comercio antes de leer
-  su presupuesto.
