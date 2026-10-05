@@ -1,6 +1,7 @@
 # Every push to master deploys production and every push to dev deploys
 # development — but only once everything that proves the old still works has
-# passed. See docs/ci.md for the one-time setup this needs in AWS and GitHub.
+# passed. A PR into master only runs the checks. See docs/ci.md for the
+# one-time setup this needs in AWS and GitHub.
 #
 #   checks  ── formato, lint, tipos, pruebas unitarias y de integración,
 #              contrato de la API, frontend, plantilla desplegable
@@ -28,14 +29,24 @@ on:
       - "!**.md"
       - "!docs/**"
       - "docs/openapi.json"
+  # A PR into master runs the checks and nothing else: no browser, no AWS.
+  # No path filter here on purpose — this is the check `master`'s protection
+  # waits for, and a run skipped by a filter never reports, which would leave
+  # a docs-only PR waiting for ever.
+  pull_request:
+    branches: [master]
   # A run asked for by hand always runs, whatever changed.
   workflow_dispatch:
 
 # One pipeline per branch at a time, never cancelled halfway: a deploy stopped
-# between the backend and the web leaves the two out of step.
+# between the backend and the web leaves the two out of step. A PR gets a group
+# of its own, so it never queues behind a deploy, and a newer push to it
+# replaces the run still checking the older one — that run deploys nothing.
 concurrency:
-  group: pipeline-${{ github.ref_name }}
-  cancel-in-progress: false
+  group: >-
+    pipeline-${{ github.event_name == 'pull_request'
+    && format('pr-{0}', github.event.number) || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -84,9 +95,12 @@ jobs:
   e2e:
     name: Flujos y pantallas en el navegador
     needs: checks
-    if: github.ref_name == 'master'
+    if: github.event_name != 'pull_request' && github.ref_name == 'master'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Above the sum of the step limits below, so a hang is caught by the step
+    # it happens in — which names it and still saves the logs — rather than by
+    # this, which cancels the job and used to lose them.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -108,21 +122,29 @@ jobs:
           npm ci --prefix frontend
           npx --prefix frontend playwright install --with-deps chromium
 
+      # Each limit is several times what the step took on a clean copy of the
+      # runner on 2026-10-05 (verify 18 s, every e2e 2.5 min): past it the
+      # step is stuck waiting on something, not slow.
       - name: Levantar la pila local
+        timeout-minutes: 15
         run: scripts/ci/local-stack.sh start
 
       - name: Dos usuarios de punta a punta, sin cruzarse
+        timeout-minutes: 5
         run: just verify
 
       - name: Todas las e2e, pantallas incluidas
+        timeout-minutes: 20
         run: just e2e
 
       - name: Bajar la pila
         if: always()
         run: scripts/ci/local-stack.sh stop
 
+      # `cancelled()` too: a job that runs out of time is cancelled, not
+      # failed, and `failure()` alone skipped this exactly when it mattered.
       - name: Guardar los logs si algo falló
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: logs-e2e
@@ -135,6 +157,7 @@ jobs:
     # A skipped e2e (every dev push) must not skip this too, which is what a
     # plain `needs` does. A failed or cancelled one still stops it.
     if: >-
+      github.event_name != 'pull_request' &&
       !cancelled() && needs.checks.result == 'success' &&
       (needs.e2e.result == 'success' ||
        (needs.e2e.result == 'skipped' && github.ref_name != 'master'))
@@ -228,6 +251,17 @@ jobs:
         run: |
           git tag -f "deployed/$TARGET" "$GITHUB_SHA"
           git push -f origin "refs/tags/deployed/$TARGET"
+
+      # Every deploy pushes one image per function and nothing ever deletes
+      # one: on 2026-10-05 production held 15 per function and no repository
+      # had a rule. This sets the rule (keep the newest three) on each SAM
+      # repository, so a function added later is capped on its first deploy.
+      # A rollback rebuilds from source, so it never needs an older image.
+      # Never fails the run: the release is already out and smoke-tested, and
+      # a missing ECR permission is a cost to fix, not a broken deploy.
+      - name: Limpiar imágenes viejas de ECR
+        continue-on-error: true
+        run: just "ecr-prune-${{ github.ref_name == 'master' && 'prod' || 'dev' }}"
 
       # Only when this run changed what is deployed and it did not hold: the
       # previous release goes out again, through the same script, and the run

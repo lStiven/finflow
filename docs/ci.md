@@ -6,17 +6,25 @@ sigue funcionando. Es `.github/workflows/pipeline.yml`, y lo que corre son las
 mismas recetas de `just` que se corren a mano: el pipeline no tiene un camino
 propio.
 
-## Cuándo no corre
+## Qué corre en cada caso
 
-En `dev` no corren los flujos ni las pantallas en el navegador: un push ahí
-pasa las validaciones y despliega desarrollo. Todo lo que va a producción sí
-pasa por ellos, porque corren en cada push a `master`.
+| Evento | Validaciones | Flujos y pantallas | Despliegue |
+|---|---|---|---|
+| Push a `dev` | sí | no | desarrollo |
+| PR hacia `master` | sí | no | no |
+| Merge (push) a `master` | sí | sí | producción, solo si las dos pasan |
 
+Las e2e corren después del merge, no en el PR: si un PR rompe un flujo del
+navegador, producción no se toca, pero `master` queda con el error hasta el
+siguiente arreglo. Es un costo aceptado a cambio de minutos de GitHub; llevarlas
+al PR es cambiar la condición del trabajo `e2e`.
 
 Un push que solo toca texto —cualquier `.md` y lo que hay en `docs/`— no corre
 nada: ninguna prueba lo lee y nada lo despliega. La excepción es
 `docs/openapi.json`, que es el contrato de la API y sí cuenta. Un push que mezcla
-texto y código corre entero. *Run workflow* corre siempre.
+texto y código corre entero. Un PR corre siempre, aunque solo traiga texto: es
+la validación que espera la protección de `master`, y una que no corre nunca
+responde. *Run workflow* corre siempre.
 
 ## Qué corre, en orden
 
@@ -111,9 +119,10 @@ En *Settings → Environments*, `production` y `development`:
 
 ### 4. Recomendado: proteger `master`
 
-*Settings → Branches*: exigir que pasen **Validaciones** y **Flujos y
-pantallas** antes de mezclar a `master`. Así lo que llega a `master` —y por
-tanto a producción— ya pasó por el pipeline en su rama.
+*Settings → Rules → Rulesets* (o *Branches*) para `master`: exigir un PR, que
+pase **Validaciones (check-all)** y que la rama esté al día con `master` antes
+de mezclar. Solo esa: **Flujos y pantallas** no corre en los PR, y exigirla
+dejaría todo PR esperando para siempre.
 
 ## Probarlo sin esperar un push
 

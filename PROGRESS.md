@@ -266,17 +266,14 @@ AWS (ver Trabas).
    la DLQ en minutos. Las dos funciones salen del mismo despliegue, así que en
    la práctica es solo no partirlo en dos.
 
-7. **Publicar automáticamente: validaciones y e2e en verde, el despliegue
-   no puede pasar todavía.** `.github/workflows/pipeline.yml` corre en GitHub.
-   Los dos primeros trabajos fallaban porque `.env.example` deja vacías dos
-   claves sin las que nada arranca; `scripts/ci/local-env.sh` las llena, y el
-   2026-10-05 los dos pasaron en una copia limpia del repo sin credenciales.
-   **El despliegue falla seguro en su primer paso de AWS**: los roles
-   `finflow-deploy-github-production` y `…-development` no existen (medido el
-   2026-10-05). Falta lo que solo puede hacer el dueño —el proveedor OIDC, los
-   dos roles y, en GitHub, los entornos con `AWS_ROLE_ARN`,
-   `CLOUDFLARE_ACCOUNT_ID`, `ENV_FILE` y `CLOUDFLARE_API_TOKEN`—, en
-   [docs/ci.md](docs/ci.md).
+7. **Publicar automáticamente: en marcha, falta el primer despliegue en verde.**
+   Un push a `dev` valida y despliega desarrollo; un PR a `master` solo valida;
+   un merge a `master` valida, corre las e2e y despliega producción. Los roles
+   OIDC existen y se asumen (el `sub` de GitHub lleva los ids numéricos del
+   repo). Pendiente: que `sam deploy`, la web y el smoke pasen en el runner
+   —el config de SAM ya va con ruta absoluta—, ver por qué la e2e se pasó de
+   tiempo en GitHub cuando corría en `dev` (en local pasa), y la regla de
+   protección de `master`. Detalle en [docs/ci.md](docs/ci.md).
 
 ## Huecos conocidos, sin urgencia
 
