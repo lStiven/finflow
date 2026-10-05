@@ -29,7 +29,7 @@ wait_for() {
 
 case "${1:-}" in
   start)
-    [ -f .env ] || cp .env.example .env
+    scripts/ci/local-env.sh
     [ -f frontend/.env.development ] || cp frontend/.env.example frontend/.env.development
     (just up > "$logs/stack.log" 2>&1 &)
     wait_for "la API" "curl -sf http://localhost:8000/health"
