@@ -4,8 +4,8 @@
 #
 #   checks  ── formato, lint, tipos, pruebas unitarias y de integración,
 #              contrato de la API, frontend, plantilla desplegable
-#   e2e     ── la pila local entera en el runner: flujo de dos usuarios y
-#              todas las e2e en un navegador de verdad, pantallas incluidas
+#   e2e     ── solo en master: la pila local entera en el runner, flujo de
+#              dos usuarios y todas las e2e en un navegador, pantallas incluidas
 #   deploy  ── backend y web juntos, smoke contra lo desplegado; si algo falla,
 #              vuelve a la última versión que pasó
 #
@@ -77,9 +77,14 @@ jobs:
       - name: Plantilla desplegable en los dos entornos
         run: just infra-check
 
+  # Production only. On dev the browser suites cost more than they catch —
+  # dev is where things are tried — so a push there goes from the checks
+  # straight to deploying development. Anything bound for production still
+  # passes through here first, since a push to master runs it.
   e2e:
     name: Flujos y pantallas en el navegador
     needs: checks
+    if: github.ref_name == 'master'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -126,7 +131,13 @@ jobs:
 
   deploy:
     name: Desplegar y comprobar
-    needs: e2e
+    needs: [checks, e2e]
+    # A skipped e2e (every dev push) must not skip this too, which is what a
+    # plain `needs` does. A failed or cancelled one still stops it.
+    if: >-
+      !cancelled() && needs.checks.result == 'success' &&
+      (needs.e2e.result == 'success' ||
+       (needs.e2e.result == 'skipped' && github.ref_name != 'master'))
     runs-on: ubuntu-latest
     timeout-minutes: 75
     # The GitHub environment holds this target's role, secrets and Cloudflare

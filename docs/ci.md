@@ -8,6 +8,11 @@ propio.
 
 ## Cuándo no corre
 
+En `dev` no corren los flujos ni las pantallas en el navegador: un push ahí
+pasa las validaciones y despliega desarrollo. Todo lo que va a producción sí
+pasa por ellos, porque corren en cada push a `master`.
+
+
 Un push que solo toca texto —cualquier `.md` y lo que hay en `docs/`— no corre
 nada: ninguna prueba lo lee y nada lo despliega. La excepción es
 `docs/openapi.json`, que es el contrato de la API y sí cuenta. Un push que mezcla
@@ -18,7 +23,7 @@ texto y código corre entero. *Run workflow* corre siempre.
 | Trabajo | Qué hace | Si falla |
 |---|---|---|
 | **Validaciones** | `just check-all` —formato, lint, tipos, las pruebas unitarias y de integración, el contrato de la API y el frontend con sus pruebas— y `just infra-check`, que la plantilla sea desplegable en los dos entornos | Nada llega a AWS |
-| **Flujos y pantallas** | Levanta la pila local entera en el runner (moto, datos de prueba, API, workers y Vite) y corre `just verify` —dos usuarios de punta a punta, con integridad y aislamiento— y `just e2e`: cada suite del navegador de esa rama y `e2e-views`, que abre todas las pantallas en teléfono y escritorio | Nada llega a AWS; los logs quedan como artefacto |
+| **Flujos y pantallas** (solo en `master`) | Levanta la pila local entera en el runner (moto, datos de prueba, API, workers y Vite) y corre `just verify` —dos usuarios de punta a punta, con integridad y aislamiento— y `just e2e`: cada suite del navegador de esa rama y `e2e-views`, que abre todas las pantallas en teléfono y escritorio | Nada llega a AWS; los logs quedan como artefacto |
 | **Desplegar y comprobar** | Aprovisiona, despliega el backend, publica la web y corre el smoke contra lo desplegado: `smoke-prod` (solo lee) en producción, `smoke` en desarrollo | Vuelve sola a la versión anterior —backend y web— y la ejecución termina en rojo |
 
 Todo lo de los dos primeros trabajos corre **antes** de tocar AWS y contra el
