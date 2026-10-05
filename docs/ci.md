@@ -61,6 +61,9 @@ Desarrollo y producción viven en la misma cuenta (ver Trabas en
 que cada rol solo lo puede asumir **su** entorno de GitHub. Las políticas de
 confianza ya están escritas: `infra/iam/github-oidc-trust-production.json` y
 `...-development.json`.
+Cada una exige el entorno de GitHub **y** la rama (`master` o `dev`): la regla
+de ramas del entorno vive en GitHub, y esta es la misma cerradura del lado de
+AWS, por si aquella se cambia algún día.
 
 ```bash
 aws iam create-role --role-name finflow-deploy-github-production \
