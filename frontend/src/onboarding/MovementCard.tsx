@@ -1,6 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ArrowDownLeft, ArrowLeftRight, ArrowUpRight, Sparkles } from "lucide-react";
-import type { Transaction } from "@/api/queries";
+import { ingestionCatalogQuery, type Transaction } from "@/api/queries";
 import { Money } from "@/components/Money";
 import { cn } from "@/lib/cn";
 import { formatDateTime } from "@/lib/dates";
@@ -31,6 +32,9 @@ export function MovementCard({
     ? transferTitle(transfer, movement.counterparty)
     : (movement.merchant?.display_name ?? movement.counterparty);
   const kind = transfer ? "Traslado" : incoming ? "Ingreso" : "Gasto";
+  // Not suspended: this card also lives in a dialog over any screen, and a
+  // bank shown as its parser spells it is better than a card that waits.
+  const banks = useQuery(ingestionCatalogQuery).data?.known_banks ?? [];
 
   return (
     <Link
@@ -66,7 +70,7 @@ export function MovementCard({
           <span className="block truncate font-medium">{title}</span>
           <span className="mt-0.5 block truncate text-faint text-xs">
             {[
-              bankDisplayName(movement.bank),
+              bankDisplayName(movement.bank, banks),
               kind,
               formatDateTime(movement.occurred_at),
             ]

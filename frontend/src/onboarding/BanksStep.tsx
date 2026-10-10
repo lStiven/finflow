@@ -23,7 +23,6 @@ import {
   customSenders,
   hasSenders,
   isApproved,
-  KNOWN_BANKS,
   type KnownBank,
   parseSender,
   type Senders,
@@ -34,12 +33,14 @@ import {
   withSender,
 } from "@/onboarding/banks";
 import { StepHeading } from "@/onboarding/parts";
+import { useKnownBanks } from "@/onboarding/useKnownBanks";
 import { type SendersControl, useSenders } from "@/onboarding/useSenders";
 
-const BANK_TONES: Record<string, string> = {
-  bancolombia: "bg-cyan/12 text-cyan ring-cyan/30",
-  lulo: "bg-violet/12 text-violet ring-violet/30",
-};
+/** By position, not by bank: the catalogue is the backend's, not this file's. */
+const BANK_TONES = [
+  "bg-cyan/12 text-cyan ring-cyan/30",
+  "bg-violet/12 text-violet ring-violet/30",
+];
 const CUSTOM_TONE = "bg-accent/12 text-accent ring-accent/30";
 
 /**
@@ -67,13 +68,14 @@ export function BanksStep({
   onOpenFilter: () => void;
 }) {
   const control = useSenders();
+  const banks = useKnownBanks();
   const { senders, save, busy, savingKey, error } = control;
   const [confirming, setConfirming] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [addedSince, setAddedSince] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
 
-  const custom = customSenders(senders);
+  const custom = customSenders(senders, banks);
   const any = hasSenders(senders);
   // Approved a moment ago and still listed until the setup is asked again.
   const discarded = unapprovedSenders.filter((sender) => !isApproved(sender, senders));
@@ -117,14 +119,14 @@ export function BanksStep({
       ) : null}
 
       <ul className="grid grid-cols-1 gap-3 min-[440px]:grid-cols-2" aria-busy={busy}>
-        {KNOWN_BANKS.map((bank) => {
+        {banks.map((bank, index) => {
           const state = bankState(bank, senders);
           return (
             <li key={bank.id}>
               <ChoiceCard
                 name={bank.name}
                 monogram={bank.name.charAt(0)}
-                tone={BANK_TONES[bank.id] ?? CUSTOM_TONE}
+                tone={BANK_TONES[index % BANK_TONES.length] ?? CUSTOM_TONE}
                 state={state}
                 detail={
                   state === "on"
@@ -152,7 +154,7 @@ export function BanksStep({
               <ChoiceCard
                 name={sender.type === "domain" ? `@${sender.value}` : sender.value}
                 monogram={(
-                  bankOfSender(`x@${domainOf(sender)}`)?.name ?? sender.value
+                  bankOfSender(`x@${domainOf(sender)}`, banks)?.name ?? sender.value
                 ).charAt(0)}
                 tone={CUSTOM_TONE}
                 state="on"
@@ -479,6 +481,7 @@ function OtherBankForm({
  */
 function ApprovedDetails({ control }: { control: SendersControl }) {
   const { senders, save, busy, savingKey } = control;
+  const banks = useKnownBanks();
   const [confirming, setConfirming] = useState<string | null>(null);
   const entries: CustomSender[] = [
     ...senders.domains.map((value) => ({ type: "domain" as const, value })),
@@ -514,6 +517,7 @@ function ApprovedDetails({ control }: { control: SendersControl }) {
               const shown = entry.type === "domain" ? `@${entry.value}` : entry.value;
               const bank = bankOfSender(
                 entry.type === "domain" ? `x@${entry.value}` : entry.value,
+                banks,
               );
               const asking = confirming === key;
               const leavesNothing = !hasSenders(withoutSender(senders, entry));

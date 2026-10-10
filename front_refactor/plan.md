@@ -25,9 +25,9 @@ y no se toca ninguna regla financiera.
   existían (alta de cuenta por pasos, desglose y parciales en Reportes,
   sugerencias de tope). Detalle y horas corregidas en la sección 10 del
   documento largo.
-- **Único hardcode pendiente:** la lista de bancos conocidos del frontend
-  (`frontend/src/onboarding/banks.ts`), copia del registro de parsers del
-  backend.
+- **Bancos y filtro desde el backend (ARC-02 + ARC-04) hechos el 2026-10-10:**
+  `known_banks` en `/ingestion/catalog` y `gmail_filter` en `/ingestion/setup`.
+  El frontend ya no guarda ningún catálogo de bancos. Sigue F1 (UX-01 y UX-02).
 
 ## Fases
 

@@ -10,6 +10,7 @@ of an id every user already has.
 
 from __future__ import annotations
 
+from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -28,3 +29,20 @@ def forwarding_address(*, base: EmailAddress, user_id: UserId) -> EmailAddress:
     alias = str(user_id.value).replace("-", "")
 
     return EmailAddress(f"{local_part}+{alias}@{domain}")
+
+
+GMAIL_FILTER_SEPARATOR = " OR "
+
+
+def gmail_filter_terms(policy: AuthorizedSenderPolicy) -> tuple[str, ...]:
+    """The approved senders as the terms of one Gmail «De» criterion.
+
+    A domain becomes `@domain`, which Gmail matches against any address there;
+    an address stays as it is. Built from the list the intake enforces, so
+    whatever extra Gmail's matching lets through, that list still discards.
+    Sorted, because the policy holds sets and the text is shown and copied.
+    """
+    return (
+        *(f"@{domain}" for domain in sorted(policy.allowed_domains)),
+        *sorted(address.value for address in policy.allowed_addresses),
+    )

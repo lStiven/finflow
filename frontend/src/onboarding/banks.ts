@@ -2,58 +2,19 @@
  * Banks, as the person choosing them thinks of them, over the two lists the
  * server actually stores.
  *
- * The API knows approved domains and approved addresses and nothing else — no
- * bank names. A known bank is the set of domains its parser recognises; any
- * other approval is shown as what it is, the address or domain somebody
- * typed. Whatever is drawn here, the server's list is still the only thing
- * that decides what is read: this module never claims a bank is approved
- * that the list does not approve.
+ * The inbox knows approved domains and approved addresses and nothing else —
+ * no bank names. A known bank is the set of domains its parser recognises, as
+ * `/ingestion/catalog` publishes it; any other approval is shown as what it
+ * is, the address or domain somebody typed. Whatever is drawn here, the
+ * server's list is still the only thing that decides what is read: this
+ * module never claims a bank is approved that the list does not approve.
  */
 
-import { gmailFromTerms } from "@/lib/forwarding";
+import type { KnownBank } from "@/api/queries";
+
+export type { KnownBank };
 
 export type Senders = { domains: string[]; addresses: string[] };
-
-export type KnownBank = {
-  id: string;
-  name: string;
-  /** What the parser writes into a movement's `bank`, lowercased. */
-  parserName: string;
-  domains: readonly string[];
-};
-
-/**
- * The banks with a deterministic parser today, and the domains each one
- * actually sends from — the same ones the backend's parser registry lists.
- *
- * Bancolombia runs several alert subdomains, plus `bancolombia.com.co`, which
- * is the one a transfer between the owner's own accounts arrives from.
- * Approving only the alert domains accepts card purchases while silently
- * dropping every transfer, which is why a bank reads as chosen only when all
- * of its domains are approved.
- *
- * Lulo's message ids come from Amazon SES, which is shared with every other
- * SES customer — the From domain is what identifies the bank.
- */
-export const KNOWN_BANKS: readonly KnownBank[] = [
-  {
-    id: "bancolombia",
-    name: "Bancolombia",
-    parserName: "bancolombia",
-    domains: [
-      "an.notificacionesbancolombia.com",
-      "notificacionesbancolombia.com",
-      "ayn.notificacionesbancolombia.com",
-      "bancolombia.com.co",
-    ],
-  },
-  {
-    id: "lulo",
-    name: "Lulo Bank",
-    parserName: "lulo bank",
-    domains: ["lulobank.com"],
-  },
-];
 
 /** `on` approves every domain the bank sends from; `partial` only some. */
 export type BankState = "on" | "partial" | "off";
@@ -67,8 +28,11 @@ export function bankState(bank: KnownBank, senders: Senders): BankState {
 export type CustomSender = { type: "domain" | "address"; value: string };
 
 /** Every approval no known bank accounts for, domains first. */
-export function customSenders(senders: Senders): CustomSender[] {
-  const known = new Set(KNOWN_BANKS.flatMap((bank) => bank.domains));
+export function customSenders(
+  senders: Senders,
+  banks: readonly KnownBank[],
+): CustomSender[] {
+  const known = new Set(banks.flatMap((bank) => bank.domains));
 
   return [
     ...senders.domains
@@ -81,17 +45,24 @@ export function customSenders(senders: Senders): CustomSender[] {
 /** A chip per approved bank, for the screens that only need to name them. */
 export type ApprovedBank = { name: string; partial: boolean };
 
-export function approvedBanks(senders: Senders): ApprovedBank[] {
-  const known = KNOWN_BANKS.map((bank) => ({
-    name: bank.name,
-    state: bankState(bank, senders),
-  }))
+export function approvedBanks(
+  senders: Senders,
+  banks: readonly KnownBank[],
+): ApprovedBank[] {
+  const known = banks
+    .map((bank) => ({
+      name: bank.name,
+      state: bankState(bank, senders),
+    }))
     .filter(({ state }) => state !== "off")
     .map(({ name, state }) => ({ name, partial: state === "partial" }));
 
   return [
     ...known,
-    ...customSenders(senders).map(({ value }) => ({ name: value, partial: false })),
+    ...customSenders(senders, banks).map(({ value }) => ({
+      name: value,
+      partial: false,
+    })),
   ];
 }
 
@@ -150,15 +121,21 @@ export function isApproved(sender: string, senders: Senders): boolean {
 }
 
 /** Which known bank an address writes from, if any. */
-export function bankOfSender(sender: string): KnownBank | undefined {
+export function bankOfSender(
+  sender: string,
+  banks: readonly KnownBank[],
+): KnownBank | undefined {
   const domain = domainOf(sender.trim().toLowerCase());
-  return KNOWN_BANKS.find((bank) => bank.domains.includes(domain));
+  return banks.find((bank) => bank.domains.includes(domain));
 }
 
-/** A movement's `bank`, spelled the way the bank spells itself. */
-export function bankDisplayName(raw: string): string {
+/**
+ * A movement's `bank`, spelled the way the bank spells itself. A known bank's
+ * id is what its parser writes there.
+ */
+export function bankDisplayName(raw: string, banks: readonly KnownBank[]): string {
   const normalized = raw.trim().toLowerCase();
-  return KNOWN_BANKS.find((bank) => bank.parserName === normalized)?.name ?? raw;
+  return banks.find((bank) => bank.id === normalized)?.name ?? raw;
 }
 
 /* ------------------------------------------------------------ what is typed */
@@ -272,13 +249,9 @@ export function senderErrorMessage(error: SenderError): string {
 
 /* ------------------------------------------------------------ Gmail filter */
 
-/** The filter's terms: what Gmail is told to match, one per approval. */
-export function filterTerms(senders: Senders): string[] {
-  return gmailFromTerms(senders.domains, senders.addresses);
-}
-
 /**
- * What changed between the filter somebody made and the approvals now.
+ * What changed between the filter somebody made and the one the server builds
+ * from the approvals now (`gmail_filter_terms` on `/ingestion/setup`).
  *
  * Null when this browser never saw the filter being made, which is not the
  * same as "nothing changed": nobody can know, so nothing is claimed.

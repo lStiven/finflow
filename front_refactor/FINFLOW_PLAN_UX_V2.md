@@ -186,9 +186,9 @@ construye una interfaz generada desde registros.
 | UX-04 | Onboarding de conexión | Asistente guiado y estado de la conexión | — | — | — | **Hecho** |
 | ARC-00 | Auditoría de las demás pantallas | Inventario corto por pantalla, sin documentos extra | S | 3–6 | P0 | **Hecho** (sección 10) |
 | ARC-01 | Contratos y cliente tipado | — | — | — | — | **Ya existía** |
-| ARC-02 | Bancos conocidos desde el backend | `known_banks` en `/ingestion/catalog`; borrar `KNOWN_BANKS` | S | 3–6 | P0 | Pendiente |
+| ARC-02 | Bancos conocidos desde el backend | `known_banks` en `/ingestion/catalog`; borrar `KNOWN_BANKS` | S | 3–6 | P0 | **Hecho** (2026-10-10) |
 | ARC-03 | Aprobaciones por usuario | — | — | — | — | **Ya existía** |
-| ARC-04 | Filtro de Gmail en el backend | `gmail_filter` en `/ingestion/setup`; borrar `gmailFromFilter` | S | 2–4 | P0 | Pendiente |
+| ARC-04 | Filtro de Gmail en el backend | `gmail_filter` en `/ingestion/setup`; borrar `gmailFromFilter` | S | 2–4 | P0 | **Hecho** (2026-10-10) |
 | ARC-05 | Progreso de ayudas en DynamoDB | — | — | — | — | **Descartado** (2.3) |
 | UX-01 | Textos cortos | Cabeceras breves, detalle bajo demanda, en todas las vistas | M | 6–12 | P0 | Pendiente |
 | UX-02 | Kit visual compartido | Promover las piezas del onboarding a `components/ui/` | S | 4–8 | P0 | Pendiente |
@@ -215,18 +215,36 @@ Primera ola (ARC-02/04, UX-01/02, UX-07, UX-10): **31–62 h**.
 
 ### ARC-02 y ARC-04 — Sin catálogo fijo en el frontend
 
-- [ ] `frontend/src` no contiene dominios ni nombres de banco como catálogo; las
-      tarjetas salen de `known_banks`.
-- [ ] `known_banks` se deriva de `BANK_DOMAINS`; agregar un parser con su
-      dominio lo hace aparecer en la pantalla sin tocar el frontend.
-- [ ] Un banco aparece "elegido" solo si **todos** sus dominios están
+**Cerrado el 2026-10-10.**
+
+- [x] `frontend/src` no contiene dominios ni nombres de banco como catálogo; las
+      tarjetas salen de `known_banks` (quedan nombres solo en comentarios,
+      placeholders y textos de ejemplo).
+- [x] `known_banks` se deriva de `BANK_DOMAINS`; agregar un parser con su
+      dominio lo hace aparecer en la pantalla sin tocar el frontend. El nombre
+      visible sale de `BANK_DISPLAY_NAMES` y, si falta, del nombre del parser.
+- [x] Un banco aparece "elegido" solo si **todos** sus dominios están
       aprobados; con algunos, "incompleto".
-- [ ] El filtro mostrado es el `gmail_filter` del servidor, con el mismo formato
+- [x] El filtro mostrado es el `gmail_filter` del servidor, con el mismo formato
       que hoy (`@dominio OR dirección`), que es el verificado en Gmail.
-- [ ] Si `/ingestion/catalog` falla, la pantalla muestra un error recuperable,
-      nunca una lista fija de respaldo.
-- [ ] Pruebas de backend del armado del filtro y del catálogo; `just e2e-connect`
+- [x] Si `/ingestion/catalog` falla, la pantalla muestra un error recuperable,
+      nunca una lista fija de respaldo (el loader de `/conectar` lo exige y cae
+      en la pantalla de error con reintento).
+- [x] Pruebas de backend del armado del filtro y del catálogo; `just e2e-connect`
       sigue pasando; Postman actualizado.
+
+Lo que la implementación agregó y el plan no decía:
+
+- `id` de un banco conocido es el `BANK_NAME` del parser, lo mismo que se
+  escribe en el `bank` de cada movimiento: así el frontend nombra el banco de
+  un movimiento sin un segundo campo (`parserName` desapareció).
+- El setup devuelve también `gmail_filter_terms`, porque el aviso de «filtro
+  desactualizado» compara términos, no el texto.
+- Guardar remitentes no termina hasta que el setup vuelve con el filtro nuevo,
+  y el inbox se lee con `ConsistentRead`: si no, se podía copiar a Gmail un
+  filtro sin el banco recién elegido.
+- `MovementCard` vive también en un diálogo global y no suspende: sin catálogo,
+  muestra el banco como lo escribe el parser.
 
 ### UX-01 y UX-02 — Base visual
 
@@ -316,9 +334,8 @@ aparezca su segundo uso:
 ### Patrón de consumo de bancos tras ARC-02
 
 ```typescript
-// ingestionCatalogQuery no existe todavía: ARC-02 la crea en api/queries.ts,
-// junto a financialCatalogQuery y merchantCatalogQuery, que sí existen.
-const { data: catalog } = useQuery(ingestionCatalogQuery);
+// Dentro de /conectar el loader ya lo trajo; useKnownBanks() suspende sobre él.
+const banks = useKnownBanks(); // known_banks de /ingestion/catalog
 const { senders, save } = useSenders(); // lo aprobado por esta persona
 // "elegido" solo cuando el PATCH respondió y todos los dominios están en la lista
 ```
@@ -441,7 +458,7 @@ salida real de las pruebas.
 ## 9. Por dónde empezar
 
 1. ~~Prompt A: auditoría corta de las demás pantallas.~~ Hecho el 2026-10-10 (sección 10).
-2. Prompt B: ARC-02 + ARC-04, el único cambio de backend del plan.
+2. ~~Prompt B: ARC-02 + ARC-04, el único cambio de backend del plan.~~ Hecho el 2026-10-10.
 3. Prompt C con UX-01 y UX-02, aplicados primero a una pantalla real.
 4. Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).
 5. Prompt D para cerrar la fase.

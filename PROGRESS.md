@@ -332,6 +332,10 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Los bancos y el filtro de Gmail los da el backend** (plan UX,
+  ARC-02 + ARC-04). `known_banks` sale del registro de parsers y el filtro se
+  arma con los remitentes aprobados; el frontend ya no tiene lista de bancos.
+  `just e2e-connect` en verde. En el árbol, sin commit. Sigue UX-01 + UX-02.
 - 2026-10-10 — **Auditoría de pantallas del plan UX (ARC-00).** Varias mejoras
   que el plan daba por construir ya existían; el pendiente bajó a 82–172 h.
   Sigue ARC-02 + ARC-04 (bancos y filtro desde el backend). Detalle en
@@ -348,10 +352,3 @@ AWS (ver Trabas).
   todavía sin desplegar.
 - 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
   el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
-- 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
-  con un 200 aunque Gmail siguiera pendiente, y un enlace en `mail.google.com`
-  se perdía sin rastro. La guía del reenvío se rehízo en dos partes —autorizar
-  la dirección, crear el filtro— y el paso ya no se cierra con la sola
-  confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
-  guía hace comprobarlo buscando antes de guardar. **Comprobado en producción
-  el 2026-10-05**: Finflow confirmó solo y Gmail lo dio por verificado.

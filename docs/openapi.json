@@ -2881,6 +2881,17 @@
             ],
             "title": "Current"
           },
+          "gmail_filter": {
+            "title": "Gmail Filter",
+            "type": "string"
+          },
+          "gmail_filter_terms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Gmail Filter Terms",
+            "type": "array"
+          },
           "ready": {
             "title": "Ready",
             "type": "boolean"
@@ -2905,7 +2916,9 @@
           "steps",
           "current",
           "ready",
-          "unapproved_senders"
+          "unapproved_senders",
+          "gmail_filter",
+          "gmail_filter_terms"
         ],
         "title": "InboxSetupResponse",
         "type": "object"
@@ -2990,6 +3003,13 @@
             "title": "Instrument Kinds",
             "type": "array"
           },
+          "known_banks": {
+            "items": {
+              "$ref": "#/components/schemas/KnownBankResponse"
+            },
+            "title": "Known Banks",
+            "type": "array"
+          },
           "processing_statuses": {
             "items": {
               "$ref": "#/components/schemas/CatalogOption"
@@ -3010,7 +3030,8 @@
           "ignored_reasons",
           "deferred_reasons",
           "instrument_kinds",
-          "setup_steps"
+          "setup_steps",
+          "known_banks"
         ],
         "title": "IngestionCatalogResponse",
         "type": "object"
@@ -3205,6 +3226,33 @@
           "charges"
         ],
         "title": "InvestmentTermsResponse",
+        "type": "object"
+      },
+      "KnownBankResponse": {
+        "description": "A bank Finflow reads with its own template, and every domain it sends from.\n\nListing a bank approves nothing for anybody: each user approves senders\nthrough their inbox. A bank absent from here still works as «otro banco».",
+        "properties": {
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "domains"
+        ],
+        "title": "KnownBankResponse",
         "type": "object"
       },
       "LinkChargePayload": {
@@ -10312,7 +10360,7 @@
     },
     "/ingestion/catalog": {
       "get": {
-        "description": "What this context's states are called, and what an instrument may be.",
+        "description": "What this context's states are called, what an instrument may be, and\nwhich banks have a parser of their own.",
         "operationId": "get_catalog_ingestion_catalog_get",
         "responses": {
           "200": {

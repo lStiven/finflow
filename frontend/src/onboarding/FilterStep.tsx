@@ -1,6 +1,8 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, Hourglass, Landmark, ShieldCheck } from "lucide-react";
+import { setupQuery } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
-import { approvedBanks, filterTerms, hasSenders } from "@/onboarding/banks";
+import { approvedBanks } from "@/onboarding/banks";
 import { CopyField } from "@/onboarding/CopyField";
 import { DesktopHint } from "@/onboarding/DesktopHint";
 import {
@@ -12,16 +14,17 @@ import {
 import { GmailTutorial } from "@/onboarding/GmailTutorial";
 import { GMAIL_INBOX_URL } from "@/onboarding/gmail";
 import { ExternalButton, Notice, StepHeading } from "@/onboarding/parts";
+import { useKnownBanks } from "@/onboarding/useKnownBanks";
 import { useSenders } from "@/onboarding/useSenders";
 
 /**
  * Step three: the filter that forwards the bank's alerts and nothing else.
  *
- * The text that goes into Gmail's «De» is built here from the approved
- * senders — the very list the intake accepts — so nobody has to learn
- * Gmail's search syntax. Nothing outside Gmail can see a filter, so this step
- * closes on the person's word, labelled as such, until the first alert
- * proves it.
+ * The text that goes into Gmail's «De» comes from the server, built from the
+ * approved senders — the very list the intake accepts — so nobody has to
+ * learn Gmail's search syntax and no screen rebuilds it on its own. Nothing
+ * outside Gmail can see a filter, so this step closes on the person's word,
+ * labelled as such, until the first alert proves it.
  */
 export function FilterStep({
   address,
@@ -41,11 +44,13 @@ export function FilterStep({
   onOpenAddress: () => void;
 }) {
   const { senders } = useSenders();
-  const terms = filterTerms(senders);
-  const filter = terms.join(" OR ");
-  const banks = approvedBanks(senders).map((bank) => bank.name);
+  const known = useKnownBanks();
+  const { data: setup } = useSuspenseQuery(setupQuery);
+  const terms = setup.gmail_filter_terms;
+  const filter = setup.gmail_filter;
+  const banks = approvedBanks(senders, known).map((bank) => bank.name);
 
-  if (!hasSenders(senders)) {
+  if (terms.length === 0) {
     return (
       <div>
         <StepHeading title="Reenvía solo tus alertas" />
