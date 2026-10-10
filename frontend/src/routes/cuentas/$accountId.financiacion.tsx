@@ -74,6 +74,7 @@ import {
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
@@ -107,14 +108,25 @@ function FinancingScreen() {
         Cuentas
       </Link>
 
-      <header className="mb-8">
-        <h1 className="font-semibold text-2xl tracking-tight">{account.name}</h1>
-        <p className="mt-1.5 max-w-2xl text-muted text-sm">
-          {shape === "loan"
-            ? "Lo que este crédito cuesta de verdad: los intereses del mes, los seguros que trae y de qué se compone cada cuota. Es un seguimiento aparte — no entra en tu patrimonio ni en tus gastos."
-            : "Lo que esta inversión rinde: lo que gana cada mes, lo que le retienen y cuánto llevas ganado."}
-        </p>
-      </header>
+      <div className="mb-8">
+        <PageHeader
+          title={account.name}
+          lead={
+            shape === "loan"
+              ? "Lo que este crédito cuesta de verdad, mes a mes."
+              : shape === "investment"
+                ? "Lo que esta inversión rinde, mes a mes."
+                : undefined
+          }
+          help={
+            shape === "loan"
+              ? LOAN_HELP
+              : shape === "investment"
+                ? INVESTMENT_HELP
+                : undefined
+          }
+        />
+      </div>
 
       {shape === null ? <NotFinanceable account={account} /> : null}
       {shape === "loan" ? <LoanPanel account={account} /> : null}
@@ -122,6 +134,48 @@ function FinancingScreen() {
     </AppShell>
   );
 }
+
+const LOAN_HELP: PageHelp = {
+  id: "financiacion-credito",
+  points: [
+    {
+      icon: Percent,
+      title: "Pagar no baja la deuda lo mismo",
+      body: "Cada mes, primero se cobran intereses y seguros; solo el resto baja lo que debes.",
+    },
+    {
+      icon: RefreshCw,
+      title: "Cada corte, un movimiento",
+      body: "«Actualizar» registra los cortes pendientes, así el saldo es la suma de cosas que ves.",
+    },
+    {
+      icon: Wallet,
+      title: "Fuera de tus totales",
+      body: "No suma a tu patrimonio ni a tus gastos: el gasto es la cuota que sale de tu cuenta.",
+    },
+  ],
+};
+
+const INVESTMENT_HELP: PageHelp = {
+  id: "financiacion-inversion",
+  points: [
+    {
+      icon: TrendingUp,
+      title: "Rinde en cada corte",
+      body: "Con la tasa pactada, Finflow abona el rendimiento y descuenta lo que te retienen.",
+    },
+    {
+      icon: Scale,
+      title: "Sin tasa, lo valoras tú",
+      body: "Un fondo que sube y baja se actualiza a mano; la diferencia queda como movimiento.",
+    },
+    {
+      icon: Wallet,
+      title: "Suma a tu patrimonio",
+      body: "A diferencia de un crédito, lo que vale una inversión sí cuenta en tus totales.",
+    },
+  ],
+};
 
 /**
  * The honest answer for a card, which is the kind most likely to land here.
@@ -316,10 +370,10 @@ function AccrueCard({
               ? "Intereses y seguros del mes"
               : "Rendimientos y retenciones del mes"}
           </p>
-          <p className="mt-1 max-w-lg text-muted text-sm leading-relaxed">
+          <p className="mt-1 max-w-lg text-muted text-sm">
             {owed
-              ? "Cada corte se registra como movimientos: los intereses por un lado y cada seguro por su nombre. Así el saldo sigue siendo la suma de cosas que puedes ver. No se suman a tus gastos del mes: el gasto es la cuota que sale de tu cuenta, y esa ya se registra cuando sale."
-              : "Cada corte se registra como movimientos: el rendimiento por un lado y lo que te retengan por otro. Así el valor sigue siendo la suma de cosas que puedes ver, y se distingue lo que ganó de lo que aportaste."}
+              ? "Cada corte queda como movimientos: los intereses y cada seguro por su nombre."
+              : "Cada corte queda como movimientos: el rendimiento y lo que te retengan."}
           </p>
           <p className="mt-2 text-faint text-xs">
             {account.accrued_through == null

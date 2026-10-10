@@ -19,6 +19,7 @@ import type {
   BudgetState,
   BudgetTotal,
 } from "@/api/queries";
+import { monthDayRange } from "@/lib/dates";
 
 /**
  * How much of a cap is used, from 0 to 1.
@@ -191,4 +192,45 @@ export function scopeLabel(scope: BudgetScope, labels: Record<string, string>): 
  */
 export function isNarrowed(scope: BudgetScope): boolean {
   return !scope.every_account;
+}
+
+/** The Transacciones filters that list what a budget counted. */
+export type BudgetMovementsSearch = {
+  direction: "outgoing";
+  transfers: "exclude";
+  from: string;
+  to: string;
+  category?: string;
+  account?: string;
+};
+
+/**
+ * Where «ver movimientos» goes for a budget, or null when no list could say it.
+ *
+ * The list has to add up to the figure on the card, so it asks for what the
+ * budget counts: spending, no transfers, that month, its category and its
+ * account. The list filters by one category and one account at a time, so a
+ * budget over several of either gets no link rather than one whose rows would
+ * not add up to its bar.
+ */
+export function movementsSearch(
+  budget: BudgetProgress,
+  month: string,
+): BudgetMovementsSearch | null {
+  if (budget.retired) return null;
+  const days = monthDayRange(month);
+  if (days === null) return null;
+
+  const { categories, accounts, every_account: everyAccount } = budget.scope;
+  if (categories.length > 1) return null;
+  if (!everyAccount && accounts.length !== 1) return null;
+
+  return {
+    direction: "outgoing",
+    transfers: "exclude",
+    from: days.from,
+    to: days.to,
+    ...(categories[0] ? { category: categories[0] } : {}),
+    ...(everyAccount || !accounts[0] ? {} : { account: accounts[0] }),
+  };
 }

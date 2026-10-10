@@ -54,6 +54,7 @@ import { intervalFor, PRESETS, type PresetId, resolveRange } from "@/lib/periods
 import { categoryLabels, labelFrom } from "@/merchants/categories";
 import {
   bandsOf,
+  bucketDrilldown,
   bucketsOf,
   cashflowSeries,
   describePrevious,
@@ -320,6 +321,8 @@ function ReportsScreen() {
                 label="Balance"
                 icon={Scale}
                 hue="cyan"
+                // Both directions, which is what a balance is made of.
+                to={{ to: "/transacciones", search: drilldown(view) }}
                 caption={
                   <span className="text-faint">
                     {netOf(now) >= 0
@@ -355,7 +358,7 @@ function ReportsScreen() {
               </StatTile>
             </section>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 [&>*]:min-w-0 lg:grid-cols-2">
               <Panel
                 title="Flujo de caja"
                 hint="Lo que entró contra lo que salió, periodo a periodo."
@@ -373,6 +376,10 @@ function ReportsScreen() {
                   series={cashflowSeries(flow)}
                   currency={currency}
                   caption="Ingresos y gastos por periodo"
+                  movementsOf={(index) => {
+                    const bucket = flow.buckets[index];
+                    return bucket ? bucketDrilldown(view, bucket) : null;
+                  }}
                 />
               </Panel>
 
@@ -420,10 +427,16 @@ function ReportsScreen() {
                 series={bands}
                 currency={currency}
                 caption="Gasto por categoría y periodo"
+                movementsOf={(index) => {
+                  const bucket = trend.buckets[index];
+                  return bucket
+                    ? bucketDrilldown(view, bucket, { direction: "outgoing" })
+                    : null;
+                }}
               />
             </Panel>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 [&>*]:min-w-0 lg:grid-cols-2">
               <Panel
                 title="Dónde más gastas"
                 hint="Los comercios que más pesan en el periodo."
@@ -484,7 +497,7 @@ const HELP: PageHelp = {
     {
       icon: MousePointerClick,
       title: "Toca para ver el detalle",
-      body: "Las cifras, las categorías y los comercios abren los movimientos que las forman.",
+      body: "Las cifras, las categorías, los comercios y cada columna abren los movimientos que los forman.",
     },
     {
       icon: CalendarRange,

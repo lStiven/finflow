@@ -30,8 +30,27 @@ y no se toca ninguna regla financiera.
   El frontend ya no guarda ningún catálogo de bancos.
 - **Textos cortos y kit compartido (UX-01 + UX-02) hechos el 2026-10-10:** cada
   pantalla principal tiene título, una línea y su acción; la explicación vive en
-  «Cómo funciona», que se abre sola la primera vez, como el asistente. Sigue F2
-  (UX-07 Transacciones y UX-10 Presupuestos).
+  «Cómo funciona», que se abre sola la primera vez, como el asistente.
+- **Transacciones y Presupuestos (UX-07 + UX-10) hechos el 2026-10-10:** «sin
+  asignar» y la categoría se resuelven desde el movimiento; el primer tope es
+  un número y un toque, y cada tope lleva a sus movimientos.
+- **Fase F0–F2 cerrada y APROBADA el 2026-10-10** (sección 11 del documento
+  largo): todo en verde y sin bloqueantes. Queda un desborde de Reportes a
+  320 px que es anterior a la fase, ya corregido.
+- **Cuentas (UX-08) hecho el 2026-10-10:** cada cuenta dice lo que le falta y
+  lo resuelve ahí mismo, una sección a la vez, y las cifras explican de qué
+  están hechas.
+- **Facturas (UX-09) hecho el 2026-10-10:** acciones con nombre detrás de
+  «Opciones», ningún error en silencio, y un cobro pagado lleva a su
+  movimiento.
+- **Resumen, Reportes y Comercios (UX-06, UX-11, UX-12) hechos el
+  2026-10-10:** cada cifra, categoría, cuenta y columna abre lo que la forma
+  —y la e2e comprueba que suma lo mismo—, y la cola de comercios se responde
+  sin salir de la lista. F4 completa.
+- **Guías y diagnóstico enlazado (UX-13 + UX-05) hechos el 2026-10-10:** una
+  lista vacía dice por qué con evidencia y lleva al arreglo; Guías es una
+  lista de tareas que el servidor marca como comprobadas. F5 completa. Queda
+  F6 (UX-14, ayuda de avisos).
 
 ## Fases
 

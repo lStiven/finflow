@@ -29,8 +29,11 @@ type Props = {
   caption?: ReactNode;
   /** The shape of the run behind the figure. */
   chart?: ReactNode;
-  /** Makes the whole tile a link — "Gastos" opens the movements behind it. */
-  to?: { to: "/transacciones"; search: Record<string, unknown> };
+  /**
+   * Makes the whole tile a link — "Gastos" opens the movements behind it,
+   * "Patrimonio" the accounts it is made of.
+   */
+  to?: { to: "/transacciones"; search: Record<string, unknown> } | { to: "/cuentas" };
 };
 
 export function StatTile({
@@ -67,9 +70,17 @@ export function StatTile({
     GLOWS[hue],
   );
 
-  if (to) {
+  if (to?.to === "/transacciones") {
     return (
       <Link to={to.to} search={to.search} className={shell}>
+        {body}
+      </Link>
+    );
+  }
+
+  if (to?.to === "/cuentas") {
+    return (
+      <Link to="/cuentas" className={shell}>
         {body}
       </Link>
     );

@@ -44,6 +44,7 @@ import {
 import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
 import { categoryGroupLabel, categoryLabels } from "@/merchants/categories";
+import { EmptyDiagnosis } from "@/onboarding/EmptyDiagnosis";
 import { AllowanceCard } from "@/plan/AllowanceCard";
 
 const RECENT_LIMIT = 6;
@@ -168,6 +169,8 @@ function Dashboard() {
    */
   const days = monthDayRange(month);
   const monthSearch = days ? { from: days.from, to: days.to } : {};
+  // «septiembre», for comparisons that have to say what they compare with.
+  const previousName = formatMonthKey(previousMonthKey(month)).split(" ")[0] ?? "";
 
   return (
     <AppShell>
@@ -187,7 +190,12 @@ function Dashboard() {
           aria-label="Cifras del mes"
           className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
         >
-          <StatTile label="Patrimonio" icon={Wallet} hue="violet">
+          <StatTile
+            label="Patrimonio"
+            icon={Wallet}
+            hue="violet"
+            to={{ to: "/cuentas" }}
+          >
             {primary ? (
               <CountUpMoney
                 amount={primary.total}
@@ -219,6 +227,7 @@ function Dashboard() {
               <Delta
                 previous={lastMonth?.incoming}
                 current={thisMonth?.incoming ?? "0"}
+                against={previousName}
               />
             }
             chart={
@@ -254,6 +263,7 @@ function Dashboard() {
               <Delta
                 previous={lastMonth?.outgoing}
                 current={thisMonth?.outgoing ?? "0"}
+                against={previousName}
                 lowerIsBetter
               />
             }
@@ -274,7 +284,12 @@ function Dashboard() {
             />
           </StatTile>
 
-          <StatTile label="Deuda" icon={TrendingDown} hue="cyan">
+          <StatTile
+            label="Deuda"
+            icon={TrendingDown}
+            hue="cyan"
+            to={{ to: "/cuentas" }}
+          >
             {primary ? (
               <CountUpMoney
                 amount={primary.liabilities}
@@ -305,7 +320,8 @@ function Dashboard() {
             groups={byCategory.groups}
             currency={currency}
             previousOutgoing={lastMonth?.outgoing}
-            month={month}
+            previousName={previousName}
+            monthSearch={monthSearch}
             labels={categoryLabels(categories.categories)}
           />
           <RecentCard transactions={recent.transactions} />
@@ -354,7 +370,7 @@ const HELP: PageHelp = {
     {
       icon: MousePointerClick,
       title: "Toca para ver",
-      body: "Ingresos y Gastos abren los movimientos que forman cada cifra.",
+      body: "Cada cifra, categoría y cuenta abre lo que la forma.",
     },
   ],
 };
@@ -402,10 +418,13 @@ function monthlyTrend(
 function Delta({
   previous,
   current,
+  against,
   lowerIsBetter = false,
 }: {
   previous?: string;
   current: string;
+  /** The previous month's name: what this compares with, said in words. */
+  against: string;
   lowerIsBetter?: boolean;
 }) {
   if (previous === undefined) return null;
@@ -414,14 +433,14 @@ function Delta({
 
   const rounded = Math.round(change * 10) / 10;
   if (rounded === 0) {
-    return <span className="text-faint">Igual que el mes pasado</span>;
+    return <span className="text-faint">Igual que {against} a esta altura</span>;
   }
 
   const good = lowerIsBetter ? rounded < 0 : rounded > 0;
   return (
     <span className={good ? "text-incoming" : "text-outgoing"}>
       {rounded > 0 ? "↑" : "↓"} {Math.abs(rounded)}%{" "}
-      <span className="text-faint">vs mes pasado</span>
+      <span className="text-faint">vs {against} a esta altura</span>
     </span>
   );
 }
@@ -430,13 +449,16 @@ function CategoryCard({
   groups,
   currency,
   previousOutgoing,
-  month,
+  previousName,
+  monthSearch,
   labels,
 }: {
   groups: SummaryGroup[];
   currency: string;
   previousOutgoing?: string;
-  month: string;
+  previousName: string;
+  /** The month's bounds as Transacciones reads them. */
+  monthSearch: { from?: string; to?: string };
   labels: Record<string, string>;
 }) {
   const slices = toSlices(groups, currency, labels);
@@ -448,13 +470,37 @@ function CategoryCard({
 
   return (
     <Card glow="violet" lift={false} className="flex flex-col gap-5">
-      <h2 className="font-medium">Gastos por categoría</h2>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-medium">Gastos por categoría</h2>
+        <Link
+          to="/reportes"
+          className="rounded-lg border border-line px-2.5 py-1 text-muted text-xs transition-colors duration-150 hover:border-accent/40 hover:text-text"
+        >
+          Ver en Reportes
+        </Link>
+      </div>
 
       {slices.parts.length === 0 ? (
         <Empty>Todavía no hay gastos registrados este mes.</Empty>
       ) : (
         <>
-          <Donut slices={slices.parts} total={slices.total} currency={currency} />
+          <Donut
+            slices={slices.parts}
+            total={slices.total}
+            currency={currency}
+            // The same spending the ring counts: this month, out, no transfers.
+            // The folded tail and the no-merchant bucket have no one category.
+            movementsOf={(slice) =>
+              slice.key.startsWith("__")
+                ? null
+                : {
+                    ...monthSearch,
+                    category: slice.key,
+                    direction: "outgoing",
+                    transfers: "exclude",
+                  }
+            }
+          />
 
           {/* The two readings the ring cannot make on its own. */}
           <dl className="mt-auto grid grid-cols-2 gap-3 border-line/70 border-t pt-4 text-sm">
@@ -463,16 +509,14 @@ function CategoryCard({
               <dd className="mt-0.5 truncate">{biggest?.label ?? "—"}</dd>
             </div>
             <div className="min-w-0 text-right">
-              <dt className="text-faint text-xs">Frente al mes pasado</dt>
+              <dt className="text-faint text-xs">Frente a {previousName}</dt>
               <dd className="mt-0.5">
                 {change === null ? (
                   <span className="text-faint">Sin comparación</span>
                 ) : (
                   <span className={change > 0 ? "text-outgoing" : "text-incoming"}>
                     {Math.abs(Math.round(change))}% {change > 0 ? "más" : "menos"} que{" "}
-                    <span className="capitalize">
-                      {formatMonthKey(previousMonthKey(month)).split(" ")[0]}
-                    </span>
+                    {previousName} a esta altura
                   </span>
                 )}
               </dd>
@@ -556,10 +600,14 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
       </div>
 
       {transactions.length === 0 ? (
-        <Empty>
-          Cuando tu banco te avise de un movimiento, aparecerá aquí sin que tengas que
-          escribir nada.
-        </Empty>
+        <EmptyDiagnosis
+          fallback={
+            <Empty>
+              Cuando tu banco te avise de un movimiento, aparecerá aquí sin que tengas
+              que escribir nada.
+            </Empty>
+          }
+        />
       ) : (
         <ul className="-mx-2 flex flex-col">
           {transactions.map((movement) => (
@@ -656,7 +704,7 @@ function AccountList({
   return (
     <section className="flex flex-col gap-3">
       <h2 className="text-muted text-sm">Cuentas</h2>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
         {accounts.map((account) => {
           // Tone and caption both, from the one place allowed to decide what
           // a balance means: a paid-off card must not read "Debes" beside a
@@ -669,31 +717,42 @@ function AccountList({
           );
           const owed = account.category === "liability";
           return (
-            <Card
+            <Link
               key={account.id}
-              glow={owed ? "accent" : "cyan"}
-              className="relative flex items-center justify-between gap-4 overflow-hidden"
+              to="/transacciones"
+              search={{ account: account.id }}
+              aria-label={`${account.name}: ver sus movimientos`}
+              className="block rounded-card"
             >
-              {/* What kind of account this is, said in one hairline. */}
-              <span
-                aria-hidden
-                className={
-                  owed
-                    ? "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent"
-                    : "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan/50 to-transparent"
-                }
-              />
-              <div className="min-w-0">
-                <p className="truncate font-medium">{account.name}</p>
-                {/* A watched credit is not in the Deuda tile above it, so it
+              <Card
+                glow={owed ? "accent" : "cyan"}
+                className="relative flex h-full items-center justify-between gap-4 overflow-hidden"
+              >
+                {/* What kind of account this is, said in one hairline. */}
+                <span
+                  aria-hidden
+                  className={
+                    owed
+                      ? "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent"
+                      : "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan/50 to-transparent"
+                  }
+                />
+                <div className="min-w-0">
+                  <p className="truncate font-medium">{account.name}</p>
+                  {/* A watched credit is not in the Deuda tile above it, so it
                     must not read "Debes" either — `/cuentas` names it the
                     same way. */}
-                <p className="mt-0.5 text-faint text-xs">
-                  {account.informational ? "Saldo del crédito" : label}
-                </p>
-              </div>
-              <Money amount={account.balance} currency={account.currency} tone={tone} />
-            </Card>
+                  <p className="mt-0.5 text-faint text-xs">
+                    {account.informational ? "Saldo del crédito" : label}
+                  </p>
+                </div>
+                <Money
+                  amount={account.balance}
+                  currency={account.currency}
+                  tone={tone}
+                />
+              </Card>
+            </Link>
           );
         })}
       </div>

@@ -32,6 +32,7 @@ import { Money } from "@/components/Money";
 import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Notice } from "@/components/ui/Notice";
 import { type Option, Select } from "@/components/ui/Select";
 import {
   formatDayMonth,
@@ -46,6 +47,7 @@ import {
   isUncategorized,
   labelFrom,
 } from "@/merchants/categories";
+import { EmptyDiagnosis } from "@/onboarding/EmptyDiagnosis";
 
 const PAGE_SIZE = 25;
 
@@ -385,6 +387,20 @@ function TransactionsScreen() {
           </Card>
         ) : null}
 
+        {search.unassigned && page.transactions.length > 0 ? (
+          <Notice
+            icon={Unlink}
+            title="Llegaron sin saber de qué cuenta son"
+            className="rise"
+          >
+            Abre uno para asignarlo, o{" "}
+            <Link to="/cuentas" className="text-cyan hover:underline">
+              enlaza su tarjeta en Cuentas
+            </Link>{" "}
+            y los de esa tarjeta se ordenan solos.
+          </Notice>
+        ) : null}
+
         {page.transactions.length === 0 ? (
           <Empty filtered={active > 0} />
         ) : (
@@ -695,7 +711,7 @@ function MovementRow({
 }
 
 function Empty({ filtered }: { filtered: boolean }) {
-  return (
+  const plain = (
     <Card lift={false}>
       <p className="py-8 text-center text-muted text-sm">
         {filtered
@@ -704,4 +720,8 @@ function Empty({ filtered }: { filtered: boolean }) {
       </p>
     </Card>
   );
+
+  // Filtered to nothing is the filter's doing; empty with no filter is the
+  // connection's, and that one says why.
+  return filtered ? plain : <EmptyDiagnosis fallback={plain} />;
 }

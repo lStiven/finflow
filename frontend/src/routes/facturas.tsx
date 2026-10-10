@@ -29,9 +29,11 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
+  ArrowRight,
   CalendarClock,
   Check,
   CircleSlash,
+  Ellipsis,
   Link2,
   Loader2,
   Pause,
@@ -297,9 +299,8 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
         </div>
       ))}
 
-      <p className="text-faint text-xs leading-relaxed">
-        La barra es lo que ya confirmaste que salió. Lo que falta sigue siendo una
-        previsión hasta que lo marques.
+      <p className="text-faint text-xs">
+        La barra es lo ya pagado; el resto es previsión hasta que lo marques.
       </p>
     </Card>
   );
@@ -385,9 +386,7 @@ function Settled({ view }: { view: BillsSettlement }) {
           </li>
         ))}
       </ul>
-      {settle.isError ? (
-        <span className="text-outgoing text-xs">{settle.error.message}</span>
-      ) : null}
+      {settle.isError ? <Failure error={settle.error} /> : null}
     </Card>
   );
 }
@@ -406,11 +405,10 @@ function Proposals({ view }: { view: BillsSettlement }) {
   return (
     <section className="flex flex-col gap-3">
       <SectionTitle count={view.proposals.length}>¿Es este el cobro?</SectionTitle>
-      <p className="max-w-prose text-muted text-xs leading-relaxed">
-        Estos movimientos ya están en tu historial y se parecen a un cobro que nadie ha
-        respondido. Enlazarlo{" "}
-        <strong className="text-text">no escribe ningún movimiento</strong>: solo dice
-        que ese dinero es el de esta factura.
+      <p className="text-muted text-xs">
+        Ya están en tu historial. Enlazar uno{" "}
+        <strong className="text-text">no escribe nada</strong>: dice que ese dinero es
+        el de la factura.
       </p>
       <div className="flex flex-col gap-3">
         {view.proposals.map((proposal) => (
@@ -509,9 +507,7 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
         ))}
       </ul>
 
-      {link.isError ? (
-        <span className="text-outgoing text-xs">{link.error.message}</span>
-      ) : null}
+      {link.isError ? <Failure error={link.error} /> : null}
     </Card>
   );
 }
@@ -538,15 +534,17 @@ const STATE: Record<BillState, { label: string | null; chip: string }> = {
  * clickable card here already has — this one had it switched off, which is
  * what made the first version feel dead.
  *
- * The three actions are hidden until the pointer is on the tile, and **only
- * where a pointer exists**: below `sm` they stay visible, because hiding a
- * control behind a hover on a phone is hiding it for good. `focus-within`
- * brings them back for the keyboard.
+ * Its four actions live behind one labelled «Opciones», and open as words in
+ * the tile itself. They used to be four bare icons at 32 px whose meaning was
+ * a `title` — which a phone never shows — so a lightning bolt that arms an
+ * automatic charge sat one slip away from a bin. Every action and every
+ * failure is said in the tile it happened in.
  */
 function BillCard({ bill, today }: { bill: Bill; today: string }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [arming, setArming] = useState(false);
+  const [menu, setMenu] = useState(false);
   const pause = usePauseBill();
   const forget = useForgetBill();
   const autopay = useSetBillAutopay();
@@ -555,6 +553,8 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
   const paused = bill.status === "paused";
   const look = lookOf({ category: bill.category, direction: bill.direction });
   const Icon = state === "frozen" ? Snowflake : look.icon;
+  // Whichever of the three failed last; each is reset when it is tried again.
+  const failure = pause.error ?? forget.error ?? autopay.error;
 
   if (editing) {
     return (
@@ -608,7 +608,71 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
         </span>
       </div>
 
-      {arming ? (
+      {menu ? (
+        <div className="rise flex flex-1 flex-col justify-end gap-1">
+          {/* The tile's own content gives way to the menu, so the name stays:
+              which bill is about to change is the one thing to keep in view. */}
+          <span className="mb-1 truncate font-medium text-sm" title={bill.name}>
+            {bill.name}
+          </span>
+          <MenuAction
+            label="Editar"
+            on={bill.name}
+            icon={Pencil}
+            onClick={() => {
+              setMenu(false);
+              setEditing(true);
+            }}
+          />
+          <MenuAction
+            label={bill.autopay ? "No cobrar sola" : "Cobrar sola"}
+            on={bill.name}
+            icon={bill.autopay ? ZapOff : Zap}
+            disabled={autopay.isPending || paused}
+            hint={paused && !bill.autopay ? "Reanúdala primero" : undefined}
+            onClick={() => {
+              setMenu(false);
+              if (bill.autopay) {
+                autopay.mutate({ billId: bill.id, enabled: false });
+              } else {
+                autopay.reset();
+                setArming(true);
+              }
+            }}
+          />
+          <MenuAction
+            label={paused ? "Reanudar" : "Pausar"}
+            on={bill.name}
+            icon={paused ? Play : Pause}
+            disabled={pause.isPending}
+            onClick={() =>
+              pause.mutate(
+                { billId: bill.id, paused: !paused },
+                { onSuccess: () => setMenu(false) },
+              )
+            }
+          />
+          <MenuAction
+            label="Borrar"
+            on={bill.name}
+            icon={Trash2}
+            tone="danger"
+            onClick={() => {
+              setMenu(false);
+              forget.reset();
+              setConfirming(true);
+            }}
+          />
+          {failure ? <Failure error={failure} /> : null}
+          <button
+            type="button"
+            onClick={() => setMenu(false)}
+            className="mt-1 min-h-11 rounded-lg text-faint text-xs hover:text-text"
+          >
+            Cerrar
+          </button>
+        </div>
+      ) : arming ? (
         <div className="flex flex-1 flex-col justify-end gap-2">
           {/* The warning is the point of the step. Arming is the only switch
               on this screen that ends in money moving without anybody
@@ -642,6 +706,7 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
               Cancelar
             </Button>
           </div>
+          {autopay.error ? <Failure error={autopay.error} /> : null}
         </div>
       ) : confirming ? (
         <div className="flex flex-1 flex-col justify-end gap-2">
@@ -666,6 +731,7 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
               Cancelar
             </Button>
           </div>
+          {forget.error ? <Failure error={forget.error} /> : null}
         </div>
       ) : (
         <>
@@ -697,55 +763,36 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
             )}
           </div>
 
-          {/* At the foot and faint: the tile is about what is coming, not
-              about its own buttons. They come up to full strength under the
-              pointer, and stay legible without one — hiding a control behind
-              a hover on a phone is hiding it for good. */}
-          <div className="-mr-1 flex justify-end gap-0.5 opacity-60 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
-            <IconAction
-              label="Editar"
-              on={bill.name}
-              icon={Pencil}
-              onClick={() => setEditing(true)}
-            />
-            <IconAction
-              label={bill.autopay ? "No cobrar sola" : "Cobrar sola"}
-              on={bill.name}
-              icon={bill.autopay ? ZapOff : Zap}
-              disabled={autopay.isPending || paused}
-              onClick={() =>
-                bill.autopay
-                  ? autopay.mutate({ billId: bill.id, enabled: false })
-                  : setArming(true)
-              }
-            />
-            <IconAction
-              label={paused ? "Reanudar" : "Pausar"}
-              on={bill.name}
-              icon={paused ? Play : Pause}
-              disabled={pause.isPending}
-              onClick={() => pause.mutate({ billId: bill.id, paused: !paused })}
-            />
-            <IconAction
-              label="Borrar"
-              on={bill.name}
-              icon={Trash2}
-              tone="danger"
-              onClick={() => setConfirming(true)}
-            />
-          </div>
+          {failure ? <Failure error={failure} /> : null}
+
+          <button
+            type="button"
+            onClick={() => setMenu(true)}
+            aria-label={`Opciones de ${bill.name}`}
+            className="-mb-1 inline-flex min-h-11 items-center gap-1.5 self-end rounded-lg px-2 text-muted text-xs transition-colors hover:bg-surface-raised hover:text-text"
+          >
+            <Ellipsis className="size-4" aria-hidden />
+            Opciones
+          </button>
         </>
       )}
     </Card>
   );
 }
 
-function IconAction({
+/**
+ * One of a bill's actions, as a word and not a glyph.
+ *
+ * The accessible name still carries the bill — «Pausar Gimnasio» — so a
+ * screen reader in a grid of tiles knows which one it is about to change.
+ */
+function MenuAction({
   label,
   on,
   icon: Icon,
   onClick,
   disabled = false,
+  hint,
   tone = "plain",
 }: {
   label: string;
@@ -753,6 +800,8 @@ function IconAction({
   icon: typeof Pencil;
   onClick: () => void;
   disabled?: boolean;
+  /** Why it is off, when it is: a greyed button with no reason is a riddle. */
+  hint?: string;
   tone?: "plain" | "danger";
 }) {
   return (
@@ -761,17 +810,27 @@ function IconAction({
       onClick={onClick}
       disabled={disabled}
       aria-label={`${label} ${on}`}
-      title={label}
       className={cn(
-        "grid size-8 place-items-center rounded-lg transition-colors",
+        "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-2 text-left text-sm transition-colors",
         "hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-45",
-        tone === "danger"
-          ? "text-faint hover:text-outgoing"
-          : "text-muted hover:text-text",
+        tone === "danger" ? "text-outgoing" : "text-text",
       )}
     >
-      <Icon className="size-4" />
+      <Icon className="size-4 shrink-0" aria-hidden />
+      <span className="min-w-0">
+        <span className="block">{label}</span>
+        {hint ? <span className="block text-faint text-xs">{hint}</span> : null}
+      </span>
     </button>
+  );
+}
+
+/** A failed action, said where it was tried and announced as it happens. */
+function Failure({ error }: { error: Error }) {
+  return (
+    <span role="alert" className="text-outgoing text-xs">
+      {error.message}
+    </span>
   );
 }
 
@@ -921,7 +980,9 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
 
       {error ? <p className="text-outgoing text-sm">{error}</p> : null}
       {saving.isError ? (
-        <p className="text-outgoing text-sm">{saving.error.message}</p>
+        <p role="alert" className="text-outgoing text-sm">
+          {saving.error.message}
+        </p>
       ) : null}
 
       <Button onClick={submit} disabled={saving.isPending} full>
@@ -1114,8 +1175,17 @@ function Charge({
         </span>
       ) : null}
 
-      {settle.isError ? (
-        <span className="text-outgoing text-xs">{settle.error.message}</span>
+      {settle.isError ? <Failure error={settle.error} /> : null}
+
+      {paid && occurrence.movement_id ? (
+        <Link
+          to="/transacciones/$transactionId"
+          params={{ transactionId: occurrence.movement_id }}
+          className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-xs transition-colors hover:text-text"
+        >
+          Ver el movimiento
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
       ) : null}
 
       {paying ? (
@@ -1207,17 +1277,15 @@ function PayForm({
           the first time they press this. And if planning is what they were
           after, the screen that does it has a name. */}
       <p className="text-faint text-xs leading-relaxed">
-        {incoming ? "Confirmar" : "Pagar"}{" "}
-        <strong className="text-text">escribe un movimiento nuevo</strong>: mueve el
-        saldo de la cuenta, {incoming ? "cuenta como ingreso" : "cuenta como gasto"} del
-        mes y te llega el aviso.{" "}
+        <strong className="text-text">Escribe un movimiento nuevo</strong> y{" "}
+        {incoming ? "cuenta como ingreso" : "cuenta como gasto"} del mes.{" "}
         {incoming ? null : (
           <>
-            ¿Solo querías apartar la plata del mes? Eso son los{" "}
+            ¿Solo querías apartar la plata?{" "}
             <Link to="/presupuestos" className="text-accent hover:underline">
-              Presupuestos
+              Eso es un presupuesto
             </Link>
-            , y ahí nada se mueve.
+            .
           </>
         )}
       </p>
@@ -1233,7 +1301,11 @@ function PayForm({
         />
       </label>
 
-      {error ? <span className="text-outgoing text-xs">{error}</span> : null}
+      {error ? (
+        <span role="alert" className="text-outgoing text-xs">
+          {error}
+        </span>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         <Button onClick={submit} disabled={pending} className="px-3 py-1.5 text-xs">
@@ -1281,7 +1353,7 @@ function ChargeAction({
       disabled={disabled}
       aria-label={`${label} ${on}`}
       className={cn(
-        "flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors",
+        "flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-xs transition-colors",
         "hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-45",
         tone === "accent" ? "text-accent" : "text-muted hover:text-text",
       )}
@@ -1321,11 +1393,9 @@ function Detected({ today }: { today: string }) {
         Parece que se repiten
       </SectionTitle>
 
-      <p className="max-w-prose text-muted text-sm leading-relaxed">
-        Cobros que ya están en tu historial y vuelven cada cierto tiempo. Esto es una
-        lectura de lo que ya pasó:{" "}
-        <strong className="text-text">no declara nada por su cuenta</strong> y no mueve
-        ningún saldo.
+      <p className="text-muted text-sm">
+        Vuelven cada cierto tiempo en tu historial.{" "}
+        <strong className="text-text">Nada se declara sin ti</strong>.
       </p>
 
       <Card lift={false} className="flex flex-col gap-0 p-0">
@@ -1443,9 +1513,7 @@ function Suggestion({
         )}
       </div>
 
-      {declare.isError ? (
-        <span className="text-outgoing text-xs">{declare.error.message}</span>
-      ) : null}
+      {declare.isError ? <Failure error={declare.error} /> : null}
     </div>
   );
 }

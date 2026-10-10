@@ -160,8 +160,8 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
-la nube, 2493 pruebas de Python y 533 del frontend, todas en verde, y siete
-e2e en el navegador (`just e2e`). El contrato de la API y los tipos del
+la nube, 2502 pruebas de Python y 560 del frontend, todas en verde, y trece
+e2e en el navegador (`just e2e`), medido el 2026-10-10. El contrato de la API y los tipos del
 frontend están sincronizados.
 
 **Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
@@ -332,25 +332,25 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
-- 2026-10-10 — **Cada pantalla dice lo justo, y explica bajo demanda** (plan UX,
-  UX-01 + UX-02). Título, una línea y su acción; lo demás en «Cómo funciona»,
-  que se abre solo la primera vez, como el asistente de conexión. `just e2e`
-  completo en verde. En el árbol, sin commit. Sigue F2: UX-07 y UX-10.
-- 2026-10-10 — **Los bancos y el filtro de Gmail los da el backend** (plan UX,
-  ARC-02 + ARC-04). `known_banks` sale del registro de parsers y el filtro se
-  arma con los remitentes aprobados; el frontend ya no tiene lista de bancos.
-  `just e2e-connect` en verde. En `dev` (83af044).
-- 2026-10-10 — **Auditoría de pantallas del plan UX (ARC-00).** Varias mejoras
-  que el plan daba por construir ya existían; el pendiente bajó a 82–172 h.
-  Sigue ARC-02 + ARC-04 (bancos y filtro desde el backend). Detalle en
-  `front_refactor/FINFLOW_PLAN_UX_V2.md`, sección 10.
-- 2026-10-10 — **El deploy ya no choca con el límite de `public.ecr.aws`.**
-  Las siete builds paralelas bajaban cada una sus imágenes base de forma
-  anónima; ahora `scripts/ci/deploy.sh` las baja antes, una vez y con
-  reintentos. En el árbol, sin commit: hasta que entre, `dev` sigue en 7c2e6af.
-- 2026-10-10 — **Conectar el banco es un asistente, no una guía de texto.**
-  Bienvenida, cuatro pasos (bancos, dirección, filtro, prueba) con tutorial
-  visual de Gmail, y para quien ya terminó, el estado real de la conexión.
-  Nada se marca listo sin evidencia del servidor. `just e2e-connect` lo
-  recorre de una cuenta nueva a su primer movimiento. En `dev` (8531ea0),
-  todavía sin desplegar.
+- 2026-10-10 — **Una lista vacía dice por qué, y Guías es una lista de tareas**
+  (plan UX, UX-05 + UX-13). El motivo sale de la evidencia de la conexión y
+  lleva al paso que lo arregla; lo pendiente en Guías lo marca el servidor. F5
+  completa; `just e2e` (13 suites) en verde. En el árbol, sin commit.
+- 2026-10-10 — **Resumen, Reportes y Comercios: cada cifra abre lo que la forma**
+  (plan UX, UX-06, UX-11, UX-12). Categorías, cuentas y columnas llevan a sus
+  movimientos —las e2e comprueban que suman lo mismo— y la cola de comercios
+  se responde en la lista. F4 completa; `just e2e` (12 suites) en verde. En
+  el árbol, sin commit.
+- 2026-10-10 — **Facturas: cada acción con su nombre, ningún error en silencio**
+  (plan UX, UX-09). Los iconos de 32 px son palabras de 44 px detrás de
+  «Opciones», y un cobro pagado lleva a su movimiento. `just e2e` en verde.
+  En el árbol, sin commit.
+- 2026-10-10 — **Cada cuenta dice lo que le falta y lo resuelve ahí** (plan UX,
+  UX-08): enlazar su tarjeta o declarar los intereses, una sección a la vez, y
+  las cifras de patrimonio explican de qué están hechas. Arreglado también el
+  desborde de Reportes a 320 px. `just e2e` (nueve suites) en verde, con
+  `e2e-cuentas` nueva. En el árbol, sin commit.
+- 2026-10-10 — **«Sin asignar» y la categoría se arreglan desde el movimiento;
+  el primer presupuesto es un número** (plan UX, UX-07 + UX-10). Cada tope
+  lleva a sus movimientos y el mes va en la URL. `just e2e` completo en verde,
+  con `e2e-transacciones` nueva. En el árbol, sin commit.

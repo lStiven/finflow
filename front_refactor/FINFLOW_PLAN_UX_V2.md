@@ -193,15 +193,15 @@ construye una interfaz generada desde registros.
 | UX-01 | Textos cortos | Cabeceras breves, detalle bajo demanda, en todas las vistas | M | 6–12 | P0 | **Hecho** en las 8 pantallas principales (2026-10-10); las de detalle van con su ticket |
 | UX-02 | Kit visual compartido | Promover las piezas del onboarding a `components/ui/` | S | 4–8 | P0 | **Hecho** la base (2026-10-10); el resto se promueve en su segundo uso |
 | UX-03 | Motor de tours atado al DOM | — | — | — | — | **Descartado**: se rompe con cada cambio de maquetación; cada vista lleva su ayuda en contexto |
-| UX-05 | Diagnóstico enlazado | Llevar el diagnóstico existente a Transacciones y Resumen | S | 3–6 | P1 | Parcial |
-| UX-06 | Resumen accionable | Métricas con ayuda corta y navegación a desglose filtrado | M | 6–12 | P1 | Pendiente |
-| UX-07 | Transacciones y detalle | Acciones rápidas, «sin asignar», edición y traslados claros | M | 10–20 | P1 | Pendiente |
-| UX-08 | Cuentas e instrumentos | Tarjeta menos densa, vinculación, patrimonio y deuda explicados (el alta por tipo ya existe) | M | 10–20 | P1 | Pendiente |
-| UX-09 | Facturas | Previsto, pagado y vencido legibles; impacto contable bajo demanda | M | 8–16 | P1 | Pendiente |
-| UX-10 | Presupuestos | Estado vacío guiado (las sugerencias desde el gasto ya existen) | S | 6–12 | P1 | Pendiente |
-| UX-11 | Reportes | Columnas navegables (el resto del desglose y los parciales ya existen) | S | 4–8 | P1 | Pendiente |
-| UX-12 | Comercios y categorías | Cola de revisión y acciones en contexto; sugerir fusiones queda fuera (sin contrato) | M | 6–12 | P1 | Pendiente |
-| UX-13 | Centro de Guías | Continuar, qué quiero hacer, resolver un problema | M | 6–12 | P1 | Pendiente |
+| UX-05 | Diagnóstico enlazado | Llevar el diagnóstico existente a Transacciones y Resumen | S | 3–6 | P1 | **Hecho** (2026-10-10) |
+| UX-06 | Resumen accionable | Métricas con ayuda corta y navegación a desglose filtrado | M | 6–12 | P1 | **Hecho** (2026-10-10) |
+| UX-07 | Transacciones y detalle | Acciones rápidas, «sin asignar», edición y traslados claros | M | 10–20 | P1 | **Hecho** (2026-10-10) |
+| UX-08 | Cuentas e instrumentos | Tarjeta menos densa, vinculación, patrimonio y deuda explicados (el alta por tipo ya existe) | M | 10–20 | P1 | **Hecho** (2026-10-10) |
+| UX-09 | Facturas | Previsto, pagado y vencido legibles; impacto contable bajo demanda | M | 8–16 | P1 | **Hecho** (2026-10-10) |
+| UX-10 | Presupuestos | Estado vacío guiado (las sugerencias desde el gasto ya existen) | S | 6–12 | P1 | **Hecho** (2026-10-10) |
+| UX-11 | Reportes | Columnas navegables (el resto del desglose y los parciales ya existen) | S | 4–8 | P1 | **Hecho** (2026-10-10) |
+| UX-12 | Comercios y categorías | Cola de revisión y acciones en contexto; sugerir fusiones queda fuera (sin contrato) | M | 6–12 | P1 | **Hecho** (2026-10-10) |
+| UX-13 | Centro de Guías | Continuar, qué quiero hacer, resolver un problema | M | 6–12 | P1 | **Hecho** (2026-10-10) |
 | UX-14 | Ayuda de avisos | La conexión con Telegram ya existe (Perfil, `/guias/avisos`); solo acortar y guiar | S | 4–8 | P2 | Pendiente |
 | UX-15 | Analítica de experiencia | — | — | — | — | **Diferido**: no hay uso suficiente para medir |
 | QA-16 | Accesibilidad, móvil y regresión | Una e2e por ticket; `just e2e` completo antes de cerrar cada fase | — | 8–16 | Transversal | Continuo |
@@ -261,8 +261,9 @@ Cómo quedó, para que el resto de tickets lo reutilice:
 - **`components/PageHeader.tsx`**: título, una línea y la acción principal.
   El párrafo que antes iba debajo vive en **«Cómo funciona»**: tres o cuatro
   puntos con icono que entran escalonados, como en el asistente de conexión.
-  Se abre solo en la primera visita y, al cerrarlo («Entendido» o la X), se
-  recuerda por cuenta en el navegador (`lib/help.ts`, mismo criterio que
+  Se abre solo al entrar hasta que se cierra —como la bienvenida del
+  asistente, que espera a que la reconozcan— y, al cerrarlo («Entendido» o la
+  X), se recuerda por cuenta en el navegador (`lib/help.ts`, mismo criterio que
   `onboarding/progress.ts`); el botón de la cabecera lo vuelve a abrir. No se
   abre solo donde otra cosa ya recibe la primera visita: Resumen (diálogo de
   bienvenida), Cuentas sin cuentas y Comercios sin comercios (su tarjeta de
@@ -276,27 +277,96 @@ Cómo quedó, para que el resto de tickets lo reutilice:
 
 ### UX-05 — Diagnóstico enlazado
 
-- [ ] Desde Transacciones vacías o Resumen sin movimientos se llega al estado de
+- [x] Desde Transacciones vacías o Resumen sin movimientos se llega al estado de
       la conexión, que ya distingue los casos con evidencia.
-- [ ] Lo que no se puede observar se dice como tal ("no podemos confirmarlo").
+- [x] Lo que no se puede observar se dice como tal ("no podemos confirmarlo").
+
+**Cerrado el 2026-10-10** (`just e2e-guias`): Transacciones vacía (sin
+filtros) y los movimientos recientes del Resumen dicen el motivo con
+evidencia —sin banco elegido, sin confirmar Gmail, confirmada sin correos,
+correos descartados por su remitente (lo nombra), alertas ilegibles, días sin
+nada— y llevan al paso que lo arregla (`onboarding/diagnosis.ts`). Del filtro
+de Gmail dice que no se puede ver desde aquí. Sin motivo que dar, el texto de
+siempre.
 
 ### UX-06 a UX-13
 
 - **Resumen:** cada tarjeta lleva a su detalle real; las comparaciones dicen el
   periodo.
+  **Cerrado el 2026-10-10** (`just e2e-resumen`): Patrimonio y Deuda llevan a
+  Cuentas; cada categoría del anillo abre sus gastos del mes, y la e2e
+  comprueba contra la API que esas filas suman lo que dibuja el anillo; cada
+  cuenta abre sus movimientos; la comparación dice el mes «a esta altura»,
+  porque se mide hasta el mismo día. Al enlazar las cuentas reapareció la
+  lección de la rejilla (`grid-cols-1`) a 320 px, y se aplicó.
 - **Transacciones:** origen automático o manual, «sin asignar», edición y
   borrado en lenguaje claro; un traslado nunca se presenta como ingreso o gasto.
+  **Cerrado el 2026-10-10** (`just e2e-transacciones`): en el detalle,
+  «sin asignar» es un aviso con la acción — asignar a una cuenta abierta de la
+  misma moneda, que son las únicas que la API acepta — y, si vino de una
+  alerta, el enlace para enlazar su tarjeta; la categoría se cambia ahí mismo
+  y el aviso dice que es del comercio; la fila «Estado», que repetía «Cuenta»,
+  se fue. La lista explica «sin asignar» al filtrar por él. El aviso de éxito
+  espera a que el movimiento se relea, para no contradecir la fila de abajo.
 - **Cuentas:** formulario según el tipo que soporta el backend; patrimonio =
   activos − pasivos; préstamos e hipotecas siguen fuera de los totales.
+  **Cerrado el 2026-10-10** (`just e2e-cuentas`): cada tarjeta dice primero
+  lo que le falta (`accounts/attention.ts`) — una cuenta que recibe alertas
+  sin nada enlazado, o un crédito o inversión sin condiciones — con la acción
+  ahí mismo; los tres paneles apilados son una fila de secciones, una abierta
+  a la vez; el aviso de crédito vigilado sale una vez, en una línea; cada cifra
+  de patrimonio dice de qué está hecha y «Debes» nombra los créditos que deja
+  fuera (préstamos e hipotecas son siempre vigilados, así que «Debes» son las
+  tarjetas); la barra del cupo se lee con lector de pantalla; la pestaña
+  (`?ver=`) y el paso del alta (`?paso=`) van en la URL; crear una cuenta
+  celebra con la marca del asistente; Financiación tiene cabecera corta y su
+  «Cómo funciona». La e2e usa una persona recién registrada porque una cuenta
+  no se puede borrar.
 - **Facturas:** previsto, confirmado y vencido según las reglas reales;
   declarar no mueve saldos y la pantalla lo dice.
+  **Cerrado el 2026-10-10** (`just e2e-bills`, ampliada): las cuatro acciones
+  de cada factura, que eran iconos de 32 px cuyo significado vivía en un
+  `title` que el teléfono no muestra, son palabras de 44 px detrás de
+  «Opciones», con el nombre de la factura a la vista; pausar, borrar y cobrar
+  sola ya no fallan en silencio, y todo error de la pantalla se anuncia; las
+  acciones de cada cobro miden 44 px y uno pagado lleva a su movimiento; los
+  cuatro párrafos largos quedan en una línea. Un cobro previsto sigue sin
+  etiqueta, a propósito: es la decisión que defiende `bills/schedule.test.ts`
+  («ponerle una a todo esconde las dos que importan»).
 - **Presupuestos:** crear el primer tope en pocos pasos; categorías sugeridas
   salen de movimientos reales; un tope no bloquea nada.
+  **Cerrado el 2026-10-10** (`just e2e-budgets`, ampliada): sin topes, la
+  pantalla pide un solo número y pone uno sobre todo el mes; el mes va en la
+  URL (`?mes=`); cada tope lleva a sus movimientos cuando la lista puede
+  reproducir su cifra — una categoría y una cuenta como mucho —, y la e2e
+  comprueba que esas filas suman lo gastado; quitar un tope muestra su error;
+  las acciones miden 44 px.
 - **Reportes:** los gráficos llevan a sus movimientos; periodos parciales
   señalados.
+  **Cerrado el 2026-10-10** (`just e2e-reportes`): elegir una columna del
+  flujo de caja o del gasto por categoría ofrece «Ver los movimientos de …»
+  debajo, en dos pasos y no navegando al tocar, porque en el teléfono ese
+  mismo toque es el que muestra las cifras. La e2e captura la serie tal como
+  la recibió la página y comprueba que la lista suma la columna. «Balance»
+  abre las dos direcciones. El día de la semana no enlaza: la lista no filtra
+  por día.
 - **Comercios:** nada se agrupa solo; las sugerencias se confirman.
+  **Cerrado el 2026-10-10** (`just e2e-comercios`): cada comercio sin revisar
+  ofrece las dos respuestas en palabras de 44 px, en la lista —«Está bien» y
+  «Otra categoría», que cambia la categoría ahí mismo—, y un fallo se dice. El
+  selector de la fila se nombra con el comercio: la pantalla ya tenía otro
+  control «Categoría» (el filtro) y dos con un nombre son uno para un lector.
+  La e2e registra una persona y le llegan dos alertas por el webhook local,
+  porque revisar no se deshace y la cola del seed se agotaría.
 - **Guías:** cada tarjeta lleva a una acción existente; la de conexión lleva a
   `/conectar`.
+  **Cerrado el 2026-10-10** (`just e2e-guias`): tres bloques —«Para que
+  Finflow trabaje solo», «¿Qué quieres hacer?», «Resolver un problema»— y las
+  lecturas debajo. Lo pendiente lo responde el servidor (conexión, cuentas,
+  presupuestos, Telegram) y lo hecho se rotula «Comprobado», la regla del
+  asistente; cada tarea es un enlace a donde se hace, y la e2e abre cada uno.
+  La tarjeta violeta que pintaba su icono en magenta desapareció con el
+  rediseño.
 
 ---
 
@@ -481,10 +551,11 @@ salida real de las pruebas.
 1. ~~Prompt A: auditoría corta de las demás pantallas.~~ Hecho el 2026-10-10 (sección 10).
 2. ~~Prompt B: ARC-02 + ARC-04, el único cambio de backend del plan.~~ Hecho el 2026-10-10.
 3. ~~Prompt C con UX-01 y UX-02, aplicados primero a una pantalla real.~~ Hecho el 2026-10-10 en las ocho pantallas principales.
-4. Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).
+4. ~~Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).~~ Hecho el 2026-10-10.
 5. Prompt D para cerrar la fase.
-6. Seguir con Cuentas, después Resumen, Facturas, Reportes y Comercios, y
-   cerrar con Guías y el diagnóstico enlazado.
+6. ~~Seguir con Cuentas, después Resumen, Facturas, Reportes y Comercios, y
+   cerrar con Guías y el diagnóstico enlazado.~~ Hecho el 2026-10-10. Queda
+   F6 (UX-14).
 
 ---
 
@@ -544,3 +615,49 @@ tope desde el gasto real). Las horas de la sección 3 se corrigieron con esto.
 
 Las e2e de Facturas y Presupuestos ya existen (`just e2e-bills`,
 `just e2e-budgets`): UX-09 y UX-10 las amplían en lugar de crear otra.
+
+---
+
+## 11. Cierre de fase F0–F2 (Prompt D, 2026-10-10)
+
+**Veredicto: APROBADA.** Ningún hallazgo bloqueante dentro de la fase.
+
+### 11.1. Lo que se corrió
+
+| Control | Resultado |
+| --- | --- |
+| `just web-check` | 541 pruebas, Biome y `tsc` en verde |
+| `just prepare` | 2502 pruebas de Python; pyright 0 errores (4 avisos de stubs en `scripts/check_template.py`, anteriores) |
+| `just openapi-check` | contrato al día |
+| `just e2e` | las ocho suites en verde, 21 pantallas a 390 y 1280 px |
+| Búsqueda en `frontend/src` | ningún dominio ni lista de bancos fuera de las pruebas |
+| Exploración en navegador (script fuera del repo) | 37 de 38 comprobaciones en verde; la que falla es el hallazgo 1 |
+
+La exploración cubrió lo que ninguna e2e prueba:
+
+- Con `/ingestion/catalog` caído, `/conectar` no dibuja bancos de respaldo:
+  tras los dos reintentos muestra «Intentar de nuevo», y reintentar con el
+  servidor de vuelta trae los bancos.
+- Si asignar un movimiento o cambiar su categoría falla en el servidor, la
+  pantalla dice por qué, no anuncia éxito y no cambia nada.
+- «Cómo funciona» con teclado: el foco va al título al abrirlo y vuelve al
+  botón al cerrarlo; la X mide 44×44.
+- Con el almacenamiento de ayudas bloqueado, la pantalla carga y la ayuda se
+  abre y se cierra sin errores.
+- Las diez pantallas tocadas, a 320 y 768 px y con la ayuda abierta.
+- Un traslado no ofrece «Asignar a»; el filtro «sin asignar» sin resultados no
+  explica nada; «Ver movimientos» aparece en exactamente los topes cuya lista
+  cuadra; el primer tope rechaza un monto inválido sin crear nada; Resumen,
+  Cuentas vacía y Comercios vacío no abren la ayuda solos y Facturas sí.
+
+### 11.2. Hallazgos
+
+| # | Nivel | Qué | Dónde | Decisión |
+| --- | --- | --- | --- | --- |
+| 1 | IMPORTANTE (fuera de la fase) | A 320 px Reportes se desborda 7 px: un nombre largo en «Dónde más gastas» o «Gastos por categoría» ensancha la rejilla, que no lleva `grid-cols-1` (la lección de la sección 6). Existe desde que nació Reportes (2026-09-02); a 390 px no pasa. | `routes/reportes/index.tsx`, las dos `grid gap-4 lg:grid-cols-2` | **Corregido** el 2026-10-10 (`grid-cols-1` y `[&>*]:min-w-0`); a 320 px ya no desborda |
+| 2 | MEJORA | `aria-controls` del botón «Cómo funciona» apunta a un id que no existe mientras el panel está cerrado | `components/PageHeader.tsx` | Anotado |
+| 3 | MEJORA | El aviso «Listo, tu primer tope está puesto» sigue visible si se cambia de mes | `routes/presupuestos.tsx` | Anotado |
+| 4 | MEJORA | Guardar remitentes ahora espera a que el setup vuelva con el filtro; en una cuenta aún sin terminar, eso incluye leer su historial de correos. No se midió lento, pero el «Guardando…» dura lo que dure esa lectura | `api/queries.ts`, `useUpdateInbox` | Anotado |
+| 5 | MEJORA | `just e2e-budgets` registra una cuenta nueva en cada corrida, como ya hacía `e2e-connect`: el emulador local las acumula | `frontend/scripts/e2e-budgets.mjs` | Aceptado |
+| 6 | MEJORA (documentación) | Este plan decía que la ayuda se abre «solo en la primera visita»; en realidad se abre hasta que se cierra | sección 4, UX-01 | Corregido en el texto |
+

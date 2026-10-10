@@ -23,6 +23,7 @@ import {
   merchantCatalogQuery,
   merchantsQuery,
   useConfirmMerchant,
+  useEditMerchant,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
 import { PageHeader, type PageHelp } from "@/components/PageHeader";
@@ -32,6 +33,7 @@ import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { aliasCountLabel, sortLabel, timesSeenLabel } from "@/merchants/aliases";
 import { CategoryManager } from "@/merchants/CategoryManager";
+import { CategoryPicker } from "@/merchants/CategoryPicker";
 import { categoryLabel, categoryLabels, labelFrom } from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
@@ -310,7 +312,7 @@ const HELP: PageHelp = {
     {
       icon: Sparkles,
       title: "Pendientes de revisar",
-      body: "Los que Finflow dedujo solo. Confirma con «Está bien» o corrígelos al abrirlos.",
+      body: "Los que Finflow dedujo solo. «Está bien» u «Otra categoría», sin salir de la lista.",
     },
   ],
 };
@@ -473,9 +475,11 @@ function Row({
   index: number;
   labels: Record<string, string>;
 }) {
+  const [fixing, setFixing] = useState(false);
+
   return (
     <div
-      className="rise flex items-center gap-2 border-line/40 border-b pr-3"
+      className="rise flex flex-col border-line/40 border-b"
       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       <Link
@@ -530,37 +534,117 @@ function Row({
 
       {/*
         Outside the link, not inside it: a button nested in an anchor is
-        invalid and swallows the click on the row it sits in. It is here at
-        all because the queue is only bearable if the common answer —"sí, es
-        ese"— takes one tap and never leaves the list.
+        invalid and swallows the click on the row it sits in. The queue is only
+        bearable if both common answers — «sí, es ese» and «es de otra
+        categoría» — take a tap and never leave the list. A line of their own,
+        with words: on a phone the old lone tick was a pinpoint with no name.
       */}
-      {merchant.needs_review ? <ConfirmButton merchant={merchant} /> : null}
+      {merchant.needs_review ? (
+        <ReviewActions
+          merchant={merchant}
+          fixing={fixing}
+          onFix={() => setFixing(true)}
+          onDone={() => setFixing(false)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function ConfirmButton({ merchant }: { merchant: Merchant }) {
+function ReviewActions({
+  merchant,
+  fixing,
+  onFix,
+  onDone,
+}: {
+  merchant: Merchant;
+  fixing: boolean;
+  onFix: () => void;
+  onDone: () => void;
+}) {
   const confirm = useConfirmMerchant(merchant.id);
+  const edit = useEditMerchant(merchant.id);
+  const [category, setCategory] = useState(merchant.category);
+  const failure = confirm.error ?? edit.error;
+
+  if (fixing) {
+    return (
+      <div className="rise flex flex-col gap-3 px-4 pb-4 sm:pl-16">
+        {/* Named after the merchant: the filter above is also «Categoría»,
+            and two controls with one name are one control to a screen reader. */}
+        <CategoryPicker
+          label={`Categoría de ${merchant.display_name}`}
+          value={category}
+          onChange={setCategory}
+        />
+        {failure ? (
+          <p role="alert" className="text-outgoing text-xs">
+            {failure.message}
+          </p>
+        ) : null}
+        <div className="flex gap-2">
+          <Button
+            variant="ghost"
+            className="py-2 text-xs"
+            onClick={() => {
+              edit.reset();
+              onDone();
+            }}
+          >
+            Cancelar
+          </Button>
+          <Button
+            className="py-2 text-xs"
+            disabled={edit.isPending || category === merchant.category}
+            aria-label={`Guardar la categoría de ${merchant.display_name}`}
+            // Editing counts as reviewing: the row leaves the queue on its own.
+            onClick={() => edit.mutate({ category }, { onSuccess: onDone })}
+          >
+            {edit.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            Guardar
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <Button
-      variant="ghost"
-      className="shrink-0 px-2.5 py-2 text-xs"
-      disabled={confirm.isPending}
-      title={`Aceptar «${merchant.display_name}» tal como está`}
-      onClick={() => {
-        // The list refetches on success and this row leaves the queue; a
-        // failure is reported by the row staying exactly where it was.
-        confirm.mutate();
-      }}
-    >
-      {confirm.isPending ? (
-        <Loader2 className="size-3.5 animate-spin" />
-      ) : (
-        <Check className="size-3.5" />
-      )}
-      <span className="hidden sm:inline">Está bien</span>
-    </Button>
+    <div className="flex flex-col gap-1 px-4 pb-3 sm:pl-16">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="ghost"
+          className="min-h-11 py-2 text-xs"
+          disabled={confirm.isPending}
+          aria-label={`Está bien ${merchant.display_name}`}
+          // The list refetches on success and this row leaves the queue.
+          onClick={() => confirm.mutate()}
+        >
+          {confirm.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Check className="size-3.5" />
+          )}
+          Está bien
+        </Button>
+        <Button
+          variant="quiet"
+          className="min-h-11 py-2 text-xs"
+          aria-label={`Otra categoría para ${merchant.display_name}`}
+          onClick={() => {
+            confirm.reset();
+            onFix();
+          }}
+        >
+          <Tag className="size-3.5" />
+          Otra categoría
+        </Button>
+      </div>
+      {failure ? (
+        <p role="alert" className="text-outgoing text-xs">
+          {failure.message}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
