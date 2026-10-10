@@ -1,894 +1,294 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import {
-  ArrowRight,
-  BadgeCheck,
-  Ban,
-  Check,
-  ChevronDown,
-  Copy,
-  Loader2,
-  Mail,
-  Radio,
-  ShieldCheck,
-  Sparkles,
-  Wallet,
-  X,
-} from "lucide-react";
-import type { ReactNode } from "react";
-import { type SubmitEvent, useState } from "react";
-import { inboxQuery, setupQuery, useUpdateInbox } from "@/api/queries";
+  inboxQuery,
+  latestAlertMovementQuery,
+  recentMailQuery,
+  setupQuery,
+} from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
-import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/Card";
-import { Field } from "@/components/ui/Field";
 import { cn } from "@/lib/cn";
-import { formatDateTime } from "@/lib/dates";
-import { gmailFromFilter } from "@/lib/forwarding";
-import { STAGE_COPY } from "@/onboarding/copy";
-import type { AddressStatus, StageId } from "@/onboarding/steps";
-import { useOnboarding } from "@/onboarding/useOnboarding";
+import { nowInSeconds } from "@/lib/dates";
+import { useReducedMotion } from "@/lib/useReducedMotion";
+import { AddressStep } from "@/onboarding/AddressStep";
+import { BanksStep } from "@/onboarding/BanksStep";
+import { ConfirmStep } from "@/onboarding/ConfirmStep";
+import { ConnectIntro } from "@/onboarding/ConnectIntro";
+import { ConnectionSummary } from "@/onboarding/ConnectionSummary";
+import { FilterStep } from "@/onboarding/FilterStep";
+import { STEP_TITLE_ID } from "@/onboarding/parts";
+import { Stepper } from "@/onboarding/Stepper";
+import {
+  type OnboardingState,
+  STAGES,
+  type StageId,
+  stageAt,
+  stageNumber,
+} from "@/onboarding/steps";
+import { type Onboarding, useOnboarding } from "@/onboarding/useOnboarding";
+
+/**
+ * Which step is on screen, carried in the address: the back button walks
+ * the steps, a link sent from a phone to a computer opens the same one, and
+ * a server answer arriving mid-read never moves the page under somebody.
+ */
+type ConnectSearch = { paso?: number };
 
 export const Route = createFileRoute("/conectar")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
   },
-  loader: ({ context }) =>
-    Promise.all([
+  validateSearch: (raw: Record<string, unknown>): ConnectSearch => {
+    const paso = Number(raw.paso);
+    return Number.isInteger(paso) && stageAt(paso) ? { paso } : {};
+  },
+  loader: ({ context }) => {
+    // Not waited on: only the last step and the connection's status read
+    // these, and both draw a placeholder until they land.
+    void context.queryClient.prefetchQuery(recentMailQuery);
+    void context.queryClient.prefetchQuery(latestAlertMovementQuery);
+    return Promise.all([
       context.queryClient.ensureQueryData(setupQuery),
       context.queryClient.ensureQueryData(inboxQuery),
-    ]),
+    ]);
+  },
   component: ConnectScreen,
 });
 
+type View =
+  | { kind: "intro" }
+  | { kind: "status" }
+  | { kind: "step"; stage: StageId; review: boolean };
+
 /**
- * One screen, two jobs.
- *
- * While anything is open it is the guide that walks somebody through
- * forwarding their first alert, resuming wherever they left off. Once
- * expenses are arriving it stops asking for anything and becomes the place to
- * look the address up and read the explanation again — which is why it is one
- * route and not two: the same five stages, told in the past tense.
+ * One screen, three faces, decided by what is true rather than by where
+ * somebody clicked: the door for an account with nothing done, the steps
+ * while anything is open, and the connection's status once expenses arrive.
+ * A step asked for by the address always wins — that is how somebody whose
+ * setup is finished still manages their banks or rereads the Gmail part.
  */
+function viewOf(
+  state: OnboardingState,
+  paso: number | undefined,
+  celebrating: boolean,
+): View {
+  const asked = paso === undefined ? undefined : stageAt(paso);
+  if (asked)
+    return { kind: "step", stage: asked, review: state.complete && !celebrating };
+  if (state.complete) {
+    return celebrating
+      ? { kind: "step", stage: "first-alert", review: false }
+      : { kind: "status" };
+  }
+  if (state.intro) return { kind: "intro" };
+  return { kind: "step", stage: state.current ?? "banks", review: false };
+}
+
 function ConnectScreen() {
-  const { state, acknowledge } = useOnboarding();
-  // The loader filled the cache, so this is the same object the hook read.
-  useSuspenseQuery(setupQuery);
-  /*
-   * Which panel is open, when somebody has said so themselves.
-   *
-   * `null` means "follow the flow": the open panel is whichever stage is
-   * current, so finishing one opens the next instead of leaving a ticked
-   * stage expanded above a collapsed one. Acknowledging hands control back.
-   */
-  const [manual, setManual] = useState<StageId | "none" | null>(null);
+  const { state, acknowledge, record } = useOnboarding();
+  const { paso } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const [celebrated, setCelebrated] = useState(false);
 
-  if (!state) return null;
+  // The moment it all came true, while the last step (or nothing in
+  // particular) is on screen: this page is the celebration then, and the
+  // shell's dialog stands down. On any other step the dialog says it.
+  const celebrateHere = Boolean(state?.celebrate) && (paso === undefined || paso === 4);
+  const celebrating = celebrated || celebrateHere;
 
-  const { complete, current } = state;
+  useEffect(() => {
+    if (!celebrateHere) return;
+    setCelebrated(true);
+    acknowledge("readyCelebrated");
+  }, [celebrateHere, acknowledge]);
 
-  function isExpanded(id: StageId): boolean {
-    if (manual !== null) return manual === id;
-    return complete ? id === "intro" : current === id;
-  }
+  // The introduction is this screen's welcome: having seen it, the shell's
+  // dialog has nothing left to say.
+  useEffect(() => {
+    if (state?.intro && state.welcome) acknowledge("welcomeSeen");
+  }, [state?.intro, state?.welcome, acknowledge]);
 
-  function acknowledgeAndAdvance(key: Parameters<typeof acknowledge>[0]) {
-    acknowledge(key);
-    setManual(null);
-  }
+  const view = state ? viewOf(state, paso, celebrating) : null;
+  const pinned = view?.kind === "step" ? view.stage : null;
+
+  useEffect(() => {
+    if (pinned && paso === undefined) {
+      void navigate({ search: { paso: stageNumber(pinned) }, replace: true });
+    }
+  }, [pinned, paso, navigate]);
+
+  if (!state || !view) return null;
+
+  const open = (id: StageId) => void navigate({ search: { paso: stageNumber(id) } });
+  const toStatus = () => {
+    setCelebrated(false);
+    void navigate({ search: {} });
+  };
 
   return (
     <AppShell>
-      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-semibold text-2xl tracking-tight">
-            {complete ? "Cómo funciona Finflow" : "Conecta tu banco"}
-          </h1>
-          <p className="mt-1.5 max-w-xl text-muted text-sm">
-            {complete
-              ? "Ya está todo andando. Esto queda por si quieres repasar el camino que hace un correo, o volver a ver tu dirección."
-              : "Cuatro cosas tienen que ser ciertas para que tus gastos se registren solos. Vamos una por una."}
-          </p>
+      {view.kind === "intro" ? (
+        <ConnectIntro
+          onStart={() => {
+            acknowledge("introSeen");
+            open("banks");
+          }}
+        />
+      ) : view.kind === "status" ? (
+        <div className="mx-auto w-full max-w-4xl">
+          <ConnectionSummary
+            state={state}
+            onOpenStage={open}
+            onFilterUpdated={(terms) => record({ filterSenders: terms })}
+          />
         </div>
-        <AddressBadge status={state.addressStatus} />
-      </header>
-
-      {!complete ? <ProgressBar done={state.doneCount} total={state.total} /> : null}
-
-      <AddressCard address={state.address} status={state.addressStatus} />
-
-      {state.unapprovedSenders.length > 0 ? (
-        <DiscardedNotice senders={state.unapprovedSenders} />
-      ) : null}
-
-      <ol className="mt-6 flex flex-col gap-3">
-        {state.stages.map((stage, index) => (
-          <StagePanel
-            key={stage.id}
-            index={index}
-            id={stage.id}
-            done={stage.done}
-            proof={stage.proof}
-            current={current === stage.id}
-            expanded={isExpanded(stage.id)}
-            onToggle={() => setManual(isExpanded(stage.id) ? "none" : stage.id)}
-          >
-            <StageBody
-              id={stage.id}
-              address={state.address}
-              status={state.addressStatus}
-              complete={complete}
-              onDone={acknowledgeAndAdvance}
-            />
-          </StagePanel>
-        ))}
-      </ol>
+      ) : (
+        <Wizard
+          state={state}
+          stage={view.stage}
+          review={view.review}
+          celebrating={celebrating}
+          onOpen={open}
+          onStatus={toStatus}
+          acknowledge={acknowledge}
+          record={record}
+        />
+      )}
     </AppShell>
   );
 }
 
-/* ------------------------------------------------------------------ pieces */
-
-const STATUS_COPY: Record<AddressStatus, { label: string; className: string }> = {
-  unverified: {
-    label: "Sin verificar",
-    className: "border-line bg-surface-raised text-muted",
-  },
-  confirmed: {
-    label: "Correo verificado",
-    className: "border-cyan/30 bg-cyan/10 text-cyan",
-  },
-  receiving: {
-    label: "Recibiendo movimientos",
-    className: "border-incoming/30 bg-incoming/10 text-incoming",
-  },
-};
-
-/** The one indicator that says whether the address itself is settled. */
-function AddressBadge({ status }: { status: AddressStatus }) {
-  const { label, className } = STATUS_COPY[status];
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
-        className,
-      )}
-    >
-      {status === "unverified" ? (
-        <Radio className="size-3.5" />
-      ) : (
-        <BadgeCheck className="size-3.5" />
-      )}
-      {label}
-    </span>
-  );
-}
-
-function ProgressBar({ done, total }: { done: number; total: number }) {
-  return (
-    <div className="mb-6">
-      <div className="mb-2 flex items-baseline justify-between text-sm">
-        <span className="text-muted">Tu progreso</span>
-        <span className="tabular text-faint text-xs">
-          {done} de {total}
-        </span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-surface-raised">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-accent to-cyan transition-[width] duration-500 ease-out"
-          style={{ width: `${(done / total) * 100}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** The address, always in reach — during the setup and long after it. */
-function AddressCard({ address, status }: { address: string; status: AddressStatus }) {
-  return (
-    <Card glow="cyan" lift={false} className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-muted text-xs uppercase tracking-wider">
-        <Mail className="size-3.5" />
-        Tu dirección de reenvío
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <code className="min-w-0 flex-1 break-all rounded-xl border border-line bg-ink px-4 py-3 text-sm">
-          {address}
-        </code>
-        <CopyButton value={address} />
-      </div>
-
-      <p className="text-faint text-xs">
-        Es tuya y no cambia nunca. Solo lee los correos que llegan a ella, y solo de los
-        remitentes que apruebes.{" "}
-        {status === "receiving"
-          ? "Ahora mismo está recibiendo."
-          : "Todavía no ha recibido nada tuyo."}
-      </p>
-    </Card>
-  );
-}
-
-function CopyButton({ value, onCopied }: { value: string; onCopied?: () => void }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      onCopied?.();
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can be refused outright (an insecure origin, a
-      // permission prompt denied). The address is on screen and selectable,
-      // so there is nothing to recover — only nothing to promise.
-      setCopied(false);
-    }
-  }
-
-  return (
-    <Button variant="ghost" onClick={copy} className="shrink-0">
-      {copied ? (
-        <Check className="size-4 text-incoming" />
-      ) : (
-        <Copy className="size-4" />
-      )}
-      {copied ? "Copiada" : "Copiar"}
-    </Button>
-  );
-}
-
-/**
- * The one failure that looks exactly like nothing happening: mail arriving
- * and being thrown away for coming from somebody who was never approved.
- */
-function DiscardedNotice({ senders }: { senders: string[] }) {
-  return (
-    <div className="mt-4 flex items-start gap-3 rounded-xl border border-warn/30 bg-warn/10 p-4">
-      <Ban className="mt-0.5 size-4 shrink-0 text-warn" />
-      <div className="min-w-0">
-        <p className="font-medium text-sm text-warn">
-          Está llegando correo que se está descartando
-        </p>
-        <p className="mt-1 text-muted text-sm">
-          Estos remitentes escribieron a tu dirección y no están aprobados, así que no
-          se leyó nada de ellos. Si es tu banco, apruébalo en el paso 3.
-        </p>
-        <ul className="mt-2 flex flex-wrap gap-2">
-          {senders.map((sender) => (
-            <li
-              key={sender}
-              className="rounded-lg border border-line bg-ink px-2 py-1 text-xs"
-            >
-              {sender}
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-/** One stage, collapsed unless it is the one being pointed at. */
-function StagePanel({
-  index,
-  id,
-  done,
-  proof,
-  current,
-  expanded,
-  onToggle,
-  children,
+function Wizard({
+  state,
+  stage,
+  review,
+  celebrating,
+  onOpen,
+  onStatus,
+  acknowledge,
+  record,
 }: {
-  index: number;
-  id: StageId;
-  done: boolean;
-  proof: "you" | "verified";
-  /** The stage being pointed at, which is what gets the lit border. */
-  current: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  children: ReactNode;
+  state: OnboardingState;
+  stage: StageId;
+  /** Revisiting a finished setup rather than doing it. */
+  review: boolean;
+  celebrating: boolean;
+  onOpen: (id: StageId) => void;
+  onStatus: () => void;
+  acknowledge: Onboarding["acknowledge"];
+  record: Onboarding["record"];
 }) {
-  const copy = STAGE_COPY[id];
+  const reduced = useReducedMotion();
+  const top = useRef<HTMLDivElement>(null);
+  const lastStage = useRef(stage);
 
-  return (
-    <li>
-      <Card
-        lift={false}
-        glow={current ? "accent" : "none"}
-        className={cn("p-0", current && "border-accent/30")}
-      >
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          className="flex w-full items-center gap-4 p-5 text-left"
-        >
-          <span
-            aria-hidden
-            className={cn(
-              "grid size-8 shrink-0 place-items-center rounded-full text-sm transition-colors",
-              done
-                ? "bg-incoming/15 text-incoming ring-1 ring-incoming/30"
-                : current
-                  ? "bg-accent/15 text-accent ring-1 ring-accent/30"
-                  : "bg-surface-raised text-faint",
-            )}
-          >
-            {done ? <Check className="size-4" /> : index + 1}
-          </span>
-
-          <span className="min-w-0 flex-1">
-            <span className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{copy.title}</span>
-              {done ? (
-                <span className="rounded-full border border-line px-2 py-0.5 text-[0.625rem] text-faint uppercase tracking-wider">
-                  {proof === "verified" ? "Verificado" : "Hecho"}
-                </span>
-              ) : null}
-            </span>
-            <span className="mt-0.5 block text-muted text-sm">{copy.blurb}</span>
-          </span>
-
-          <ChevronDown
-            className={cn(
-              "size-4 shrink-0 text-faint transition-transform duration-200",
-              expanded && "rotate-180",
-            )}
-          />
-        </button>
-
-        {expanded ? (
-          <div className="rise border-line border-t p-5">{children}</div>
-        ) : null}
-      </Card>
-    </li>
+  // Which way the step came from, so it slides in from that side. Adjusted
+  // during render, the way React suggests for state that follows a prop.
+  const [shown, setShown] = useState<{ stage: StageId; direction: "forward" | "back" }>(
+    {
+      stage,
+      direction: "forward",
+    },
   );
-}
-
-function StageBody({
-  id,
-  address,
-  status,
-  complete,
-  onDone,
-}: {
-  id: StageId;
-  address: string;
-  status: AddressStatus;
-  complete: boolean;
-  onDone: (key: "introSeen" | "addressCopied" | "gmailSubmitted") => void;
-}) {
-  switch (id) {
-    case "intro":
-      return <IntroBody complete={complete} onDone={() => onDone("introSeen")} />;
-    case "address":
-      return (
-        <AddressBody
-          address={address}
-          complete={complete}
-          onDone={() => onDone("addressCopied")}
-        />
-      );
-    case "senders":
-      return <SendersBody />;
-    case "forwarding":
-      return (
-        <ForwardingBody
-          address={address}
-          status={status}
-          complete={complete}
-          onDone={() => onDone("gmailSubmitted")}
-        />
-      );
-    case "first-alert":
-      return <FirstAlertBody complete={complete} />;
-  }
-}
-
-function IntroBody({ complete, onDone }: { complete: boolean; onDone: () => void }) {
-  return (
-    <div className="flex flex-col gap-5">
-      <p className="text-sm leading-relaxed">
-        Tu banco ya te avisa por correo cada vez que compras, pagas o recibes plata.
-        Finflow no entra a tu banco ni te pide claves: <strong>lee esos correos</strong>{" "}
-        y arma con ellos tus movimientos, tus cuentas y tu saldo.
-      </p>
-
-      <ul className="flex flex-col gap-4">
-        <IntroPoint icon={Mail} title="Te damos una dirección solo tuya">
-          Es una dirección de correo que este despliegue posee. Tú configuras tu correo
-          para que le reenvíe las alertas de tu banco, y nada más.
-        </IntroPoint>
-        <IntroPoint icon={ShieldCheck} title="Nadie entra a tu correo personal">
-          No hay permisos de Google, no hay acceso a tu bandeja. El único buzón que
-          Finflow lee es el suyo, y ahí solo llega lo que tú le reenvíes.
-        </IntroPoint>
-        <IntroPoint icon={Ban} title="Solo se acepta a quien tú apruebes">
-          Cualquier correo que llegue de un remitente que no aprobaste se descarta sin
-          leerse. Mientras no apruebes a nadie, tu dirección no acepta nada.
-        </IntroPoint>
-        <IntroPoint icon={Wallet} title="El resto pasa solo">
-          De cada alerta salen el monto, el comercio y la cuenta. Tú no escribes ni un
-          movimiento a mano — aunque puedes corregir cualquiera.
-        </IntroPoint>
-      </ul>
-
-      {!complete ? (
-        <div>
-          <Button onClick={onDone}>
-            Entendido, seguir
-            <ArrowRight className="size-4" />
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function IntroPoint({
-  icon: Icon,
-  title,
-  children,
-}: {
-  icon: typeof Mail;
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <li className="flex items-start gap-3">
-      <span
-        aria-hidden
-        className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-xl border border-line bg-ink"
-      >
-        <Icon className="size-4 text-cyan" />
-      </span>
-      <span className="min-w-0">
-        <span className="block font-medium text-sm">{title}</span>
-        <span className="mt-0.5 block text-muted text-sm leading-relaxed">
-          {children}
-        </span>
-      </span>
-    </li>
-  );
-}
-
-function AddressBody({
-  address,
-  complete,
-  onDone,
-}: {
-  address: string;
-  complete: boolean;
-  onDone: () => void;
-}) {
-  return (
-    <div className="flex flex-col gap-5">
-      <p className="text-sm leading-relaxed">
-        Esta es tu dirección. Sale de tu cuenta, no la elige nadie y no cambia. Lo que
-        llegue ahí se guarda como una alerta tuya y se procesa; lo que llegue de un
-        remitente sin aprobar se descarta.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <code className="min-w-0 flex-1 break-all rounded-xl border border-line bg-ink px-4 py-3 text-sm">
-          {address}
-        </code>
-        {!complete ? <CopyButton value={address} onCopied={onDone} /> : null}
-      </div>
-
-      {!complete ? (
-        <div>
-          <Button variant="ghost" onClick={onDone}>
-            Ya la tengo
-            <ArrowRight className="size-4" />
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * The banks with a deterministic parser today, and the domains each one
- * actually sends from.
- *
- * One button per bank rather than one list: approving a sender is approving
- * what may be read, and somebody who only banks with one of these should not
- * have to accept the other to get started. Any bank missing here still works
- * through the field below — it is typed instead of clicked, and read by the
- * LLM instead of a template.
- *
- * Lulo sends from `lulobank.com`. Its message ids come from Amazon SES, which
- * is shared with every other SES customer and is why that domain is not here.
- */
-const KNOWN_BANKS = [
-  {
-    label: "Bancolombia",
-    // The domains the parser registry knows: the alert subdomains — the bank
-    // runs several — plus `bancolombia.com.co`, which is the one a transfer
-    // between the owner's own accounts arrives from. Approving only the alert
-    // domains accepts the card and purchase alerts while silently dropping
-    // every transfer.
-    domains: [
-      "an.notificacionesbancolombia.com",
-      "notificacionesbancolombia.com",
-      "ayn.notificacionesbancolombia.com",
-      "bancolombia.com.co",
-    ],
-  },
-  { label: "Lulo bank", domains: ["lulobank.com"] },
-];
-
-/**
- * The approved-sender list, and the only screen that edits it.
- *
- * Available whether or not the setup is finished: banks change the domain
- * they send from, somebody approves the wrong one by pasting it, and a list
- * that could only ever grow would leave the wrong entry accepted forever.
- * Removing is not destructive — it is re-approved by typing it again — so it
- * costs one click, with the consequence spelled out where it matters: taking
- * the last one out means the address accepts nothing at all.
- */
-function SendersBody() {
-  const { data: inbox } = useSuspenseQuery(inboxQuery);
-  const update = useUpdateInbox();
-  const [custom, setCustom] = useState("");
-
-  const domains = inbox.allowed_domains;
-  const addresses = inbox.allowed_addresses;
-
-  function save(next: { domains?: string[]; addresses?: string[] }) {
-    // The endpoint replaces the whole list rather than merging, so both sides
-    // travel on every call — sending one alone would silently clear the other.
-    update.mutate({
-      allowed_domains: next.domains ?? domains,
-      allowed_addresses: next.addresses ?? addresses,
+  if (shown.stage !== stage) {
+    setShown({
+      stage,
+      direction:
+        STAGES.indexOf(stage) > STAGES.indexOf(shown.stage) ? "forward" : "back",
     });
   }
 
-  function addCustom(event: SubmitEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const value = custom.trim().toLowerCase();
-    if (!value) return;
-
-    // An "@" means somebody pasted a whole address; anything else is a domain.
-    if (value.includes("@")) {
-      if (!addresses.includes(value)) save({ addresses: [...addresses, value] });
-    } else if (!domains.includes(value)) {
-      save({ domains: [...domains, value] });
+  useEffect(() => {
+    if (lastStage.current === stage) return;
+    lastStage.current = stage;
+    // A new step is announced by its title, and seen from its top: "Continuar"
+    // is pressed at the bottom of a long step.
+    document.getElementById(STEP_TITLE_ID)?.focus({ preventScroll: true });
+    if ((top.current?.getBoundingClientRect().top ?? 0) < 0) {
+      top.current?.scrollIntoView({
+        behavior: reduced ? "auto" : "smooth",
+        block: "start",
+      });
     }
-    setCustom("");
-  }
+  }, [stage, reduced]);
 
-  function remove(sender: string, kind: "domain" | "address") {
-    if (kind === "domain") {
-      save({ domains: domains.filter((value) => value !== sender) });
-    } else {
-      save({ addresses: addresses.filter((value) => value !== sender) });
-    }
-  }
-
-  const approved: { value: string; kind: "domain" | "address" }[] = [
-    ...domains.map((value) => ({ value, kind: "domain" as const })),
-    ...addresses.map((value) => ({ value, kind: "address" as const })),
-  ];
-  const last = approved.length === 1;
+  const done = (id: StageId) =>
+    state.stages.find((each) => each.id === id)?.done ?? false;
 
   return (
-    <div className="flex flex-col gap-5">
-      <p className="text-sm leading-relaxed">
-        Aprueba las direcciones o dominios desde los que te escribe tu banco. Es lo
-        único que decide qué se lee: <strong>una lista vacía no acepta nada</strong>,
-        que es el valor seguro por defecto.
-      </p>
-
-      <div className="flex flex-wrap items-center gap-3">
-        {KNOWN_BANKS.map((bank) => {
-          const isApproved = bank.domains.every((domain) => domains.includes(domain));
-
-          return (
-            <Button
-              key={bank.label}
-              variant={isApproved ? "ghost" : "primary"}
-              disabled={isApproved || update.isPending}
-              onClick={() =>
-                save({ domains: [...new Set([...domains, ...bank.domains])] })
-              }
-            >
-              {isApproved ? <Check className="size-4 text-incoming" /> : null}
-              {isApproved ? `${bank.label} aprobado` : `Aprobar ${bank.label}`}
-            </Button>
-          );
-        })}
-        {update.isPending ? (
-          <Loader2 className="size-4 animate-spin text-faint" />
-        ) : null}
-      </div>
-
-      <form
-        onSubmit={addCustom}
-        className="flex flex-col gap-3 sm:flex-row sm:items-end"
-      >
-        <Field
-          label="Otro banco"
-          className="w-full"
-          placeholder="dominio.com o alertas@banco.com"
-          value={custom}
-          onChange={(e) => setCustom(e.target.value)}
-        />
-        {/*
-          Disabled while a write is in flight like every other control here:
-          `save` rebuilds the whole list from the cached one, and the endpoint
-          replaces rather than merges — a second submit before the first
-          response lands would drop the sender the first one added.
-        */}
-        <Button
-          type="submit"
-          variant="ghost"
-          disabled={!custom.trim() || update.isPending}
-        >
-          Aprobar
-        </Button>
-      </form>
-
-      {update.error ? (
-        <p role="alert" className="text-outgoing text-sm">
-          {update.error.message}
-        </p>
-      ) : null}
-
-      <div>
-        <p className="mb-2 text-muted text-xs uppercase tracking-wider">Aprobados</p>
-        {approved.length === 0 ? (
-          <p className="text-faint text-sm">
-            Nadie todavía. Tu dirección no acepta nada.
+    <div ref={top} className="mx-auto w-full max-w-3xl scroll-mt-6">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-faint text-xs uppercase tracking-wider">
+            {review
+              ? "Tu conexión"
+              : `${state.doneCount} de ${state.total} pasos listos`}
           </p>
-        ) : (
-          <>
-            <ul className="flex flex-wrap gap-2">
-              {approved.map(({ value, kind }) => (
-                <li
-                  key={value}
-                  className="flex items-center gap-1.5 rounded-lg border border-incoming/25 bg-incoming/10 py-1 pr-1 pl-2.5 text-incoming text-xs"
-                >
-                  <Check className="size-3 shrink-0" />
-                  <span className="min-w-0 break-all">{value}</span>
-                  <button
-                    type="button"
-                    onClick={() => remove(value, kind)}
-                    disabled={update.isPending}
-                    aria-label={`Quitar ${value} de los remitentes aprobados`}
-                    title={`Quitar ${value}`}
-                    className="-my-1 grid size-6 shrink-0 place-items-center rounded-md text-incoming/70 transition-colors hover:bg-outgoing/15 hover:text-outgoing disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-faint text-xs leading-relaxed">
-              {last
-                ? "Si quitas el último, tu dirección deja de aceptar correo y no se registrará ningún movimiento nuevo."
-                : "Quitar uno deja de aceptar sus correos de aquí en adelante; los movimientos que ya se registraron se quedan."}
-            </p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
- * The two things done in Gmail, in the order Gmail allows them: the filter's
- * "Reenviarlo a" list only offers an address once it is verified, so the
- * filter half says so and watches the same status the screen already polls.
- *
- * Every label is Gmail's own, in its Spanish wording, because this is read
- * with Gmail open beside it: a step that names a button Gmail does not show
- * is where somebody stops.
- */
-function ForwardingBody({
-  address,
-  status,
-  complete,
-  onDone,
-}: {
-  address: string;
-  status: AddressStatus;
-  complete: boolean;
-  onDone: () => void;
-}) {
-  const { data: setup } = useSuspenseQuery(setupQuery);
-  const { data: inbox } = useSuspenseQuery(inboxQuery);
-  const confirmedAt = setup.steps.find(
-    (step) => step.key === "forwarding_confirmed",
-  )?.at;
-  const fromFilter = gmailFromFilter(inbox.allowed_domains, inbox.allowed_addresses);
-  const verified = status !== "unverified" || complete;
-
-  return (
-    <div className="flex flex-col gap-6">
-      <p className="rounded-xl border border-line bg-ink p-4 text-sm leading-relaxed">
-        Hazlo <strong>desde un computador</strong>, en gmail.com. La app de Gmail del
-        teléfono no tiene estas opciones. Son dos partes y se hacen una sola vez.
-      </p>
-
-      <section className="flex flex-col gap-3">
-        <h3 className="font-medium text-sm">
-          Parte 1 · Autoriza tu dirección de Finflow
-        </h3>
-        <ol className="flex flex-col gap-3 text-sm leading-relaxed">
-          <Instruction n={1}>
-            Arriba a la derecha, <strong>Configuración</strong> (⚙️) →{" "}
-            <strong>Ver toda la configuración</strong> → pestaña{" "}
-            <strong>Reenvío y correo POP/IMAP</strong>.
-          </Instruction>
-          <Instruction n={2}>
-            Pulsa <strong>Agregar una dirección de reenvío</strong>, pega la tuya y
-            pulsa <strong>Siguiente</strong> → <strong>Continuar</strong> →{" "}
-            <strong>Aceptar</strong>. Google puede pedirte tu contraseña para dejarte
-            seguir.
-            <span className="mt-2 flex items-start gap-2">
-              <code className="block min-w-0 flex-1 break-all rounded-lg border border-line bg-ink px-3 py-2 text-xs">
-                {address}
-              </code>
-              <CopyButton value={address} />
-            </span>
-          </Instruction>
-          <Instruction n={3}>
-            Google manda un correo de verificación a esa dirección.{" "}
-            <strong>No tienes que abrirlo</strong>: Finflow lo recibe y lo confirma
-            solo, en aproximadamente un minuto, y aquí abajo lo verás confirmado. Gmail
-            no se actualiza solo: <strong>recarga la página</strong> y tu dirección debe
-            dejar de decir que la verificación está pendiente. Si a los pocos minutos lo
-            sigue diciendo, pulsa{" "}
-            <strong>Volver a enviar correo de verificación</strong> ahí mismo.
-          </Instruction>
-          <Instruction n={4}>
-            En esa misma pestaña, <strong>deja marcado «Inhabilitar el reenvío»</strong>
-            . La otra opción, «Reenviar una copia del correo entrante», mandaría todo tu
-            correo, también el personal. Lo que se reenvía lo decide el filtro de la
-            parte 2.
-          </Instruction>
-        </ol>
-
-        {verified ? (
-          <p className="flex items-center gap-2 text-incoming text-sm">
-            <BadgeCheck className="size-4" />
-            {confirmedAt
-              ? `Google confirmó tu dirección: ${formatDateTime(confirmedAt)}`
-              : "El correo ya está llegando, así que el camino funciona."}
-          </p>
-        ) : (
-          <div className="flex flex-col gap-4 rounded-xl border border-line bg-ink p-4">
-            <div className="flex items-center gap-2.5 text-muted text-sm">
-              <Loader2 className="size-4 animate-spin text-cyan" />
-              {STAGE_COPY.forwarding.waiting}
-            </div>
-            <p className="text-faint text-xs">
-              Esta pantalla se entera sola. Si pasa un rato largo, revisa que la
-              dirección quedó bien pegada en Gmail, sin espacios.
-            </p>
-          </div>
-        )}
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h3 className="font-medium text-sm">
-          Parte 2 · Crea el filtro que reenvía solo lo de tu banco
-        </h3>
-        {!verified ? (
-          <p className="rounded-xl border border-warn/30 bg-warn/10 p-3 text-sm leading-relaxed">
-            Espera a que la parte 1 quede confirmada. Antes de eso, Gmail no muestra tu
-            dirección de Finflow en la lista de «Reenviarlo a» y el filtro no se puede
-            terminar.
-          </p>
-        ) : null}
-        <ol className="flex flex-col gap-3 text-sm leading-relaxed">
-          <Instruction n={5}>
-            En la caja de búsqueda de Gmail, arriba, pulsa{" "}
-            <strong>Mostrar opciones de búsqueda</strong>: el icono de la derecha de la
-            caja, con tres rayas.
-          </Instruction>
-          <Instruction n={6}>
-            En el campo <strong>De</strong> pega esto tal cual, y deja los demás campos
-            vacíos:
-            {fromFilter ? (
-              <span className="mt-2 flex items-start gap-2">
-                <code className="block min-w-0 flex-1 break-all rounded-lg border border-line bg-ink px-3 py-2 text-xs">
-                  {fromFilter}
-                </code>
-                <CopyButton value={fromFilter} />
-              </span>
-            ) : (
-              <span className="mt-2 block text-faint text-xs">
-                Aparece aquí cuando apruebes a tu banco en el paso anterior.
-              </span>
-            )}
-            <span className="mt-2 block">
-              No necesitas saber desde qué dirección exacta te escribe tu banco: el{" "}
-              <code>@</code> delante de un dominio quiere decir «cualquier dirección que
-              termine así», y <code>OR</code> junta todos tus bancos en un solo filtro.
-            </span>
-          </Instruction>
-          <Instruction n={7}>
-            <strong>Compruébalo antes de guardar</strong>: pulsa <strong>Buscar</strong>
-            . Deben aparecer correos de tu banco que ya tengas. Si tienes alertas del
-            banco y no aparece ninguna, abre una, copia la dirección del remitente
-            completa (la que va entre «&lt;» y «&gt;») y apruébala en el paso{" "}
-            <strong>{STAGE_COPY.senders.title}</strong>: el texto de arriba se actualiza
-            solo.
-          </Instruction>
-          <Instruction n={8}>
-            Vuelve a abrir <strong>Mostrar opciones de búsqueda</strong> (lo que pegaste
-            sigue ahí) y pulsa <strong>Crear filtro</strong>.
-          </Instruction>
-          <Instruction n={9}>
-            Marca <strong>Reenviarlo a:</strong> y elige tu dirección de Finflow en la
-            lista. Si no aparece, es que todavía no está verificada: vuelve al paso 3.
-          </Instruction>
-          <Instruction n={10}>
-            Pulsa <strong>Crear filtro</strong>. Listo. El filtro solo reenvía los
-            correos que lleguen <strong>de ahora en adelante</strong>; los que ya tienes
-            no, aunque marques «Aplicar el filtro también a las conversaciones que
-            coinciden».
-          </Instruction>
-        </ol>
-        <p className="text-faint text-xs leading-relaxed">
-          Si más adelante apruebas otro banco, actualiza el filtro: en Gmail,{" "}
-          <strong>Configuración</strong> → <strong>Ver toda la configuración</strong> →{" "}
-          <strong>Filtros y direcciones bloqueadas</strong> → <strong>Editar</strong> en
-          tu filtro, y reemplaza el campo «De» por el texto nuevo de aquí.
-        </p>
-        {verified && !complete ? (
-          <div>
-            <Button variant="ghost" onClick={onDone}>
-              Ya creé el filtro
-            </Button>
-          </div>
-        ) : null}
-      </section>
-    </div>
-  );
-}
-
-function Instruction({ n, children }: { n: number; children: ReactNode }) {
-  return (
-    <li className="flex items-start gap-3">
-      <span
-        aria-hidden
-        className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg border border-line bg-ink text-faint text-xs"
-      >
-        {n}
-      </span>
-      <span className="min-w-0">{children}</span>
-    </li>
-  );
-}
-
-function FirstAlertBody({ complete }: { complete: boolean }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm leading-relaxed">
-        Con el reenvío activo, la próxima alerta de tu banco llega sola. Puedes esperar
-        a tu siguiente compra o hacer una pequeña para probar.
-      </p>
-
-      {complete ? (
-        <p className="flex items-center gap-2 text-incoming text-sm">
-          <Sparkles className="size-4" />
-          Ya llegó la primera. Desde ahí, cada movimiento se registra solo.
-        </p>
-      ) : (
-        <div className="flex items-center gap-2.5 rounded-xl border border-line bg-ink p-4 text-muted text-sm">
-          <Loader2 className="size-4 animate-spin text-cyan" />
-          {STAGE_COPY["first-alert"].waiting}
+          <h1 className="mt-1 font-semibold text-2xl tracking-tight">
+            Conecta tu banco
+          </h1>
         </div>
-      )}
+        {review ? (
+          <Link
+            to="/conectar"
+            search={{}}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg text-cyan text-sm underline-offset-4 hover:underline"
+          >
+            <ArrowLeft className="size-4" aria-hidden />
+            Estado de la conexión
+          </Link>
+        ) : null}
+      </header>
+
+      <Stepper stages={state.stages} viewing={stage} onSelect={onOpen} />
+
+      <div
+        key={stage}
+        className={cn(
+          "mt-8",
+          shown.direction === "back" ? "step-in-back" : "step-in-forward",
+        )}
+      >
+        {stage === "banks" ? (
+          <BanksStep
+            unapprovedSenders={state.unapprovedSenders}
+            filterDone={done("filter")}
+            continueLabel={review ? "Listo" : "Continuar"}
+            onContinue={review ? onStatus : () => onOpen("address")}
+            onOpenFilter={() => onOpen("filter")}
+          />
+        ) : stage === "address" ? (
+          <AddressStep
+            address={state.address}
+            confirmedAt={state.forwardingConfirmedAt}
+            receiving={state.firstAlertAt !== null || state.complete}
+            requestedAt={state.forwardingRequestedAt}
+            onCopied={() => acknowledge("addressCopied")}
+            onRequested={() => record({ forwardingRequestedAt: nowInSeconds() })}
+            onContinue={() => onOpen("filter")}
+          />
+        ) : stage === "filter" ? (
+          <FilterStep
+            address={state.address}
+            addressConfirmed={done("address")}
+            done={done("filter")}
+            onDone={(terms) => {
+              record({ gmailSubmitted: true, filterSenders: terms });
+              onOpen("first-alert");
+            }}
+            onOpenBanks={() => onOpen("banks")}
+            onOpenAddress={() => onOpen("address")}
+          />
+        ) : (
+          <ConfirmStep
+            state={state}
+            celebrating={celebrating}
+            onOpenStage={onOpen}
+            onSummary={onStatus}
+          />
+        )}
+      </div>
     </div>
   );
 }

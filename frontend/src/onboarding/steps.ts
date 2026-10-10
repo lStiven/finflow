@@ -2,10 +2,11 @@
  * What the "connect your bank" screen shows, resolved in one place.
  *
  * Two sources have to be merged and neither one is enough on its own: the API
- * knows the four verifiable facts and nothing about what the person read, the
- * browser knows what they read and nothing about what the mailbox did. This
- * is the function that puts them together, so no component has to reason
- * about the seam — and so the rules that matter can be tested without a DOM.
+ * knows the verifiable facts and nothing about what the person did in Gmail,
+ * the browser knows what they said they did and nothing about what the
+ * mailbox saw. This is the function that puts them together, so no component
+ * has to reason about the seam — and so the rules that matter can be tested
+ * without a DOM.
  *
  * The server always wins where the two could disagree. `ready` in particular
  * closes the whole thing regardless of what was acknowledged: somebody whose
@@ -17,28 +18,24 @@ import type { InboxSetup } from "@/api/queries";
 import type { OnboardingAcks } from "@/onboarding/progress";
 
 /**
- * The five stages a person walks through, in the order they are shown.
- *
- * More than the API's four steps because two of these are *reading*, not
- * doing: the API has no business tracking those, and a screen that skipped
- * them would hand somebody an address with no explanation of what it is.
+ * The four stages, in the order they are shown and the order Gmail allows:
+ * the filter's «Reenviarlo a» only lists an address Google already verified,
+ * and the filter's terms come from the banks chosen first.
  */
-export const STAGES = [
-  "intro",
-  "address",
-  "senders",
-  "forwarding",
-  "first-alert",
-] as const;
+export const STAGES = ["banks", "address", "filter", "first-alert"] as const;
 
 export type StageId = (typeof STAGES)[number];
 
 /** Who says a stage is done, which is what the screen labels it with. */
 export type Proof = "you" | "verified";
 
+/** `waiting` is a stage whose part is done and whose proof is on its way. */
+export type StageStatus = "done" | "waiting" | "todo";
+
 export type Stage = {
   id: StageId;
   done: boolean;
+  status: StageStatus;
   proof: Proof;
 };
 
@@ -53,7 +50,7 @@ export type OnboardingState = {
   complete: boolean;
   doneCount: number;
   total: number;
-  /** Whether to show the "everything is connected" message — once, ever. */
+  /** Whether to say "everything is connected" — once, ever. */
   celebrate: boolean;
   /**
    * Whether to welcome somebody and point them at the first step — once,
@@ -62,51 +59,95 @@ export type OnboardingState = {
    * stacking two dialogs.
    */
   welcome: boolean;
+  /**
+   * Whether the guide opens on its introduction. Only for somebody with
+   * nothing done anywhere: progress made in another browser is on the
+   * server, and somebody who has already started is not shown the door.
+   */
+  intro: boolean;
   address: string;
   addressStatus: AddressStatus;
   /** Senders whose mail arrived and was discarded for not being approved. */
   unapprovedSenders: string[];
+  sendersApproved: boolean;
+  forwardingConfirmedAt: number | null;
+  firstAlertAt: number | null;
+  /** When they said the address was added in Gmail, if they did. */
+  forwardingRequestedAt: number | null;
+  /** The filter's terms when they said it was made, if this browser saw it. */
+  filterSenders: string[] | null;
 };
 
-function isDone(setup: InboxSetup, key: string): boolean {
-  return setup.steps.some((step) => step.key === key && step.done);
+function stepOf(setup: InboxSetup, key: string) {
+  return setup.steps.find((step) => step.key === key);
 }
 
 export function resolveOnboarding(
   setup: InboxSetup,
   acks: OnboardingAcks,
 ): OnboardingState {
-  const sendersApproved = isDone(setup, "senders_approved");
-  const forwardingConfirmed = isDone(setup, "forwarding_confirmed");
-  const firstAlert = isDone(setup, "first_alert");
+  const sendersApproved = Boolean(stepOf(setup, "senders_approved")?.done);
+  const forwarding = stepOf(setup, "forwarding_confirmed");
+  const forwardingConfirmed = Boolean(forwarding?.done);
+  const alert = stepOf(setup, "first_alert");
+  const firstAlert = Boolean(alert?.done);
   const complete = setup.ready;
+
+  // An alert that arrived proves the address works with or without Google's
+  // confirmation: somebody forwarding by hand never gets one, and must not be
+  // told their address is unverified while their movements appear.
+  const addressDone = forwardingConfirmed || firstAlert;
+  // Google's confirmation is half of the filter stage's precondition, and the
+  // person's word is the other half: nothing outside Gmail can see a filter.
+  // That word alone never closes it — a green tick over a filter that cannot
+  // exist yet (the address is not even verified) is the lie this avoids. The
+  // first alert settles it either way.
+  const filterDone = (forwardingConfirmed && acks.gmailSubmitted) || firstAlert;
 
   const stages: Stage[] = (
     [
-      { id: "intro", done: acks.introSeen, proof: "you" },
-      { id: "address", done: acks.addressCopied, proof: "you" },
-      { id: "senders", done: sendersApproved, proof: "verified" },
       {
-        id: "forwarding",
-        // Google's confirmation is half of this stage, not all of it: the
-        // filter that actually forwards is made afterwards, and closing the
-        // stage on the confirmation alone collapsed it before anybody read
-        // the half that matters. Nothing outside Gmail can see a filter, so
-        // that half is the person's word — and labelled as such — until the
-        // first alert proves the whole route. That alert also settles it for
-        // somebody forwarding by hand, who never gets a confirmation and
-        // would otherwise sit here with movements already on screen.
-        done: (forwardingConfirmed && acks.gmailSubmitted) || firstAlert,
+        id: "banks",
+        done: sendersApproved,
+        status: sendersApproved ? "done" : "todo",
+        proof: "verified",
+      },
+      {
+        id: "address",
+        done: addressDone,
+        status: addressDone
+          ? "done"
+          : acks.forwardingRequestedAt !== null
+            ? "waiting"
+            : "todo",
+        proof: "verified",
+      },
+      {
+        id: "filter",
+        done: filterDone,
+        status: filterDone ? "done" : "todo",
         proof: firstAlert ? "verified" : "you",
       },
-      { id: "first-alert", done: firstAlert, proof: "verified" },
+      {
+        id: "first-alert",
+        done: firstAlert,
+        status: firstAlert ? "done" : filterDone ? "waiting" : "todo",
+        proof: "verified",
+      },
     ] satisfies Stage[]
   ).map((stage) =>
     // Arriving expenses settle every stage behind them. A recap that still
-    // showed "copy your address" as pending, for an account already
-    // receiving, would be reporting on the reading rather than the setup.
-    complete ? { ...stage, done: true } : stage,
+    // showed a stage as pending, for an account already receiving, would be
+    // reporting on the clicks rather than on the setup.
+    complete ? { ...stage, done: true, status: "done" } : stage,
   );
+
+  const nothingStarted =
+    !sendersApproved &&
+    !forwardingConfirmed &&
+    !firstAlert &&
+    acks.forwardingRequestedAt === null &&
+    !acks.gmailSubmitted;
 
   return {
     stages,
@@ -119,20 +160,28 @@ export function resolveOnboarding(
     // round: somebody signing in on a new browser with everything already
     // connected must not be walked through connecting it.
     welcome: !complete && !acks.welcomeSeen,
+    intro: !complete && !acks.introSeen && nothingStarted,
     address: setup.address,
-    addressStatus: addressStatusOf({ complete, forwardingConfirmed }),
+    addressStatus: complete
+      ? "receiving"
+      : forwardingConfirmed
+        ? "confirmed"
+        : "unverified",
     unapprovedSenders: setup.unapproved_senders,
+    sendersApproved,
+    forwardingConfirmedAt: forwardingConfirmed ? (forwarding?.at ?? null) : null,
+    firstAlertAt: firstAlert ? (alert?.at ?? null) : null,
+    forwardingRequestedAt: acks.forwardingRequestedAt,
+    filterSenders: acks.filterSenders,
   };
 }
 
-function addressStatusOf({
-  complete,
-  forwardingConfirmed,
-}: {
-  complete: boolean;
-  forwardingConfirmed: boolean;
-}): AddressStatus {
-  if (complete) return "receiving";
-  if (forwardingConfirmed) return "confirmed";
-  return "unverified";
+/** The 1-based position the URL carries, for a stage. */
+export function stageNumber(id: StageId): number {
+  return STAGES.indexOf(id) + 1;
+}
+
+/** The stage a 1-based position names, if it names one. */
+export function stageAt(position: number): StageId | undefined {
+  return STAGES[position - 1];
 }

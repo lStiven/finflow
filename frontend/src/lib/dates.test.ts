@@ -7,6 +7,7 @@ import {
   formatIsoDate,
   formatIsoDayMonth,
   formatMonthKey,
+  formatRelative,
   fromLocalInput,
   monthDayRange,
   monthRange,
@@ -150,5 +151,29 @@ describe("formatDayMonth", () => {
   it("deja fuera el año, que ya está en el encabezado del mes", () => {
     // 2026-08-29 12:00 UTC, que en Bogotá son las 07:00 del mismo día.
     expect(formatDayMonth(1788004800)).toBe("29 de ago");
+  });
+});
+
+describe("formatRelative", () => {
+  const NOW = 1_788_004_800;
+
+  it("cuenta hacia atrás en la unidad más grande que cabe, sin redondear arriba", () => {
+    expect(formatRelative(NOW - 20, NOW)).toBe("justo ahora");
+    expect(formatRelative(NOW - 5 * 60, NOW)).toBe("hace 5 minutos");
+    // 59 minutos no son "hace 1 hora".
+    expect(formatRelative(NOW - 59 * 60, NOW)).toBe("hace 59 minutos");
+    expect(formatRelative(NOW - 3 * 3_600, NOW)).toBe("hace 3 horas");
+    expect(formatRelative(NOW - 86_400, NOW)).toBe("ayer");
+    expect(formatRelative(NOW - 12 * 86_400, NOW)).toBe("hace 12 días");
+  });
+
+  it("nombra el día pasado un mes, en vez de contar", () => {
+    expect(formatRelative(NOW - 40 * 86_400, NOW)).toBe(
+      `el ${formatDate(NOW - 40 * 86_400)}`,
+    );
+  });
+
+  it("no habla del futuro aunque el reloj se adelante", () => {
+    expect(formatRelative(NOW + 300, NOW)).toBe("justo ahora");
   });
 });

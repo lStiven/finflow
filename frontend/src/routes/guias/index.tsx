@@ -42,7 +42,7 @@ function GuidesScreen() {
           icon={Mail}
           glow="cyan"
           title="Conectar tu banco"
-          blurb="Los cinco pasos que hacen que tus gastos se registren solos: tu dirección, los remitentes que apruebas y el reenvío en Gmail."
+          blurb="Cuatro pasos para que tus gastos se registren solos: elegir tus bancos, autorizar tu dirección en Gmail, crear el filtro y recibir tu primera alerta."
           badge={
             state === null
               ? undefined

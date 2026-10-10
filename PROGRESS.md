@@ -160,7 +160,7 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
-la nube, 2455 pruebas de Python y 473 del frontend, todas en verde, y cinco
+la nube, 2493 pruebas de Python y 533 del frontend, todas en verde, y siete
 e2e en el navegador (`just e2e`). El contrato de la API y los tipos del
 frontend están sincronizados.
 
@@ -332,6 +332,12 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Conectar el banco es un asistente, no una guía de texto.**
+  Bienvenida, cuatro pasos (bancos, dirección, filtro, prueba) con tutorial
+  visual de Gmail, y para quien ya terminó, el estado real de la conexión.
+  Nada se marca listo sin evidencia del servidor. `just e2e-connect` lo
+  recorre de una cuenta nueva a su primer movimiento. Solo en el árbol, sin
+  commit y sin publicar.
 - 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
   el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
 - 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
@@ -339,7 +345,8 @@ AWS (ver Trabas).
   se perdía sin rastro. La guía del reenvío se rehízo en dos partes —autorizar
   la dirección, crear el filtro— y el paso ya no se cierra con la sola
   confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
-  guía hace comprobarlo buscando antes de guardar.
+  guía hace comprobarlo buscando antes de guardar. **Comprobado en producción
+  el 2026-10-05**: Finflow confirmó solo y Gmail lo dio por verificado.
 - 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
   desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
   se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
@@ -348,6 +355,3 @@ AWS (ver Trabas).
 - 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
   huella de tarjeta y no de la cuenta donde quedó el movimiento; el detalle ya
   nombra los cuatro orígenes.
-- 2026-09-30 — **`master` lista para producción** con la exportación y los
-  avisos en la app, sin presupuestos (no existen ahí); `dev` publicada entera
-  en desarrollo, API y web.

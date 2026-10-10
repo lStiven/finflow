@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { ArrowRight, Plug } from "lucide-react";
 import { STAGE_COPY } from "@/onboarding/copy";
 import { useOnboarding } from "@/onboarding/useOnboarding";
@@ -10,12 +10,15 @@ import { useOnboarding } from "@/onboarding/useOnboarding";
  * expenses are arriving — an onboarding banner that outlives the onboarding
  * is the thing people learn to stop reading. What it shows is the count and
  * the next stage by name, so "what is missing" is answerable without opening
- * anything.
+ * anything. Not on the guide itself, which shows the same thing larger.
  */
 export function OnboardingNudge() {
   const { state } = useOnboarding();
+  const onGuide = useRouterState({
+    select: (router) => router.location.pathname === "/conectar",
+  });
 
-  if (!state || state.complete || !state.current) return null;
+  if (!state || state.complete || !state.current || onGuide) return null;
 
   const next = STAGE_COPY[state.current];
 
@@ -38,7 +41,9 @@ export function OnboardingNudge() {
             {state.doneCount} de {state.total} listos
           </span>
         </span>
-        <span className="mt-0.5 block truncate text-muted text-sm">{next.title}</span>
+        <span className="mt-0.5 block truncate text-muted text-sm">
+          Sigue: {next.title}
+        </span>
       </span>
 
       <span
