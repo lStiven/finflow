@@ -202,7 +202,7 @@ construye una interfaz generada desde registros.
 | UX-11 | Reportes | Columnas navegables (el resto del desglose y los parciales ya existen) | S | 4–8 | P1 | **Hecho** (2026-10-10) |
 | UX-12 | Comercios y categorías | Cola de revisión y acciones en contexto; sugerir fusiones queda fuera (sin contrato) | M | 6–12 | P1 | **Hecho** (2026-10-10) |
 | UX-13 | Centro de Guías | Continuar, qué quiero hacer, resolver un problema | M | 6–12 | P1 | **Hecho** (2026-10-10) |
-| UX-14 | Ayuda de avisos | La conexión con Telegram ya existe (Perfil, `/guias/avisos`); solo acortar y guiar | S | 4–8 | P2 | Pendiente |
+| UX-14 | Ayuda de avisos | La conexión con Telegram ya existe (Perfil, `/guias/avisos`); solo acortar y guiar | S | 4–8 | P2 | **Hecho** (2026-10-10) |
 | UX-15 | Analítica de experiencia | — | — | — | — | **Diferido**: no hay uso suficiente para medir |
 | QA-16 | Accesibilidad, móvil y regresión | Una e2e por ticket; `just e2e` completo antes de cerrar cada fase | — | 8–16 | Transversal | Continuo |
 
@@ -352,10 +352,14 @@ siempre.
   por día.
 - **Comercios:** nada se agrupa solo; las sugerencias se confirman.
   **Cerrado el 2026-10-10** (`just e2e-comercios`): cada comercio sin revisar
-  ofrece las dos respuestas en palabras de 44 px, en la lista —«Está bien» y
-  «Otra categoría», que cambia la categoría ahí mismo—, y un fallo se dice. El
-  selector de la fila se nombra con el comercio: la pantalla ya tenía otro
-  control «Categoría» (el filtro) y dos con un nombre son uno para un lector.
+  ofrece sus dos respuestas en su misma fila: la categoría como píldora que
+  guarda al elegirla —eso ya cuenta como revisado— y «Está bien»; «Listo: …»
+  lo dice arriba de la lista, y un fallo se dice en la fila. **Rehecho el mismo
+  día**: la primera versión ponía un bloque de botones bajo cada comercio y
+  Stiven la rechazó por pesada; la lección es que una cola se lee como lista,
+  y una respuesta por fila cabe en la fila. El selector se nombra con el
+  comercio: la pantalla ya tenía otro control «Categoría» (el filtro) y dos con
+  un nombre son uno para un lector.
   La e2e registra una persona y le llegan dos alertas por el webhook local,
   porque revisar no se deshace y la cola del seed se agotaría.
 - **Guías:** cada tarjeta lleva a una acción existente; la de conexión lleva a
@@ -554,8 +558,8 @@ salida real de las pruebas.
 4. ~~Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).~~ Hecho el 2026-10-10.
 5. Prompt D para cerrar la fase.
 6. ~~Seguir con Cuentas, después Resumen, Facturas, Reportes y Comercios, y
-   cerrar con Guías y el diagnóstico enlazado.~~ Hecho el 2026-10-10. Queda
-   F6 (UX-14).
+   cerrar con Guías y el diagnóstico enlazado.~~ Hecho el 2026-10-10.
+7. ~~F6 (UX-14)~~ Hecho el 2026-10-10. **El plan está completo.**
 
 ---
 
@@ -660,4 +664,34 @@ La exploración cubrió lo que ninguna e2e prueba:
 | 4 | MEJORA | Guardar remitentes ahora espera a que el setup vuelva con el filtro; en una cuenta aún sin terminar, eso incluye leer su historial de correos. No se midió lento, pero el «Guardando…» dura lo que dure esa lectura | `api/queries.ts`, `useUpdateInbox` | Anotado |
 | 5 | MEJORA | `just e2e-budgets` registra una cuenta nueva en cada corrida, como ya hacía `e2e-connect`: el emulador local las acumula | `frontend/scripts/e2e-budgets.mjs` | Aceptado |
 | 6 | MEJORA (documentación) | Este plan decía que la ayuda se abre «solo en la primera visita»; en realidad se abre hasta que se cierra | sección 4, UX-01 | Corregido en el texto |
+
+---
+
+## 12. F6 y lo que se sumó al final (2026-10-10)
+
+**UX-14, ayuda de avisos** (`just e2e-guia-avisos`). La guía se hace, no solo
+se lee: arriba, el estado real del canal —sin conectar, esperando «Empezar»,
+conectado— con los tres pasos y el botón «Conectar Telegram» ahí mismo, el
+mismo flujo que Perfil (`alerts/ConnectTelegram.tsx`, compartido). Si se
+conecta mientras se mira, celebra como el asistente. El resto quedó en líneas
+cortas. La e2e no puede hacer que Telegram pulse «Empezar» sin llamar a la API
+real del bot con el token del stack, así que el estado conectado se dibuja con
+una respuesta simulada; `t.me` queda bloqueado en la prueba.
+
+**Recorridos animados** (pedido por Stiven al ver UX-14; `just e2e-guias`).
+Lo que cuesta entender en un párrafo, en movimiento y paso a paso, con el
+lenguaje visual del asistente (`guides/stories/`):
+
+| Recorrido | Dónde se abre |
+| --- | --- |
+| Cómo llega un movimiento: pago → correo del banco → Gmail → Finflow lo lee → cae en su cuenta → aviso | «Cómo funciona» de Transacciones |
+| Un traslado no es un gasto: dos saldos se mueven, el patrimonio no | «Cómo funciona» de Cuentas |
+| De qué está hecha una cuota: intereses y seguros primero, solo el resto baja la deuda | «Cómo funciona» de la financiación de un crédito |
+| De previsto a pagado: declarar no mueve plata, pagar sí, cobrar sola espera al banco | «Cómo funciona» de Facturas |
+
+Los cuatro están juntos en `/guias/flujos`, enlazado desde Guías. Avanzan a
+mano, nunca solos (quien lee no es adelantado, y es lo accesible); el
+carrusel es el del asistente, promovido a `components/ui/Tutorial.tsx` en su
+segundo uso. Cada cifra es una que la app produce: la de la cuota es el
+ejemplo verificado (2.000.000 sobre 60.000.000 deja 58.920.622,87).
 

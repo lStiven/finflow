@@ -2,6 +2,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Combine,
@@ -23,6 +24,7 @@ import {
   merchantCatalogQuery,
   merchantsQuery,
   useConfirmMerchant,
+  useCreateCategory,
   useEditMerchant,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
@@ -33,8 +35,13 @@ import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { aliasCountLabel, sortLabel, timesSeenLabel } from "@/merchants/aliases";
 import { CategoryManager } from "@/merchants/CategoryManager";
-import { CategoryPicker } from "@/merchants/CategoryPicker";
-import { categoryLabel, categoryLabels, labelFrom } from "@/merchants/categories";
+import { CategoryNameForm } from "@/merchants/CategoryNameForm";
+import {
+  categoryLabel,
+  categoryLabels,
+  createCategoryError,
+  labelFrom,
+} from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -132,6 +139,9 @@ function MerchantsScreen() {
   // Nothing at all, ever — the only case the explanation is for. Somebody who
   // has merchants but filtered them all away needs a different sentence.
   const nothingYet = page.total === 0 && !filtering;
+  // What the last review in the list did, said once above it: the row it
+  // happened on leaves the queue, so the row cannot be where it is said.
+  const [reviewed, setReviewed] = useState<string | null>(null);
 
   return (
     <AppShell>
@@ -222,6 +232,16 @@ function MerchantsScreen() {
               {search.search || search.category ? " con estos filtros" : ""}
             </p>
 
+            {reviewed ? (
+              <p
+                role="status"
+                className="rise flex items-center gap-2 text-incoming text-sm"
+              >
+                <Check className="size-4 shrink-0" aria-hidden />
+                Listo: {reviewed}
+              </p>
+            ) : null}
+
             {page.merchants.length === 0 ? (
               <Empty inQueue={search.review === true} />
             ) : (
@@ -229,7 +249,13 @@ function MerchantsScreen() {
                 <ul>
                   {page.merchants.map((merchant, index) => (
                     <li key={merchant.id}>
-                      <Row merchant={merchant} index={index} labels={labels} />
+                      <Row
+                        merchant={merchant}
+                        index={index}
+                        inQueue={search.review === true}
+                        labels={labels}
+                        onReviewed={setReviewed}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -467,19 +493,24 @@ function SearchBar({
 function Row({
   merchant,
   index,
+  inQueue,
   // A row holds a value and nothing else, so a category this person wrote
   // would render as `custom:mascotas` without the names beside it.
   labels,
+  onReviewed,
 }: {
   merchant: Merchant;
   index: number;
+  /** In «Por revisar» every row is unreviewed, so saying it again is noise. */
+  inQueue: boolean;
   labels: Record<string, string>;
+  onReviewed: (message: string) => void;
 }) {
-  const [fixing, setFixing] = useState(false);
+  const reviewing = merchant.needs_review;
 
   return (
     <div
-      className="rise flex flex-col border-line/40 border-b"
+      className="rise flex flex-col border-line/40 border-b sm:flex-row sm:items-center"
       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       <Link
@@ -491,7 +522,7 @@ function Row({
           aria-hidden
           className={cn(
             "grid size-9 shrink-0 place-items-center rounded-lg transition-transform duration-200 group-hover:scale-110",
-            merchant.needs_review
+            reviewing
               ? "bg-gradient-to-br from-accent/25 to-violet/5 text-accent"
               : "bg-surface-raised text-muted",
           )}
@@ -504,141 +535,190 @@ function Row({
             <span className="truncate font-medium text-sm">
               {merchant.display_name}
             </span>
-            {merchant.needs_review ? (
+            {reviewing && !inQueue ? (
               <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[0.625rem] text-accent uppercase tracking-wider">
                 Sin revisar
               </span>
             ) : null}
           </span>
-          {/* One line, and short enough to finish it: the category is what
-              this queue is about. The last-seen date used to be here and was
-              the half that got clipped on a phone — it is on the merchant's
-              own screen, and the list is sorted by recency anyway. */}
+          {/* One line, short enough to finish. The category is left out
+              while it is a control right beside this — said twice, it was
+              the first thing to look like clutter. */}
           <span className="mt-0.5 block truncate text-faint text-xs">
-            <span className="inline-flex items-center gap-1 align-middle">
-              <Tag className="size-3" aria-hidden />
-              {labelFrom(labels, merchant.category)}
-            </span>
-            <span> · {timesSeenLabel(merchant.times_seen)}</span>
+            {reviewing ? null : (
+              <span className="inline-flex items-center gap-1 align-middle">
+                <Tag className="size-3" aria-hidden />
+                {labelFrom(labels, merchant.category)} ·{" "}
+              </span>
+            )}
+            <span>{timesSeenLabel(merchant.times_seen)}</span>
             {merchant.alias_count > 1 ? (
               <span> · {aliasCountLabel(merchant.alias_count)}</span>
             ) : null}
           </span>
         </span>
 
+        {/* On a wide screen the controls sit right after this, and a chevron
+            between the name and them points at nothing. */}
         <Enter
-          className="size-4 shrink-0 text-faint transition-transform duration-200 group-hover:translate-x-0.5"
+          className={cn(
+            "size-4 shrink-0 text-faint transition-transform duration-200 group-hover:translate-x-0.5",
+            reviewing && "sm:hidden",
+          )}
           aria-hidden
         />
       </Link>
 
       {/*
-        Outside the link, not inside it: a button nested in an anchor is
-        invalid and swallows the click on the row it sits in. The queue is only
-        bearable if both common answers — «sí, es ese» and «es de otra
-        categoría» — take a tap and never leave the list. A line of their own,
-        with words: on a phone the old lone tick was a pinpoint with no name.
+        Outside the link: a control nested in an anchor is invalid and
+        swallows the click. Beside the name on a wide screen, under it on a
+        phone — one row either way, not a second block per merchant.
       */}
-      {merchant.needs_review ? (
-        <ReviewActions
-          merchant={merchant}
-          fixing={fixing}
-          onFix={() => setFixing(true)}
-          onDone={() => setFixing(false)}
-        />
+      {reviewing ? (
+        <ReviewControls merchant={merchant} labels={labels} onReviewed={onReviewed} />
       ) : null}
     </div>
   );
 }
 
-function ReviewActions({
+/** A control that shares the row's quiet look: a pill, not a block. */
+const PILL =
+  "inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs transition-colors hover:border-cyan/40 disabled:opacity-50 sm:min-h-9";
+
+/** The dropdown entry that opens the name field. Never a category value. */
+const CREATE = "__create__";
+
+/**
+ * Reviewing a merchant is saying what it is, so the category *is* the
+ * control: choosing one saves it, and that counts as reviewed. «Está bien»
+ * is for when the guess was already right.
+ *
+ * A native select, styled as a pill: it opens the platform's own picker on a
+ * phone and needs no code to be keyboard- and screen-reader-friendly.
+ */
+function ReviewControls({
   merchant,
-  fixing,
-  onFix,
-  onDone,
+  labels,
+  onReviewed,
 }: {
   merchant: Merchant;
-  fixing: boolean;
-  onFix: () => void;
-  onDone: () => void;
+  labels: Record<string, string>;
+  onReviewed: (message: string) => void;
 }) {
+  const { data } = useSuspenseQuery(categoriesQuery);
   const confirm = useConfirmMerchant(merchant.id);
   const edit = useEditMerchant(merchant.id);
-  const [category, setCategory] = useState(merchant.category);
+  const create = useCreateCategory();
+  const [naming, setNaming] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const busy = confirm.isPending || edit.isPending;
   const failure = confirm.error ?? edit.error;
 
-  if (fixing) {
-    return (
-      <div className="rise flex flex-col gap-3 px-4 pb-4 sm:pl-16">
-        {/* Named after the merchant: the filter above is also «Categoría»,
-            and two controls with one name are one control to a screen reader. */}
-        <CategoryPicker
-          label={`Categoría de ${merchant.display_name}`}
-          value={category}
-          onChange={setCategory}
-        />
-        {failure ? (
-          <p role="alert" className="text-outgoing text-xs">
-            {failure.message}
-          </p>
-        ) : null}
-        <div className="flex gap-2">
-          <Button
-            variant="ghost"
-            className="py-2 text-xs"
-            onClick={() => {
-              edit.reset();
-              onDone();
-            }}
-          >
-            Cancelar
-          </Button>
-          <Button
-            className="py-2 text-xs"
-            disabled={edit.isPending || category === merchant.category}
-            aria-label={`Guardar la categoría de ${merchant.display_name}`}
-            // Editing counts as reviewing: the row leaves the queue on its own.
-            onClick={() => edit.mutate({ category }, { onSuccess: onDone })}
-          >
-            {edit.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            Guardar
-          </Button>
-        </div>
-      </div>
+  function choose(category: string) {
+    edit.mutate(
+      { category },
+      {
+        onSuccess: () =>
+          onReviewed(
+            `${merchant.display_name} quedó en ${labels[category] ?? labelFrom(labels, category)}.`,
+          ),
+      },
     );
   }
 
+  async function onCreate(name: string) {
+    setNameError(null);
+    try {
+      const created = await create.mutateAsync({ label: name });
+      setNaming(false);
+      edit.mutate(
+        { category: created.value },
+        { onSuccess: () => onReviewed(`${merchant.display_name} quedó en ${name}.`) },
+      );
+    } catch (cause) {
+      setNameError(createCategoryError(cause));
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-1 px-4 pb-3 sm:pl-16">
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="ghost"
-          className="min-h-11 py-2 text-xs"
-          disabled={confirm.isPending}
+    <div className="flex flex-col gap-2 px-4 pb-3 pl-16 sm:py-3 sm:pl-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn(PILL, "relative pr-8")}>
+          <Tag className="size-3.5 shrink-0 text-faint" aria-hidden />
+          <select
+            aria-label={`Categoría de ${merchant.display_name}`}
+            value={merchant.category}
+            disabled={busy}
+            onChange={(event) => {
+              if (event.target.value === CREATE) {
+                setNaming(true);
+                return;
+              }
+              choose(event.target.value);
+            }}
+            className="-inset-px absolute h-[calc(100%+2px)] w-[calc(100%+2px)] cursor-pointer appearance-none rounded-full bg-transparent pr-8 pl-8 text-transparent focus-visible:outline-2 focus-visible:outline-cyan focus-visible:outline-offset-2"
+          >
+            {data.categories.map((option) => (
+              <option key={option.value} value={option.value} className="text-text">
+                {categoryLabel(option.value, option.label)}
+              </option>
+            ))}
+            <option value={CREATE} className="text-text">
+              ＋ Crear una categoría…
+            </option>
+          </select>
+          <span aria-hidden className="pointer-events-none">
+            {labelFrom(labels, merchant.category)}
+          </span>
+          {edit.isPending ? (
+            <Loader2
+              aria-hidden
+              className="pointer-events-none absolute right-3 size-3.5 animate-spin"
+            />
+          ) : (
+            <ChevronDown
+              aria-hidden
+              className="pointer-events-none absolute right-3 size-3.5 text-faint"
+            />
+          )}
+        </span>
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            confirm.mutate(undefined, {
+              onSuccess: () => onReviewed(`${merchant.display_name} quedó revisado.`),
+            })
+          }
           aria-label={`Está bien ${merchant.display_name}`}
-          // The list refetches on success and this row leaves the queue.
-          onClick={() => confirm.mutate()}
+          className={cn(PILL, "text-text")}
         >
           {confirm.isPending ? (
-            <Loader2 className="size-3.5 animate-spin" />
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
           ) : (
-            <Check className="size-3.5" />
+            <Check className="size-3.5 text-incoming" aria-hidden />
           )}
           Está bien
-        </Button>
-        <Button
-          variant="quiet"
-          className="min-h-11 py-2 text-xs"
-          aria-label={`Otra categoría para ${merchant.display_name}`}
-          onClick={() => {
-            confirm.reset();
-            onFix();
-          }}
-        >
-          <Tag className="size-3.5" />
-          Otra categoría
-        </Button>
+        </button>
       </div>
+
+      {naming ? (
+        <CategoryNameForm
+          label="Nueva categoría"
+          submitLabel="Crear y usar"
+          pendingLabel="Creando…"
+          pending={create.isPending}
+          error={nameError}
+          categories={data.categories}
+          onSubmit={(name) => void onCreate(name)}
+          onCancel={() => {
+            setNaming(false);
+            setNameError(null);
+          }}
+        />
+      ) : null}
+
       {failure ? (
         <p role="alert" className="text-outgoing text-xs">
           {failure.message}

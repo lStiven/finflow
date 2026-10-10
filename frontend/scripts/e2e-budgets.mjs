@@ -253,13 +253,22 @@ function monthEnd() {
 }
 
 /**
- * A registration ticket, which only an inbox could otherwise provide. The same
- * fixture the connect suite uses; it refuses to run outside the emulator.
+ * A whole account, through the registration use case rather than the
+ * endpoint: the endpoint allows ten a quarter hour per address, which a full
+ * browser run would exhaust on its own. See `scripts/e2e_connect_fixture.py`.
  */
-function ticketFor(email) {
+function person(email, password) {
   return execFileSync(
     "uv",
-    ["run", "python", "scripts/e2e_connect_fixture.py", "ticket", email],
+    [
+      "run",
+      "python",
+      "scripts/e2e_connect_fixture.py",
+      "person",
+      email,
+      "--password",
+      password,
+    ],
     {
       cwd: ROOT,
       env: { ...process.env, ENV_FILE: ".env", PYTHONPATH: "src" },
@@ -294,17 +303,7 @@ function lastDay(month) {
 async function firstBudget(browser) {
   const email = `e2e-presupuestos-${Date.now()}@finflow.local`;
   const password = "una frase larga de prueba";
-  const registered = await fetch(`${API}/identity/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email,
-      password,
-      verification_token: ticketFor(email),
-      name: "Presupuestos",
-    }),
-  });
-  if (!registered.ok) throw new Error(`registro → ${registered.status}`);
+  person(email, password);
 
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },

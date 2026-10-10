@@ -160,11 +160,11 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
-la nube, 2502 pruebas de Python y 560 del frontend, todas en verde, y trece
+la nube, 2502 pruebas de Python y 562 del frontend, todas en verde, y quince
 e2e en el navegador (`just e2e`), medido el 2026-10-10. El contrato de la API y los tipos del
 frontend están sincronizados.
 
-**Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** veintidós —la última, `/guias/flujos`, el 2026-10-10—, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
 cuatro guías, más **Facturas** desde el 2026-09-14 y **Presupuestos** desde el
@@ -332,6 +332,12 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Plan UX completo: avisos guiados y cuatro recorridos animados**
+  (UX-14 y lo pedido después). La guía de avisos conecta Telegram desde ella
+  misma; cómo llega un movimiento, un traslado, una cuota y una factura se ven
+  paso a paso desde el «Cómo funciona» de su pantalla y en `/guias/flujos`.
+  La cola de Comercios se rehízo en una fila por comercio. `just e2e` (15
+  suites, 22 pantallas) en verde. En el árbol, sin commit.
 - 2026-10-10 — **Una lista vacía dice por qué, y Guías es una lista de tareas**
   (plan UX, UX-05 + UX-13). El motivo sale de la evidencia de la conexión y
   lleva al paso que lo arregla; lo pendiente en Guías lo marca el servidor. F5
@@ -345,12 +351,3 @@ AWS (ver Trabas).
   (plan UX, UX-09). Los iconos de 32 px son palabras de 44 px detrás de
   «Opciones», y un cobro pagado lleva a su movimiento. `just e2e` en verde.
   En el árbol, sin commit.
-- 2026-10-10 — **Cada cuenta dice lo que le falta y lo resuelve ahí** (plan UX,
-  UX-08): enlazar su tarjeta o declarar los intereses, una sección a la vez, y
-  las cifras de patrimonio explican de qué están hechas. Arreglado también el
-  desborde de Reportes a 320 px. `just e2e` (nueve suites) en verde, con
-  `e2e-cuentas` nueva. En el árbol, sin commit.
-- 2026-10-10 — **«Sin asignar» y la categoría se arreglan desde el movimiento;
-  el primer presupuesto es un número** (plan UX, UX-07 + UX-10). Cada tope
-  lleva a sus movimientos y el mes va en la URL. `just e2e` completo en verde,
-  con `e2e-transacciones` nueva. En el árbol, sin commit.

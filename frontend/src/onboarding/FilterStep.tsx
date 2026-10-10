@@ -3,6 +3,7 @@ import { ArrowRight, Check, Hourglass, Landmark, ShieldCheck } from "lucide-reac
 import { setupQuery } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
 import { Notice } from "@/components/ui/Notice";
+import { Tutorial } from "@/components/ui/Tutorial";
 import { approvedBanks } from "@/onboarding/banks";
 import { CopyField } from "@/onboarding/CopyField";
 import { DesktopHint } from "@/onboarding/DesktopHint";
@@ -12,7 +13,6 @@ import {
   SearchBarMock,
   SearchOptionsMock,
 } from "@/onboarding/GmailMocks";
-import { GmailTutorial } from "@/onboarding/GmailTutorial";
 import { GMAIL_INBOX_URL } from "@/onboarding/gmail";
 import { ExternalButton, StepHeading } from "@/onboarding/parts";
 import { useKnownBanks } from "@/onboarding/useKnownBanks";
@@ -134,7 +134,7 @@ export function FilterStep({
         </p>
       </div>
 
-      <GmailTutorial
+      <Tutorial
         label="Cómo crear el filtro en Gmail"
         slides={[
           {

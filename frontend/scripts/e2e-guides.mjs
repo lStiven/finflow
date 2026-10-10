@@ -97,6 +97,31 @@ function fixture(fact, subject) {
   ).trim();
 }
 
+/**
+ * A whole account, through the registration use case rather than the
+ * endpoint: the endpoint allows ten a quarter hour per address, which a full
+ * browser run would exhaust on its own. See `scripts/e2e_connect_fixture.py`.
+ */
+function person(email, password) {
+  return execFileSync(
+    "uv",
+    [
+      "run",
+      "python",
+      "scripts/e2e_connect_fixture.py",
+      "person",
+      email,
+      "--password",
+      password,
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env, ENV_FILE: ".env", PYTHONPATH: "src" },
+      encoding: "utf8",
+    },
+  ).trim();
+}
+
 async function until(read, done, timeout = ARRIVAL_MS) {
   const deadline = Date.now() + timeout;
   for (;;) {
@@ -128,18 +153,7 @@ async function main() {
 
   const email = `e2e-guias-${RUN}@finflow.local`;
   const password = "una frase larga de prueba";
-  const registered = await fetch(`${API}/identity/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email,
-      password,
-      verification_token: fixture("ticket", email),
-      name: "Guías",
-    }),
-  });
-  if (!registered.ok) throw new Error(`registro → ${registered.status}`);
-  const call = client((await registered.json()).access_token);
+  const call = client(person(email, password));
 
   const browser = await chromium.launch();
   const context = await browser.newContext({
@@ -320,6 +334,55 @@ async function main() {
       if (titles !== 1 || failed > 0) broken.push(href);
     }
     check("cada tarea y cada problema abre una pantalla real", broken, []);
+
+    // ------------------------------------ the flows, seen rather than read
+    // Every story walks end to end with «Siguiente» and the arrow keys, and
+    // the one chosen lives in the address.
+    await page.goto(`${WEB}/guias/flujos`, { waitUntil: "networkidle" });
+    const tabs = await page.getByRole("tab").allTextContents();
+    check("los cuatro recorridos están", tabs.length, 4);
+    const walked = [];
+    for (const name of tabs) {
+      await page.getByRole("tab", { name }).click();
+      const counter = page.getByText(/^1 de \d+$/);
+      await counter.waitFor({ timeout: 5_000 });
+      const total = Number((await counter.innerText()).split(" de ")[1]);
+      for (let at = 2; at <= total; at++) {
+        if (at % 2 === 0) {
+          await page.getByRole("button", { name: "Siguiente" }).click();
+        } else {
+          // As somebody on a keyboard would: focus inside, then the arrow.
+          await page.getByRole("button", { name: "Siguiente" }).focus();
+          await page.keyboard.press("ArrowRight");
+        }
+      }
+      walked.push(
+        (await page.getByText(`${total} de ${total}`, { exact: true }).isVisible()) &&
+          (await page.getByRole("button", { name: "Siguiente" }).isDisabled()),
+      );
+    }
+    check("cada recorrido llega a su último paso", walked, [true, true, true, true]);
+    await page.getByRole("tab", { name: "De qué está hecha una cuota" }).click();
+    check(
+      "el recorrido elegido queda en la dirección",
+      new URL(page.url()).searchParams.get("ver"),
+      "cuota",
+    );
+    await page.setViewportSize({ width: 320, height: 640 });
+    check("los recorridos no se van de lado a 320 px", await sideways(page), false);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    await page.goto(`${WEB}/transacciones`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Cómo funciona" }).click();
+    await page.getByRole("button", { name: "Verlo paso a paso" }).click();
+    check(
+      "en Transacciones, «Verlo paso a paso» abre cómo llega un movimiento",
+      await page
+        .getByRole("region", { name: "Cómo llega un movimiento" })
+        .getByText("1 de 6", { exact: true })
+        .isVisible(),
+      true,
+    );
 
     check("la pantalla no registró errores", problems, []);
   } catch (error) {

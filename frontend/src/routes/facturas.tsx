@@ -104,6 +104,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
+import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
 import { formatIsoDate, formatIsoDayMonth, todayIso } from "@/lib/dates";
 import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
@@ -195,6 +196,7 @@ function BillsScreen() {
 /** What the header paragraph used to say, now a tap away. */
 const HELP: PageHelp = {
   id: "facturas",
+  story: storyOf("factura"),
   points: [
     {
       icon: Receipt,

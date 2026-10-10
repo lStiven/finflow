@@ -80,6 +80,7 @@ import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { StatTile } from "@/components/ui/StatTile";
+import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
 import { formatIsoDate, formatIsoDayMonth, todayIso } from "@/lib/dates";
 import { isZero, signOf } from "@/lib/money";
@@ -137,6 +138,7 @@ function FinancingScreen() {
 
 const LOAN_HELP: PageHelp = {
   id: "financiacion-credito",
+  story: storyOf("cuota"),
   points: [
     {
       icon: Percent,

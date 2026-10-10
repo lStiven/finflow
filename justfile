@@ -734,6 +734,16 @@ e2e-allowance *args:
 e2e-budgets *args:
     cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
 
+# The alerts guide, in a real browser and against the real stack, as a newly
+# registered person: not connected it says where you are; pressing «Conectar
+# Telegram» there leaves a pending channel in the API and moves to «Empezar»;
+# Perfil offers an old link again; connected it names the chat (stubbed: the
+# real bot is never called, and t.me is blocked). Needs `just up` and `just web`.
+#
+# Check that alerts are connected from the guide itself.
+e2e-guia-avisos *args:
+    cd {{frontend_dir}} && node scripts/e2e-alerts-guide.mjs {{args}}
+
 # Guías and the empty screens, in a real browser and against the real stack,
 # as a newly registered person walked through every state a connection can
 # be in: the empty list names the reason and links to the step that fixes it;
@@ -842,7 +852,7 @@ e2e-views *args:
     cd {{frontend_dir}} && node scripts/e2e-views.mjs {{args}}
 
 # The browser suites, in order.
-e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-transacciones e2e-cuentas e2e-resumen e2e-reportes e2e-comercios e2e-guias e2e-alerts e2e-connect e2e-views
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-transacciones e2e-cuentas e2e-resumen e2e-reportes e2e-comercios e2e-guias e2e-guia-avisos e2e-alerts e2e-connect e2e-views
 
 # Format check, lint and typecheck the frontend.
 web-check:

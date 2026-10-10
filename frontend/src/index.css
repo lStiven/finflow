@@ -298,6 +298,16 @@
     }
   }
 
+  /* A share of something filling in, from the left: the parts of a payment. */
+  @keyframes grow-x {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
   @keyframes shimmer {
     to {
       background-position: -200% 0;
@@ -615,6 +625,11 @@
 
   .burst {
     animation: burst 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .grow-x {
+    transform-origin: left;
+    animation: grow-x 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   /* A check that draws itself once. The path carries `pathLength="1"`. */

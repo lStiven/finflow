@@ -49,8 +49,12 @@ y no se toca ninguna regla financiera.
   sin salir de la lista. F4 completa.
 - **Guías y diagnóstico enlazado (UX-13 + UX-05) hechos el 2026-10-10:** una
   lista vacía dice por qué con evidencia y lleva al arreglo; Guías es una
-  lista de tareas que el servidor marca como comprobadas. F5 completa. Queda
-  F6 (UX-14, ayuda de avisos).
+  lista de tareas que el servidor marca como comprobadas. F5 completa.
+- **Avisos (UX-14) y recorridos animados hechos el 2026-10-10:** la guía de
+  avisos conecta Telegram desde ella misma, y cuatro recorridos animados
+  —cómo llega un movimiento, un traslado, una cuota, una factura— se abren
+  desde el «Cómo funciona» de su pantalla y en `/guias/flujos`. **Plan
+  completo**; el detalle, en la sección 12 del documento largo.
 
 ## Fases
 

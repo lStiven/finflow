@@ -34,6 +34,7 @@ import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Notice } from "@/components/ui/Notice";
 import { type Option, Select } from "@/components/ui/Select";
+import { storyOf } from "@/guides/stories";
 import {
   formatDayMonth,
   formatMonthKey,
@@ -450,6 +451,7 @@ function TransactionsScreen() {
 
 const HELP: PageHelp = {
   id: "transacciones",
+  story: storyOf("movimiento"),
   points: [
     {
       icon: Mail,

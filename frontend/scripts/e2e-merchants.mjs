@@ -7,12 +7,13 @@
  *
  * UX-12 made both common answers to «¿es este negocio?» one tap, in the list:
  *
- * 1. **Each merchant waiting for review offers both answers in words**, at
- *    44 px — «Está bien» and «Otra categoría».
+ * 1. **Each merchant waiting for review offers both answers in one row**, at
+ *    44 px on a phone: its category as a control, and «Está bien».
  * 2. **«Está bien» confirms it** in the API, and a failure says so instead of
  *    leaving the row exactly where it was.
- * 3. **«Otra categoría» changes it in place**: the merchant's category in the
- *    API is the one chosen, and correcting it also counts as reviewing it.
+ * 3. **Choosing a category is the answer**: it saves at once, the API has
+ *    the one chosen, correcting it also counts as reviewing it, and the
+ *    screen says so above the list.
  * 4. Nothing scrolls sideways at 390 or 320 px, and nothing logs an error.
  *
  * Reviewing cannot be undone, so the seeded queue is left alone: this
@@ -85,10 +86,23 @@ function client(token) {
   };
 }
 
-function ticketFor(email) {
+/**
+ * A whole account, through the registration use case rather than the
+ * endpoint: the endpoint allows ten a quarter hour per address, which a full
+ * browser run would exhaust on its own. See `scripts/e2e_connect_fixture.py`.
+ */
+function person(email, password) {
   return execFileSync(
     "uv",
-    ["run", "python", "scripts/e2e_connect_fixture.py", "ticket", email],
+    [
+      "run",
+      "python",
+      "scripts/e2e_connect_fixture.py",
+      "person",
+      email,
+      "--password",
+      password,
+    ],
     {
       cwd: ROOT,
       env: { ...process.env, ENV_FILE: ".env", PYTHONPATH: "src" },
@@ -145,18 +159,7 @@ async function main() {
 
   const email = `e2e-comercios-${RUN}@finflow.local`;
   const password = "una frase larga de prueba";
-  const registered = await fetch(`${API}/identity/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email,
-      password,
-      verification_token: ticketFor(email),
-      name: "Comercios",
-    }),
-  });
-  if (!registered.ok) throw new Error(`registro → ${registered.status}`);
-  const call = client((await registered.json()).access_token);
+  const call = client(person(email, password));
 
   const browser = await chromium.launch();
   const context = await browser.newContext({
@@ -229,15 +232,15 @@ async function main() {
     const okFirst = page.getByRole("button", {
       name: `Está bien ${first.display_name}`,
     });
-    const otherSecond = page.getByRole("button", {
-      name: `Otra categoría para ${second.display_name}`,
+    const categoryOfSecond = page.getByLabel(`Categoría de ${second.display_name}`, {
+      exact: true,
     });
     const heights = [];
-    for (const button of [okFirst, otherSecond]) {
+    for (const button of [okFirst, categoryOfSecond]) {
       const box = await button.boundingBox();
       heights.push(box ? Math.round(box.height) >= 44 : false);
     }
-    check("cada comercio ofrece las dos respuestas, en palabras de 44 px", heights, [
+    check("cada comercio ofrece sus dos respuestas en su fila, a 44 px", heights, [
       true,
       true,
     ]);
@@ -265,25 +268,32 @@ async function main() {
     await okFirst.waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
     check("y sale de la cola en pantalla", await okFirst.count(), 0);
 
-    // ------------------------------------- «Otra categoría», in the list
+    // ------------------------------- choosing the category is the answer
     const before = (await call(`/merchants/${second.id}`)).category;
     const target = before === "restaurants" ? "education" : "restaurants";
-    await otherSecond.click();
-    await page
-      .getByLabel(`Categoría de ${second.display_name}`, { exact: true })
-      .selectOption(target);
-    await page
-      .getByRole("button", { name: `Guardar la categoría de ${second.display_name}` })
-      .click();
+    await categoryOfSecond.selectOption(target);
     const fixed = await until(
       () => call(`/merchants/${second.id}`),
       (merchant) => merchant.category === target,
       10_000,
     );
     check(
-      "«Otra categoría» la cambia en la API, y eso también lo revisa",
+      "elegir la categoría la guarda en la API, y eso también lo revisa",
       [fixed.category, fixed.needs_review],
       [target, false],
+    );
+    await page
+      .getByRole("status")
+      .filter({ hasText: `Listo: ${second.display_name} quedó en` })
+      .waitFor({ timeout: 10_000 })
+      .catch(() => {});
+    check(
+      "y la pantalla lo dice arriba de la lista",
+      await page
+        .getByRole("status")
+        .filter({ hasText: `Listo: ${second.display_name} quedó en` })
+        .count(),
+      1,
     );
     check("sin salir de la lista", new URL(page.url()).pathname, "/comercios");
 

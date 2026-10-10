@@ -82,11 +82,23 @@ function client(token) {
   };
 }
 
-/** A registration ticket, which only an inbox could otherwise provide. */
-function ticketFor(email) {
+/**
+ * A whole account, through the registration use case rather than the
+ * endpoint: the endpoint allows ten a quarter hour per address, which a full
+ * browser run would exhaust on its own. See `scripts/e2e_connect_fixture.py`.
+ */
+function person(email, password) {
   return execFileSync(
     "uv",
-    ["run", "python", "scripts/e2e_connect_fixture.py", "ticket", email],
+    [
+      "run",
+      "python",
+      "scripts/e2e_connect_fixture.py",
+      "person",
+      email,
+      "--password",
+      password,
+    ],
     {
       cwd: ROOT,
       env: { ...process.env, ENV_FILE: ".env", PYTHONPATH: "src" },
@@ -144,18 +156,7 @@ async function main() {
 
   const email = `e2e-cuentas-${Date.now()}@finflow.local`;
   const password = "una frase larga de prueba";
-  const registered = await fetch(`${API}/identity/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email,
-      password,
-      verification_token: ticketFor(email),
-      name: "Cuentas",
-    }),
-  });
-  if (!registered.ok) throw new Error(`registro → ${registered.status}`);
-  const call = client((await registered.json()).access_token);
+  const call = client(person(email, password));
 
   const browser = await chromium.launch();
   const context = await browser.newContext({

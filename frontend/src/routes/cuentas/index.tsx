@@ -59,6 +59,7 @@ import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Notice } from "@/components/ui/Notice";
 import { Select } from "@/components/ui/Select";
+import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/dates";
 import { describeBalance, signOf, toChartValue } from "@/lib/money";
@@ -163,7 +164,12 @@ function AccountsScreen() {
               : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."
           }
           // Without any account the first-run card below is the explanation.
-          help={{ id: "cuentas", openFirstTime: declaredAny, points: HELP_POINTS }}
+          help={{
+            id: "cuentas",
+            openFirstTime: declaredAny,
+            points: HELP_POINTS,
+            story: storyOf("traslado"),
+          }}
           actions={
             declaredAny ? (
               <Link to="/cuentas/nueva" className={buttonClass("primary")}>

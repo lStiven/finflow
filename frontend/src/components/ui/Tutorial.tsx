@@ -16,14 +16,17 @@ export type TutorialSlide = {
 const SWIPE_PX = 48;
 
 /**
- * Gmail, one action at a time.
+ * One idea at a time, each with its picture.
  *
- * Each slide is a single thing to do, with a picture of where on Gmail's
- * screen it happens and that spot lit. Arrows, dots, a swipe or the
- * keyboard's arrow keys move between them; none of it locks — somebody who
- * already knows the way can read the last slide first.
+ * Born as the connect guide's Gmail walkthrough — one action per slide, the
+ * spot on Gmail's screen lit — and shared since with the guides that show a
+ * flow in motion: how a movement arrives, what a transfer does. Each slide's
+ * illustration remounts as it arrives, so its animation plays when it is
+ * reached rather than all at once. Arrows, dots, a swipe or the arrow keys
+ * move between them; none of it locks, and nothing advances on its own:
+ * somebody reading is never overtaken.
  */
-export function GmailTutorial({
+export function Tutorial({
   label,
   slides,
 }: {

@@ -1,4 +1,4 @@
-import { CircleHelp, X } from "lucide-react";
+import { CircleHelp, Play, X } from "lucide-react";
 import {
   type ComponentType,
   type CSSProperties,
@@ -11,6 +11,8 @@ import {
 import { useAuth } from "@/auth/AuthContext";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Tutorial } from "@/components/ui/Tutorial";
+import type { Story } from "@/guides/stories";
 import { hasSeenHelp, markHelpSeen } from "@/lib/help";
 
 export type HelpPoint = {
@@ -23,6 +25,8 @@ export type PageHelp = {
   /** Stable per screen: it is what «ya lo leí» is remembered under. */
   id: string;
   points: readonly HelpPoint[];
+  /** The same idea in motion, step by step, for when the points are not enough. */
+  story?: Story;
   /**
    * Opens on its own the first time somebody lands here. Off where something
    * else already greets a first visit — the welcome dialog, a first-run card.
@@ -100,7 +104,13 @@ export function PageHeader({
       </div>
 
       {help && open ? (
-        <HelpPanel id={panelId} points={help.points} focus={asked} onClose={close} />
+        <HelpPanel
+          id={panelId}
+          points={help.points}
+          story={help.story}
+          focus={asked}
+          onClose={close}
+        />
       ) : null}
     </header>
   );
@@ -109,15 +119,19 @@ export function PageHeader({
 function HelpPanel({
   id,
   points,
+  story,
   focus,
   onClose,
 }: {
   id: string;
   points: readonly HelpPoint[];
+  story?: Story;
   focus: boolean;
   onClose: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  // Opened on request only: a carousel is the long answer, the points the short one.
+  const [watching, setWatching] = useState(false);
 
   useEffect(() => {
     if (focus) heading.current?.focus();
@@ -176,9 +190,27 @@ function HelpPanel({
         ))}
       </ul>
 
-      <Button variant="ghost" className="self-start py-2 text-xs" onClick={onClose}>
-        Entendido
-      </Button>
+      {story && watching ? (
+        <div className="rise">
+          <Tutorial label={story.title} slides={story.slides} />
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Button variant="ghost" className="py-2 text-xs" onClick={onClose}>
+          Entendido
+        </Button>
+        {story && !watching ? (
+          <Button
+            variant="quiet"
+            className="py-2 text-cyan text-xs"
+            onClick={() => setWatching(true)}
+          >
+            <Play className="size-3.5" aria-hidden />
+            Verlo paso a paso
+          </Button>
+        ) : null}
+      </div>
     </Card>
   );
 }

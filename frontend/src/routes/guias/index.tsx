@@ -21,6 +21,7 @@ import {
   Link2,
   Mail,
   Percent,
+  Play,
   Receipt,
   Scale,
   Tag,
@@ -135,6 +136,13 @@ function GuidesScreen() {
         </Section>
 
         <Section title="Para entender">
+          <TaskRow
+            to={<Link to="/guias/flujos" />}
+            icon={Play}
+            title="Verlo en movimiento"
+            line="Cómo llega un movimiento, un traslado, una cuota y una factura."
+            verb="Ver"
+          />
           <TaskRow
             to={<Link to="/guias/cuentas-y-movimientos" />}
             icon={Wallet}
