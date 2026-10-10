@@ -111,6 +111,27 @@ export function nowInSeconds(): number {
 }
 
 /**
+ * "hace 2 horas", "ayer", "hace 3 días" — how long ago something happened,
+ * for the places where that matters more than the date itself.
+ *
+ * Coarse on purpose: the largest unit that fits, rounded down, so "hace 1
+ * hora" is never said of something 59 minutes old. Under a minute is "justo
+ * ahora", and anything a clock skew puts in the future reads the same way.
+ * Past a month it gives up on counting and names the day.
+ */
+export function formatRelative(epochSeconds: number, now = nowInSeconds()): string {
+  const elapsed = Math.max(0, now - epochSeconds);
+  if (elapsed < 60) return "justo ahora";
+
+  const relative = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
+  if (elapsed < 3_600) return relative.format(-Math.floor(elapsed / 60), "minute");
+  if (elapsed < 86_400) return relative.format(-Math.floor(elapsed / 3_600), "hour");
+  if (elapsed < 30 * 86_400)
+    return relative.format(-Math.floor(elapsed / 86_400), "day");
+  return `el ${formatDate(epochSeconds)}`;
+}
+
+/**
  * The UTC offset the display zone is on at that instant, in seconds.
  *
  * Read from the runtime's own tz database rather than hardcoded. Bogota has

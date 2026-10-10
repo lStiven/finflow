@@ -210,6 +210,101 @@
   }
 
   /*
+   * The connect guide's motion. Each one says that something happened — a
+   * step arriving from the side it was reached from, a choice landing, an
+   * alert travelling — and only the ones that mean "waiting" loop.
+   */
+  @keyframes step-in-forward {
+    from {
+      opacity: 0;
+      transform: translateX(18px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes step-in-back {
+    from {
+      opacity: 0;
+      transform: translateX(-18px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.4);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1.12);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+
+  /*
+   * An alert crossing one leg of bank → Gmail → Finflow. `cqw` is the leg's
+   * own width (it is a size container), so the same keyframes fit a phone
+   * and a monitor without a measurement in JavaScript.
+   */
+  @keyframes hop {
+    0% {
+      opacity: 0;
+      transform: translateX(0);
+    }
+    10% {
+      opacity: 1;
+    }
+    42% {
+      opacity: 1;
+      transform: translateX(calc(100cqw - 100%));
+    }
+    50%,
+    100% {
+      opacity: 0;
+      transform: translateX(calc(100cqw - 100%));
+    }
+  }
+
+  @keyframes spotlight {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-accent) 55%, transparent);
+    }
+    70%,
+    100% {
+      box-shadow: 0 0 0 12px color-mix(in oklch, var(--color-accent) 0%, transparent);
+    }
+  }
+
+  @keyframes burst {
+    0% {
+      opacity: 0;
+      transform: translate(0, 0) scale(0.5);
+    }
+    15% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: translate(var(--burst-x), var(--burst-y)) scale(1);
+    }
+  }
+
+  @keyframes shimmer {
+    to {
+      background-position: -200% 0;
+    }
+  }
+
+  /*
    * Movement is decoration; nothing depends on it being seen.
    *
    * `!important` is the point rather than a shortcut: the durations it has to
@@ -484,6 +579,61 @@
 
   .pulse-ring {
     animation: pulse-ring 4.5s ease-in-out infinite;
+  }
+
+  .step-in-forward {
+    animation: step-in-forward 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .step-in-back {
+    animation: step-in-back 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .pop {
+    animation: pop 320ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  .hop {
+    animation: hop 3.6s cubic-bezier(0.45, 0, 0.55, 1) infinite both;
+  }
+
+  /* The second leg starts when the first one lands. */
+  .hop-late {
+    animation-delay: 1.8s;
+  }
+
+  /*
+   * What to press, in a tutorial's picture of Gmail. The outline stays put —
+   * it is the part that still says "here" with motion reduced — and only the
+   * halo around it breathes.
+   */
+  .spotlight {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+    animation: spotlight 1.8s ease-out infinite;
+  }
+
+  .burst {
+    animation: burst 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* A check that draws itself once. The path carries `pathLength="1"`. */
+  .draw-check {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: trace 420ms 120ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+  }
+
+  /* Something that exists and is still being read: no figure to show yet. */
+  .shimmer {
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      oklch(1 0 0 / 0.06) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
   }
 
   /*

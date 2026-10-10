@@ -39,6 +39,23 @@ docker_config="$(just --evaluate docker_config)"
 # infra/infra/. Taken after the `cd`, so a rollback reads the older tree's own.
 sam_config="$(pwd)/infra/samconfig.toml"
 
+# Pull every external image the Dockerfile names, once and in series, before
+# the build. `sam build` builds the seven functions in parallel, and on a fresh
+# runner each build pulled the same three images itself: ~20 anonymous pulls at
+# once from a shared IP, which public.ecr.aws answers with `toomanyrequests`
+# (2026-10-10). With them local, the builder uses them and pulls nothing.
+# Stage names (`builder`) have no `/` or `:`, which is what tells them apart.
+images="$(grep -oE '^FROM [^ ]+|--from=[^ ]+' Dockerfile \
+  | sed -E 's/^(FROM |--from=)//' | grep -E '[/:]' | sort -u)"
+for image in $images; do
+  for attempt in 1 2 3 4; do
+    DOCKER_CONFIG="$docker_config" docker pull --quiet "$image" && break
+    [ "$attempt" -eq 4 ] && exit 1
+    echo "pull de $image rechazado; reintento en $((attempt * 15)) s" >&2
+    sleep $((attempt * 15))
+  done
+done
+
 DOCKER_CONFIG="$docker_config" sam build --config-env "$config" \
   --config-file "$sam_config" --template infra/template.yaml
 DOCKER_CONFIG="$docker_config" sam deploy --config-env "$config" \

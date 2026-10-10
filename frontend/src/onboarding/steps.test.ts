@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { InboxSetup } from "@/api/queries";
 import { NO_ACKS, type OnboardingAcks } from "@/onboarding/progress";
-import { resolveOnboarding } from "@/onboarding/steps";
+import { resolveOnboarding, STAGES, stageAt, stageNumber } from "@/onboarding/steps";
 
 const ADDRESS = "finflowingest+abc@gmail.com";
+const CONFIRMED_AT = 1_760_000_000;
+const ALERT_AT = 1_760_000_600;
 
 /**
  * The API's four steps, as they actually come back. Named individually so a
@@ -31,8 +33,12 @@ function setup(
     steps: [
       { key: "address_assigned", done: true, at: null },
       { key: "senders_approved", done: sendersApproved, at: null },
-      { key: "forwarding_confirmed", done: forwardingConfirmed, at: null },
-      { key: "first_alert", done: firstAlert, at: null },
+      {
+        key: "forwarding_confirmed",
+        done: forwardingConfirmed,
+        at: forwardingConfirmed ? CONFIRMED_AT : null,
+      },
+      { key: "first_alert", done: firstAlert, at: firstAlert ? ALERT_AT : null },
     ],
     current: null,
     ready,
@@ -48,72 +54,92 @@ function doneIds(state: ReturnType<typeof resolveOnboarding>): string[] {
   return state.stages.filter((stage) => stage.done).map((stage) => stage.id);
 }
 
+function statusOf(state: ReturnType<typeof resolveOnboarding>, id: string) {
+  return state.stages.find((stage) => stage.id === id)?.status;
+}
+
 describe("resolving onboarding", () => {
-  it("points a brand new account at the explanation", () => {
+  it("opens a brand new account on the introduction, pointing at the banks", () => {
     const state = resolveOnboarding(setup(), acks());
 
-    expect(state.current).toBe("intro");
+    expect(state.intro).toBe(true);
+    expect(state.current).toBe("banks");
     expect(state.doneCount).toBe(0);
-    expect(state.total).toBe(5);
+    expect(state.total).toBe(4);
     expect(state.complete).toBe(false);
   });
 
-  it("advances through the reading as it is acknowledged", () => {
-    expect(resolveOnboarding(setup(), acks({ introSeen: true })).current).toBe(
-      "address",
+  it("leaves the introduction once it is left, or once anything is done", () => {
+    expect(resolveOnboarding(setup(), acks({ introSeen: true })).intro).toBe(false);
+    // Progress made in another browser is on the server: no door to walk
+    // through again.
+    expect(resolveOnboarding(setup({ sendersApproved: true }), acks()).intro).toBe(
+      false,
     );
     expect(
-      resolveOnboarding(setup(), acks({ introSeen: true, addressCopied: true }))
-        .current,
-    ).toBe("senders");
+      resolveOnboarding(setup(), acks({ forwardingRequestedAt: CONFIRMED_AT })).intro,
+    ).toBe(false);
   });
 
-  it("takes the sender step from the API, not from the browser", () => {
-    // Nothing acknowledged locally, but the account already approves
-    // somebody: the screen must not ask them to do it again.
+  it("takes the bank step from the API, not from the browser", () => {
     const state = resolveOnboarding(setup({ sendersApproved: true }), acks());
 
-    expect(doneIds(state)).toEqual(["senders"]);
+    expect(doneIds(state)).toEqual(["banks"]);
+    expect(state.current).toBe("address");
   });
 
-  it("keeps the forwarding step open after Google confirms, for the filter", () => {
-    // The confirmation is only the first half. Closing on it collapsed the
-    // step before anybody read how to make the filter that forwards.
-    const state = resolveOnboarding(
-      setup({ sendersApproved: true, forwardingConfirmed: true }),
-      acks({ introSeen: true, addressCopied: true }),
+  it("waits on Google once the address was added, and not before", () => {
+    const before = resolveOnboarding(setup({ sendersApproved: true }), acks());
+    const after = resolveOnboarding(
+      setup({ sendersApproved: true }),
+      acks({ forwardingRequestedAt: CONFIRMED_AT - 60 }),
     );
 
-    expect(state.current).toBe("forwarding");
-    expect(state.addressStatus).toBe("confirmed");
+    expect(statusOf(before, "address")).toBe("todo");
+    expect(statusOf(after, "address")).toBe("waiting");
+    // Saying so does not close it: only Google's confirmation does.
+    expect(after.current).toBe("address");
   });
 
-  it("closes the forwarding step once confirmed and the filter is made", () => {
+  it("closes the address step on Google's confirmation, with its time", () => {
     const state = resolveOnboarding(
       setup({ sendersApproved: true, forwardingConfirmed: true }),
-      acks({ introSeen: true, addressCopied: true, gmailSubmitted: true }),
+      acks(),
+    );
+
+    expect(doneIds(state)).toEqual(["banks", "address"]);
+    expect(state.forwardingConfirmedAt).toBe(CONFIRMED_AT);
+    expect(state.addressStatus).toBe("confirmed");
+    expect(state.current).toBe("filter");
+  });
+
+  it("closes the filter step on the person's word, once Google confirmed", () => {
+    const state = resolveOnboarding(
+      setup({ sendersApproved: true, forwardingConfirmed: true }),
+      acks({ gmailSubmitted: true }),
     );
 
     expect(state.current).toBe("first-alert");
-    // The filter is the person's word, so the tick says so.
-    expect(state.stages.find((stage) => stage.id === "forwarding")?.proof).toBe("you");
+    // The filter is the person's word until an alert proves it.
+    expect(state.stages.find((stage) => stage.id === "filter")?.proof).toBe("you");
+    expect(statusOf(state, "first-alert")).toBe("waiting");
   });
 
-  it("saying the Gmail rule is set up does not close the step by itself", () => {
-    // Only Google's confirmation — or an alert actually arriving — settles
-    // it. Believing the claim would show a green tick over a broken route.
+  it("does not believe a filter made before the address was verified", () => {
+    // Gmail does not offer an unverified address in «Reenviarlo a», so that
+    // filter cannot exist yet. A tick over it would hide the real step.
     const state = resolveOnboarding(
       setup({ sendersApproved: true }),
-      acks({ introSeen: true, addressCopied: true, gmailSubmitted: true }),
+      acks({ gmailSubmitted: true }),
     );
 
-    expect(state.current).toBe("forwarding");
+    expect(doneIds(state)).toEqual(["banks"]);
     expect(state.addressStatus).toBe("unverified");
   });
 
-  it("counts a first alert as proof the route works, with no confirmation", () => {
+  it("counts a first alert as proof of the address and the filter", () => {
     // Somebody forwarding each alert by hand never gets a confirmation. They
-    // are connected, and must not sit on that step with movements on screen.
+    // are connected, and must not sit on those steps with movements on screen.
     const state = resolveOnboarding(
       setup({ sendersApproved: true, firstAlert: true, ready: true }),
       acks(),
@@ -121,11 +147,10 @@ describe("resolving onboarding", () => {
 
     expect(state.complete).toBe(true);
     expect(state.current).toBeNull();
+    expect(state.firstAlertAt).toBe(ALERT_AT);
   });
 
   it("settles every stage once expenses are arriving", () => {
-    // Including the reading nobody acknowledged: the recap reports on the
-    // setup, not on which paragraphs were opened.
     const state = resolveOnboarding(
       setup({
         sendersApproved: true,
@@ -137,13 +162,8 @@ describe("resolving onboarding", () => {
     );
 
     expect(state.doneCount).toBe(state.total);
-    expect(doneIds(state)).toEqual([
-      "intro",
-      "address",
-      "senders",
-      "forwarding",
-      "first-alert",
-    ]);
+    expect(doneIds(state)).toEqual([...STAGES]);
+    expect(state.stages.every((stage) => stage.status === "done")).toBe(true);
     expect(state.addressStatus).toBe("receiving");
   });
 
@@ -152,11 +172,12 @@ describe("resolving onboarding", () => {
     // senders stops the next alert cold, and the screen has to say so.
     const state = resolveOnboarding(
       setup({ sendersApproved: false, forwardingConfirmed: true, firstAlert: true }),
-      acks({ introSeen: true, addressCopied: true }),
+      acks({ introSeen: true }),
     );
 
     expect(state.complete).toBe(false);
-    expect(state.current).toBe("senders");
+    expect(state.current).toBe("banks");
+    expect(state.intro).toBe(false);
   });
 
   it("celebrates once, and then never again", () => {
@@ -178,8 +199,11 @@ describe("resolving onboarding", () => {
    * connected: the acks are empty there, so only the server half can tell
    * this apart from a brand-new account.
    */
-  it("never welcomes an account whose expenses are already arriving", () => {
-    expect(resolveOnboarding(setup({ ready: true }), acks()).welcome).toBe(false);
+  it("never welcomes or introduces an account already receiving", () => {
+    const state = resolveOnboarding(setup({ ready: true }), acks());
+
+    expect(state.welcome).toBe(false);
+    expect(state.intro).toBe(false);
   });
 
   /*
@@ -199,31 +223,37 @@ describe("resolving onboarding", () => {
     );
   });
 
-  it("carries the address and who is being discarded", () => {
+  it("carries the address, who is being discarded and what was claimed", () => {
     const state = resolveOnboarding(
       setup({ unapproved: ["alertas@banco.com"] }),
-      acks(),
+      acks({ forwardingRequestedAt: 42, filterSenders: ["@lulobank.com"] }),
     );
 
     expect(state.address).toBe(ADDRESS);
     expect(state.unapprovedSenders).toEqual(["alertas@banco.com"]);
+    expect(state.forwardingRequestedAt).toBe(42);
+    expect(state.filterSenders).toEqual(["@lulobank.com"]);
   });
 
   it("labels who vouches for each stage", () => {
-    // The two reading stages are the user's word, and so is the filter until
-    // an alert proves it; the rest are the API's. The screen says which, so a
-    // tick means the same thing twice.
     const state = resolveOnboarding(setup(), acks());
     const proofs = Object.fromEntries(
       state.stages.map((stage) => [stage.id, stage.proof]),
     );
 
     expect(proofs).toEqual({
-      intro: "you",
-      address: "you",
-      senders: "verified",
-      forwarding: "you",
+      banks: "verified",
+      address: "verified",
+      filter: "you",
       "first-alert": "verified",
     });
+  });
+
+  it("numbers the stages the way the URL does", () => {
+    expect(stageNumber("banks")).toBe(1);
+    expect(stageNumber("first-alert")).toBe(4);
+    expect(stageAt(3)).toBe("filter");
+    expect(stageAt(0)).toBeUndefined();
+    expect(stageAt(5)).toBeUndefined();
   });
 });

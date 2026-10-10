@@ -475,6 +475,39 @@ export const inboxQuery = queryOptions({
   queryFn: () => unwrap(api.GET("/identity/inbox")),
 });
 
+/** How many of the newest emails the connect screen reads. */
+export const RECENT_MAIL = 6;
+
+/**
+ * The newest emails that reached this account's address, whatever became of
+ * them.
+ *
+ * What lets the connect screen tell "arrived and registered" from "arrived
+ * and unreadable" from "thrown away for its sender" — three outcomes that
+ * look identical from the movements list. One short page, never the counts:
+ * those read the account's whole history, and this is polled while somebody
+ * waits for their first alert.
+ */
+export const recentMailQuery = queryOptions({
+  queryKey: [...queryKeys.notifications, "recent", RECENT_MAIL],
+  queryFn: () =>
+    unwrap(
+      api.GET("/ingestion/notifications", {
+        params: { query: { limit: RECENT_MAIL } },
+      }),
+    ),
+  staleTime: 10_000,
+});
+
+/**
+ * The newest movement that came from a bank alert: the evidence that the
+ * whole route works, which an accepted email on its own is not.
+ */
+export const latestAlertMovementQuery = transactionsQuery({
+  origin: "bank_alert",
+  limit: 1,
+});
+
 /**
  * Who is signed in — id, email and name.
  *
@@ -513,6 +546,8 @@ export function useUpdateProfile(): UseMutationResult<Profile, Error, ProfileBod
 
 type InboxBody = components["schemas"]["InboxSendersPayload"];
 
+export const UPDATE_INBOX = ["update-inbox"] as const;
+
 /**
  * Replaces, never merges — the backend takes the list as final. Callers must
  * send the existing senders plus the new one; there is no partial update, and
@@ -521,6 +556,9 @@ type InboxBody = components["schemas"]["InboxSendersPayload"];
 export function useUpdateInbox(): UseMutationResult<RegisteredInbox, Error, InboxBody> {
   const client = useQueryClient();
   return useMutation({
+    // Named, so every control that writes the list can see a write in flight
+    // from any other one: each rebuilds the whole list from the cached copy.
+    mutationKey: UPDATE_INBOX,
     mutationFn: (body: InboxBody) => unwrap(api.PATCH("/identity/inbox", { body })),
     onSuccess: (data) => {
       client.setQueryData(queryKeys.inbox, data);

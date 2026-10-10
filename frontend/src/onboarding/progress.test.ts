@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NO_ACKS, readAcks, writeAck } from "@/onboarding/progress";
+import { NO_ACKS, readAcks, writeAck, writeAcks } from "@/onboarding/progress";
 
 const USER = "11111111-1111-1111-1111-111111111111";
 const OTHER = "22222222-2222-2222-2222-222222222222";
@@ -124,5 +124,54 @@ describe("onboarding acknowledgements", () => {
     expect(readAcks(USER)).toEqual(NO_ACKS);
     expect(() => writeAck(USER, "introSeen")).not.toThrow();
     expect(writeAck(USER, "introSeen").introSeen).toBe(true);
+  });
+
+  it("keeps when the address was added and what the filter matched", () => {
+    writeAcks(USER, { forwardingRequestedAt: 1_760_000_000 });
+    writeAcks(USER, {
+      gmailSubmitted: true,
+      filterSenders: ["@lulobank.com", "alertas@banco.com"],
+    });
+
+    expect(readAcks(USER)).toEqual({
+      ...NO_ACKS,
+      forwardingRequestedAt: 1_760_000_000,
+      gmailSubmitted: true,
+      filterSenders: ["@lulobank.com", "alertas@banco.com"],
+    });
+  });
+
+  /*
+   * The e2e suites and `just shot` write the entry by hand, with only the
+   * flags that existed before these two fields. They must keep reading as
+   * "nothing claimed" rather than as a broken entry.
+   */
+  it("reads an entry with none of the newer fields as not claimed", () => {
+    stubStorage({
+      [`finflow.onboarding.${USER}`]: JSON.stringify({
+        welcomeSeen: true,
+        introSeen: true,
+        addressCopied: true,
+        gmailSubmitted: true,
+        readyCelebrated: true,
+      }),
+    });
+
+    const acks = readAcks(USER);
+
+    expect(acks.forwardingRequestedAt).toBeNull();
+    expect(acks.filterSenders).toBeNull();
+    expect(acks.gmailSubmitted).toBe(true);
+  });
+
+  it("drops a wait time or a filter that is not what it should be", () => {
+    stubStorage({
+      [`finflow.onboarding.${USER}`]: JSON.stringify({
+        forwardingRequestedAt: "ayer",
+        filterSenders: ["@lulobank.com", 7],
+      }),
+    });
+
+    expect(readAcks(USER)).toEqual(NO_ACKS);
   });
 });

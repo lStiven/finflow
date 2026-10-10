@@ -2,7 +2,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { setupQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
-import { type OnboardingAcks, readAcks, writeAck } from "@/onboarding/progress";
+import {
+  type FlagAck,
+  type OnboardingAcks,
+  readAcks,
+  writeAck,
+  writeAcks,
+} from "@/onboarding/progress";
 import { type OnboardingState, resolveOnboarding } from "@/onboarding/steps";
 
 /**
@@ -21,7 +27,9 @@ function acksKey(userId: string) {
 export type Onboarding = {
   /** Null while the first answer is still in flight, or with no session. */
   state: OnboardingState | null;
-  acknowledge: (key: keyof OnboardingAcks) => void;
+  acknowledge: (key: FlagAck) => void;
+  /** Several claims at once — a time, a filter's terms — as one write. */
+  record: (patch: Partial<OnboardingAcks>) => void;
 };
 
 export function useOnboarding(): Onboarding {
@@ -41,9 +49,17 @@ export function useOnboarding(): Onboarding {
   });
 
   const acknowledge = useCallback(
-    (key: keyof OnboardingAcks) => {
+    (key: FlagAck) => {
       if (!userId) return;
       client.setQueryData(acksKey(userId), writeAck(userId, key));
+    },
+    [client, userId],
+  );
+
+  const record = useCallback(
+    (patch: Partial<OnboardingAcks>) => {
+      if (!userId) return;
+      client.setQueryData(acksKey(userId), writeAcks(userId, patch));
     },
     [client, userId],
   );
@@ -51,5 +67,6 @@ export function useOnboarding(): Onboarding {
   return {
     state: setup && acks ? resolveOnboarding(setup, acks) : null,
     acknowledge,
+    record,
   };
 }

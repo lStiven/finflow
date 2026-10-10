@@ -758,6 +758,17 @@ e2e-export *args:
 e2e-alerts *args:
     cd {{frontend_dir}} && node scripts/e2e-alerts.mjs {{args}}
 
+# Connecting a bank, in a real browser and against the real stack: a brand-new
+# account walks the guide on a phone-sized screen — banks, the forwarding
+# address, the Gmail filter, the first alert — and after every step the page
+# is compared with the API. Google's confirmation and the registration ticket
+# are written by `scripts/e2e_connect_fixture.py`, local only. Needs `just up`
+# (the workers too) and `just web`.
+#
+# Walk the connect guide from a new account to its first movement.
+e2e-connect *args:
+    cd {{frontend_dir}} && node scripts/e2e-connect.mjs {{args}}
+
 # Every screen, on a phone and on a desktop, in a real browser. The screens
 # are read from `frontend/src/routes`, so a new one is covered the day it
 # lands; each fails on a JavaScript or console error, an API answer of 400+
@@ -769,7 +780,7 @@ e2e-views *args:
     cd {{frontend_dir}} && node scripts/e2e-views.mjs {{args}}
 
 # The browser suites, in order.
-e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-alerts e2e-views
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-alerts e2e-connect e2e-views
 
 # Format check, lint and typecheck the frontend.
 web-check:

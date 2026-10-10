@@ -1,9 +1,12 @@
-import { useNavigate } from "@tanstack/react-router";
-import { PartyPopper } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback } from "react";
+import { latestAlertMovementQuery } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useScrollLock } from "@/lib/useScrollLock";
+import { MovementCard } from "@/onboarding/MovementCard";
+import { SuccessMark } from "@/onboarding/parts";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
 /**
@@ -14,50 +17,75 @@ import { useOnboarding } from "@/onboarding/useOnboarding";
  * they were doing it for. It is shown from the shell rather than from the
  * guide because the poll can flip to ready while they are looking at any
  * screen — including a dashboard that has just filled with their first
- * movement.
+ * movement. On the guide's last step it stands down: that step says it in
+ * place.
+ *
+ * What it claims follows what exists. "Ready" means an email got through,
+ * not that a movement came out of it, so "Finflow is working" waits for a
+ * movement it can show; until then it says what is known — the first alert
+ * arrived.
  */
 export function ReadyDialog() {
   const { state, acknowledge } = useOnboarding();
   const navigate = useNavigate();
+  const onLastStep = useRouterState({
+    select: (router) => {
+      if (router.location.pathname !== "/conectar") return false;
+      const { paso } = router.location.search as { paso?: unknown };
+      return paso === undefined || paso === 4;
+    },
+  });
+  const open = Boolean(state?.celebrate) && !onLastStep;
+  const latest = useQuery({ ...latestAlertMovementQuery, enabled: open });
 
   // See `WelcomeDialog`: the condition is passed in because the hook cannot
   // sit after the early return.
-  useScrollLock(Boolean(state?.celebrate));
+  useScrollLock(open);
   useDismissOnEscape(
     useCallback(() => acknowledge("readyCelebrated"), [acknowledge]),
-    Boolean(state?.celebrate),
+    open,
   );
 
-  if (!state?.celebrate) return null;
+  if (!open) return null;
 
   const dismiss = () => acknowledge("readyCelebrated");
+  const movement = latest.data?.transactions[0] ?? null;
 
   return (
     <div
       role="dialog"
       aria-modal
       aria-labelledby="ready-title"
+      aria-describedby="ready-body"
       className="fixed inset-0 z-50 grid place-items-center bg-ink/80 p-5 backdrop-blur-sm"
     >
       <div className="rise surface w-full max-w-md rounded-card border border-incoming/30 bg-surface p-7 text-center">
-        <span
-          aria-hidden
-          className="pulse-ring mx-auto grid size-14 place-items-center rounded-2xl bg-incoming/15 ring-1 ring-incoming/30"
-        >
-          <PartyPopper className="size-6 text-incoming" />
-        </span>
+        <SuccessMark celebrate className="mx-auto" />
 
-        <h2 id="ready-title" className="mt-5 font-semibold text-xl tracking-tight">
-          Listo, ya quedó conectado
+        <h2 id="ready-title" className="mt-6 font-semibold text-xl tracking-tight">
+          {movement ? "¡Finflow ya está funcionando!" : "Llegó tu primera alerta"}
         </h2>
-        <p className="mt-2.5 text-muted text-sm leading-relaxed">
-          Tu banco ya le está escribiendo a Finflow. Desde ahora{" "}
-          <strong className="text-text">
-            cada gasto que te notifique se registra solo
-          </strong>
-          : no tienes que escribir nada. Revisa tus movimientos cuando quieras y corrige
-          lo que haga falta.
+        <p id="ready-body" className="mt-2.5 text-muted text-sm leading-relaxed">
+          {movement ? (
+            <>
+              Este movimiento llegó solo, desde tu banco.{" "}
+              <strong className="text-text">
+                Desde ahora no tienes que escribir nada
+              </strong>
+              : revisa y corrige cuando quieras.
+            </>
+          ) : (
+            "Tu banco ya le escribe a Finflow. En cuanto se lea, verás el movimiento en Transacciones."
+          )}
         </p>
+
+        {movement ? (
+          <MovementCard
+            movement={movement}
+            onOpen={dismiss}
+            className="mt-5 text-left"
+          />
+        ) : null}
 
         <div className="mt-7 flex flex-col gap-2.5">
           {/* Navigating in the handler rather than wrapping the button in a
@@ -67,7 +95,7 @@ export function ReadyDialog() {
             full
             onClick={() => {
               dismiss();
-              void navigate({ to: "/" });
+              void navigate({ to: "/transacciones" });
             }}
           >
             Ver mis movimientos
