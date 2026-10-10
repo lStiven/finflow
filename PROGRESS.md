@@ -332,12 +332,20 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Auditoría de pantallas del plan UX (ARC-00).** Varias mejoras
+  que el plan daba por construir ya existían; el pendiente bajó a 82–172 h.
+  Sigue ARC-02 + ARC-04 (bancos y filtro desde el backend). Detalle en
+  `front_refactor/FINFLOW_PLAN_UX_V2.md`, sección 10.
+- 2026-10-10 — **El deploy ya no choca con el límite de `public.ecr.aws`.**
+  Las siete builds paralelas bajaban cada una sus imágenes base de forma
+  anónima; ahora `scripts/ci/deploy.sh` las baja antes, una vez y con
+  reintentos. En el árbol, sin commit: hasta que entre, `dev` sigue en 7c2e6af.
 - 2026-10-10 — **Conectar el banco es un asistente, no una guía de texto.**
   Bienvenida, cuatro pasos (bancos, dirección, filtro, prueba) con tutorial
   visual de Gmail, y para quien ya terminó, el estado real de la conexión.
   Nada se marca listo sin evidencia del servidor. `just e2e-connect` lo
-  recorre de una cuenta nueva a su primer movimiento. Solo en el árbol, sin
-  commit y sin publicar.
+  recorre de una cuenta nueva a su primer movimiento. En `dev` (8531ea0),
+  todavía sin desplegar.
 - 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
   el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
 - 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
@@ -347,11 +355,3 @@ AWS (ver Trabas).
   confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
   guía hace comprobarlo buscando antes de guardar. **Comprobado en producción
   el 2026-10-05**: Finflow confirmó solo y Gmail lo dio por verificado.
-- 2026-10-01 — **Los avisos se pueden borrar, y el de un movimiento borrado
-  desaparece solo.** Uno a uno o «Borrar todo», y no vuelven aunque el evento
-  se reentregue. El toast se rehízo como tarjeta propia, y un error ya no
-  muestra «Something went wrong!»: hay pantalla propia para sin conexión, algo
-  que ya no existe y fallo nuestro. En `master` y en `dev`.
-- 2026-10-01 — **«Sin cuenta asignada» ya dice la verdad.** Se leía de la
-  huella de tarjeta y no de la cuenta donde quedó el movimiento; el detalle ya
-  nombra los cuatro orígenes.

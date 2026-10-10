@@ -1,520 +1,508 @@
 # Finflow — Plan de mejora UX/UI y arquitectura frontend–backend
 
-**Versión:** 2.0  
-**Estado:** propuesta ejecutable, sujeta a auditoría del repositorio  
-**Base:** overview funcional de Finflow, capturas de las vistas y acuerdo de implementación previo  
-**Propósito:** mejorar la experiencia de usuario sin duplicar el onboarding de correo que Claude ya está desarrollando y sin introducir configuraciones bancarias fijas en el frontend.
+**Versión:** 3.0 (2026-10-10)
+**Estado:** plan ejecutable, contrastado con el código del repositorio
+**Cambios frente a 2.0:** el onboarding de correo ya está entregado; se
+eliminaron las piezas que ya existían o que estaban sobredimensionadas para la
+escala real de Finflow; los prompts se ajustaron para consumir menos contexto.
 
-> **Regla principal:** el backend es la fuente de verdad de bancos, remitentes, autorizaciones, direcciones de reenvío, estados de procesamiento y finanzas; el frontend interpreta esos datos y ofrece una experiencia comprensible. Las guías deben mostrar acciones reales, no explicaciones técnicas extensas.
+> **Regla principal:** el backend es la fuente de verdad de bancos,
+> remitentes, aprobaciones, direcciones de reenvío, estados de procesamiento y
+> finanzas. El frontend interpreta esos datos y los vuelve comprensibles. Las
+> ayudas enseñan haciendo, no con párrafos.
 
-## 0. Alcance, exclusiones y cómo usar este plan
+## 0. Alcance y punto de partida
 
-### Fuera de alcance: guía de conexión bancaria ya delegada
+### Escala que manda en cada decisión
 
-**NO ejecutar de nuevo `UX-04 — Onboarding de conexión de correo`.** Claude ya recibió instrucciones para rediseñarla. Se considera **trabajo en curso en paralelo** y no se incluye en el esfuerzo ni en las entregas de este plan.
+Finflow es un despliegue privado para su autor y unas pocas personas
+(`CLAUDE.md`): AWS en capa gratuita, sin multi-tenencia. Toda propuesta se mide
+contra eso. Una pieza pensada para un producto con equipos de operación —CRUD
+administrativo, auditoría de catálogo, CMS— cuesta más de lo que devuelve aquí.
 
-**SÍ se permite:** revisar el contrato backend consumido por esa guía, detectar bancos o correos hardcodeados, definir APIs comunes y coordinar una integración mínima cuando la guía existente esté lista. **NO** reescribirla, cambiar su diseño, duplicar componentes, sobrescribir archivos que Claude esté tocando ni ejecutar nuevamente su prompt. Si se necesita modificarla, registrar una dependencia y coordinar el cambio por separado.
+### Ya entregado: onboarding de conexión con el banco (antes UX-04)
 
-### Qué incluye
+Entregado el 2026-10-10 en `/conectar`, sin commit aún. Ya **no** hay trabajo
+en paralelo ni archivos reservados. Este plan puede tocar esos archivos, con
+una condición: `just e2e-connect` debe seguir pasando.
 
-1. Arquitectura *backend-driven*: catálogo de bancos y remitentes, aprobaciones individuales y contratos de API con persistencia en DynamoDB.
-2. Sistema de componentes compartidos de UX, ayudas contextuales y seguimiento por usuario.
-3. Mejoras de las vistas existentes: Resumen, Transacciones, Cuentas, Facturas, Presupuestos, Reportes, Comercios y Centro de Guías.
-4. Diagnóstico de problemas de recepción sin rehacer el asistente de correo.
-5. Accesibilidad, responsive, pruebas y observabilidad segura.
+| Qué quedó | Dónde |
+| --- | --- |
+| Pantalla y orquestación (bienvenida, 4 pasos, estado de la conexión) | `frontend/src/routes/conectar.tsx` |
+| Lógica pura con pruebas: pasos, bancos, evidencia, salud de la conexión | `frontend/src/onboarding/{steps,banks,activity,progress}.ts` |
+| Componentes del flujo | `frontend/src/onboarding/*.tsx` |
+| Diálogos y aviso globales | `frontend/src/components/{WelcomeDialog,ReadyDialog,OnboardingNudge}.tsx` |
+| Prueba en navegador de punta a punta | `frontend/scripts/e2e-connect.mjs` + `scripts/e2e_connect_fixture.py` |
+
+### Lo que ya existía y este plan daba por construir
+
+| Pieza del plan 2.0 | Realidad en el código |
+| --- | --- |
+| ARC-01, contratos y cliente tipado | Existe: OpenAPI generado desde FastAPI (`docs/openapi.json`), tipos en `frontend/src/api/schema.d.ts` (`just web-types`), cliente `openapi-fetch`, consultas en `frontend/src/api/queries.ts`. |
+| ARC-03, aprobaciones por usuario | Existe: `allowed_domains` y `allowed_addresses` por usuario, aplicadas en Ingestion (`AuthorizedSenderPolicy`). `PATCH /identity/inbox` reemplaza la lista completa. |
+| UX-05, diagnóstico de recepción | Mayormente hecho en el estado de la conexión: correo descartado por remitente, correo sin movimiento, correo leyéndose, sin correos en 14 días, últimos correos con su resultado y "Es de mi banco". |
+| UX-02, kit visual | La mitad existe en `frontend/src/onboarding/` (ver sección 6). |
+
+### Qué incluye este plan
+
+1. Quitar del frontend el único catálogo fijo que queda (bancos conocidos) y el
+   armado del filtro de Gmail.
+2. Textos más cortos y componentes compartidos promovidos desde el onboarding.
+3. Mejoras de Resumen, Transacciones, Cuentas, Facturas, Presupuestos,
+   Reportes, Comercios y Guías.
+4. Accesibilidad, responsive y una prueba en navegador por ticket.
 
 ### Reglas de ejecución
 
-- Implementar **un flujo vertical completo** por ticket: API y datos cuando aplique → tipos/cliente frontend → vista → pruebas.
-- Revisar la implementación real antes de crear tablas, endpoints, componentes o librerías.
-- No cambiar reglas financieras mediante transformaciones de interfaz.
-- No introducir bancos, direcciones, dominios ni patrones Gmail quemados en React/Vue/TypeScript, constantes, fixtures de producción o archivos de configuración desplegados.
-- No bloquear el lanzamiento de mejoras visuales por componentes opcionales que todavía requieran backend; documentar sus dependencias.
-- No reutilizar ni ejecutar la guía de correo previamente delegada como parte de este plan.
+- Un flujo vertical completo por ticket: API si hace falta → tipos → vista →
+  pruebas unitarias → e2e en navegador.
+- Revisar la implementación real antes de crear tablas, endpoints o
+  componentes.
+- No cambiar reglas financieras a través de la interfaz.
+- No introducir bancos, dominios ni direcciones fijas en el frontend. Los
+  enlaces a pantallas de Gmail (`frontend/src/onboarding/gmail.ts`) son
+  navegación, no catálogo: se quedan en el frontend.
+- Si un ticket cambia un endpoint: `just web-types` y actualizar la colección
+  de Postman en el mismo cambio (`CLAUDE.md`).
+
+### Relación con los otros planes
+
+El plan de producto vive en los artefactos "De aquí a competir" y "Finflow
+frente al mercado" (`.claude/rules/roadmap-artifacts.md`). Este documento es
+solo el plan de ejecución de la mejora de experiencia. Si un ticket cierra algo
+que el plan de construcción describe, se marca allí en el mismo turno.
+
+Lo urgente de `PROGRESS.md` (tope al gasto del modelo de lenguaje, publicar
+`master` en producción, disparador diario de los créditos) va antes o
+intercalado: cuesta dinero o bloquea a usuarios reales.
 
 ---
 
-## 1. Diagnóstico confirmado a partir de las pantallas
+## 1. Diagnóstico por pantalla
 
 | Vista | Hallazgo | Experiencia esperada |
-|---|---|---|
-| Resumen | Indicadores y gráficos útiles, pero no explican cambios ni conducen a la causa. | Tarjetas con ayuda corta, desglose y navegación a movimientos filtrados. |
-| Transacciones | Lista clara; detalle con lenguaje financiero y varias acciones separadas. | Acciones rápidas, explicación de «sin asignar», edición accesible y navegación consistente. |
-| Cuentas | Patrimonio, activos, deudas y vinculaciones requieren interpretación. | Explicación visual bajo demanda y alta guiada según el tipo de cuenta. |
-| Facturas | Introducción extensa y controles basados en iconos ambiguos. | Estados y acciones legibles; explicar el impacto contable cuando se necesite. |
-| Presupuestos | Estado vacío poco motivador y explicación larga en cabecera. | Primer presupuesto guiado y acceso directo desde categorías con gasto. |
-| Reportes | Gráficos informativos, pero con exploración limitada. | Desglose navegable, fechas comparables y claridad de períodos parciales. |
-| Comercios | Texto largo para explicar agrupación y manejo de categorías. | Bandeja de sugerencias revisables y acciones contextuales. |
-| Guías | Biblioteca estática de lecturas. | Centro de tareas, ayuda contextual, continuidad y resolución de problemas. |
-| Conexión de correo | Existe trabajo de Claude en curso. | **No rediseñarla nuevamente.** Solo acordar contratos y reutilización futura. |
+| --- | --- | --- |
+| Resumen | Indicadores útiles que no explican cambios ni llevan a la causa. | Tarjetas con ayuda corta y navegación a movimientos filtrados. |
+| Transacciones | Lista clara; el detalle usa lenguaje financiero y acciones separadas. | Acciones rápidas, explicación de «sin asignar», edición accesible. |
+| Cuentas | Patrimonio, activos, deudas y vinculaciones exigen interpretación. | Explicación bajo demanda y alta guiada según el tipo de cuenta. |
+| Facturas | Introducción extensa e iconos ambiguos. | Estados y acciones legibles; el impacto contable, solo cuando importa. |
+| Presupuestos | Estado vacío poco motivador y explicación larga arriba. | Primer presupuesto guiado y acceso directo desde categorías con gasto. |
+| Reportes | Gráficos informativos, exploración limitada. | Desglose navegable, periodos comparables y parciales señalados. |
+| Comercios | Texto largo para explicar agrupación y categorías. | Bandeja de sugerencias revisables y acciones en contexto. |
+| Guías | Biblioteca estática de lecturas. | Centro de tareas: continuar, qué quiero hacer, resolver un problema. |
+| Conexión de correo | **Hecho.** | Referencia de estilo y de componentes para el resto. |
 
 ### Principios de diseño visual
 
-Conservar el tema oscuro, navegación lateral, magenta como acción principal, cian informativo y verde para éxito. Usar mejor jerarquía, menos texto permanente, contrastes accesibles, foco visible, interacción móvil y animaciones discretas que respeten `prefers-reduced-motion`.
+Fondo oscuro, navegación lateral (barra inferior en móvil), magenta como acción
+principal, cian informativo, verde para éxito o dinero que entra, ámbar para
+atención. Tokens en `frontend/src/index.css`; no introducir paleta nueva.
+Jerarquía clara, menos texto permanente, foco visible, objetivos táctiles de
+44 px, animaciones discretas que respeten `prefers-reduced-motion`. La regla
+global de movimiento reducido ya está en `index.css`.
 
 ---
 
-## 2. Decisiones de arquitectura obligatorias
+## 2. Decisiones de arquitectura
 
-### 2.1. Propiedad de los datos: backend vs. frontend
+### 2.1. Propiedad de los datos
 
-| Elemento | Dueño de la verdad | Persistencia / implementación recomendada | Responsabilidad frontend |
-|---|---|---|---|
-| Catálogo de bancos admitidos | Backend | DynamoDB; alta, baja lógica y edición vía servicio autenticado | Consultar y renderizar; **nunca mantener lista hardcodeada** |
-| Nombre, alias visible, orden y estado de un banco | Backend | DynamoDB, identificador estable `bank_id` | Mostrar lo devuelto por API |
-| Remitentes y dominios admitidos por banco | Backend | DynamoDB; reglas revisadas, versionadas y auditadas | Mostrar nombres y mensajes; no decidir si un remitente es confiable |
-| Autorizaciones de remitentes por usuario | Backend | DynamoDB, aisladas por `user_id`; comprobación real en Ingestion | Crear/revocar mediante API y reflejar estado devuelto |
-| Dirección de reenvío Finflow | Backend | Mantener mecanismo actual: alias determinista o persistido, según contrato existente | **Obtenerla exclusivamente desde API**; no componerla con el correo o ID del usuario |
-| Texto del filtro de Gmail | Backend preferentemente | Endpoint que construya el filtro desde remitentes autorizados y sintaxis validada | Copiar y presentar el texto; no concatenar `OR` localmente |
-| Verificación del reenvío, recepción y procesamiento | Backend | Estados/eventos reales del flujo existente | Consultar y mostrar los estados sin inventar éxitos |
-| Cuentas, instrumentos, transacciones, saldo y patrimonio | Backend | Dominios actuales / DynamoDB según implementación | Presentación, captura de acciones y navegación |
-| Categorías y agrupación de comercios | Backend | Reglas y datos actuales | Revisión y edición sin recalcular finanzas |
-| Progreso de guías por usuario | Backend si debe mantenerse entre dispositivos | DynamoDB; guía, versión, paso, estado, marcas de tiempo | Solicitar/actualizar progreso; conservar estado efímero de animaciones localmente |
-| Textos cortos, layout, animaciones y componentes UX | Frontend | Código versionado, traducciones y tokens | **Mantener en frontend**, salvo que haya una necesidad real de CMS |
-| Feature flags operativas | Backend si necesitan activación sin despliegue | Configuración persistida y servida por API | Mostrar/ocultar funcionalidades según capacidades verificadas |
+| Elemento | Dueño | Implementación | Frontend |
+| --- | --- | --- | --- |
+| Bancos conocidos (con parser propio) | Backend | El registro de parsers en código (`ingestion/domain/parsing/registry.py`, `BANK_DOMAINS`), publicado por `GET /ingestion/catalog` | Leer y dibujar; borrar `KNOWN_BANKS` |
+| Remitentes aprobados por usuario | Backend | Ya existe: inbox del usuario en DynamoDB, aplicado en Ingestion | Aprobar o quitar vía `PATCH /identity/inbox`; mostrar lo confirmado |
+| Dirección de reenvío | Backend | Ya existe: alias derivado del `user_id`; no cambiarlo | Mostrar lo que da la API; nunca calcularlo |
+| Texto del filtro de Gmail | Backend | Campo nuevo en `GET /ingestion/setup` | Copiar y mostrar; borrar `gmailFromFilter` |
+| Verificación, recepción y procesamiento | Backend | Ya existe: `/ingestion/setup` y `/ingestion/notifications` | Mostrar sin inventar éxitos |
+| Cuentas, movimientos, saldos, facturas, presupuestos | Backend | Dominios actuales | Presentación y captura de acciones |
+| Progreso de ayudas ("ya lo vi", "lo descarté") | Navegador | `localStorage` por usuario, como `onboarding/progress.ts` | Lo verificable siempre sale del servidor |
+| Textos, layout, animaciones, componentes | Frontend | Código versionado y tokens | Mantener en frontend |
 
-**Decisión importante:** *backend-driven* no significa trasladar todos los componentes, textos y animaciones a DynamoDB. Lo configurable como negocio se guarda en el backend; el comportamiento visual y las definiciones de componentes permanecen tipados y versionados en frontend. Esto evita convertir la UI en un intérprete complejo de JSON.
+### 2.2. Por qué no un catálogo de bancos administrable en DynamoDB
 
-### 2.2. Modelo mínimo conceptual para DynamoDB
+En Finflow, "banco conocido" significa **tiene un parser determinista**, y los
+parsers son código Python. Dar de alta un banco en DynamoDB sin desplegar no le
+da parser: solo pone un nombre en una tarjeta, y abre la puerta a que catálogo y
+parsers se contradigan. Un banco sin parser ya funciona hoy como «Otro banco»:
+la persona aprueba el remitente y el modelo de lenguaje interpreta la alerta.
 
-**No crear una tabla por cada pantalla sin revisar el diseño actual.** Primero inspeccionar el modelo de claves y patrones de acceso del repositorio; después reutilizar tablas/entidades si corresponde. Los siguientes son **agregados conceptuales**, no un esquema obligatorio.
+Por eso la fuente de verdad del catálogo es el registro de parsers, y el
+backend solo tiene que **publicarlo**. Se descartan el CRUD administrativo, la
+auditoría de catálogo, el versionado y las bajas lógicas. Si algún día hay
+bancos administrables sin parser (por ejemplo, para ofrecer tarjetas con logo),
+se reabre como ticket propio.
 
-| Agregado | Campos sugeridos | Operaciones necesarias |
-|---|---|---|
-| `BankCatalog` | `bank_id`, `display_name`, `status`, `sort_order`, `logo_key`, `version`, `updated_at` | Listar activos, consultar, activar/desactivar, actualizar metadata |
-| `BankSenderRule` | `rule_id`, `bank_id`, `match_type`, `normalized_value`, `status`, `version`, `updated_at` | Listar por banco; crear, deshabilitar y auditar reglas |
-| `UserSenderApproval` | `user_id`, `approval_id`, `rule_id` o patrón propio validado, `status`, `created_at`, `updated_at` | Listar, aprobar, revocar, consultar autorizaciones efectivas |
-| `UserGuideProgress` | `user_id`, `guide_id`, `guide_version`, `status`, `current_step`, `updated_at` | Consultar, comenzar, avanzar, completar, omitir y reiniciar |
-| `CatalogAudit` | actor, tipo de cambio, entidad, antes/después o diff seguro, fecha | Trazabilidad administrativa y recuperación |
+### 2.3. Por qué el progreso de ayudas se queda en el navegador
 
-**Estados recomendados para el catálogo:** `active`, `disabled`, `deprecated` (adaptar a nomenclatura actual). Una desactivación no debe borrar movimientos históricos ni romper nombres de bancos en transacciones anteriores. Los IDs son estables y no dependen del nombre o dominio.
+Todo lo que el servidor puede comprobar —remitentes aprobados, confirmación de
+Gmail, primer correo, movimientos— ya se sincroniza entre dispositivos porque
+sale de la API. Lo que queda en el navegador son afirmaciones que nadie puede
+verificar ("leí esto", "creé el filtro"). Guardarlas junto a hechos verificados
+mezclaría las dos cosas. El costo, aceptado: en otro navegador se repite una
+ayuda, nunca un paso real. Si eso llegara a molestar, se reabre como ticket P2.
 
-**Reglas de DynamoDB:** diseñar particiones para consultas por catálogo/banco/usuario; evitar `Scan` en cada petición; usar escrituras condicionales para evitar actualizaciones perdidas, paginación y lecturas consistentes cuando sean necesarias; evitar que un usuario lea aprobaciones de otro. El backend puede cachear catálogos de lectura frecuente, con invalidación o TTL y políticas de versión.
+### 2.4. Catálogo global y aprobaciones del usuario son cosas distintas
 
-### 2.3. Catálogo global ≠ aprobaciones del usuario
+Que un banco aparezca como conocido **no aprueba sus correos para nadie**. Cada
+persona aprueba los suyos y la ingesta lo aplica en el servidor. Las reglas ya
+vigentes, que se mantienen:
 
-Son dos dominios distintos:
+- Una lista vacía no acepta nada.
+- Un dominio se compara exacto: `bancolombia.com.co` no cubre subdominios.
+- El frontend no deja aprobar como dominio un correo personal (`gmail.com`,
+  `hotmail.com`…); una dirección exacta en esos dominios sí.
+- "Es de mi banco" aprueba la dirección exacta, nunca el dominio.
+- Riesgo residual conocido: un correo reenviado no trae SPF/DKIM útiles
+  (`docs/email-forwarding.md`). La interfaz no lo resuelve y no debe aparentar
+  que lo hace.
 
-1. **Catálogo global administrado:** define qué bancos y qué remitentes conocidos están admitidos o reconocidos. Puede evolucionar sin desplegar el frontend.
-2. **Aprobaciones por usuario:** define cuáles de esos remitentes —o remitentes personalizados válidos— acepta **ese usuario**. Deben persistir por usuario y ser aplicadas obligatoriamente en Ingestion.
+### 2.5. Contratos a crear (los únicos de este plan)
 
-Agregar un banco o un remitente al catálogo **no debe aprobar automáticamente todos sus correos para todos los usuarios**. Quitar una regla no debe convertir una autorización antigua en aceptación irrestricta. Si se desactiva, el sistema debe aplicar una política explícita y auditada; conservar la historia sin aceptar mensajes nuevos por accidente.
+| Capacidad | Contrato | Consumidor |
+| --- | --- | --- |
+| Bancos conocidos | Campo `known_banks` en `GET /ingestion/catalog`: `id`, `name`, `domains`, derivados de `BANK_DOMAINS` | Paso "Elige tus bancos", nombres en el estado de la conexión |
+| Filtro de Gmail | Campo `gmail_filter` en `GET /ingestion/setup`, armado desde los remitentes aprobados | Paso "Reenvía solo tus alertas", aviso de filtro desactualizado |
 
-Los dominios y direcciones deben validarse por reglas exactas o de dominio con límites correctos; no usar comparaciones ingenuas de subcadenas. Considerar remitentes falsificados y la semántica real de cabeceras reenviadas; la confianza no puede descansar solo en una tarjeta verde en frontend.
+El resto de las capacidades del plan 2.0 (`/me/forwarding`,
+`/me/sender-approvals`, `/me/guides`) ya existen con otro nombre o se
+descartan. Cada consumidor nuevo usa el cliente y las consultas de
+`queries.ts`; no se duplican tipos a mano.
 
-### 2.4. Sobre el alias de correo
+### 2.6. Qué se queda en el frontend
 
-El overview describe una dirección derivada determinísticamente del `user_id`. **No sustituir silenciosamente esta decisión por un alias aleatorio guardado en DynamoDB.** Si la dirección actual es estable y expuesta mediante backend, eso ya cumple la separación de responsabilidades con frontend. Si el requerimiento operativo exige almacenar o rotar aliases, plantear una migración **explícita y compatible** que no rompa filtros de Gmail existentes. Lo indispensable es que el frontend jamás lo calcule.
-
-### 2.5. Contratos HTTP y tipado del cliente
-
-Antes de añadir endpoints, buscar si ya existe una API equivalente. Si faltan, plantear **contratos orientativos**, sujetos a los módulos y nombres reales del proyecto:
-
-| Capacidad | Contrato conceptual | Consumidor |
-|---|---|---|
-| Catálogo activo | `GET /catalog/banks` | Selección de bancos y vistas con filtros |
-| Remitentes admitidos | `GET /catalog/banks/{bank_id}/senders` | Panel de detalles y aprobaciones |
-| Aprobaciones del usuario | `GET /me/sender-approvals` | Selección y estado personal |
-| Autorizar / revocar | `POST /me/sender-approvals`, `DELETE /me/sender-approvals/{id}` | Acciones de usuario |
-| Configuración de correo | `GET /me/forwarding` | Dirección y estado verificado |
-| Filtro listo para copiar | `GET /me/forwarding/filter` | Flujo de Gmail ya delegado |
-| Estado de guías | `GET /me/guides`, `PUT /me/guides/{guide_id}` | Ayudas contextuales |
-| Administración autenticada | Endpoints de catálogo bajo el esquema admin actual | Operación del producto, no usuario final |
-
-**Estos endpoints son ejemplos, NO afirmaciones de que ya existen.** Los contratos reales se documentarán tras la auditoría. Preferir OpenAPI generado desde FastAPI/Pydantic y tipos del cliente derivados del contrato; no mantener DTO duplicados manualmente en backend y frontend. Usar el cliente HTTP y la librería de cache/queries ya instalada; separar `api/`, `features/`, `shared/ui/`, `shared/hooks/` siguiendo las convenciones reales, sin reorganizaciones masivas.
-
-**No almacenar secretos ni tokens en configuraciones públicas.** Validar permisos en servidor, nunca únicamente con controles ocultos en la UI. Sin catálogos accesibles por API, mostrar error recuperable, **no** una lista fija de bancos como fallback de producción.
-
-### 2.6. Actualización dinámica del frontend
-
-- **Una sola ruta de datos:** vista → hook/query → cliente tipado → endpoint → dominio/backend → DynamoDB.
-- Para catálogos: query con revalidación razonable, control de versión/ETag si ya se usa y refetch al regresar a la vista. No requiere WebSockets para un catálogo pequeño.
-- Para mutaciones: invalidar/refrescar queries afectadas y mostrar el estado confirmado por backend; evitar marcar «aprobado» hasta recibir éxito.
-- Para cambios concurrentes: usar versionado/condiciones cuando se editan registros administrativos.
-- Al eliminar/desactivar una entidad: mantener datos históricos y mensajes coherentes, sin perder referencias.
-- Estados homogéneos de `loading`, `empty`, `error`, `ready`, `updating`; accesibles.
-
-### 2.7. Qué mantener fuera del backend
-
-La librería de componentes, rutas frontend, iconos, tokens de color, animaciones, definiciones de tours ligados a selectores del DOM y textos de ayuda genéricos son **código frontend versionado**. No se recomienda un generador de interfaces definido por DynamoDB para una aplicación de esta escala. Sí persistir por usuario qué tour vio u omitió.
+Componentes, rutas, iconos, tokens, animaciones, textos de ayuda genéricos,
+enlaces a pantallas de Gmail y el estado efímero de la interfaz. No se
+construye una interfaz generada desde registros.
 
 ---
 
-## 3. Backlog actualizado: esfuerzo, dificultad, tamaño y urgencia
+## 3. Backlog revisado
 
-**Tamaño:** S = pequeño, M = mediano, L = grande, XL = muy grande.  
-**Dificultad:** Baja / Media / Alta.  
-**Urgencia:** P0 = base o riesgo importante; P1 = siguiente ola; P2 = evolutiva.  
-**Horas:** estimaciones de esfuerzo humano **si hay que implementar el alcance descrito**. Se ajustan tras la auditoría, especialmente si ya existen APIs o colecciones en DynamoDB. **No incluye el onboarding de correo ya delegado.**
+**Tamaño:** S, M, L. **Urgencia:** P0 base, P1 siguiente ola, P2 evolutiva.
+**Horas:** esfuerzo humano estimado.
 
-| ID | Iniciativa | Descripción / resultado | Dificultad | Tamaño | Horas | Urgencia |
-|---|---|---|---|---|---:|---|
-| **ARC-00** | Auditoría del proyecto y límites de trabajo | Mapear rutas, dependencias, APIs, DynamoDB y los archivos del onboarding actualmente en trabajo; detectar hardcodes. | Media | M | **6–12** | **P0** |
-| **ARC-01** | Contratos API y cliente tipado | Definir fuente de verdad, Pydantic/OpenAPI, cliente tipado, errores y caché; evitar DTOs y reglas duplicadas. | Media | M | **10–20** | **P0** |
-| **ARC-02** | Catálogo dinámico de bancos/remitentes | Persistencia DynamoDB, CRUD administrativo controlado, estados, versionado y listado para frontend. | Alta | L | **20–40** | **P0** |
-| **ARC-03** | Aprobaciones individuales de remitentes | Aislamiento por usuario, revocación real, aplicación en Ingestion y sincronización con UI. | Alta | L | **16–32** | **P0** |
-| **ARC-04** | Filtro de Gmail generado en backend | Endpoint para obtener texto seguro basado en aprobaciones y reglas vigentes; integración **solo contractual** con onboarding delegado. | Media | M | **8–16** | **P0** |
-| **ARC-05** | Progreso de guías persistente | DynamoDB por usuario/guía/versión con APIs para continuar, omitir o reiniciar. | Media | M | **8–16** | **P1** |
-| **UX-01** | Microcopy y simplificación de pantallas | Reducir cabeceras, aclarar conceptos financieros y mostrar detalles bajo demanda. | Baja | M | **8–16** | **P0** |
-| **UX-02** | Kit visual e interacciones | Tooltip, popover, modal, spotlight, empty state, toast y progreso reutilizables sobre estilos existentes. | Media | L | **12–24** | **P0** |
-| **UX-03** | Motor ligero de ayudas contextuales | Tours activados por pantalla y estado real; uso de progreso persistente, reanudación y descarte. | Media | L | **12–24** | **P1** |
-| **UX-05** | Diagnóstico de movimientos que no llegan | Estados comprobables, rutas de resolución y mensajes útiles sin reescribir el onboarding. | Alta | M | **12–24** | **P1** |
-| **UX-06** | Resumen accionable | Métricas con explicaciones y navegación a desglose filtrado; períodos claros. | Media | M | **10–20** | **P1** |
-| **UX-07** | Transacciones y detalle | Acciones rápidas, estados entendibles, edición, «sin asignar» y traslados. | Media | M | **12–24** | **P1** |
-| **UX-08** | Cuentas e instrumentos | Alta contextual, vinculación de instrumentos y explicación de patrimonio/deuda. | Alta | L | **16–32** | **P1** |
-| **UX-09** | Facturas | Estado previsto/pagado, acciones claras y prevención de confusión con gasto registrado. | Media | M | **12–24** | **P1** |
-| **UX-10** | Presupuestos | Estado vacío guiado, crear primer límite y acciones desde categorías relevantes. | Media | M | **10–20** | **P1** |
-| **UX-11** | Reportes interactivos | Navegar desde visualizaciones, comparar períodos equivalentes y explicar métricas. | Alta | L | **14–28** | **P1** |
-| **UX-12** | Comercios y categorías | Revisión guiada, sugerencias de agrupación, menos textos e impactos claros al editar. | Media | M | **10–20** | **P1** |
-| **UX-13** | Centro de Guías | Acciones por tarea, continuidad por usuario, soporte contextual y reejecución de ayudas. | Media | M | **10–20** | **P1** |
-| **UX-14** | Avisos móviles (si ya existe soporte) | Ayuda breve para habilitar/preferir avisos; no inventar integración de Telegram. | Media | M | **8–16** | **P2** |
-| **UX-15** | Analítica UX sin datos sensibles | Errores, abandonos y finalización de tareas sin correos, importes ni contenido bancario. | Baja | S | **6–12** | **P2** |
-| **QA-16** | Accesibilidad, móvil y regresión | Validación transversal de responsive, foco, contraste, pruebas de API y finanzas. | Media | L | **16–32** | **P0 transversal** |
+| ID | Iniciativa | Resultado | Tamaño | Horas | Urgencia | Estado |
+| --- | --- | --- | --- | ---: | --- | --- |
+| UX-04 | Onboarding de conexión | Asistente guiado y estado de la conexión | — | — | — | **Hecho** |
+| ARC-00 | Auditoría de las demás pantallas | Inventario corto por pantalla, sin documentos extra | S | 3–6 | P0 | **Hecho** (sección 10) |
+| ARC-01 | Contratos y cliente tipado | — | — | — | — | **Ya existía** |
+| ARC-02 | Bancos conocidos desde el backend | `known_banks` en `/ingestion/catalog`; borrar `KNOWN_BANKS` | S | 3–6 | P0 | Pendiente |
+| ARC-03 | Aprobaciones por usuario | — | — | — | — | **Ya existía** |
+| ARC-04 | Filtro de Gmail en el backend | `gmail_filter` en `/ingestion/setup`; borrar `gmailFromFilter` | S | 2–4 | P0 | Pendiente |
+| ARC-05 | Progreso de ayudas en DynamoDB | — | — | — | — | **Descartado** (2.3) |
+| UX-01 | Textos cortos | Cabeceras breves, detalle bajo demanda, en todas las vistas | M | 6–12 | P0 | Pendiente |
+| UX-02 | Kit visual compartido | Promover las piezas del onboarding a `components/ui/` | S | 4–8 | P0 | Pendiente |
+| UX-03 | Motor de tours atado al DOM | — | — | — | — | **Descartado**: se rompe con cada cambio de maquetación; cada vista lleva su ayuda en contexto |
+| UX-05 | Diagnóstico enlazado | Llevar el diagnóstico existente a Transacciones y Resumen | S | 3–6 | P1 | Parcial |
+| UX-06 | Resumen accionable | Métricas con ayuda corta y navegación a desglose filtrado | M | 6–12 | P1 | Pendiente |
+| UX-07 | Transacciones y detalle | Acciones rápidas, «sin asignar», edición y traslados claros | M | 10–20 | P1 | Pendiente |
+| UX-08 | Cuentas e instrumentos | Tarjeta menos densa, vinculación, patrimonio y deuda explicados (el alta por tipo ya existe) | M | 10–20 | P1 | Pendiente |
+| UX-09 | Facturas | Previsto, pagado y vencido legibles; impacto contable bajo demanda | M | 8–16 | P1 | Pendiente |
+| UX-10 | Presupuestos | Estado vacío guiado (las sugerencias desde el gasto ya existen) | S | 6–12 | P1 | Pendiente |
+| UX-11 | Reportes | Columnas navegables (el resto del desglose y los parciales ya existen) | S | 4–8 | P1 | Pendiente |
+| UX-12 | Comercios y categorías | Cola de revisión y acciones en contexto; sugerir fusiones queda fuera (sin contrato) | M | 6–12 | P1 | Pendiente |
+| UX-13 | Centro de Guías | Continuar, qué quiero hacer, resolver un problema | M | 6–12 | P1 | Pendiente |
+| UX-14 | Ayuda de avisos | La conexión con Telegram ya existe (Perfil, `/guias/avisos`); solo acortar y guiar | S | 4–8 | P2 | Pendiente |
+| UX-15 | Analítica de experiencia | — | — | — | — | **Diferido**: no hay uso suficiente para medir |
+| QA-16 | Accesibilidad, móvil y regresión | Una e2e por ticket; `just e2e` completo antes de cerrar cada fase | — | 8–16 | Transversal | Continuo |
 
-**Estimación máxima del alcance nuevo completo: 236–472 horas-persona**, si hubiera que construir todos los elementos. No es una cifra cerrada: **ARC-02/03/04/05 pueden requerir mucho menos o cero implementación si ya existen**. El trabajo del onboarding de correo está explícitamente excluido. Las estimaciones son aditivas solo como referencia y deberán eliminar solapamientos reales tras ARC-00.
-
----
-
-## 4. Criterios de aceptación por módulo (sin repetir el flujo Gmail)
-
-### ARC-01/02/03/04 — Backend-driven de verdad
-
-- [ ] Ningún banco, remitente, dominio o email se define como lista fija en el código frontend de producción.
-- [ ] Agregar un banco activo y sus remitentes por el mecanismo administrativo provoca que aparezcan en la UI al refrescar o revalidar, **sin despliegue frontend**.
-- [ ] Desactivar un banco impide nuevas selecciones según política, pero conserva referencias históricas legibles.
-- [ ] Una aprobación individual es una operación de backend y solo afecta a su usuario.
-- [ ] Un usuario no puede autorizar, consultar ni revocar remitentes de otro usuario.
-- [ ] La ingesta aplica autorizaciones en servidor aunque la UI se manipule.
-- [ ] Si cambia una regla, el texto del filtro se obtiene actualizado del backend; la UI avisa que quizá haya que actualizar Gmail, sin asumir que lo modificó automáticamente.
-- [ ] No se construyen expresiones Gmail incompatibles, dominios demasiado amplios ni permisos implícitos.
-- [ ] Endpoints seguros, pruebas de contratos y migración/seed idempotente si se crean nuevas entidades.
-
-### UX-01/02/03 — Base visual y ayudas
-
-- [ ] Cabeceras cortas, una CTA principal por contexto, información adicional solo bajo demanda.
-- [ ] Componentes compartidos respetan tokens actuales, teclado, foco, lector de pantalla y móvil.
-- [ ] Cada guía admite `not_started`, `in_progress`, `completed`, `dismissed`, versión y reinicio.
-- [ ] El progreso de la guía no reemplaza el estado real de una cuenta o integración.
-- [ ] No se muestran ayudas que el usuario haya descartado reiteradamente.
-
-### UX-05 — Diagnóstico, no otro onboarding
-
-- [ ] El usuario distingue «no llegaron correos», «remitente no aprobado», «correo recibido sin extraer» y «movimiento sin asignar» **solo si existe evidencia real para diferenciarlos**.
-- [ ] Para información no observable se muestra «No podemos confirmar todavía», no una causa inventada.
-- [ ] El resultado lleva a una acción concreta y enlaza a la guía de correo existente cuando corresponde.
-- [ ] No modifica el diseño/implementación del asistente ya delegado.
-
-### UX-06 — Resumen
-
-- [ ] Tarjetas de patrimonio/ingresos/gastos/deudas con ayudas cortas y enlaces a detalle.
-- [ ] Clic en categoría o transacción abre el filtro/detalle real correspondiente.
-- [ ] Comparaciones especifican período y no hacen inferencias financieras sin base.
-
-### UX-07 — Transacciones
-
-- [ ] Se identifican origen automático/manual, estado «sin asignar», edición y eliminación con lenguaje claro.
-- [ ] Acciones rápidas discretas en escritorio, accesibles en móvil.
-- [ ] Se preserva la lógica del traslado entre cuentas: no se presenta como ingreso/gasto nuevo.
-
-### UX-08 — Cuentas
-
-- [ ] Formularios adecuados al tipo: ahorro, corriente, tarjeta, efectivo, inversión, préstamo/hipoteca, según soporta el backend.
-- [ ] Se entiende patrimonio = activos − pasivos, sin forzar cuentas para recibir movimientos.
-- [ ] Las vinculaciones e historial retroactivo respetan lo que decide el backend; sin emparejar por conjetura.
-
-### UX-09 — Facturas
-
-- [ ] Se diferencian pagos previstos, confirmados y vencidos según reglas reales.
-- [ ] Acciones importantes tienen texto o tooltip accesible.
-- [ ] No se contabiliza una factura declarada como si ya hubiera salido dinero.
-- [ ] Antes de prometer conciliación automática, auditar si hay soporte real y riesgo de doble conteo.
-
-### UX-10 — Presupuestos
-
-- [ ] Estado vacío con CTA, ejemplo claramente etiquetado si usa datos simulados.
-- [ ] Crear un presupuesto con categoría y límite requiere pocos pasos.
-- [ ] Categorías sugeridas derivan de movimientos reales; no inventar montos ni bloquear pagos.
-
-### UX-11 — Reportes
-
-- [ ] Gráficos navegan a los movimientos que componen el dato cuando haya filtros compatibles.
-- [ ] Períodos parciales y bases de comparación se indican con fechas precisas.
-- [ ] Cambios porcentuales tienen explicaciones comprensibles y comprobables.
-
-### UX-12 — Comercios
-
-- [ ] Revisión de sugerencias con confirmación real, respetando decisiones previas.
-- [ ] Gestión de categorías con confirmaciones precisas, sin textos extensos permanentes.
-- [ ] No se agrupan automáticamente sugerencias inciertas.
-
-### UX-13 — Guías
-
-- [ ] Secciones: «Continuar», «Qué quiero hacer» y «Resolver un problema».
-- [ ] Cada tarjeta lleva a acciones existentes, no a nuevas páginas de texto.
-- [ ] El usuario puede reabrir una guía ya completada sin alterar estados financieros.
-- [ ] La tarjeta de conexión de correo dirige al trabajo ya existente; no hay una segunda implementación.
+**Total pendiente: 82–172 horas-persona** (corregido por la auditoría, sección 10.3).
+Primera ola (ARC-02/04, UX-01/02, UX-07, UX-10): **31–62 h**.
 
 ---
 
-## 5. Plan de ejecución sin colisiones con Claude
+## 4. Criterios de aceptación
 
-| Entrega | Tickets | Qué se implementa | Dependencia / control |
-|---|---|---|---|
-| **E0 — Auditoría y coordinación** | ARC-00 | Inventario, contratos reales, mapa de archivos «reservados» por la guía de correo y hardcodes. | **Solo análisis**, no tocar código de onboarding. |
-| **E1 — Fuente de verdad** | ARC-01, ARC-02, ARC-03, ARC-04 | Catálogo, remitentes, aprobaciones, contrato de filtro, tipos y consumo frontend. | Ejecutar solo las piezas ausentes; validar con el responsable del onboarding. |
-| **E2 — Fundamentos UX** | UX-01, UX-02, ARC-05, UX-03 | Microcopy, primitives compartidas y motor de ayudas por usuario. | No reemplazar componentes ya hechos por Claude; reutilizar/adaptar después. |
-| **E3 — Tareas cotidianas** | UX-07, UX-08, UX-10 | Transacciones, cuentas y presupuestos. | Flujos verticales independientes; regresión financiera. |
-| **E4 — Resto de las vistas** | UX-06, UX-09, UX-11, UX-12 | Resumen, facturas, reportes y comercios. | No prometer funciones sin APIs. |
-| **E5 — Ayuda unificada** | UX-05, UX-13 | Diagnóstico, centro de ayuda y enlaces hacia el onboarding **ya existente**. | Integrar al terminar el trabajo paralelo de Claude. |
-| **E6 — Evolución** | UX-14, UX-15 | Avisos y telemetría, si corresponden. | Respetar privacidad y soporte backend. |
-| **Siempre** | QA-16 | Pruebas, accesibilidad y responsive en cada ticket. | No diferir toda la validación al final. |
+### ARC-02 y ARC-04 — Sin catálogo fijo en el frontend
 
-**E0 debe producir un archivo `docs/ux/RESERVAS_DE_ARCHIVOS.md`** que identifique qué rutas/componentes/servicios modifica el Claude que desarrolla la guía de correo. Si no se puede confirmar qué archivos modifica, no tocarlos hasta revisar el diff del trabajo en curso. Evitar ramas paralelas que editen los mismos archivos; integrar primero el contrato backend y después adaptar el consumidor con un cambio mínimo acordado.
+- [ ] `frontend/src` no contiene dominios ni nombres de banco como catálogo; las
+      tarjetas salen de `known_banks`.
+- [ ] `known_banks` se deriva de `BANK_DOMAINS`; agregar un parser con su
+      dominio lo hace aparecer en la pantalla sin tocar el frontend.
+- [ ] Un banco aparece "elegido" solo si **todos** sus dominios están
+      aprobados; con algunos, "incompleto".
+- [ ] El filtro mostrado es el `gmail_filter` del servidor, con el mismo formato
+      que hoy (`@dominio OR dirección`), que es el verificado en Gmail.
+- [ ] Si `/ingestion/catalog` falla, la pantalla muestra un error recuperable,
+      nunca una lista fija de respaldo.
+- [ ] Pruebas de backend del armado del filtro y del catálogo; `just e2e-connect`
+      sigue pasando; Postman actualizado.
 
-### Criterio para iniciar una iniciativa
+### UX-01 y UX-02 — Base visual
 
-1. Su contrato API y dueño de datos están identificados.
-2. No pisa un archivo que esté siendo editado por otro agente.
-3. Hay criterios de aceptación y pruebas concretas.
-4. Se conoce cuál es la acción observable que mejora al usuario.
-5. La mejora puede entregarse y revisarse de forma aislada.
+- [ ] Cabecera de una o dos líneas y una acción principal por pantalla.
+- [ ] Componentes compartidos con teclado, foco visible, lector de pantalla y
+      móvil; sin librerías nuevas.
+- [ ] Ninguna ayuda reemplaza el estado real de una cuenta o integración.
+
+### UX-05 — Diagnóstico enlazado
+
+- [ ] Desde Transacciones vacías o Resumen sin movimientos se llega al estado de
+      la conexión, que ya distingue los casos con evidencia.
+- [ ] Lo que no se puede observar se dice como tal ("no podemos confirmarlo").
+
+### UX-06 a UX-13
+
+- **Resumen:** cada tarjeta lleva a su detalle real; las comparaciones dicen el
+  periodo.
+- **Transacciones:** origen automático o manual, «sin asignar», edición y
+  borrado en lenguaje claro; un traslado nunca se presenta como ingreso o gasto.
+- **Cuentas:** formulario según el tipo que soporta el backend; patrimonio =
+  activos − pasivos; préstamos e hipotecas siguen fuera de los totales.
+- **Facturas:** previsto, confirmado y vencido según las reglas reales;
+  declarar no mueve saldos y la pantalla lo dice.
+- **Presupuestos:** crear el primer tope en pocos pasos; categorías sugeridas
+  salen de movimientos reales; un tope no bloquea nada.
+- **Reportes:** los gráficos llevan a sus movimientos; periodos parciales
+  señalados.
+- **Comercios:** nada se agrupa solo; las sugerencias se confirman.
+- **Guías:** cada tarjeta lleva a una acción existente; la de conexión lleva a
+  `/conectar`.
 
 ---
 
-## 6. Estrategia específica de frontend recomendada
+## 5. Orden de ejecución
 
-**Evitar dos extremos:** (a) un frontend con datos financieros y bancos hardcodeados; (b) un frontend completamente generado desde registros DynamoDB. Recomiendo un **frontend delgado y tipado, organizado por funcionalidades**, con un backend que gestione las reglas y estados.
+| Fase | Tickets | Qué se entrega | Control |
+| --- | --- | --- | --- |
+| F0 | ARC-00, ARC-02, ARC-04 | Inventario corto; bancos y filtro desde el backend | `just prepare`, `just web-check`, `just e2e-connect` |
+| F1 | UX-01, UX-02 | Textos cortos y kit compartido | `just e2e-views` |
+| F2 | UX-07, UX-10 | Transacciones y Presupuestos | e2e del ticket + `just e2e` |
+| F3 | UX-08 | Cuentas | e2e del ticket + `just e2e` |
+| F4 | UX-06, UX-09, UX-11, UX-12 | Resumen, Facturas, Reportes, Comercios | Uno por sesión |
+| F5 | UX-05, UX-13 | Diagnóstico enlazado y centro de guías | `just e2e` |
+| F6 | UX-14 | Ayuda de avisos | — |
 
-### Estructura conceptual (adaptar al framework actual)
+### Criterio para iniciar un ticket
 
-```text
-src/
-  app/                        # Router, layout, autenticación y providers
-  features/
-    dashboard/                # Resumen, consultas, gráficos y navegación
-    transactions/             # Listas, filtros, detalle y edición
-    accounts/                 # Cuentas, instrumentos y vinculaciones
-    bills/                    # Facturas
-    budgets/                  # Presupuestos
-    reports/                  # Reportes
-    merchants/                # Comercios y categorías
-    guides/                   # Centro de guías, reglas de aparición, progreso
-    banking-catalog/          # Catálogo de bancos y aprobaciones desde API
-  shared/
-    api/                      # Cliente HTTP, tipos generados, errores
-    ui/                       # Tooltip, modal, wizard, toasts, empty states
-    hooks/                    # Hooks realmente compartidos
-    utils/                    # Formato, fechas, moneda: solo presentación
-```
+1. Su contrato API y el dueño de los datos están identificados.
+2. Tiene criterios de aceptación y una prueba en navegador concreta.
+3. Se conoce la acción del usuario que mejora.
+4. Se puede entregar y revisar sola.
 
-**No ejecutar esta reorganización de directorios por defecto.** Es un mapa de responsabilidades, no una orden de refactor masivo. Conservar convenciones actuales si ya funcionan.
+---
 
-### Patrón de consumo de bancos (conceptual)
+## 6. Estrategia de frontend
+
+### Convenciones reales del repositorio (no reorganizar)
+
+- `frontend/src/routes/` — pantallas (TanStack Router, rutas por archivo).
+- `frontend/src/<feature>/` — lógica pura con su `*.test.ts` y, a veces,
+  componentes del feature (`bills/`, `budgets/`, `merchants/`, `onboarding/`).
+- `frontend/src/components/` y `components/ui/` — piezas compartidas.
+- `frontend/src/api/queries.ts` — todas las lecturas y escrituras; tipos de
+  `schema.d.ts`, que es generado (no se edita a mano).
+- Pruebas: Vitest sobre lógica pura (sin DOM) y Playwright en
+  `frontend/scripts/e2e-*.mjs`, cada una con su receta `just e2e-*`.
+
+### Kit compartido: promover, no reconstruir (UX-02)
+
+Ya construido en el onboarding y probado. Se mueve a `components/ui/` cuando
+aparezca su segundo uso:
+
+| Pieza | Archivo actual | Uso |
+| --- | --- | --- |
+| `Notice` | `onboarding/parts.tsx` | Aviso informativo, de atención o de éxito |
+| `ExternalButton`, `buttonClass` | `onboarding/parts.tsx`, `components/ui/Button.tsx` | Enlaces con aspecto de botón |
+| `StepHeading` | `onboarding/parts.tsx` | Título que recibe el foco al cambiar de paso |
+| `SuccessMark`, `WaitingDot` | `onboarding/parts.tsx` | Éxito con animación; espera pasiva |
+| `CopyField`, `useCopy` | `onboarding/CopyField.tsx` | Copiar con confirmación y respaldo manual |
+| `GmailTutorial` | `onboarding/GmailTutorial.tsx` | Carrusel de pasos con teclado y gesto |
+| `Stepper` | `onboarding/Stepper.tsx` | Progreso por pasos |
+| `MovementCard` | `onboarding/MovementCard.tsx` | Un movimiento como tarjeta |
+| `useMediaQuery`, `useNow` | `lib/` | Consultas de medios; tiempo que avanza |
+| Animaciones | `index.css` | `step-in-*`, `pop`, `spotlight`, `burst`, `shimmer`, `draw-check` |
+
+### Patrón de consumo de bancos tras ARC-02
 
 ```typescript
-// Ilustración de responsabilidades; NO asumir nombres reales de hooks ni endpoints.
-const { data: banks, isLoading, error } = useBankCatalog();
-const { data: approvals } = useMySenderApprovals();
-
-// Renderizar información servida por la API.
-// Autorizar/revocar solo mediante mutaciones confirmadas por backend.
-// Nunca declarar BANKS = ['Bancolombia', 'Lulo', ...] como catálogo de producción.
+// ingestionCatalogQuery no existe todavía: ARC-02 la crea en api/queries.ts,
+// junto a financialCatalogQuery y merchantCatalogQuery, que sí existen.
+const { data: catalog } = useQuery(ingestionCatalogQuery);
+const { senders, save } = useSenders(); // lo aprobado por esta persona
+// "elegido" solo cuando el PATCH respondió y todos los dominios están en la lista
 ```
 
-### Ejemplo de respuesta de API (SOLO contrato ilustrativo)
+### Lecciones del onboarding que aplican a todas las vistas
 
-```json
-{
-  "version": 12,
-  "banks": [
-    {
-      "bank_id": "bank_example",
-      "display_name": "Banco de ejemplo",
-      "status": "active",
-      "logo_url": null,
-      "available_sender_count": 2
-    }
-  ]
-}
-```
-
-**No exponer todas las reglas de seguridad a una UI pública** si el usuario solo requiere nombre y selección. Separar endpoints públicos/autenticados/administrativos con el menor privilegio posible.
-
-### Dónde guardar el progreso de una guía
-
-Usar DynamoDB como fuente de verdad si se quiere continuidad entre navegador y móvil. El frontend puede mantener estado local efímero del popover, animación o paso actual, pero debe sincronizar eventos durables `completed`, `dismissed` y `current_step` mediante API. Incluir versión de guía para no reciclar un estado antiguo sobre un recorrido nuevo. No persistir detalles de correo, compras o saldos junto con estado de guías.
+- El paso o la pestaña visible va en la URL (`?paso=N`), así el botón atrás
+  funciona y la pantalla no salta cuando el servidor responde.
+- Una rejilla en móvil necesita `grid-cols-1` explícito; si no, un texto
+  truncado la ensancha y la página se desborda.
+- Nada aparece "aprobado" o "listo" antes de la respuesta del servidor.
+- Separar lo que el servidor comprueba de lo que la persona dice, y rotularlo
+  distinto ("Comprobado" frente a "Lo marcaste tú").
 
 ---
 
 ## 7. Prompts para Claude Code
 
-### Prompt A — Auditoría de arquitectura y UX (una sola vez)
+**Para todos:** sin subagentes. Una revisión multiagente lee el diff completo
+una vez por agente; en un cambio grande agota el límite de la sesión sin
+terminar. Si un ticket necesita revisión, se hace directa sobre los archivos de
+riesgo, y si algo se corta por límite, no se relanza igual.
+
+### Prompt A — Auditoría corta (ARC-00), una sola vez
 
 ```text
-ROL: Actúa como Staff Software Engineer / arquitecto de software con experiencia en Python, FastAPI, DynamoDB y frontend moderno, junto con un Product Designer senior.
+Lee front_refactor/FINFLOW_PLAN_UX_V2.md (secciones 0, 1 y 3) y PROGRESS.md.
+Ejecuta solo ARC-00. No escribas código ni abras subagentes.
 
-Lee docs/ux/FINFLOW_PLAN_UX_V2.md y ejecuta EXCLUSIVAMENTE ARC-00. No escribas código de producto todavía.
+Para Resumen, Transacciones, Cuentas, Facturas, Presupuestos, Reportes,
+Comercios y Guías, lee solo el archivo de la ruta en frontend/src/routes y lo
+que importe directamente. Para cada pantalla anota en una tabla:
+- textos permanentes que sobran o pueden ir bajo demanda;
+- la acción principal y si se ve;
+- estados vacío / carga / error que falten;
+- APIs que consume (de api/queries.ts);
+- piezas del kit (sección 6) que podría usar.
 
-CONTEXTOS QUE DEBES RESPETAR:
-- Ya existe una tarea delegada a Claude para rediseñar el onboarding de asociación de correo. NO ejecutes esa tarea otra vez.
-- No edites ni sustituyas sus componentes, instrucciones, estados ni rutas.
-- El backend debe ser fuente de verdad de bancos, remitentes, aprobaciones y datos bancarios. DynamoDB se usará según el modelo actual del repositorio.
-- El frontend debe renderizar estados y contratos reales; no contener catálogos quemados.
-- El frontend puede mantener componentes, animaciones y copys genéricos en código; no construir un CMS dinámico innecesario.
-
-AUDITA DE FORMA SELECTIVA:
-1. Ubica rutas y componentes de Resumen, Transacciones, Cuentas, Facturas, Presupuestos, Reportes, Comercios y Guías.
-2. Identifica stack frontend, componentes compartidos, estado global, caché de datos, cliente HTTP y tests.
-3. Ubica backend de bancos, aprobaciones de remitentes, identidad, forwarding, ingest y endpoints relacionados.
-4. Ubica tablas/entidades DynamoDB, access patterns y migraciones o seeds existentes.
-5. Localiza TODOS los valores de banco/correo/dominio/Gmail hardcodeados en frontend y dónde se originan.
-6. Distingue configuraciones globales, autorizaciones por usuario y metadatos visuales.
-7. Confirma si el alias de Finflow se deriva del user_id; no cambies esa lógica sin una justificación y migración.
-8. Identifica qué archivos están comprometidos por el trabajo paralelo del onboarding de correo; no los modifiques.
-9. Verifica contratos ya disponibles antes de sugerir endpoints o modelos Dynamo nuevos.
-10. Marca expresamente lo existente, lo faltante y lo que no has podido confirmar.
-
-ENTREGABLES (crear solo documentación):
-- docs/ux/AUDITORIA_UX_TECNICA.md
-- docs/ux/MATRIZ_FUENTE_VERDAD.md: dato, dueño, persistencia, API, consumidores y hardcodes.
-- docs/ux/CONTRATOS_Y_BRECHAS.md: endpoints existentes vs. por crear, permisos, estados y pruebas.
-- docs/ux/RESERVAS_DE_ARCHIVOS.md: archivos del onboarding ya delegado que NO deben tocarse.
-- docs/ux/BACKLOG_AJUSTADO.md: esfuerzo real revisado, duplicidades eliminadas y orden de tickets.
-
-EFICIENCIA:
-- Empieza por índices de rutas, imports, contratos OpenAPI, repositorios e infraestructura.
-- No leas toda la documentación ni todos los archivos por defecto.
-- No vuelvas a cargar documentos inspeccionados cuando el resumen existente baste.
-- No edites código, no cambies reglas financieras y no hagas commits.
-
-Al terminar, entrega una síntesis de decisiones y recomienda cuál de ARC-01, ARC-02, ARC-03 o ARC-04 falta realmente y debe ejecutarse primero.
+Entrega: una sección nueva "Auditoría por pantalla" al final de
+front_refactor/FINFLOW_PLAN_UX_V2.md, y corrige ahí las horas del backlog si
+la auditoría lo justifica. Nada de documentos adicionales.
 ```
 
-### Prompt B — Implementar backend-driven de bancos y remitentes (si ARC-00 detecta brecha)
+### Prompt B — ARC-02 + ARC-04 (bancos y filtro desde el backend)
 
 ```text
-ROL: Staff Backend Engineer (FastAPI/Pydantic/DynamoDB) y responsable de contratos frontend.
+Implementa ARC-02 y ARC-04 de front_refactor/FINFLOW_PLAN_UX_V2.md
+(secciones 2.2, 2.5 y 4). Sin subagentes.
 
-TAREA: implementar ÚNICAMENTE el ticket ARC-XX que indique el usuario dentro del plan docs/ux/FINFLOW_PLAN_UX_V2.md. No ejecutar más de un ticket en esta sesión.
+Lee solo: ingestion/domain/parsing/registry.py, ingestion/presentation/http/
+notifications.py (catálogo) y setup.py, frontend/src/onboarding/banks.ts,
+frontend/src/lib/forwarding.ts y sus pruebas.
 
-LEE SOLO:
-- La sección relevante del plan.
-- docs/ux/MATRIZ_FUENTE_VERDAD.md y docs/ux/CONTRATOS_Y_BRECHAS.md.
-- Los archivos de código y tests directamente relacionados con ARC-XX.
-
-REQUISITOS INNEGOCIABLES:
-1. Backend es fuente de verdad. Catálogos globales y autorizaciones por usuario se persisten/controlan por backend, preferentemente reutilizando DynamoDB existente.
-2. No introducir arrays de bancos/correos/dominos fijos en frontend de producción.
-3. Separar catálogo global del consentimiento por usuario; agregar un banco no aprueba sus remitentes a todos.
-4. Respetar aislación por usuario y autorización de endpoints; backend debe validar remitentes durante la ingesta.
-5. Preservar referencias históricas si un banco o regla se desactiva; preferir baja lógica.
-6. Validar patrones de email/dominio cuidadosamente; no ampliar permisos por error.
-7. Reutilizar las estructuras de DynamoDB, Pydantic y APIs ya presentes antes de añadir otras.
-8. Si se requiere migración de catálogos anteriores, que sea idempotente y tenga plan de rollback/compatibilidad.
-9. Preferir contrato OpenAPI y cliente tipado generado o integrado al stack actual.
-10. NO cambiar el alias determinista existente ni archivos del onboarding de correo delegado.
-11. Si el frontend requiere cambiar su consumo, documentar la adaptación y reservarla para la integración coordinada.
-12. No exponer datos sensibles en logs, mocks ni observabilidad.
-
-PRUEBAS MÍNIMAS:
-- Alta, listado, edición y desactivación de banco/regla.
-- Usuario A jamás ve ni modifica aprobaciones del usuario B.
-- Remitentes desactivados no quedan aceptados accidentalmente.
-- Cambios de catálogo no exigen despliegue frontend.
-- Manejo de conflictos, validación de patrones, errores de API y compatibilidad histórica.
-
-ENTREGA: contrato real, archivos modificados, diseño de claves/consultas de DynamoDB, casos probados, riesgos, dependencias con onboarding y límites del ticket.
+1. Backend: `known_banks` en GET /ingestion/catalog derivado de BANK_DOMAINS
+   (id estable, nombre visible, dominios); `gmail_filter` en GET
+   /ingestion/setup con el formato actual (`@dominio OR dirección`). Pruebas.
+2. `just web-types`; actualizar docs/postman según docs/postman/README.md.
+3. Frontend: crear ingestionCatalogQuery en api/queries.ts (hoy ninguna
+   pantalla lee /ingestion/catalog) y leer gmail_filter de setupQuery; borrar
+   KNOWN_BANKS y gmailFromFilter; error recuperable si el catálogo no
+   responde.
+4. Validar: just prepare, just web-check, just up + just web, just e2e-connect.
+5. Actualizar PROGRESS.md y el estado del ticket en este plan. No hagas commit.
 ```
 
-### Prompt C — Implementar una mejora UX sin duplicar onboarding (repetir por ticket)
+### Prompt C — Un ticket de UX (repetir por ticket)
 
 ```text
-ROL: Product Designer senior, UX Engineer y Frontend Engineer senior trabajando en el repositorio real de Finflow.
+Ticket: UX-XX de front_refactor/FINFLOW_PLAN_UX_V2.md. Sin subagentes.
+Lee la fila del ticket (sección 3), sus criterios (sección 4), la auditoría de
+su pantalla y solo los archivos de esa pantalla.
 
-TICKET: UX-XX (elegir uno de UX-01/02/03/05/06/07/08/09/10/11/12/13/14/15).
+Reglas: datos de negocio desde el backend; reutiliza el kit de la sección 6;
+no cambies cálculos ni reglas financieras; no inventes estados; tema oscuro y
+tokens actuales; sin librerías nuevas; nada de commits.
 
-Lee exclusivamente la sección pertinente de docs/ux/FINFLOW_PLAN_UX_V2.md, la auditoría ya existente y los archivos del ticket.
+1. En dos líneas: la fricción actual y la acción que mejora.
+2. Diseño: estados vacío/carga/error/éxito, móvil, teclado y lector.
+3. Implementa solo ese ticket, con pruebas de la lógica nueva.
+4. Escribe frontend/scripts/e2e-<pantalla>.mjs con su receta just, siguiendo
+   e2e-connect.mjs: pantalla comparada con la API, sin desborde lateral, sin
+   errores.
+5. Valida: just web-check, la e2e del ticket y just e2e-views.
+6. Actualiza el estado del ticket en este plan y PROGRESS.md.
 
-REGLAS:
-- La guía de asociación de correo YA ESTÁ DELEGADA a otro Claude: NO volver a implementarla, rediseñarla o tocar sus archivos.
-- Datos y configuraciones de negocio proceden del backend. No quemes bancos, dominios, correos, saldos ni estados en frontend.
-- Usa el cliente API, tipos, tokens visuales y componentes compartidos existentes.
-- La lógica del frontend se limita a presentación, navegación y estados efímeros; validaciones y resultados de negocio pertenecen al backend.
-- La guía debe enseñar realizando acciones, no reemplazar un texto largo por otro.
-- Conserva el tema oscuro y los acentos magenta, cian, violeta y verde. No introduzcas librerías sin necesidad.
-- No alterar cálculos financieros, reglas de cuenta, traslado, facturas o categorización para arreglar la UI.
-- Si el ticket necesita una API que no existe, especifica contrato y dependencia. No simules una operación real en producción.
-- Entrega un cambio pequeño, integrado y testeado antes de pasar a otra vista.
-
-PLAN DE TRABAJO:
-1. Explica brevemente la fricción UX actual y la acción del usuario que debe mejorar.
-2. Verifica APIs/estados; identifica componentes reutilizables.
-3. Define el diseño, microcopy, estados (vacío/carga/error/éxito), responsive y accesibilidad.
-4. Implementa únicamente ese ticket, incluidas las pruebas pertinentes.
-5. Valida la navegación, resultado funcional y ausencia de regresiones.
-6. Actualiza docs/ux/ESTADO_TICKETS.md con evidencia, archivos y pruebas.
-
-NO HAGAS: refactor global, hardcodes de catálogo, demos falsos de movimientos, reescritura del correo, commits automáticos.
-
-AL FINAL RESPONDE:
-- Qué cambió y por qué mejora el flujo.
-- Archivos modificados.
-- Contratos backend consumidos.
-- Casos/estados probados y comandos de pruebas ejecutados.
-- Criterios cumplidos, problemas abiertos y próxima tarea sugerida.
+Responde: qué cambió y por qué mejora, archivos, contratos usados, pruebas
+ejecutadas con su resultado, y lo que queda abierto.
 ```
 
-### Prompt D — Integración y control de calidad entre entregas
+### Prompt D — Cierre de fase
 
 ```text
-ROL: Arquitecto / QA Lead de Finflow.
-
-OBJETIVO: revisar la entrega E-N del plan docs/ux/FINFLOW_PLAN_UX_V2.md, sin iniciar funcionalidades nuevas.
-
-VALIDA:
-1. El onboarding de Gmail ya delegado se mantiene funcional e independiente, sin duplicar pasos ni rutas.
-2. Catálogo de bancos y remitentes solo desde backend; persistencia DynamoDB y APIs verdaderas.
-3. Separación entre catálogo global y autorizaciones por usuario, con pruebas de aislamiento y seguridad.
-4. Los alias son de origen backend y el filtro Gmail no se arma mediante listas frontend.
-5. El frontend conserva estados reales, refresca consultas tras mutaciones y maneja loading/empty/error.
-6. El progreso de guía no implica comprobación de banco, alerta o transacción.
-7. Saldos, traslados, cuentas sin asignar, correcciones, facturas y presupuestos mantienen integridad.
-8. Móvil, teclado, contraste, accesibilidad, reduced motion y navegación.
-9. No hay hardcodes nuevos de bancos/correos ni secretos en frontend o logs.
-10. Todas las pruebas declaradas fueron realmente ejecutadas. Si alguna no pudo ejecutarse, registrarlo.
-
-CLASIFICA: BLOQUEANTE / IMPORTANTE / MEJORA.
-Corrige únicamente defectos dentro del alcance ya entregado. No refactorices áreas ajenas. Devuelve veredicto APROBADA o NO APROBADA con evidencia y listado de archivos afectos.
+Revisa la fase F-N de front_refactor/FINFLOW_PLAN_UX_V2.md sin iniciar nada
+nuevo y sin subagentes.
+Corre just web-check, just prepare (si hubo Python) y just e2e completo.
+Comprueba con grep que no hay catálogos de bancos ni dominios en frontend/src.
+Clasifica lo que encuentres en BLOQUEANTE / IMPORTANTE / MEJORA, corrige solo
+lo bloqueante dentro de la fase, y da veredicto APROBADA / NO APROBADA con la
+salida real de las pruebas.
 ```
 
 ---
 
-## 8. Definición de terminado (DoD)
+## 8. Definición de terminado
 
-- [ ] No se ha duplicado ni sobrescrito la guía de correo actualmente delegada.
-- [ ] El dato de negocio tiene fuente de verdad única y contrato identificado.
-- [ ] Se descartó cualquier hardcode de bancos, remitentes, dominios y dirección de Finflow en producción.
-- [ ] No hay aprobación implícita de remitentes nuevos ni acceso a información de otro usuario.
-- [ ] Funciona al crear/desactivar registros de catálogo en backend sin actualizar frontend.
-- [ ] Se conserva información histórica y existe estrategia de migración cuando corresponda.
-- [ ] La mejora reduce carga cognitiva y ofrece una acción clara.
-- [ ] Contempla estado vacío, carga, error, éxito y recuperación cuando sean aplicables.
-- [ ] Acepta teclado, lector de pantalla, móvil y preferencia de movimiento reducido.
-- [ ] Respeta reglas financieras y no convierte un estado didáctico en éxito bancario.
-- [ ] Pruebas ejecutadas y resultados documentados sin afirmaciones inventadas.
-- [ ] Existe entrega autónoma y revisable, con documentación mínima y siguiente ticket.
+- [ ] El dato de negocio tiene una sola fuente de verdad y un contrato.
+- [ ] No hay bancos, dominios ni direcciones fijas en el frontend.
+- [ ] No hay aprobación implícita de remitentes ni acceso a datos de otra
+      persona.
+- [ ] La mejora reduce texto y deja una acción principal clara.
+- [ ] Cubre vacío, carga, error, éxito y recuperación cuando aplica.
+- [ ] Funciona con teclado, lector de pantalla, móvil (320–430 px) y movimiento
+      reducido.
+- [ ] Respeta las reglas financieras y no presenta una ayuda como un éxito
+      bancario.
+- [ ] Tiene su e2e en navegador; `just web-check` y `just e2e` pasan, con la
+      salida real.
+- [ ] `PROGRESS.md` y el estado del ticket en este plan están al día.
 
-## 9. Orden recomendado para comenzar
+## 9. Por dónde empezar
 
-1. **Ejecutar Prompt A** — auditar antes de tocar; identificar APIs existentes y reservar archivos de la guía de correo.
-2. **Corregir solo brechas ARC-01/02/03/04 realmente ausentes**, comenzando por contrato y modelo de datos.
-3. **Crear UX-01 + UX-02** con un primer caso real para validar el kit, sin crear una arquitectura excesiva.
-4. **Implementar UX-07 (Transacciones)** y **UX-10 (Presupuestos)**: mejoras visibles y fáciles de validar en uso cotidiano.
-5. **Implementar UX-08 (Cuentas)**; después Resumen, Facturas, Reportes y Comercios.
-6. **Finalizar UX-03 + ARC-05 + UX-13** cuando las primeras ayudas reales demuestren qué abstracciones hacen falta; no anticipar un sistema de tours demasiado complejo.
-7. **Integrar UX-05** y los accesos al onboarding cuando Claude finalice la guía de correo.
-8. Ejecutar **QA-16 en cada incremento** y Prompt D antes de cerrar una entrega.
+1. ~~Prompt A: auditoría corta de las demás pantallas.~~ Hecho el 2026-10-10 (sección 10).
+2. Prompt B: ARC-02 + ARC-04, el único cambio de backend del plan.
+3. Prompt C con UX-01 y UX-02, aplicados primero a una pantalla real.
+4. Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).
+5. Prompt D para cerrar la fase.
+6. Seguir con Cuentas, después Resumen, Facturas, Reportes y Comercios, y
+   cerrar con Guías y el diagnóstico enlazado.
 
-### Resultado esperado
+---
 
-**Finflow obtiene un frontend simple y mantenible, guiado por contratos de backend, y un catálogo bancario administrable desde DynamoDB sin tocar código frontend.** A la vez, mejora cada pantalla y aprende a acompañar al usuario mediante ayudas contextuales, sin repetir el trabajo ya delegado del correo.
+## 10. Auditoría por pantalla (ARC-00, 2026-10-10)
+
+Leída sobre el código, no sobre capturas: cada ruta de `frontend/src/routes`
+y lo que importa directamente. **Cambia el plan en un punto central:** varias
+mejoras que la sección 1 daba por construir ya existen (alta de cuenta por
+pasos, desglose navegable y periodos parciales en Reportes, sugerencias de
+tope desde el gasto real). Las horas de la sección 3 se corrigieron con esto.
+
+### 10.1. Tabla
+
+| Pantalla | Texto permanente que sobra o va bajo demanda | Acción principal | Estados que faltan | APIs (`api/queries.ts`) | Kit (sección 6) |
+| --- | --- | --- | --- | --- | --- |
+| **Resumen** `routes/index.tsx` | Subtítulo genérico («Aquí tienes un resumen…»); el párrafo de «sin cuentas» repite la explicación de Cuentas. | No hay una; la pantalla es de lectura. Ingresos y Gastos llevan a Transacciones filtradas; **Patrimonio, Deuda, el donut y las cuentas no llevan a nada.** | Vacío de movimientos sin salida a `/conectar` ni a «agregar a mano». Carga: sin indicador al navegar (ver 10.2). | `accountsQuery`, `summaryQuery` ×4, `categoriesQuery`, `transactionsQuery`, `planQuery`, `allowanceQuery`, `budgetsQuery` | `Notice` para el vacío; `MovementCard` no hace falta (la fila actual sirve). |
+| **Transacciones** lista + detalle + nueva | Lista: casi nada. Detalle: el párrafo «no está en ninguna cuenta…» y la fila **Estado** repiten la fila **Cuenta** («Sin asignar» dos veces). Nueva: el recuadro del traslado (dos frases) y la ayuda de categoría (tres líneas) pueden ir bajo demanda. | Lista: «Agregar», visible. Detalle: «Corregir» y «Eliminar» se ven, pero **no hay forma de cambiar la categoría desde el movimiento**: la categoría es del comercio y no se enlaza a `/comercios/$merchantId`. «Sin asignar» no dice cómo resolverse (enlazar la tarjeta en Cuentas). | Vacío sin filtros: no enlaza a `/conectar` ni al diagnóstico. Error de mutaciones: cubierto (`role="alert"`). | `transactionsQuery`, `transactionQuery`, `accountsQuery`, `merchantsForFilterQuery`, `categoriesQuery`, `financialCatalogQuery`, `useEditTransaction`, `useDeleteTransaction`, `useUndoTransfer`, `useCreateTransaction`, `useCreateTransferLeg` | `Notice` (traslado, sin asignar); `buttonClass` para los enlaces con aspecto de botón que hoy repiten clases a mano. |
+| **Cuentas** lista + nueva + financiación | Lista: el aviso de crédito vigilado aparece **dos veces** (en la tarjeta y dentro del panel de financiación); el párrafo de enlazar alertas es largo. Financiación: cabecera de tres líneas y «Intereses y seguros del mes» con un párrafo de cuatro. | «Nueva cuenta», visible. Cada tarjeta acumula tres paneles plegables (alertas, financiación, ajustes) más un enlace: la acción de la tarjeta no destaca. **El alta ya es un asistente por tipo** (Tipo → Datos → Confirmar) con pantalla de éxito que cuenta lo adoptado. | Pestañas y paso del alta en estado local, no en la URL (atrás no los deshace). Barra de cupo sin valor accesible. | `accountsQuery` (open/all/closed), `accountQuery`, `financingQuery`, `financialCatalogQuery`, `useLinkInstrument`, `useUnlinkInstrument`, `useRenameAccount`, `useRestateBalance`, `useSetCreditLimit`, `useCloseAccount`, `useReopenAccount`, `useCreateAccount`, `useAccrue`, `useRevalue`, `useSet{Loan,Investment}Terms`, `useClearFinancing` | `Stepper` (el alta tiene uno propio), `Notice`, `SuccessMark` en el éxito del alta. |
+| **Facturas** `routes/facturas.tsx` | Cabecera de tres líneas; nota bajo la barra de previsión; el aviso de «cobrar sola» es necesario pero largo. | «Declarar una factura», visible. **Cuatro acciones solo con icono** (editar, cobrar sola, pausar, borrar) a 32 px, por debajo de los 44 px del plan; el significado vive en `title`, que en el teléfono no existe. | **Errores silenciosos:** pausar, borrar y armar «cobrar sola» no muestran el fallo. Los errores que sí se muestran no llevan `role="alert"`. Un cobro pagado no enlaza al movimiento que escribió. | `billsQuery`, `accountsQuery`, `categoriesQuery`, `recurringQuery`, `useSettleDueCharges`, `useSettleCharge`, `useLinkCharge`, `usePauseBill`, `useForgetBill`, `useSetBillAutopay`, `useDeclareBill` | `Notice` (aviso de cobrar sola, previsión), `buttonClass` para acciones con texto. |
+| **Presupuestos** `routes/presupuestos.tsx` | Cabecera de tres líneas; nota al pie sobre topes solapados (puede ir junto al total, bajo demanda). | «Poner un tope», visible. **Las sugerencias desde categorías con gasto real ya existen** («Donde más se te va, y sin tope»). Un tope no lleva a sus movimientos. | Mes en estado local, no en la URL. Quitar un tope no muestra el error si falla. Barras `role="presentation"` (el texto de al lado lo compensa). Acciones a 32 px. | `budgetsQuery(month)`, `categoriesQuery`, `useDeclareBudget`, `useAmendBudget`, `useForgetBudget` | `Notice`; el vacío puede ofrecer el tope «todo el mes» con un toque. |
+| **Reportes** `routes/reportes/index.tsx` | Pista larga en «En qué se va, periodo a periodo». | Filtros de periodo en la URL. **Ya lleva a los movimientos** desde Gastos, Ingresos, categorías, comercios y mayores gastos; **ya marca los periodos parciales** en las columnas. Falta: las columnas (flujo, pila, día de la semana) no son navegables. | Vacío bien resuelto (enlaza a `/conectar` y a agregar a mano). | `accountsQuery`, `summaryQuery` ×4, `trendQuery` ×2, `transactionsQuery`, `categoriesQuery` | Ninguna nueva. |
+| **Comercios** lista + detalle | Cabecera con ejemplo de tres líneas; el banner de revisión repite la explicación cada vez. | «Ver los pendientes» y «Está bien» por fila. Detalle: editar, mover o separar alias, fusionar — completo. | «Está bien» falla en silencio (la fila se queda, sin mensaje). **No existe un contrato de sugerencias de fusión**: «sugerencias revisables» del plan solo puede ser la cola de revisión que ya hay. | `merchantsQuery`, `merchantQuery`, `merchantCatalogQuery`, `categoriesQuery`, `merchantsForFilterQuery`, `summaryQuery("merchant")`, `useConfirmMerchant`, `useEditMerchant`, `useMoveAlias`, `useSplitAlias`, `useMergeMerchants` | `Notice` para el banner. |
+| **Guías** índice + 3 lecturas | Cada tarjeta lleva dos líneas de resumen; las lecturas son de 11 a 19 párrafos. | «Leer»: en la tarjeta de conexión es incorrecto (es un asistente, no una lectura). No hay guía ni tarea para Facturas ni Presupuestos. | La tarjeta violeta dibuja el icono en magenta (el componente solo distingue cian). | `useOnboarding` (nada más) | `Notice`, `Stepper` para «continuar donde quedé». |
+
+### 10.2. Lo que se repite en todas
+
+- **Carga:** el router no tiene `defaultPendingComponent`; al navegar se queda
+  la pantalla anterior hasta que el loader responde, sin indicación. Una barra
+  fina en `AppShell` leyendo el estado del router lo resuelve para todas.
+  Error y «no existe» sí son globales (`RouteError`, `NotFoundScreen`).
+- **Objetivos táctiles:** las acciones con icono de Facturas, Presupuestos y
+  desenlazar en Cuentas miden 32 px o menos.
+- **Errores de mutación sin mostrar:** Facturas (pausar, borrar, cobrar sola),
+  Presupuestos (quitar), Comercios («Está bien»).
+- **Estado en la URL:** Transacciones, Comercios y Reportes ya lo hacen;
+  Cuentas (pestañas, paso del alta) y Presupuestos (mes) no.
+- **Enlaces con aspecto de botón** escritos a mano en al menos cinco
+  pantallas en lugar de `buttonClass`: el primer uso real del kit (UX-02).
+
+### 10.3. Correcciones al backlog
+
+| ID | Antes | Ahora | Por qué |
+| --- | ---: | ---: | --- |
+| ARC-00 | 3–6 | — | Hecho: esta sección. |
+| UX-05 | 4–8 | 3–6 | Solo faltan enlaces desde el vacío de Resumen y Transacciones. |
+| UX-06 | 10–20 | 6–12 | Ingresos y Gastos ya llevan a su detalle; faltan Patrimonio, Deuda, donut y cuentas. |
+| UX-07 | 12–24 | 10–20 | Lista sólida; el trabajo está en el detalle (categoría, «sin asignar», redundancias). |
+| UX-08 | 16–32 | 10–20 | El alta por tipo ya existe; queda la densidad de la tarjeta y la URL. |
+| UX-09 | 10–20 | 8–16 | Iconos con texto, errores visibles, cabecera corta. |
+| UX-10 | 10–20 | 6–12 | Las sugerencias desde el gasto ya existen; queda vacío con un toque, mes en URL, enlace a movimientos. |
+| UX-11 | 14–28 | 4–8 | Desglose navegable y periodos parciales ya existen; quedan las columnas. |
+| UX-12 | 10–20 | 6–12 | Sin sugerencias de fusión (no hay contrato): solo textos, errores y la cola existente. Sugerir fusiones queda como ticket propio, con backend en Merchant. |
+| UX-13 | 8–16 | 6–12 | Corregir la tarjeta de conexión y sumar tareas, no reescribir las lecturas. |
+
+**Total pendiente: 82–172 horas-persona** (antes 125–250).
+**Primera ola** (ARC-02/04, UX-01/02, UX-07, UX-10): **31–62 h** (antes 45–90).
+
+Las e2e de Facturas y Presupuestos ya existen (`just e2e-bills`,
+`just e2e-budgets`): UX-09 y UX-10 las amplían en lugar de crear otra.
