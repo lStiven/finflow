@@ -2,7 +2,6 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Combine,
@@ -593,8 +592,8 @@ const CREATE = "__create__";
  * control: choosing one saves it, and that counts as reviewed. «Está bien»
  * is for when the guess was already right.
  *
- * A native select, styled as a pill: it opens the platform's own picker on a
- * phone and needs no code to be keyboard- and screen-reader-friendly.
+ * The category is the app's own `Select` in its pill form: a menu on a wide
+ * screen, a sheet on a phone, the same keyboard and screen-reader behaviour.
  */
 function ReviewControls({
   merchant,
@@ -643,45 +642,27 @@ function ReviewControls({
   return (
     <div className="flex flex-col gap-2 px-4 pb-3 pl-16 sm:py-3 sm:pl-0">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={cn(PILL, "relative pr-8")}>
-          <Tag className="size-3.5 shrink-0 text-faint" aria-hidden />
-          <select
-            aria-label={`Categoría de ${merchant.display_name}`}
-            value={merchant.category}
-            disabled={busy}
-            onChange={(event) => {
-              if (event.target.value === CREATE) {
-                setNaming(true);
-                return;
-              }
-              choose(event.target.value);
-            }}
-            className="-inset-px absolute h-[calc(100%+2px)] w-[calc(100%+2px)] cursor-pointer appearance-none rounded-full bg-transparent pr-8 pl-8 text-transparent focus-visible:outline-2 focus-visible:outline-cyan focus-visible:outline-offset-2"
-          >
-            {data.categories.map((option) => (
-              <option key={option.value} value={option.value} className="text-text">
-                {categoryLabel(option.value, option.label)}
-              </option>
-            ))}
-            <option value={CREATE} className="text-text">
-              ＋ Crear una categoría…
-            </option>
-          </select>
-          <span aria-hidden className="pointer-events-none">
-            {labelFrom(labels, merchant.category)}
-          </span>
-          {edit.isPending ? (
-            <Loader2
-              aria-hidden
-              className="pointer-events-none absolute right-3 size-3.5 animate-spin"
-            />
-          ) : (
-            <ChevronDown
-              aria-hidden
-              className="pointer-events-none absolute right-3 size-3.5 text-faint"
-            />
-          )}
-        </span>
+        <Select
+          variant="pill"
+          icon={Tag}
+          label={`Categoría de ${merchant.display_name}`}
+          value={merchant.category}
+          disabled={busy}
+          options={[
+            ...data.categories.map((option) => ({
+              value: option.value,
+              label: categoryLabel(option.value, option.label),
+            })),
+            { value: CREATE, label: "＋ Crear una categoría…" },
+          ]}
+          onChange={(event) => {
+            if (event.target.value === CREATE) {
+              setNaming(true);
+              return;
+            }
+            choose(event.target.value);
+          }}
+        />
 
         <button
           type="button"

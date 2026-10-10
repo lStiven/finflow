@@ -140,6 +140,23 @@ async function until(read, done, timeout = ARRIVAL_MS) {
 const sideways = (page) =>
   page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
 
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -271,7 +288,7 @@ async function main() {
     // ------------------------------- choosing the category is the answer
     const before = (await call(`/merchants/${second.id}`)).category;
     const target = before === "restaurants" ? "education" : "restaurants";
-    await categoryOfSecond.selectOption(target);
+    await choose(page, page, `Categoría de ${second.display_name}`, { value: target });
     const fixed = await until(
       () => call(`/merchants/${second.id}`),
       (merchant) => merchant.category === target,

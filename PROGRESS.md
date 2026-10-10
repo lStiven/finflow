@@ -332,6 +332,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Las listas desplegables son de la app, y el carrusel ya no salta.**
+  Menú propio en escritorio, hoja desde abajo en el teléfono, búsqueda en las
+  largas y teclado completo, en todos los selectores sin cambiar pantallas.
+  «Siguiente» queda quieto en todos los pasos. `just e2e` en verde. En el
+  árbol, sin commit.
 - 2026-10-10 — **Plan UX completo: avisos guiados y cuatro recorridos animados**
   (UX-14 y lo pedido después). La guía de avisos conecta Telegram desde ella
   misma; cómo llega un movimiento, un traslado, una cuota y una factura se ven

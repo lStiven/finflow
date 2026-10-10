@@ -137,6 +137,23 @@ const sideways = (page) =>
 /** How a figure reads in Colombian pesos, digits only: `1.000.000`. */
 const digits = (amount) => Number(amount).toLocaleString("es-CO");
 
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -274,7 +291,7 @@ async function main() {
 
     const section = page.locator(`[id="${savings.id}-alerts"]`);
     await section.getByLabel("Últimos cuatro").fill("0530");
-    await section.getByLabel("¿Cómo llegan esas alertas?").selectOption("account");
+    await choose(page, section, "¿Cómo llegan esas alertas?", { value: "account" });
     await section.getByRole("button", { name: /^Enlazar/ }).click();
     await section.getByText("Enlazada.", { exact: false }).waitFor({ timeout: 10_000 });
 

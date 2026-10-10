@@ -342,12 +342,25 @@ async function main() {
     const tabs = await page.getByRole("tab").allTextContents();
     check("los cuatro recorridos están", tabs.length, 4);
     const walked = [];
+    // Where «Siguiente» sits inside the carousel, slide after slide: one
+    // value per story, or the button moved under the pointer.
+    const steady = [];
+    const offsetOfNext = async () => {
+      const carousel = page.locator("section[aria-roledescription='carrusel']");
+      const next = carousel.getByRole("button", { name: "Siguiente" });
+      const [outer, inner] = [await carousel.boundingBox(), await next.boundingBox()];
+      return Math.round((inner?.y ?? 0) - (outer?.y ?? 0));
+    };
     for (const name of tabs) {
+      const offsets = new Set();
       await page.getByRole("tab", { name }).click();
-      const counter = page.getByText(/^1 de \d+$/);
+      // Visible only: every slide is also laid out, invisible, to hold the
+      // carousel's height.
+      const counter = page.getByText(/^1 de \d+$/).filter({ visible: true });
       await counter.waitFor({ timeout: 5_000 });
       const total = Number((await counter.innerText()).split(" de ")[1]);
       for (let at = 2; at <= total; at++) {
+        offsets.add(await offsetOfNext());
         if (at % 2 === 0) {
           await page.getByRole("button", { name: "Siguiente" }).click();
         } else {
@@ -356,12 +369,23 @@ async function main() {
           await page.keyboard.press("ArrowRight");
         }
       }
+      offsets.add(await offsetOfNext());
+      steady.push(offsets.size === 1);
       walked.push(
-        (await page.getByText(`${total} de ${total}`, { exact: true }).isVisible()) &&
+        (await page
+          .getByText(`${total} de ${total}`, { exact: true })
+          .filter({ visible: true })
+          .isVisible()) &&
           (await page.getByRole("button", { name: "Siguiente" }).isDisabled()),
       );
     }
     check("cada recorrido llega a su último paso", walked, [true, true, true, true]);
+    check("«Siguiente» no se mueve de un paso al siguiente", steady, [
+      true,
+      true,
+      true,
+      true,
+    ]);
     await page.getByRole("tab", { name: "De qué está hecha una cuota" }).click();
     check(
       "el recorrido elegido queda en la dirección",
@@ -380,6 +404,7 @@ async function main() {
       await page
         .getByRole("region", { name: "Cómo llega un movimiento" })
         .getByText("1 de 6", { exact: true })
+        .filter({ visible: true })
         .isVisible(),
       true,
     );

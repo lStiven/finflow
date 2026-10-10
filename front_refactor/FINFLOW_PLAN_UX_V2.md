@@ -695,3 +695,24 @@ carrusel es el del asistente, promovido a `components/ui/Tutorial.tsx` en su
 segundo uso. Cada cifra es una que la app produce: la de la cuota es el
 ejemplo verificado (2.000.000 sobre 60.000.000 deja 58.920.622,87).
 
+**Selectores propios** (pedido por Stiven: el menú nativo «se ve anticuado y
+los colores no cuadran»). `components/ui/Select.tsx` conserva el contrato del
+`<select>` —etiqueta, opciones, `value`, `onChange` con `event.target.value`—,
+así que ninguna pantalla cambió, y dibuja la lista: en pantalla ancha, un menú
+bajo el campo (encima si no cabe) en un portal, para que ningún
+`overflow-hidden` lo recorte; en el teléfono, una hoja desde abajo con filas
+de 48 px; con más de diez opciones, un buscador que ignora tildes. Es el patrón
+ARIA de combobox de solo selección: flechas, Inicio/Fin, Enter, Escape y
+escribir un nombre. Las animaciones son solo opacidad y transformación.
+La versión anterior de la píldora de Comercios dejaba las opciones casi
+invisibles en Chrome (heredaban un texto transparente): desapareció con esto.
+Las e2e eligen con un ayudante `choose` que abre el campo por su etiqueta y
+pulsa la opción, como una persona.
+
+**El carrusel ya no cambia de alto** (también de Stiven: «Siguiente» se movía
+bajo el puntero). Todos los pasos se dibujan invisibles en la misma celda de
+una rejilla, así que el carrusel mide lo que el más alto desde el principio,
+sin medir nada en JavaScript; el visible se superpone y anima. Las copias
+son `inert`, `aria-hidden` y sin animación. `just e2e-guias` comprueba que el
+botón no se mueva en ningún paso.
+

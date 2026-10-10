@@ -46,6 +46,7 @@ import { RankedBars } from "@/components/charts/RankedBars";
 import { Money } from "@/components/Money";
 import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import { StatTile } from "@/components/ui/StatTile";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/dates";
@@ -651,21 +652,19 @@ function Filters({
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {accounts.length > 0 ? (
-            <select
-              aria-label="Cuenta"
+            <Select
+              variant="compact"
+              label="Cuenta"
+              placeholder="Todas las cuentas"
               value={search.cuenta ?? ""}
               onChange={(event) =>
                 onChange({ cuenta: event.target.value || undefined })
               }
-              className="rounded-lg border border-line bg-ink px-3 py-1.5 text-muted text-xs focus:border-accent focus:outline-none"
-            >
-              <option value="">Todas las cuentas</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
+              options={accounts.map((account) => ({
+                value: account.id,
+                label: account.name,
+              }))}
+            />
           ) : null}
 
           {/*
@@ -674,18 +673,13 @@ function Filters({
            * screen reports — it never adds two together.
            */}
           {currencies.length > 1 ? (
-            <select
-              aria-label="Moneda"
+            <Select
+              variant="compact"
+              label="Moneda"
               value={view.currency}
               onChange={(event) => onChange({ moneda: event.target.value })}
-              className="rounded-lg border border-line bg-ink px-3 py-1.5 text-muted text-xs focus:border-accent focus:outline-none"
-            >
-              {currencies.map((code) => (
-                <option key={code} value={code}>
-                  {code}
-                </option>
-              ))}
-            </select>
+              options={currencies.map((code) => ({ value: code, label: code }))}
+            />
           ) : null}
         </div>
       </div>

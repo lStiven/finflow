@@ -174,6 +174,23 @@ async function moneyState(call) {
   };
 }
 
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -257,7 +274,7 @@ async function main() {
     // confirmation below be checked against a balance rather than against a
     // row count — a balance that moved by the wrong amount is the failure
     // worth catching, and an unassigned charge cannot show it.
-    await page.getByLabel("Sale de").selectOption({ index: 1 });
+    await choose(page, page, "Sale de", { index: 1 });
     // `exact`, and not by accident: the suggestions section at the foot of
     // this screen has buttons called «Declarar SPOTIFY COL como factura», and
     // Playwright matches an accessible name by substring unless told not to.

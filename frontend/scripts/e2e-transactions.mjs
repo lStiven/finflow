@@ -146,6 +146,23 @@ async function sweep(call) {
   }
 }
 
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -260,8 +277,9 @@ async function main() {
     const acceptable = accounts.accounts.filter(
       (account) => account.closed_at === null && account.currency === "COP",
     );
-    const select = page.getByLabel("Asignar a");
-    const offered = (await select.locator("option").allTextContents()).filter(
+    await page.getByRole("combobox", { name: "Asignar a", exact: true }).click();
+    const assignList = page.getByRole("listbox", { name: "Asignar a", exact: true });
+    const offered = (await assignList.getByRole("option").allTextContents()).filter(
       (label) => label !== "Elige una cuenta",
     );
     check(
@@ -274,7 +292,7 @@ async function main() {
     if (!target) throw new Error("El seed no tiene una cuenta de activos en COP");
     const before = Number(target.balance);
 
-    await select.selectOption({ label: target.name });
+    await assignList.getByRole("option", { name: target.name, exact: true }).click();
     await page.getByRole("button", { name: "Asignar", exact: true }).click();
     await page.getByText(`Quedó en ${target.name}`).waitFor({ timeout: 10_000 });
 
@@ -294,7 +312,7 @@ async function main() {
 
     // ------------------------------------------------------- the category
     await page.getByRole("button", { name: /Educación/ }).click();
-    await page.getByLabel("Categoría", { exact: true }).selectOption(NEXT_CATEGORY);
+    await choose(page, page, "Categoría", { value: NEXT_CATEGORY });
     await page.getByRole("button", { name: "Guardar", exact: true }).click();
     await page
       .getByText(`${COUNTERPARTY} ahora es ${NEXT_LABEL}`, { exact: false })
