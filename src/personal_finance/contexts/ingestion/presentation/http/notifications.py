@@ -30,6 +30,7 @@ from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
     NotificationQuery,
 )
+from personal_finance.contexts.ingestion.domain.parsing.registry import known_banks
 from personal_finance.contexts.ingestion.domain.setup import SetupStep
 from personal_finance.contexts.ingestion.domain.transactions import InstrumentKind
 from personal_finance.contexts.ingestion.domain.value_objects import (
@@ -51,6 +52,19 @@ from personal_finance.shared.presentation.catalog import CatalogOption, options
 router = APIRouter(prefix="/ingestion", tags=["ingestion"])
 
 
+class KnownBankResponse(BaseModel):
+    """A bank Finflow reads with its own template, and every domain it sends from.
+
+    Listing a bank approves nothing for anybody: each user approves senders
+    through their inbox. A bank absent from here still works as «otro banco».
+    """
+
+    # What the parser writes into a movement's `bank`.
+    id: str
+    name: str
+    domains: list[str]
+
+
 class IngestionCatalogResponse(BaseModel):
     """Ingestion's vocabulary, for the screens that render or filter by it.
 
@@ -68,6 +82,9 @@ class IngestionCatalogResponse(BaseModel):
     # In the order a connect-your-bank screen shows them, which is the one
     # place that order gets decided.
     setup_steps: list[CatalogOption]
+    # Derived from the parser registry, never listed twice: a parser added
+    # with its domains appears on the connect screen with no client change.
+    known_banks: list[KnownBankResponse]
 
 
 class NotificationResponse(BaseModel):
@@ -125,13 +142,18 @@ CurrentUser = Annotated[UserId, Depends(get_current_user_id)]
 
 @router.get("/catalog", response_model=IngestionCatalogResponse)
 def get_catalog() -> IngestionCatalogResponse:
-    """What this context's states are called, and what an instrument may be."""
+    """What this context's states are called, what an instrument may be, and
+    which banks have a parser of their own."""
     return IngestionCatalogResponse(
         processing_statuses=options(ProcessingStatus),
         ignored_reasons=options(NotificationIgnoredReason),
         deferred_reasons=options(NotificationDeferredReason),
         instrument_kinds=options(InstrumentKind),
         setup_steps=options(SetupStep),
+        known_banks=[
+            KnownBankResponse(id=bank.id, name=bank.name, domains=list(bank.domains))
+            for bank in known_banks()
+        ],
     )
 
 

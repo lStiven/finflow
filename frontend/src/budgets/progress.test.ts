@@ -16,6 +16,7 @@ import {
   isNarrowed,
   leftOf,
   monthLabel,
+  movementsSearch,
   overBy,
   percentUsed,
   scopeLabel,
@@ -243,5 +244,69 @@ describe("lo que un tope vigila", () => {
         every_account: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("the movements behind a budget", () => {
+  const OCTOBER = {
+    direction: "outgoing",
+    transfers: "exclude",
+    from: "2026-10-01",
+    to: "2026-10-31",
+  };
+
+  it("lists the month's spending in its one category", () => {
+    expect(movementsSearch(budget(), "2026-10")).toEqual({
+      ...OCTOBER,
+      category: "restaurants",
+    });
+  });
+
+  it("lists every category for a budget over the whole month", () => {
+    const whole = budget({
+      scope: { categories: [], accounts: [], total: true, every_account: true },
+    });
+
+    expect(movementsSearch(whole, "2026-10")).toEqual(OCTOBER);
+  });
+
+  it("narrows to the one account a budget watches", () => {
+    const card = budget({
+      scope: {
+        categories: [],
+        accounts: ["acc-1"],
+        total: true,
+        every_account: false,
+      },
+    });
+
+    expect(movementsSearch(card, "2026-10")).toEqual({ ...OCTOBER, account: "acc-1" });
+  });
+
+  /* The list filters one category at a time: its rows could not add up. */
+  it("offers no list for several categories or several accounts", () => {
+    const many = budget({
+      scope: {
+        categories: ["restaurants", "bars"],
+        accounts: [],
+        total: false,
+        every_account: true,
+      },
+    });
+    const twoCards = budget({
+      scope: {
+        categories: [],
+        accounts: ["acc-1", "acc-2"],
+        total: true,
+        every_account: false,
+      },
+    });
+
+    expect(movementsSearch(many, "2026-10")).toBeNull();
+    expect(movementsSearch(twoCards, "2026-10")).toBeNull();
+  });
+
+  it("offers none for a budget whose categories are gone", () => {
+    expect(movementsSearch(budget({ retired: true }), "2026-10")).toBeNull();
   });
 });

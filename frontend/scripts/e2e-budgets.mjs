@@ -31,19 +31,30 @@
  * 6. **A budget over everything counts every category**, including spending no
  *    merchant owns yet — the kind that needs no category and is therefore the
  *    only kind an alert could ever reach.
+ * 7. **A bar leads to its rows, and they add up to it.** «Ver movimientos»
+ *    opens Transacciones filtered the way the budget counts, and the API's
+ *    rows for that filter sum to exactly what the budget says was spent. The
+ *    month lives in the address, so «atrás» undoes paging.
+ * 8. **The first cap is one figure.** A newly registered account, with none,
+ *    is offered a cap over the whole month and gets exactly that.
  *
  * Exits non-zero on the first mismatch. It cleans up after itself — the caps
  * and the movement it creates are removed at the end, including when an
  * assertion fails.
  */
 
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
 const WEB = process.env.FINFLOW_WEB_URL ?? "http://localhost:5173";
 const API = process.env.FINFLOW_API_URL ?? "http://localhost:8000";
 const DEMO_EMAIL = process.env.FINFLOW_DEMO_EMAIL ?? "demo@finflow.local";
 const DEMO_PASSWORD = process.env.FINFLOW_DEMO_PASSWORD ?? "una frase larga de verdad";
+/** The repository root, where the account fixture runs. */
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
  * The category this suite caps.
@@ -114,10 +125,10 @@ function client(token) {
   };
 }
 
-async function signIn(page) {
+async function signIn(page, email = DEMO_EMAIL, password = DEMO_PASSWORD) {
   await page.goto(`${WEB}/login`, { waitUntil: "domcontentloaded" });
-  await page.getByLabel("Correo").fill(DEMO_EMAIL);
-  await page.getByLabel("Contraseña").fill(DEMO_PASSWORD);
+  await page.getByLabel("Correo").fill(email);
+  await page.getByLabel("Contraseña").fill(password);
   await page.locator('form button[type="submit"]').click();
   await page.waitForURL((url) => !url.pathname.startsWith("/login"), {
     timeout: 15_000,
@@ -239,6 +250,109 @@ function monthEnd() {
   const [year, month] = thisMonth().split("-").map(Number);
 
   return Math.floor(Date.UTC(year, month, 1) / 1000) + BOGOTA_OFFSET_SECONDS;
+}
+
+/**
+ * A whole account, through the registration use case rather than the
+ * endpoint: the endpoint allows ten a quarter hour per address, which a full
+ * browser run would exhaust on its own. See `scripts/e2e_connect_fixture.py`.
+ */
+function person(email, password) {
+  return execFileSync(
+    "uv",
+    [
+      "run",
+      "python",
+      "scripts/e2e_connect_fixture.py",
+      "person",
+      email,
+      "--password",
+      password,
+    ],
+    {
+      cwd: ROOT,
+      env: { ...process.env, ENV_FILE: ".env", PYTHONPATH: "src" },
+      encoding: "utf8",
+    },
+  ).trim();
+}
+
+/** `2026-10` → `2026-11`, the way the month bar pages. */
+function nextMonth(month) {
+  const [year, number] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, number, 1));
+
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** The last calendar day of a month, as the list's «hasta» reads it. */
+function lastDay(month) {
+  const [year, number] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(year, number, 0)).getUTCDate();
+
+  return `${month}-${String(last).padStart(2, "0")}`;
+}
+
+/**
+ * The empty screen's one-tap first cap, for somebody who has none.
+ *
+ * Needs an account with no budgets at all — the seeded one has its own — so it
+ * registers one, the way the connect suite does. That account stays behind in
+ * the emulator, like the connect suite's; it holds nothing but this cap.
+ */
+async function firstBudget(browser) {
+  const email = `e2e-presupuestos-${Date.now()}@finflow.local`;
+  const password = "una frase larga de prueba";
+  person(email, password);
+
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    locale: "es-CO",
+    timezoneId: "America/Bogota",
+    reducedMotion: "reduce",
+  });
+  const page = await context.newPage();
+  const problems = [];
+  page.on("pageerror", (error) => problems.push(`error: ${error.message}`));
+
+  try {
+    const call = client(await signIn(page, email, password));
+    await dismissOnboarding(page);
+    await page.goto(`${WEB}/presupuestos`, { waitUntil: "networkidle" });
+
+    check(
+      "sin ningún tope, la pantalla ofrece el primero en un paso",
+      await page.getByText("Empieza con un tope para todo el mes").isVisible(),
+      true,
+    );
+
+    await page
+      .getByLabel("¿Cuánto quieres gastar como máximo al mes?")
+      .fill("1.500.000");
+    await page.getByRole("button", { name: "Poner el tope" }).click();
+    await page
+      .getByText("Listo, tu primer tope está puesto")
+      .waitFor({ timeout: 10_000 });
+
+    const view = await call("/financial/budgets?timezone=America/Bogota");
+    check(
+      "y el servidor tiene ese tope: todo el mes, cada mes, con lo tecleado",
+      view.budgets.map((budget) => [
+        budget.limit,
+        budget.scope.categories,
+        budget.recurring,
+      ]),
+      [["1500000", [], true]],
+    );
+    check(
+      "el paso de un toque no se queda en pantalla después",
+      await page.getByText("Empieza con un tope para todo el mes").count(),
+      0,
+    );
+    check("esa pantalla no registró errores", problems, []);
+  } finally {
+    await context.close();
+  }
 }
 
 async function main() {
@@ -412,6 +526,54 @@ async function main() {
       true,
     );
 
+    // ----------------------------- the movements behind the bar, from it
+    await page
+      .locator("div.group")
+      .filter({ has: page.getByText(NAME, { exact: true }) })
+      .getByRole("link", { name: "Ver movimientos" })
+      .click();
+    await page.waitForURL((url) => url.pathname === "/transacciones", {
+      timeout: 10_000,
+    });
+    const asked = Object.fromEntries(new URL(page.url()).searchParams);
+    check(
+      "«Ver movimientos» abre los gastos de esa categoría en ese mes",
+      [asked.category, asked.direction, asked.transfers, asked.from, asked.to],
+      [CATEGORY, "outgoing", "exclude", `${thisMonth()}-01`, lastDay(thisMonth())],
+    );
+
+    const listed = await call(
+      `/financial/transactions?category=${CATEGORY}&direction=outgoing&transfers=exclude` +
+        `&from=${monthStart()}&to=${monthEnd()}&limit=100`,
+    );
+    check(
+      "y esas filas suman exactamente lo gastado del tope",
+      listed.transactions.reduce((sum, movement) => sum + Number(movement.amount), 0),
+      Number(spent?.spent),
+    );
+    await page
+      .getByText(
+        `${listed.total} ${listed.total === 1 ? "movimiento" : "movimientos"} con los filtros aplicados`,
+      )
+      .waitFor({ timeout: 10_000 });
+    note(`la lista muestra ${listed.total}, los mismos que la API`);
+
+    // ----------------------------------------- the month lives in the address
+    await page.goto(`${WEB}/presupuestos`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Mes siguiente" }).click();
+    await page.waitForURL((url) => url.searchParams.has("mes"), { timeout: 10_000 });
+    check(
+      "pasar de mes lo deja en la dirección",
+      new URL(page.url()).searchParams.get("mes"),
+      nextMonth(thisMonth()),
+    );
+    await page.goBack({ waitUntil: "networkidle" });
+    check(
+      "y «atrás» vuelve al mes de antes",
+      new URL(page.url()).searchParams.has("mes"),
+      false,
+    );
+
     // ------------- a month's own budget is read beside the recurring one
     // No shadowing: both govern this month, so both come back. Overlapping is
     // the feature, not a collision to resolve.
@@ -492,6 +654,8 @@ async function main() {
     );
 
     check("la pantalla no registró errores", problems, []);
+
+    await firstBudget(browser);
   } catch (error) {
     failures += 1;
     steps.push(` FALLA ${error.message}`);

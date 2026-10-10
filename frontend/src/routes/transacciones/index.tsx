@@ -6,9 +6,12 @@ import {
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
+  Mail,
+  Pencil,
   Plus,
   Search,
   SlidersHorizontal,
+  Unlink,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -26,9 +29,12 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { ExportButton } from "@/components/ExportDialog";
 import { Money } from "@/components/Money";
-import { Button } from "@/components/ui/Button";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Notice } from "@/components/ui/Notice";
 import { type Option, Select } from "@/components/ui/Select";
+import { storyOf } from "@/guides/stories";
 import {
   formatDayMonth,
   formatMonthKey,
@@ -42,6 +48,7 @@ import {
   isUncategorized,
   labelFrom,
 } from "@/merchants/categories";
+import { EmptyDiagnosis } from "@/onboarding/EmptyDiagnosis";
 
 const PAGE_SIZE = 25;
 
@@ -219,46 +226,47 @@ function TransactionsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
-        <header className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="font-semibold text-2xl tracking-tight">Transacciones</h1>
-            <p className="mt-1 text-muted text-sm">
+        <PageHeader
+          title="Transacciones"
+          lead={
+            <>
               {page.total === 0
                 ? "Nada todavía"
                 : `${page.total} ${page.total === 1 ? "movimiento" : "movimientos"}`}
               {active > 0 ? " con los filtros aplicados" : ""}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Starts from what the list has selected; the dialog decides. */}
-            <ExportButton
-              selection={search}
-              accounts={accounts.accounts}
-              categories={categories.categories}
-              merchantName={
-                merchants.merchants.find((merchant) => merchant.id === search.merchant)
-                  ?.display_name
-              }
-              originName={
-                search.origin
-                  ? originLabel(
-                      search.origin,
-                      catalog.transaction_origins.find(
-                        (option) => option.value === search.origin,
-                      )?.label ?? search.origin,
-                    )
-                  : undefined
-              }
-            />
-            <Link
-              to="/transacciones/nueva"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
-            >
-              <Plus className="size-4" />
-              Agregar
-            </Link>
-          </div>
-        </header>
+            </>
+          }
+          help={HELP}
+          actions={
+            <>
+              {/* Starts from what the list has selected; the dialog decides. */}
+              <ExportButton
+                selection={search}
+                accounts={accounts.accounts}
+                categories={categories.categories}
+                merchantName={
+                  merchants.merchants.find(
+                    (merchant) => merchant.id === search.merchant,
+                  )?.display_name
+                }
+                originName={
+                  search.origin
+                    ? originLabel(
+                        search.origin,
+                        catalog.transaction_origins.find(
+                          (option) => option.value === search.origin,
+                        )?.label ?? search.origin,
+                      )
+                    : undefined
+                }
+              />
+              <Link to="/transacciones/nueva" className={buttonClass("primary")}>
+                <Plus className="size-4" />
+                Agregar
+              </Link>
+            </>
+          }
+        />
 
         {/*
           Keyed on the URL: the box holds a local draft until submitted, and
@@ -380,6 +388,20 @@ function TransactionsScreen() {
           </Card>
         ) : null}
 
+        {search.unassigned && page.transactions.length > 0 ? (
+          <Notice
+            icon={Unlink}
+            title="Llegaron sin saber de qué cuenta son"
+            className="rise"
+          >
+            Abre uno para asignarlo, o{" "}
+            <Link to="/cuentas" className="text-cyan hover:underline">
+              enlaza su tarjeta en Cuentas
+            </Link>{" "}
+            y los de esa tarjeta se ordenan solos.
+          </Notice>
+        ) : null}
+
         {page.transactions.length === 0 ? (
           <Empty filtered={active > 0} />
         ) : (
@@ -426,6 +448,33 @@ function TransactionsScreen() {
     </AppShell>
   );
 }
+
+const HELP: PageHelp = {
+  id: "transacciones",
+  story: storyOf("movimiento"),
+  points: [
+    {
+      icon: Mail,
+      title: "Llegan solos",
+      body: "Cada alerta de tu banco se vuelve un movimiento. «Agregar» es para el efectivo y lo que no avisa.",
+    },
+    {
+      icon: Unlink,
+      title: "«Sin asignar»",
+      body: "Llegó, pero aún no sabemos de qué cuenta. Enlaza esa tarjeta en Cuentas y se ordena sola.",
+    },
+    {
+      icon: ArrowLeftRight,
+      title: "Traslados",
+      body: "Mover plata entre tus cuentas no es gasto ni ingreso. Se marcan en violeta.",
+    },
+    {
+      icon: Pencil,
+      title: "Todo se corrige",
+      body: "Abre un movimiento para corregirlo o borrarlo. Lo que dijo el banco queda guardado.",
+    },
+  ],
+};
 
 /**
  * The merchants offered, plus whichever one is already filtering.
@@ -664,7 +713,7 @@ function MovementRow({
 }
 
 function Empty({ filtered }: { filtered: boolean }) {
-  return (
+  const plain = (
     <Card lift={false}>
       <p className="py-8 text-center text-muted text-sm">
         {filtered
@@ -673,4 +722,8 @@ function Empty({ filtered }: { filtered: boolean }) {
       </p>
     </Card>
   );
+
+  // Filtered to nothing is the filter's doing; empty with no filter is the
+  // connection's, and that one says why.
+  return filtered ? plain : <EmptyDiagnosis fallback={plain} />;
 }

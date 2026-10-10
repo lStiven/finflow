@@ -17,7 +17,7 @@
  *   together.
  */
 
-import type { Transaction } from "@/api/queries";
+import type { Account, Transaction } from "@/api/queries";
 
 /** The account picker's value for "take this off its account". */
 export const DETACH = "__detach__";
@@ -84,4 +84,20 @@ export function buildCorrection(
 /** True when the body would change nothing — `detach: false` is the only key. */
 export function isEmpty(body: Correction): boolean {
   return Object.keys(body).length === 1 && !body.detach;
+}
+
+/**
+ * The accounts a movement with no account can be put on in one tap.
+ *
+ * Open ones only — a closed account takes no new movements — and only in the
+ * movement's own currency: the API refuses the rest, and a button that is
+ * always refused is worse than one that is not offered.
+ */
+export function assignableAccounts(
+  movement: Pick<Transaction, "currency">,
+  accounts: readonly Account[],
+): Account[] {
+  return accounts.filter(
+    (account) => account.closed_at === null && account.currency === movement.currency,
+  );
 }

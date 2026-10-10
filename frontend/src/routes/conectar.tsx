@@ -3,6 +3,7 @@ import { ArrowLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   inboxQuery,
+  ingestionCatalogQuery,
   latestAlertMovementQuery,
   recentMailQuery,
   setupQuery,
@@ -48,9 +49,13 @@ export const Route = createFileRoute("/conectar")({
     // these, and both draw a placeholder until they land.
     void context.queryClient.prefetchQuery(recentMailQuery);
     void context.queryClient.prefetchQuery(latestAlertMovementQuery);
+    // The banks come from the backend's parser registry. If they cannot be
+    // read, the route's error screen offers a retry: there is no fixed list
+    // here to fall back on, on purpose.
     return Promise.all([
       context.queryClient.ensureQueryData(setupQuery),
       context.queryClient.ensureQueryData(inboxQuery),
+      context.queryClient.ensureQueryData(ingestionCatalogQuery),
     ]);
   },
   component: ConnectScreen,

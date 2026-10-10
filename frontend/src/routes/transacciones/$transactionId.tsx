@@ -1,10 +1,12 @@
-import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
   ArrowLeftRight,
+  Check,
   Landmark,
   Pencil,
+  Tag,
   Trash2,
   TriangleAlert,
   Undo2,
@@ -20,6 +22,7 @@ import {
   type Transaction,
   transactionQuery,
   useDeleteTransaction,
+  useEditMerchant,
   useEditTransaction,
   useUndoTransfer,
 } from "@/api/queries";
@@ -28,13 +31,15 @@ import { Money } from "@/components/Money";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
-import { buildCorrection, DETACH, isEmpty } from "@/lib/correction";
+import { assignableAccounts, buildCorrection, DETACH, isEmpty } from "@/lib/correction";
 import { formatDateTime, fromLocalInput, toLocalInput } from "@/lib/dates";
 import { undoConsequence } from "@/lib/declaring";
 import { describeDeletion } from "@/lib/deletion";
 import { transferBlurb, transferTitle } from "@/lib/transfers";
+import { CategoryPicker } from "@/merchants/CategoryPicker";
 import { categoryLabels, labelFrom } from "@/merchants/categories";
 import { DeclareTransfer } from "@/transfers/DeclareTransfer";
 
@@ -64,6 +69,10 @@ function TransactionScreen() {
   const { data: categories } = useSuspenseQuery(categoriesQuery);
   const labels = categoryLabels(categories.categories);
   const [editing, setEditing] = useState(false);
+  const [changingCategory, setChangingCategory] = useState(false);
+  // What the last quick action did, said once where it happened. Cleared by
+  // leaving: it describes this visit, not the movement.
+  const [done, setDone] = useState<string | null>(null);
 
   const incoming = movement.direction === "incoming";
   const transfer = movement.transfer;
@@ -131,7 +140,21 @@ function TransactionScreen() {
             </Row>
           ) : null}
           {movement.merchant?.category ? (
-            <Row label="Categoría">{labelFrom(labels, movement.merchant.category)}</Row>
+            <Row label="Categoría">
+              <button
+                type="button"
+                onClick={() => {
+                  setDone(null);
+                  setChangingCategory(true);
+                }}
+                aria-expanded={changingCategory}
+                className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-right transition-colors hover:text-cyan"
+              >
+                {labelFrom(labels, movement.merchant.category)}
+                <Pencil className="size-3.5 text-faint" aria-hidden />
+                <span className="sr-only">(cambiar)</span>
+              </button>
+            </Row>
           ) : null}
           <Row label="Cuenta">
             {movement.account_id ? (
@@ -139,9 +162,6 @@ function TransactionScreen() {
             ) : (
               <span className="text-warn">Sin asignar</span>
             )}
-          </Row>
-          <Row label="Estado">
-            {movement.status === "assigned" ? "En una cuenta" : "Sin asignar"}
           </Row>
           <Row label="Origen">
             {/* Every origin by name: a confirmed bill read as «Alerta del
@@ -154,16 +174,30 @@ function TransactionScreen() {
           {movement.note ? <Row label="Nota">{movement.note}</Row> : null}
         </Card>
 
+        {done ? (
+          <Notice tone="success" icon={Check} title={done} className="rise" />
+        ) : null}
+
+        {changingCategory && movement.merchant ? (
+          <CategoryChange
+            movementId={movement.id}
+            merchant={movement.merchant}
+            labels={labels}
+            onClose={() => setChangingCategory(false)}
+            onSaved={(label) => {
+              setChangingCategory(false);
+              setDone(`${movement.merchant?.display_name} ahora es ${label}.`);
+            }}
+          />
+        ) : null}
+
+        {movement.account_id ? null : (
+          <Unassigned movement={movement} onAssigned={(name) => setDone(name)} />
+        )}
+
         <Stated movement={movement} />
 
         {transfer ? null : <DeclareTransfer movement={movement} />}
-
-        {movement.account_id ? null : (
-          <p className="text-faint text-xs">
-            Este movimiento no está en ninguna cuenta, así que no mueve ningún saldo. Se
-            adopta solo en cuanto declares la cuenta que le corresponde.
-          </p>
-        )}
 
         {editing ? (
           <EditForm movement={movement} onDone={() => setEditing(false)} />
@@ -178,6 +212,176 @@ function TransactionScreen() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * A movement with no account, and the way out of that from right here.
+ *
+ * It used to be a faint sentence at the foot of the screen saying the state
+ * and not the remedy. The remedy is one choice — which account — so the choice
+ * is offered in place. The lasting fix is linking the card, which only an
+ * alert's movement has; a hand-written one never had a card to link.
+ */
+function Unassigned({
+  movement,
+  onAssigned,
+}: {
+  movement: Transaction;
+  onAssigned: (message: string) => void;
+}) {
+  const { data: accounts } = useSuspenseQuery(accountsQuery("all"));
+  const edit = useEditTransaction(movement.id);
+  const options = assignableAccounts(movement, accounts.accounts);
+  const [chosen, setChosen] = useState("");
+  const fromAlert = movement.origin === "bank_alert";
+
+  async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!chosen || edit.isPending) return;
+    try {
+      await edit.mutateAsync({ account_id: chosen, detach: false });
+      const name =
+        options.find((account) => account.id === chosen)?.name ?? "la cuenta";
+      onAssigned(`Quedó en ${name}, y su saldo ya lo cuenta.`);
+    } catch {
+      // `edit.error` carries it, shown below.
+    }
+  }
+
+  return (
+    <Notice tone="warn" icon={Unlink} title="No está en ninguna cuenta">
+      <p>No mueve ningún saldo hasta que le digas de cuál es.</p>
+
+      {/* A transfer's legs are moved through «Corregir», which knows the
+          rules of a pair; this shortcut is for a plain movement. */}
+      {movement.transfer ? null : options.length > 0 ? (
+        <form
+          onSubmit={onSubmit}
+          className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end"
+        >
+          <div className="min-w-0 flex-1">
+            <Select
+              label="Asignar a"
+              placeholder="Elige una cuenta"
+              value={chosen}
+              onChange={(event) => setChosen(event.target.value)}
+              options={options.map((account) => ({
+                value: account.id,
+                label: account.name,
+              }))}
+            />
+          </div>
+          <Button type="submit" disabled={!chosen || edit.isPending}>
+            {edit.isPending ? "Asignando…" : "Asignar"}
+          </Button>
+        </form>
+      ) : (
+        <p className="mt-2">
+          No tienes una cuenta abierta en {movement.currency}.{" "}
+          <Link to="/cuentas/nueva" className="text-cyan hover:underline">
+            Declara una
+          </Link>{" "}
+          y podrás asignarlo.
+        </p>
+      )}
+
+      {edit.error ? (
+        <p role="alert" className="mt-2 text-outgoing text-sm">
+          {edit.error.message}
+        </p>
+      ) : null}
+
+      {fromAlert ? (
+        <p className="mt-3 text-faint text-xs">
+          Si llegan más de esa tarjeta,{" "}
+          <Link to="/cuentas" className="text-cyan hover:underline">
+            enlázala en Cuentas
+          </Link>{" "}
+          y caerán solos en su cuenta.
+        </p>
+      ) : null}
+    </Notice>
+  );
+}
+
+/**
+ * Changing the category from the movement that made somebody want to.
+ *
+ * The category belongs to the merchant, not to this one movement, so saving
+ * here relabels every movement of that merchant — and the screen says so
+ * before the button rather than after.
+ */
+function CategoryChange({
+  movementId,
+  merchant,
+  labels,
+  onClose,
+  onSaved,
+}: {
+  movementId: string;
+  merchant: NonNullable<Transaction["merchant"]>;
+  labels: Record<string, string>;
+  onClose: () => void;
+  onSaved: (label: string) => void;
+}) {
+  const client = useQueryClient();
+  const edit = useEditMerchant(merchant.id);
+  const [category, setCategory] = useState(merchant.category);
+  const changed = category !== merchant.category;
+
+  async function onSubmit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!changed || edit.isPending) return;
+    try {
+      await edit.mutateAsync({ category });
+      // The movement carries its merchant's category, so it is re-read before
+      // saying it changed: otherwise «ahora es Restaurantes» sits above a row
+      // still reading the old one until the refetch lands.
+      await client.refetchQueries({ queryKey: transactionQuery(movementId).queryKey });
+      onSaved(labelFrom(labels, category));
+    } catch {
+      // `edit.error` carries it, shown below.
+    }
+  }
+
+  return (
+    <Card glow="cyan" lift={false} className="rise">
+      <form onSubmit={onSubmit} className="flex flex-col gap-4">
+        <h2 className="flex items-center gap-2 font-medium text-sm">
+          <Tag className="size-4 text-cyan" aria-hidden />
+          Categoría de {merchant.display_name}
+        </h2>
+
+        <CategoryPicker value={category} onChange={setCategory} />
+
+        <p className="text-faint text-xs">
+          Es del comercio: sus otros movimientos también la toman.{" "}
+          <Link
+            to="/comercios/$merchantId"
+            params={{ merchantId: merchant.id }}
+            className="text-cyan hover:underline"
+          >
+            Ver el comercio
+          </Link>
+        </p>
+
+        {edit.error ? (
+          <p role="alert" className="text-outgoing text-sm">
+            {edit.error.message}
+          </p>
+        ) : null}
+
+        <div className="flex gap-3">
+          <Button type="button" variant="ghost" full onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button type="submit" full disabled={!changed || edit.isPending}>
+            {edit.isPending ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }
 

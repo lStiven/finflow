@@ -160,11 +160,11 @@ Los comercios se normalizan aparte: el texto del banco se convierte en un
 comercio con nombre y categoría, y hay una pantalla para revisar y corregir.
 
 **Estado técnico:** 88 operaciones de API en cinco contextos, siete procesos en
-la nube, 2493 pruebas de Python y 533 del frontend, todas en verde, y siete
-e2e en el navegador (`just e2e`). El contrato de la API y los tipos del
+la nube, 2502 pruebas de Python y 562 del frontend, todas en verde, y quince
+e2e en el navegador (`just e2e`), medido el 2026-10-10. El contrato de la API y los tipos del
 frontend están sincronizados.
 
-**Pantallas:** veintiuna, y están todas menos una. Resumen, Transacciones (incluido crear,
+**Pantallas:** veintidós —la última, `/guias/flujos`, el 2026-10-10—, y están todas menos una. Resumen, Transacciones (incluido crear,
 trasladar y borrar), Cuentas (con la pantalla de financiación y su tabla de
 amortización), Comercios, Reportes, Perfil, la guía para conectar el banco y las
 cuatro guías, más **Facturas** desde el 2026-09-14 y **Presupuestos** desde el
@@ -332,26 +332,27 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
-- 2026-10-10 — **Auditoría de pantallas del plan UX (ARC-00).** Varias mejoras
-  que el plan daba por construir ya existían; el pendiente bajó a 82–172 h.
-  Sigue ARC-02 + ARC-04 (bancos y filtro desde el backend). Detalle en
-  `front_refactor/FINFLOW_PLAN_UX_V2.md`, sección 10.
-- 2026-10-10 — **El deploy ya no choca con el límite de `public.ecr.aws`.**
-  Las siete builds paralelas bajaban cada una sus imágenes base de forma
-  anónima; ahora `scripts/ci/deploy.sh` las baja antes, una vez y con
-  reintentos. En el árbol, sin commit: hasta que entre, `dev` sigue en 7c2e6af.
-- 2026-10-10 — **Conectar el banco es un asistente, no una guía de texto.**
-  Bienvenida, cuatro pasos (bancos, dirección, filtro, prueba) con tutorial
-  visual de Gmail, y para quien ya terminó, el estado real de la conexión.
-  Nada se marca listo sin evidencia del servidor. `just e2e-connect` lo
-  recorre de una cuenta nueva a su primer movimiento. En `dev` (8531ea0),
-  todavía sin desplegar.
-- 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
-  el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
-- 2026-10-04 — **Confirmar el reenvío ya no miente.** Se marcaba confirmado
-  con un 200 aunque Gmail siguiera pendiente, y un enlace en `mail.google.com`
-  se perdía sin rastro. La guía del reenvío se rehízo en dos partes —autorizar
-  la dirección, crear el filtro— y el paso ya no se cierra con la sola
-  confirmación. Que Gmail acepte `@dominio` en «De» no lo documenta Google: la
-  guía hace comprobarlo buscando antes de guardar. **Comprobado en producción
-  el 2026-10-05**: Finflow confirmó solo y Gmail lo dio por verificado.
+- 2026-10-10 — **Las listas desplegables son de la app, y el carrusel ya no salta.**
+  Menú propio en escritorio, hoja desde abajo en el teléfono, búsqueda en las
+  largas y teclado completo, en todos los selectores sin cambiar pantallas.
+  «Siguiente» queda quieto en todos los pasos. `just e2e` en verde. En el
+  árbol, sin commit.
+- 2026-10-10 — **Plan UX completo: avisos guiados y cuatro recorridos animados**
+  (UX-14 y lo pedido después). La guía de avisos conecta Telegram desde ella
+  misma; cómo llega un movimiento, un traslado, una cuota y una factura se ven
+  paso a paso desde el «Cómo funciona» de su pantalla y en `/guias/flujos`.
+  La cola de Comercios se rehízo en una fila por comercio. `just e2e` (15
+  suites, 22 pantallas) en verde. En el árbol, sin commit.
+- 2026-10-10 — **Una lista vacía dice por qué, y Guías es una lista de tareas**
+  (plan UX, UX-05 + UX-13). El motivo sale de la evidencia de la conexión y
+  lleva al paso que lo arregla; lo pendiente en Guías lo marca el servidor. F5
+  completa; `just e2e` (13 suites) en verde. En el árbol, sin commit.
+- 2026-10-10 — **Resumen, Reportes y Comercios: cada cifra abre lo que la forma**
+  (plan UX, UX-06, UX-11, UX-12). Categorías, cuentas y columnas llevan a sus
+  movimientos —las e2e comprueban que suman lo mismo— y la cola de comercios
+  se responde en la lista. F4 completa; `just e2e` (12 suites) en verde. En
+  el árbol, sin commit.
+- 2026-10-10 — **Facturas: cada acción con su nombre, ningún error en silencio**
+  (plan UX, UX-09). Los iconos de 32 px son palabras de 44 px detrás de
+  «Opciones», y un cobro pagado lleva a su movimiento. `just e2e` en verde.
+  En el árbol, sin commit.

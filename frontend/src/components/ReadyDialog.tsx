@@ -3,10 +3,10 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { latestAlertMovementQuery } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
+import { SuccessMark } from "@/components/ui/SuccessMark";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useScrollLock } from "@/lib/useScrollLock";
 import { MovementCard } from "@/onboarding/MovementCard";
-import { SuccessMark } from "@/onboarding/parts";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
 /**

@@ -29,11 +29,13 @@
  */
 
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
+  ArrowRight,
   Check,
   ChevronLeft,
   ChevronRight,
+  Layers,
   Loader2,
   Plus,
   Target,
@@ -42,7 +44,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { type SubmitEvent, useState } from "react";
 import {
   type BudgetBody,
   type BudgetProgress,
@@ -65,6 +67,7 @@ import {
   captionOf,
   leftOf,
   monthLabel,
+  movementsSearch,
   overBy,
   scopeLabel,
   shiftMonth,
@@ -75,9 +78,11 @@ import {
 } from "@/budgets/progress";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
 import { cn } from "@/lib/cn";
 import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
 
@@ -102,15 +107,24 @@ const TONES: Record<BudgetState, { bar: string; text: string; ring: string }> = 
 /** How many categories one budget may gather. The API refuses more. */
 const MAX_SCOPE_CATEGORIES = 20;
 
+/**
+ * The month on screen, in the address: back undoes paging to another month,
+ * and a link to December opens December. Absent means the current one.
+ */
+type BudgetsSearch = { mes?: string };
+
+const MONTH_KEY = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 export const Route = createFileRoute("/presupuestos")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
   },
-  loader: ({ context }) =>
+  validateSearch: (raw: Record<string, unknown>): BudgetsSearch =>
+    typeof raw.mes === "string" && MONTH_KEY.test(raw.mes) ? { mes: raw.mes } : {},
+  loaderDeps: ({ search }) => search,
+  loader: ({ context, deps }) =>
     Promise.all([
-      // The current month, which is what the screen opens on. Paging to
-      // another one is a fetch the month bar pays for.
-      context.queryClient.query(budgetsQuery()),
+      context.queryClient.query(budgetsQuery(deps.mes ?? null)),
       // The picker needs them, and so does every label on this screen: a
       // scope holds category *values* and only this list knows their names.
       context.queryClient.query({ ...categoriesQuery, staleTime: "static" }),
@@ -119,10 +133,14 @@ export const Route = createFileRoute("/presupuestos")({
 });
 
 function BudgetsScreen() {
-  const [month, setMonth] = useState<string | null>(null);
-  const { data: view } = useSuspenseQuery(budgetsQuery(month));
+  const { mes } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const { data: view } = useSuspenseQuery(budgetsQuery(mes ?? null));
   const { data: categories } = useSuspenseQuery(categoriesQuery);
   const [declaring, setDeclaring] = useState(false);
+  // Said once, where it happened, the moment the first cap exists.
+  const [firstDone, setFirstDone] = useState(false);
+  const empty = view.budgets.length === 0;
 
   const labels = Object.fromEntries(
     categories.categories.map((option) => [
@@ -134,21 +152,17 @@ function BudgetsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-7">
-        <header className="flex flex-col gap-2">
-          <h1 className="font-semibold text-2xl tracking-tight">Presupuestos</h1>
-          <p className="max-w-prose text-muted text-sm leading-relaxed">
-            Un tope sobre lo que tú elijas —todo el mes, una categoría o varias— y un
-            semáforo contra lo que llevas gastado. Poner un tope{" "}
-            <strong className="text-text">no mueve ningún saldo</strong> y no bloquea
-            nada: te avisa aquí, y decides tú.
-          </p>
-        </header>
+        <PageHeader
+          title="Presupuestos"
+          lead="Un tope para lo que quieras, y cómo vas contra él."
+          help={HELP}
+        />
 
         <MonthBar
           month={view.month}
           onChange={(next) => {
-            setMonth(next);
             setDeclaring(false);
+            void navigate({ search: { mes: next } });
           }}
         />
 
@@ -156,6 +170,11 @@ function BudgetsScreen() {
 
         {declaring ? (
           <BudgetForm month={view.month} onClose={() => setDeclaring(false)} />
+        ) : empty ? (
+          <FirstBudget
+            onDeclared={() => setFirstDone(true)}
+            onChooseCategories={() => setDeclaring(true)}
+          />
         ) : (
           <Button onClick={() => setDeclaring(true)} full>
             <Plus className="size-4" />
@@ -163,9 +182,19 @@ function BudgetsScreen() {
           </Button>
         )}
 
-        {view.budgets.length === 0 ? (
-          <Empty />
-        ) : (
+        {firstDone && !empty ? (
+          <Notice
+            tone="success"
+            icon={Check}
+            title="Listo, tu primer tope está puesto"
+            className="rise"
+          >
+            La barra se mueve sola con cada gasto. Cuando quieras, agrega otro para una
+            categoría.
+          </Notice>
+        ) : null}
+
+        {empty ? null : (
           <section className="flex flex-col gap-3">
             <SectionTitle count={view.budgets.length}>Tus topes</SectionTitle>
             <div className="grid gap-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
@@ -188,16 +217,37 @@ function BudgetsScreen() {
             month={view.month}
           />
         ) : null}
-
-        <p className="text-faint text-xs leading-relaxed">
-          Los topes no reparten el gasto del mes: pueden solaparse entre ellos y pueden
-          dejar huecos, así que la suma de tus topes y lo que dice Resumen no tienen por
-          qué coincidir.
-        </p>
       </div>
     </AppShell>
   );
 }
+
+/** What the header paragraph and the footnote used to say, now a tap away. */
+const HELP: PageHelp = {
+  id: "presupuestos",
+  points: [
+    {
+      icon: Wallet,
+      title: "Solo informa",
+      body: "Un tope no mueve saldos ni bloquea compras: te avisa aquí y decides tú.",
+    },
+    {
+      icon: Target,
+      title: "Qué vigila",
+      body: "Sin categorías, cuenta todo lo que gastes en el mes. También puedes elegir una o varias.",
+    },
+    {
+      icon: TriangleAlert,
+      title: "Ámbar y rojo",
+      body: "Ámbar al llegar al punto de aviso que elijas, rojo al pasarte.",
+    },
+    {
+      icon: Layers,
+      title: "Pueden solaparse",
+      body: "Dos topes pueden contar el mismo gasto, así que su suma no tiene que cuadrar con Resumen.",
+    },
+  ],
+};
 
 function SectionTitle({ children, count }: { children: string; count?: number }) {
   return (
@@ -335,16 +385,110 @@ function Overview({ totals }: { totals: readonly BudgetTotal[] }) {
   );
 }
 
-function Empty() {
+/**
+ * The first cap, in one figure and one tap.
+ *
+ * An empty screen used to say what the easiest cap was and then leave somebody
+ * to find the form and fill in five fields to get it. The easiest one needs a
+ * single number — a ceiling over everything spent in the month — so that is
+ * all this asks. Choosing categories stays one tap away.
+ */
+function FirstBudget({
+  onDeclared,
+  onChooseCategories,
+}: {
+  onDeclared: () => void;
+  onChooseCategories: () => void;
+}) {
+  const declare = useDeclareBudget();
+  const [limit, setLimit] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function submit(event: SubmitEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const parsed = parseAmount(limit);
+    if (parsed === null) {
+      setError("Escribe un número mayor que cero.");
+      return;
+    }
+    setError(null);
+    declare.mutate(
+      {
+        name: "Todo el mes",
+        limit: parsed,
+        currency: "COP",
+        categories: [],
+        accounts: [],
+        icon: "",
+        month: null,
+        warn_at: 80,
+      },
+      { onSuccess: onDeclared },
+    );
+  }
+
   return (
-    <Card lift={false} className="flex flex-col items-center gap-3 py-12 text-center">
-      <span className="grid size-12 place-items-center rounded-2xl bg-surface-raised">
-        <Target className="size-5 text-faint" />
-      </span>
-      <p className="max-w-xs text-muted text-sm leading-relaxed">
-        Todavía no has puesto ningún tope. El más fácil de empezar es uno sobre todo el
-        mes: no hay que elegir ninguna categoría.
-      </p>
+    <Card
+      glow="accent"
+      lift={false}
+      className="rise relative overflow-hidden p-6 sm:p-8"
+    >
+      <span
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/60 to-transparent"
+      />
+      <form onSubmit={submit} className="flex flex-col gap-5">
+        <div className="flex items-start gap-4">
+          <span
+            aria-hidden
+            className="pulse-ring grid size-12 shrink-0 place-items-center rounded-2xl bg-accent/15 ring-1 ring-accent/30"
+          >
+            <Target className="size-5 text-accent" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-semibold text-lg tracking-tight">
+              Empieza con un tope para todo el mes
+            </h2>
+            <p className="mt-1 text-muted text-sm">
+              Sin elegir categorías: cuenta todo lo que gastes.
+            </p>
+          </div>
+        </div>
+
+        <Field
+          label="¿Cuánto quieres gastar como máximo al mes?"
+          icon={Wallet}
+          inputMode="decimal"
+          placeholder="2.000.000"
+          value={limit}
+          onChange={(event) => setLimit(event.target.value)}
+        />
+
+        {error ? (
+          <p role="alert" className="text-outgoing text-sm">
+            {error}
+          </p>
+        ) : null}
+        {declare.isError ? (
+          <p role="alert" className="text-outgoing text-sm">
+            {declare.error.message}
+          </p>
+        ) : null}
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Button type="submit" disabled={declare.isPending}>
+            {declare.isPending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            Poner el tope
+          </Button>
+          <Button variant="quiet" onClick={onChooseCategories}>
+            Prefiero elegir categorías
+          </Button>
+        </div>
+      </form>
     </Card>
   );
 }
@@ -413,6 +557,7 @@ function BudgetCard({
   const look = lookOfBudget(budget);
   const left = leftOf(budget);
   const over = overBy(budget);
+  const behind = movementsSearch(budget, month);
 
   if (editing) {
     return (
@@ -428,6 +573,11 @@ function BudgetCard({
         <span className="text-muted text-sm leading-relaxed">
           ¿Quitar «{budget.name}»? No borra ningún movimiento.
         </span>
+        {forget.isError ? (
+          <span role="alert" className="text-outgoing text-sm">
+            {forget.error.message}
+          </span>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button
             variant="ghost"
@@ -556,6 +706,17 @@ function BudgetCard({
               )}
             </span>
           </div>
+
+          {behind ? (
+            <Link
+              to="/transacciones"
+              search={behind}
+              className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-xs transition-colors hover:text-text"
+            >
+              Ver movimientos
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          ) : null}
         </>
       )}
     </Card>
@@ -582,7 +743,7 @@ function IconAction({
       aria-label={`${label} ${on}`}
       title={label}
       className={cn(
-        "grid size-8 place-items-center rounded-lg transition-colors hover:bg-surface-raised",
+        "grid size-11 place-items-center rounded-lg transition-colors hover:bg-surface-raised",
         tone === "danger"
           ? "text-faint hover:text-outgoing"
           : "text-muted hover:text-text",

@@ -18,6 +18,7 @@ from personal_finance.contexts.ingestion.application.ports import (
 from personal_finance.contexts.ingestion.application.queries import (
     ListNotificationsUseCase,
 )
+from personal_finance.contexts.ingestion.domain.parsing.registry import BANK_DOMAINS
 from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
@@ -272,6 +273,21 @@ def test_the_catalog_publishes_the_states_and_the_instrument_vocabulary(
     kinds = [option["value"] for option in catalog["instrument_kinds"]]
     assert "credit_card" in kinds
     assert "savings_account" in kinds
+
+
+def test_the_catalog_lists_the_banks_with_a_parser_and_all_their_domains(
+    client: TestClient,
+) -> None:
+    banks = {
+        bank["id"]: bank
+        for bank in client.get("/ingestion/catalog").json()["known_banks"]
+    }
+
+    assert banks["bancolombia"]["name"] == "Bancolombia"
+    assert set(banks["bancolombia"]["domains"]) == {
+        domain for domain, bank in BANK_DOMAINS.items() if bank == "bancolombia"
+    }
+    assert banks["lulo bank"]["domains"] == ["lulobank.com"]
 
 
 def test_every_published_status_is_one_the_filter_accepts(

@@ -25,9 +25,36 @@ y no se toca ninguna regla financiera.
   existían (alta de cuenta por pasos, desglose y parciales en Reportes,
   sugerencias de tope). Detalle y horas corregidas en la sección 10 del
   documento largo.
-- **Único hardcode pendiente:** la lista de bancos conocidos del frontend
-  (`frontend/src/onboarding/banks.ts`), copia del registro de parsers del
-  backend.
+- **Bancos y filtro desde el backend (ARC-02 + ARC-04) hechos el 2026-10-10:**
+  `known_banks` en `/ingestion/catalog` y `gmail_filter` en `/ingestion/setup`.
+  El frontend ya no guarda ningún catálogo de bancos.
+- **Textos cortos y kit compartido (UX-01 + UX-02) hechos el 2026-10-10:** cada
+  pantalla principal tiene título, una línea y su acción; la explicación vive en
+  «Cómo funciona», que se abre sola la primera vez, como el asistente.
+- **Transacciones y Presupuestos (UX-07 + UX-10) hechos el 2026-10-10:** «sin
+  asignar» y la categoría se resuelven desde el movimiento; el primer tope es
+  un número y un toque, y cada tope lleva a sus movimientos.
+- **Fase F0–F2 cerrada y APROBADA el 2026-10-10** (sección 11 del documento
+  largo): todo en verde y sin bloqueantes. Queda un desborde de Reportes a
+  320 px que es anterior a la fase, ya corregido.
+- **Cuentas (UX-08) hecho el 2026-10-10:** cada cuenta dice lo que le falta y
+  lo resuelve ahí mismo, una sección a la vez, y las cifras explican de qué
+  están hechas.
+- **Facturas (UX-09) hecho el 2026-10-10:** acciones con nombre detrás de
+  «Opciones», ningún error en silencio, y un cobro pagado lleva a su
+  movimiento.
+- **Resumen, Reportes y Comercios (UX-06, UX-11, UX-12) hechos el
+  2026-10-10:** cada cifra, categoría, cuenta y columna abre lo que la forma
+  —y la e2e comprueba que suma lo mismo—, y la cola de comercios se responde
+  sin salir de la lista. F4 completa.
+- **Guías y diagnóstico enlazado (UX-13 + UX-05) hechos el 2026-10-10:** una
+  lista vacía dice por qué con evidencia y lleva al arreglo; Guías es una
+  lista de tareas que el servidor marca como comprobadas. F5 completa.
+- **Avisos (UX-14) y recorridos animados hechos el 2026-10-10:** la guía de
+  avisos conecta Telegram desde ella misma, y cuatro recorridos animados
+  —cómo llega un movimiento, un traslado, una cuota, una factura— se abren
+  desde el «Cómo funciona» de su pantalla y en `/guias/flujos`. **Plan
+  completo**; el detalle, en la sección 12 del documento largo.
 
 ## Fases
 

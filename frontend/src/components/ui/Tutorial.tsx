@@ -16,14 +16,17 @@ export type TutorialSlide = {
 const SWIPE_PX = 48;
 
 /**
- * Gmail, one action at a time.
+ * One idea at a time, each with its picture.
  *
- * Each slide is a single thing to do, with a picture of where on Gmail's
- * screen it happens and that spot lit. Arrows, dots, a swipe or the
- * keyboard's arrow keys move between them; none of it locks — somebody who
- * already knows the way can read the last slide first.
+ * Born as the connect guide's Gmail walkthrough — one action per slide, the
+ * spot on Gmail's screen lit — and shared since with the guides that show a
+ * flow in motion: how a movement arrives, what a transfer does. Each slide's
+ * illustration remounts as it arrives, so its animation plays when it is
+ * reached rather than all at once. Arrows, dots, a swipe or the arrow keys
+ * move between them; none of it locks, and nothing advances on its own:
+ * somebody reading is never overtaken.
  */
-export function GmailTutorial({
+export function Tutorial({
   label,
   slides,
 }: {
@@ -102,36 +105,32 @@ export function GmailTutorial({
       aria-label={label}
       className="overflow-hidden rounded-2xl border border-line bg-surface"
     >
-      <div className="touch-pan-y">
+      {/*
+        Every slide is laid into the same grid cell, invisible, so the
+        carousel is as tall as its tallest slide from the start — and the
+        buttons below never move under the pointer between one slide and the
+        next. The visible slide sits on top, remounted so its picture plays
+        as it arrives. The others are inert, unread and unanimated.
+      */}
+      <div className="grid touch-pan-y">
+        {slides.map((each, at) => (
+          <div
+            key={each.title}
+            aria-hidden
+            inert
+            className="ghost-slide invisible col-start-1 row-start-1"
+          >
+            <SlideBody slide={each} index={at} total={slides.length} />
+          </div>
+        ))}
         <div
           key={index}
-          className={direction === "back" ? "step-in-back" : "step-in-forward"}
+          className={cn(
+            "col-start-1 row-start-1",
+            direction === "back" ? "step-in-back" : "step-in-forward",
+          )}
         >
-          <div className="bg-gradient-to-b from-ink to-surface px-4 pt-5 pb-7 sm:px-8 sm:pt-7 sm:pb-9">
-            <div className="mx-auto max-w-md">{slide.illustration}</div>
-          </div>
-          <div className="px-4 pb-5 sm:px-6">
-            <p className="text-faint text-xs tabular">
-              {index + 1} de {slides.length}
-            </p>
-            <h3 className="mt-1 text-pretty font-medium text-base">{slide.title}</h3>
-            {slide.caption ? (
-              <div className="mt-1.5 text-pretty text-muted text-sm leading-relaxed">
-                {slide.caption}
-              </div>
-            ) : null}
-            {slide.help ? (
-              <details className="group mt-3">
-                <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-1.5 rounded-lg text-cyan text-sm [&::-webkit-details-marker]:hidden">
-                  <CircleHelp className="size-4" aria-hidden />
-                  {slide.help.question}
-                </summary>
-                <div className="rise mt-1 rounded-xl border border-line bg-ink p-3 text-muted text-sm leading-relaxed">
-                  {slide.help.answer}
-                </div>
-              </details>
-            ) : null}
-          </div>
+          <SlideBody slide={slide} index={index} total={slides.length} />
         </div>
       </div>
 
@@ -186,5 +185,46 @@ export function GmailTutorial({
         {`Paso ${index + 1} de ${slides.length}: ${slide.title}`}
       </p>
     </section>
+  );
+}
+
+/** One slide: its picture, then its words. */
+function SlideBody({
+  slide,
+  index,
+  total,
+}: {
+  slide: TutorialSlide;
+  index: number;
+  total: number;
+}) {
+  return (
+    <>
+      <div className="bg-gradient-to-b from-ink to-surface px-4 pt-5 pb-7 sm:px-8 sm:pt-7 sm:pb-9">
+        <div className="mx-auto max-w-md">{slide.illustration}</div>
+      </div>
+      <div className="px-4 pb-5 sm:px-6">
+        <p className="text-faint text-xs tabular">
+          {index + 1} de {total}
+        </p>
+        <h3 className="mt-1 text-pretty font-medium text-base">{slide.title}</h3>
+        {slide.caption ? (
+          <div className="mt-1.5 text-pretty text-muted text-sm leading-relaxed">
+            {slide.caption}
+          </div>
+        ) : null}
+        {slide.help ? (
+          <details className="group mt-3">
+            <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-1.5 rounded-lg text-cyan text-sm [&::-webkit-details-marker]:hidden">
+              <CircleHelp className="size-4" aria-hidden />
+              {slide.help.question}
+            </summary>
+            <div className="rise mt-1 rounded-xl border border-line bg-ink p-3 text-muted text-sm leading-relaxed">
+              {slide.help.answer}
+            </div>
+          </details>
+        ) : null}
+      </div>
+    </>
   );
 }

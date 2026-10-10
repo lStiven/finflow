@@ -342,13 +342,23 @@ async function main() {
     }
     check(
       "el tutorial llega a su sexta pantalla",
-      (await tutorial.getByText(/^\d de 6$/).innerText()).trim(),
+      (
+        await tutorial
+          .getByText(/^\d de 6$/)
+          .filter({ visible: true })
+          .innerText()
+      ).trim(),
       "6 de 6",
     );
     await tutorial.getByRole("button", { name: "Anterior", exact: true }).click();
     check(
       "y vuelve atrás",
-      (await tutorial.getByText(/^\d de 6$/).innerText()).trim(),
+      (
+        await tutorial
+          .getByText(/^\d de 6$/)
+          .filter({ visible: true })
+          .innerText()
+      ).trim(),
       "5 de 6",
     );
     await noSideways("paso 3");

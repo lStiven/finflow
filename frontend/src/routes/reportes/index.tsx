@@ -19,8 +19,11 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   CalendarDays,
+  CalendarRange,
+  MousePointerClick,
   Receipt,
   Scale,
 } from "lucide-react";
@@ -41,7 +44,9 @@ import { Columns } from "@/components/charts/Columns";
 import { bandPalette } from "@/components/charts/palette";
 import { RankedBars } from "@/components/charts/RankedBars";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import { StatTile } from "@/components/ui/StatTile";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/dates";
@@ -50,6 +55,7 @@ import { intervalFor, PRESETS, type PresetId, resolveRange } from "@/lib/periods
 import { categoryLabels, labelFrom } from "@/merchants/categories";
 import {
   bandsOf,
+  bucketDrilldown,
   bucketsOf,
   cashflowSeries,
   describePrevious,
@@ -246,12 +252,11 @@ function ReportsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
-        <header>
-          <h1 className="font-semibold text-2xl tracking-tight">Reportes</h1>
-          <p className="mt-1 text-muted text-sm">
-            En qué se va tu plata, y cómo cambia periodo a periodo.
-          </p>
-        </header>
+        <PageHeader
+          title="Reportes"
+          lead="En qué se va tu plata, y cómo cambia periodo a periodo."
+          help={HELP}
+        />
 
         <Filters
           search={search}
@@ -317,6 +322,8 @@ function ReportsScreen() {
                 label="Balance"
                 icon={Scale}
                 hue="cyan"
+                // Both directions, which is what a balance is made of.
+                to={{ to: "/transacciones", search: drilldown(view) }}
                 caption={
                   <span className="text-faint">
                     {netOf(now) >= 0
@@ -352,7 +359,7 @@ function ReportsScreen() {
               </StatTile>
             </section>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 [&>*]:min-w-0 lg:grid-cols-2">
               <Panel
                 title="Flujo de caja"
                 hint="Lo que entró contra lo que salió, periodo a periodo."
@@ -370,6 +377,10 @@ function ReportsScreen() {
                   series={cashflowSeries(flow)}
                   currency={currency}
                   caption="Ingresos y gastos por periodo"
+                  movementsOf={(index) => {
+                    const bucket = flow.buckets[index];
+                    return bucket ? bucketDrilldown(view, bucket) : null;
+                  }}
                 />
               </Panel>
 
@@ -417,10 +428,16 @@ function ReportsScreen() {
                 series={bands}
                 currency={currency}
                 caption="Gasto por categoría y periodo"
+                movementsOf={(index) => {
+                  const bucket = trend.buckets[index];
+                  return bucket
+                    ? bucketDrilldown(view, bucket, { direction: "outgoing" })
+                    : null;
+                }}
               />
             </Panel>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 [&>*]:min-w-0 lg:grid-cols-2">
               <Panel
                 title="Dónde más gastas"
                 hint="Los comercios que más pesan en el periodo."
@@ -474,6 +491,27 @@ function ReportsScreen() {
     </AppShell>
   );
 }
+
+const HELP: PageHelp = {
+  id: "reportes",
+  points: [
+    {
+      icon: MousePointerClick,
+      title: "Toca para ver el detalle",
+      body: "Las cifras, las categorías, los comercios y cada columna abren los movimientos que los forman.",
+    },
+    {
+      icon: CalendarRange,
+      title: "Elige el periodo",
+      body: "Arriba cambias el rango. Uno que aún no termina se ve más tenue y dice «en curso».",
+    },
+    {
+      icon: ArrowLeftRight,
+      title: "Sin traslados",
+      body: "Pagar tu tarjeta desde otra cuenta tuya no aparece como gasto.",
+    },
+  ],
+};
 
 /* ------------------------------------------------------------------ parts */
 
@@ -614,21 +652,19 @@ function Filters({
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {accounts.length > 0 ? (
-            <select
-              aria-label="Cuenta"
+            <Select
+              variant="compact"
+              label="Cuenta"
+              placeholder="Todas las cuentas"
               value={search.cuenta ?? ""}
               onChange={(event) =>
                 onChange({ cuenta: event.target.value || undefined })
               }
-              className="rounded-lg border border-line bg-ink px-3 py-1.5 text-muted text-xs focus:border-accent focus:outline-none"
-            >
-              <option value="">Todas las cuentas</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
+              options={accounts.map((account) => ({
+                value: account.id,
+                label: account.name,
+              }))}
+            />
           ) : null}
 
           {/*
@@ -637,18 +673,13 @@ function Filters({
            * screen reports — it never adds two together.
            */}
           {currencies.length > 1 ? (
-            <select
-              aria-label="Moneda"
+            <Select
+              variant="compact"
+              label="Moneda"
               value={view.currency}
               onChange={(event) => onChange({ moneda: event.target.value })}
-              className="rounded-lg border border-line bg-ink px-3 py-1.5 text-muted text-xs focus:border-accent focus:outline-none"
-            >
-              {currencies.map((code) => (
-                <option key={code} value={code}>
-                  {code}
-                </option>
-              ))}
-            </select>
+              options={currencies.map((code) => ({ value: code, label: code }))}
+            />
           ) : null}
         </div>
       </div>

@@ -197,8 +197,7 @@ async function exportFrom(page, { choices = [], account } = {}) {
   for (const label of choices) {
     await dialog.getByRole("button", { name: label, exact: true }).click();
   }
-  if (account)
-    await dialog.getByLabel("Cuenta", { exact: true }).selectOption({ label: account });
+  if (account) await choose(page, dialog, "Cuenta", { label: account });
 
   const button = dialog.getByRole("button", { name: /^Descargar/ });
   await button.waitFor();
@@ -232,6 +231,23 @@ function rowsOf(bytes) {
 /** Midnight in Bogotá of a `YYYY-MM-DD` day, as epoch seconds. */
 function bogotaMidnight(day) {
   return Date.parse(`${day}T00:00:00-05:00`) / 1000;
+}
+
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
 }
 
 async function main() {
@@ -367,9 +383,7 @@ async function main() {
       for (const label of ["Mes pasado", "Todos", "CSV"]) {
         await dialog.getByRole("button", { name: label, exact: true }).click();
       }
-      await dialog
-        .getByLabel("Cuenta", { exact: true })
-        .selectOption({ label: accounts[0].name });
+      await choose(page, dialog, "Cuenta", { label: accounts[0].name });
       await page.waitForLoadState("networkidle");
       check(
         "sin movimientos el mes pasado, no se descarga un archivo vacío",

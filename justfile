@@ -734,6 +734,78 @@ e2e-allowance *args:
 e2e-budgets *args:
     cd {{frontend_dir}} && node scripts/e2e-budgets.mjs {{args}}
 
+# The alerts guide, in a real browser and against the real stack, as a newly
+# registered person: not connected it says where you are; pressing «Conectar
+# Telegram» there leaves a pending channel in the API and moves to «Empezar»;
+# Perfil offers an old link again; connected it names the chat (stubbed: the
+# real bot is never called, and t.me is blocked). Needs `just up` and `just web`.
+#
+# Check that alerts are connected from the guide itself.
+e2e-guia-avisos *args:
+    cd {{frontend_dir}} && node scripts/e2e-alerts-guide.mjs {{args}}
+
+# Guías and the empty screens, in a real browser and against the real stack,
+# as a newly registered person walked through every state a connection can
+# be in: the empty list names the reason and links to the step that fixes it;
+# Guías counts what is left from the server, ticks an account once declared,
+# and every task and problem opens a real screen. Needs `just up` — the
+# workers too — and `just web`.
+#
+# Check that an empty list says why, and that every guide leads somewhere.
+e2e-guias *args:
+    cd {{frontend_dir}} && node scripts/e2e-guides.mjs {{args}}
+
+# The merchants review queue, in a real browser and against the real stack,
+# as a newly registered person whose bank alerts arrive through the local
+# webhook (reviewing cannot be undone, so the seeded queue is left alone):
+# both answers are words at 44 px, «Está bien» confirms and says so when it
+# fails, «Otra categoría» changes the merchant in place. Needs `just up` —
+# the workers too — and `just web`.
+#
+# Check that a merchant is reviewed without leaving the list.
+e2e-comercios *args:
+    cd {{frontend_dir}} && node scripts/e2e-merchants.mjs {{args}}
+
+# The reports screen, in a real browser and against the real stack,
+# read-only: choosing a column of the cashflow chart stays on the screen and
+# offers its movements, and the API's rows for that filter add up to the
+# column the page drew; Balance opens both directions. Needs `just up` and
+# `just web`.
+#
+# Check that a report's columns open what they are made of.
+e2e-reportes *args:
+    cd {{frontend_dir}} && node scripts/e2e-reports.mjs {{args}}
+
+# The dashboard, in a real browser and against the real stack, read-only:
+# Patrimonio and Deuda open Cuentas; every category in the ring opens its own
+# spending this month, and the API's rows for it add up to the wedge; every
+# account opens its movements; comparisons name the month they compare with.
+# Needs `just up` and `just web`.
+#
+# Check that every figure on Resumen opens what it is made of.
+e2e-resumen *args:
+    cd {{frontend_dir}} && node scripts/e2e-dashboard.mjs {{args}}
+
+# The accounts screen, in a real browser and against the real stack, as a
+# newly registered person (accounts cannot be deleted): the three figures
+# are the API's net worth; an account nothing reaches says so and links from
+# there; a loan asks for its terms; one section open at a time; the tab and
+# the wizard step live in the address. Needs `just up` and `just web`.
+#
+# Check that every account says what it still needs, and that the figures add up.
+e2e-cuentas *args:
+    cd {{frontend_dir}} && node scripts/e2e-accounts.mjs {{args}}
+
+# A movement's detail, in a real browser and against the real stack: «Cómo
+# funciona» opens once and stays closed; «sin asignar» offers exactly the
+# accounts the API would take and assigning moves that balance by the amount;
+# the category changes on the merchant. Cleans up after itself. Needs
+# `just up` and `just web`.
+#
+# Resolve «sin asignar» and a wrong category from a movement's detail.
+e2e-transacciones *args:
+    cd {{frontend_dir}} && node scripts/e2e-transactions.mjs {{args}}
+
 # The Transacciones export, in a real browser and against the real stack.
 # Drives the export dialog and checks the file against the API: «Todo» +
 # «Gastos» carries every outgoing movement `/financial/transactions` pages
@@ -780,7 +852,7 @@ e2e-views *args:
     cd {{frontend_dir}} && node scripts/e2e-views.mjs {{args}}
 
 # The browser suites, in order.
-e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-alerts e2e-connect e2e-views
+e2e: e2e-bills e2e-allowance e2e-budgets e2e-export e2e-transacciones e2e-cuentas e2e-resumen e2e-reportes e2e-comercios e2e-guias e2e-guia-avisos e2e-alerts e2e-connect e2e-views
 
 # Format check, lint and typecheck the frontend.
 web-check:
