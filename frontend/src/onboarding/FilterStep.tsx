@@ -2,6 +2,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { ArrowRight, Check, Hourglass, Landmark, ShieldCheck } from "lucide-react";
 import { setupQuery } from "@/api/queries";
 import { Button } from "@/components/ui/Button";
+import { Notice } from "@/components/ui/Notice";
 import { approvedBanks } from "@/onboarding/banks";
 import { CopyField } from "@/onboarding/CopyField";
 import { DesktopHint } from "@/onboarding/DesktopHint";
@@ -13,7 +14,7 @@ import {
 } from "@/onboarding/GmailMocks";
 import { GmailTutorial } from "@/onboarding/GmailTutorial";
 import { GMAIL_INBOX_URL } from "@/onboarding/gmail";
-import { ExternalButton, Notice, StepHeading } from "@/onboarding/parts";
+import { ExternalButton, StepHeading } from "@/onboarding/parts";
 import { useKnownBanks } from "@/onboarding/useKnownBanks";
 import { useSenders } from "@/onboarding/useSenders";
 

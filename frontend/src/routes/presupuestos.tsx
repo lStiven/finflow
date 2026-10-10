@@ -34,6 +34,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Layers,
   Loader2,
   Plus,
   Target,
@@ -75,6 +76,7 @@ import {
 } from "@/budgets/progress";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
@@ -134,15 +136,11 @@ function BudgetsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-7">
-        <header className="flex flex-col gap-2">
-          <h1 className="font-semibold text-2xl tracking-tight">Presupuestos</h1>
-          <p className="max-w-prose text-muted text-sm leading-relaxed">
-            Un tope sobre lo que tú elijas —todo el mes, una categoría o varias— y un
-            semáforo contra lo que llevas gastado. Poner un tope{" "}
-            <strong className="text-text">no mueve ningún saldo</strong> y no bloquea
-            nada: te avisa aquí, y decides tú.
-          </p>
-        </header>
+        <PageHeader
+          title="Presupuestos"
+          lead="Un tope para lo que quieras, y cómo vas contra él."
+          help={HELP}
+        />
 
         <MonthBar
           month={view.month}
@@ -188,16 +186,37 @@ function BudgetsScreen() {
             month={view.month}
           />
         ) : null}
-
-        <p className="text-faint text-xs leading-relaxed">
-          Los topes no reparten el gasto del mes: pueden solaparse entre ellos y pueden
-          dejar huecos, así que la suma de tus topes y lo que dice Resumen no tienen por
-          qué coincidir.
-        </p>
       </div>
     </AppShell>
   );
 }
+
+/** What the header paragraph and the footnote used to say, now a tap away. */
+const HELP: PageHelp = {
+  id: "presupuestos",
+  points: [
+    {
+      icon: Wallet,
+      title: "Solo informa",
+      body: "Un tope no mueve saldos ni bloquea compras: te avisa aquí y decides tú.",
+    },
+    {
+      icon: Target,
+      title: "Qué vigila",
+      body: "Sin categorías, cuenta todo lo que gastes en el mes. También puedes elegir una o varias.",
+    },
+    {
+      icon: TriangleAlert,
+      title: "Ámbar y rojo",
+      body: "Ámbar al llegar al punto de aviso que elijas, rojo al pasarte.",
+    },
+    {
+      icon: Layers,
+      title: "Pueden solaparse",
+      body: "Dos topes pueden contar el mismo gasto, así que su suma no tiene que cuadrar con Resumen.",
+    },
+  ],
+};
 
 function SectionTitle({ children, count }: { children: string; count?: number }) {
   return (

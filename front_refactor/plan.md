@@ -27,7 +27,11 @@ y no se toca ninguna regla financiera.
   documento largo.
 - **Bancos y filtro desde el backend (ARC-02 + ARC-04) hechos el 2026-10-10:**
   `known_banks` en `/ingestion/catalog` y `gmail_filter` en `/ingestion/setup`.
-  El frontend ya no guarda ningún catálogo de bancos. Sigue F1 (UX-01 y UX-02).
+  El frontend ya no guarda ningún catálogo de bancos.
+- **Textos cortos y kit compartido (UX-01 + UX-02) hechos el 2026-10-10:** cada
+  pantalla principal tiene título, una línea y su acción; la explicación vive en
+  «Cómo funciona», que se abre sola la primera vez, como el asistente. Sigue F2
+  (UX-07 Transacciones y UX-10 Presupuestos).
 
 ## Fases
 

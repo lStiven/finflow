@@ -4,6 +4,7 @@ import { ArrowRight, Check, Circle, FileQuestion, Loader2 } from "lucide-react";
 import { useEffect } from "react";
 import { latestAlertMovementQuery, queryKeys, recentMailQuery } from "@/api/queries";
 import { Button, buttonClass } from "@/components/ui/Button";
+import { SuccessMark } from "@/components/ui/SuccessMark";
 import { cn } from "@/lib/cn";
 import { evidenceOf, outcomeOf } from "@/onboarding/activity";
 import { DiscardedSenders } from "@/onboarding/BanksStep";
@@ -11,7 +12,7 @@ import { isApproved } from "@/onboarding/banks";
 import { STAGE_COPY } from "@/onboarding/copy";
 import { FlowAnimation } from "@/onboarding/FlowAnimation";
 import { MovementCard, MovementPlaceholder } from "@/onboarding/MovementCard";
-import { StepHeading, SuccessMark, WaitingDot } from "@/onboarding/parts";
+import { StepHeading, WaitingDot } from "@/onboarding/parts";
 import type { OnboardingState, StageId } from "@/onboarding/steps";
 import { useSenders } from "@/onboarding/useSenders";
 

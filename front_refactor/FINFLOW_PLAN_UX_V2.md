@@ -190,8 +190,8 @@ construye una interfaz generada desde registros.
 | ARC-03 | Aprobaciones por usuario | — | — | — | — | **Ya existía** |
 | ARC-04 | Filtro de Gmail en el backend | `gmail_filter` en `/ingestion/setup`; borrar `gmailFromFilter` | S | 2–4 | P0 | **Hecho** (2026-10-10) |
 | ARC-05 | Progreso de ayudas en DynamoDB | — | — | — | — | **Descartado** (2.3) |
-| UX-01 | Textos cortos | Cabeceras breves, detalle bajo demanda, en todas las vistas | M | 6–12 | P0 | Pendiente |
-| UX-02 | Kit visual compartido | Promover las piezas del onboarding a `components/ui/` | S | 4–8 | P0 | Pendiente |
+| UX-01 | Textos cortos | Cabeceras breves, detalle bajo demanda, en todas las vistas | M | 6–12 | P0 | **Hecho** en las 8 pantallas principales (2026-10-10); las de detalle van con su ticket |
+| UX-02 | Kit visual compartido | Promover las piezas del onboarding a `components/ui/` | S | 4–8 | P0 | **Hecho** la base (2026-10-10); el resto se promueve en su segundo uso |
 | UX-03 | Motor de tours atado al DOM | — | — | — | — | **Descartado**: se rompe con cada cambio de maquetación; cada vista lleva su ayuda en contexto |
 | UX-05 | Diagnóstico enlazado | Llevar el diagnóstico existente a Transacciones y Resumen | S | 3–6 | P1 | Parcial |
 | UX-06 | Resumen accionable | Métricas con ayuda corta y navegación a desglose filtrado | M | 6–12 | P1 | Pendiente |
@@ -248,10 +248,31 @@ Lo que la implementación agregó y el plan no decía:
 
 ### UX-01 y UX-02 — Base visual
 
-- [ ] Cabecera de una o dos líneas y una acción principal por pantalla.
-- [ ] Componentes compartidos con teclado, foco visible, lector de pantalla y
+**Cerrado el 2026-10-10** para Resumen, Transacciones, Cuentas, Facturas,
+Presupuestos, Reportes, Comercios y Guías.
+
+- [x] Cabecera de una o dos líneas y una acción principal por pantalla.
+- [x] Componentes compartidos con teclado, foco visible, lector de pantalla y
       móvil; sin librerías nuevas.
-- [ ] Ninguna ayuda reemplaza el estado real de una cuenta o integración.
+- [x] Ninguna ayuda reemplaza el estado real de una cuenta o integración.
+
+Cómo quedó, para que el resto de tickets lo reutilice:
+
+- **`components/PageHeader.tsx`**: título, una línea y la acción principal.
+  El párrafo que antes iba debajo vive en **«Cómo funciona»**: tres o cuatro
+  puntos con icono que entran escalonados, como en el asistente de conexión.
+  Se abre solo en la primera visita y, al cerrarlo («Entendido» o la X), se
+  recuerda por cuenta en el navegador (`lib/help.ts`, mismo criterio que
+  `onboarding/progress.ts`); el botón de la cabecera lo vuelve a abrir. No se
+  abre solo donde otra cosa ya recibe la primera visita: Resumen (diálogo de
+  bienvenida), Cuentas sin cuentas y Comercios sin comercios (su tarjeta de
+  primer uso).
+- **Promovidos a `components/ui/`**: `Notice` y `SuccessMark`. Los enlaces con
+  aspecto de botón de las cabeceras usan `buttonClass`.
+- **Quedan para su ticket**: las cabeceras de las pantallas de detalle
+  (financiación de una cuenta, alta de cuenta, nuevo movimiento, detalle de un
+  comercio) y los textos dentro de tarjetas (nota de la previsión en Facturas,
+  aviso de crédito vigilado repetido en Cuentas).
 
 ### UX-05 — Diagnóstico enlazado
 
@@ -459,7 +480,7 @@ salida real de las pruebas.
 
 1. ~~Prompt A: auditoría corta de las demás pantallas.~~ Hecho el 2026-10-10 (sección 10).
 2. ~~Prompt B: ARC-02 + ARC-04, el único cambio de backend del plan.~~ Hecho el 2026-10-10.
-3. Prompt C con UX-01 y UX-02, aplicados primero a una pantalla real.
+3. ~~Prompt C con UX-01 y UX-02, aplicados primero a una pantalla real.~~ Hecho el 2026-10-10 en las ocho pantallas principales.
 4. Prompt C con UX-07 (Transacciones) y UX-10 (Presupuestos).
 5. Prompt D para cerrar la fase.
 6. Seguir con Cuentas, después Resumen, Facturas, Reportes y Comercios, y

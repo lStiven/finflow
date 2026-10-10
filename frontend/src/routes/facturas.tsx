@@ -97,6 +97,7 @@ import {
 } from "@/bills/schedule";
 import { AppShell } from "@/components/AppShell";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
@@ -146,15 +147,11 @@ function BillsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-7">
-        <header className="flex flex-col gap-2">
-          <h1 className="font-semibold text-2xl tracking-tight">Facturas</h1>
-          <p className="max-w-prose text-muted text-sm leading-relaxed">
-            Los cobros que ya sabes que vienen y de los que el banco no te avisa por
-            correo. Declararlos{" "}
-            <strong className="text-text">no mueve ningún saldo</strong>: el dinero sale
-            cuando marcas el cobro como pagado, abajo.
-          </p>
-        </header>
+        <PageHeader
+          title="Facturas"
+          lead="Lo que se cobra solo y tu banco no avisa por correo."
+          help={HELP}
+        />
 
         <Forecast totals={view.totals} />
 
@@ -192,6 +189,33 @@ function BillsScreen() {
     </AppShell>
   );
 }
+
+/** What the header paragraph used to say, now a tap away. */
+const HELP: PageHelp = {
+  id: "facturas",
+  points: [
+    {
+      icon: Receipt,
+      title: "Declarar no mueve plata",
+      body: "Una factura avisa lo que viene. Ningún saldo cambia al declararla.",
+    },
+    {
+      icon: Check,
+      title: "Pagada es cuando cuenta",
+      body: "Al marcar un cobro como pagado se registra el gasto y baja el saldo. Se puede deshacer.",
+    },
+    {
+      icon: Zap,
+      title: "Cobrar sola",
+      body: "Espera unos días por si tu banco avisa. Si encuentra el movimiento, no agrega nada.",
+    },
+    {
+      icon: Sparkles,
+      title: "Propuestas",
+      body: "Lo que se repite cada mes aparece abajo para declararlo con un toque. Nada se declara sin ti.",
+    },
+  ],
+};
 
 function SectionTitle({ children, count }: { children: string; count?: number }) {
   return (

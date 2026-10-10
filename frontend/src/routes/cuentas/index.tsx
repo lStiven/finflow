@@ -46,7 +46,8 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
 import { Money } from "@/components/Money";
-import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/PageHeader";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
@@ -118,26 +119,26 @@ function AccountsScreen() {
 
   return (
     <AppShell>
-      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-semibold text-2xl tracking-tight">Cuentas</h1>
-          <p className="mt-1.5 max-w-xl text-muted text-sm">
-            {declaredAny
-              ? "Lo que tienes y lo que debes, con los movimientos que ya se les asignaron."
-              : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."}
-          </p>
-        </div>
-
-        {declaredAny ? (
-          <Link
-            to="/cuentas/nueva"
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
-          >
-            <Plus className="size-4" />
-            Nueva cuenta
-          </Link>
-        ) : null}
-      </header>
+      <div className="mb-8">
+        <PageHeader
+          title="Cuentas"
+          lead={
+            declaredAny
+              ? "Lo que tienes y lo que debes."
+              : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."
+          }
+          // Without any account the first-run card below is the explanation.
+          help={{ id: "cuentas", openFirstTime: declaredAny, points: HELP_POINTS }}
+          actions={
+            declaredAny ? (
+              <Link to="/cuentas/nueva" className={buttonClass("primary")}>
+                <Plus className="size-4" />
+                Nueva cuenta
+              </Link>
+            ) : null
+          }
+        />
+      </div>
 
       {!declaredAny ? (
         <EmptyState />
@@ -196,6 +197,29 @@ function AccountsScreen() {
     </AppShell>
   );
 }
+
+const HELP_POINTS = [
+  {
+    icon: ShieldCheck,
+    title: "Las declaras tú",
+    body: "Finflow no entra a tu banco: una cuenta es una etiqueta tuya para ordenar lo que llega.",
+  },
+  {
+    icon: Radio,
+    title: "Enlaza sus tarjetas",
+    body: "Las alertas traen el banco y los últimos cuatro dígitos. Enlázalos en la cuenta y sus movimientos caen ahí.",
+  },
+  {
+    icon: Scale,
+    title: "Patrimonio",
+    body: "Lo que tienes menos lo que debes. Préstamos e hipotecas se vigilan sin sumar.",
+  },
+  {
+    icon: Pencil,
+    title: "Todo se ajusta",
+    body: "Nombre, saldo, cupo, cerrar o reabrir: en «Ajustes de la cuenta» de cada tarjeta.",
+  },
+];
 
 function ScopeTabs({
   scope,

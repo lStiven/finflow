@@ -2,6 +2,7 @@ import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { ArrowRight, Bell, BookOpen, Mail, Percent, Wallet } from "lucide-react";
 import type { ComponentType } from "react";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { useOnboarding } from "@/onboarding/useOnboarding";
 
@@ -28,13 +29,9 @@ function GuidesScreen() {
 
   return (
     <AppShell>
-      <header className="mb-8">
-        <h1 className="font-semibold text-2xl tracking-tight">Guías</h1>
-        <p className="mt-1.5 max-w-xl text-muted text-sm">
-          Lo que hay que entender de Finflow, en cuatro lecturas cortas. Están aquí para
-          volver cuando algo no cuadre.
-        </p>
-      </header>
+      <div className="mb-8">
+        <PageHeader title="Guías" lead="Para volver cuando algo no cuadre." />
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <GuideCard

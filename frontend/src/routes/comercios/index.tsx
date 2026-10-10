@@ -4,6 +4,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Combine,
   ChevronRight as Enter,
   Loader2,
   Search,
@@ -24,6 +25,7 @@ import {
   useConfirmMerchant,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
@@ -132,15 +134,12 @@ function MerchantsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
-        <header>
-          <h1 className="font-semibold text-2xl tracking-tight">Comercios</h1>
-          <p className="mt-1.5 max-w-2xl text-muted text-sm leading-relaxed">
-            El negocio real detrás del texto que escribe tu banco.{" "}
-            <span className="text-text">TIENDAS ARA 123</span> y{" "}
-            <span className="text-text">ARA 900</span> son el mismo sitio, y agruparlos
-            es lo que hace que tus gastos por categoría signifiquen algo.
-          </p>
-        </header>
+        <PageHeader
+          title="Comercios"
+          lead="El negocio real detrás del texto que escribe tu banco."
+          // Before any merchant exists, the first-run card is the explanation.
+          help={{ ...HELP, openFirstTime: !nothingYet }}
+        />
 
         {nothingYet ? (
           <FirstRun />
@@ -290,6 +289,32 @@ function MerchantsScreen() {
   );
 }
 
+const HELP: PageHelp = {
+  id: "comercios",
+  points: [
+    {
+      icon: Store,
+      title: "Aparecen solos",
+      body: "Cada alerta trae el texto del negocio. Finflow lo limpia y lo junta con sus otras formas.",
+    },
+    {
+      icon: Combine,
+      title: "Uno solo, muchos nombres",
+      body: "«TIENDAS ARA 123» y «ARA 900» son el mismo sitio. Unirlos hace que tus categorías cuadren.",
+    },
+    {
+      icon: Tag,
+      title: "La categoría es del comercio",
+      body: "Cámbiala en el comercio y todos sus movimientos, los de antes también, la toman.",
+    },
+    {
+      icon: Sparkles,
+      title: "Pendientes de revisar",
+      body: "Los que Finflow dedujo solo. Confirma con «Está bien» o corrígelos al abrirlos.",
+    },
+  ],
+};
+
 /* ------------------------------------------------------------------- la cola */
 
 /**
@@ -336,10 +361,8 @@ function ReviewBanner({
               ? "1 comercio que nadie ha mirado"
               : `${pending} comercios que nadie ha mirado`}
           </p>
-          <p className="mt-1 text-muted text-sm leading-relaxed">
-            Finflow los dedujo solo, a partir del texto de tus alertas. Revisarlos es
-            decir «sí, es ese negocio» —o ponerle el nombre y la categoría que tú usas—.
-            No corre prisa: mientras tanto todo sigue funcionando igual.
+          <p className="mt-1 text-muted text-sm">
+            Finflow los dedujo de tus alertas. Revisarlos no corre prisa.
           </p>
         </div>
         {inQueue ? null : (

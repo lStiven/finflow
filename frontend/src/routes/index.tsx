@@ -4,7 +4,9 @@ import {
   ArrowDownLeft,
   ArrowLeftRight,
   ArrowUpRight,
+  CalendarDays,
   Landmark,
+  MousePointerClick,
   TrendingDown,
   Wallet,
 } from "lucide-react";
@@ -27,6 +29,7 @@ import { CountUpMoney } from "@/components/CountUpMoney";
 import { Donut, type Slice } from "@/components/charts/Donut";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
 import {
@@ -169,17 +172,16 @@ function Dashboard() {
   return (
     <AppShell>
       <div className="flex flex-col gap-8">
-        <header className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="font-semibold text-2xl tracking-tight">Resumen</h1>
-            <p className="mt-1 text-muted text-sm">
-              Aquí tienes un resumen de tus finanzas.
+        <PageHeader
+          title="Resumen"
+          lead="Cuánto tienes, cuánto entró, cuánto gastaste y cuánto debes."
+          help={HELP}
+          actions={
+            <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs first-letter:uppercase">
+              {formatMonthKey(month)}
             </p>
-          </div>
-          <p className="rounded-lg border border-line bg-surface px-3 py-1.5 text-muted text-xs first-letter:uppercase">
-            {formatMonthKey(month)}
-          </p>
-        </header>
+          }
+        />
 
         <section
           aria-label="Cifras del mes"
@@ -325,6 +327,37 @@ function Dashboard() {
     </AppShell>
   );
 }
+
+/**
+ * Not opened on arrival: a first visit here is already greeted by the welcome
+ * dialog, and two explanations at once is one too many.
+ */
+const HELP: PageHelp = {
+  id: "resumen",
+  openFirstTime: false,
+  points: [
+    {
+      icon: Wallet,
+      title: "Patrimonio",
+      body: "Lo que tienen tus cuentas menos lo que debes. Los préstamos que solo vigilas no cuentan.",
+    },
+    {
+      icon: ArrowLeftRight,
+      title: "Traslados aparte",
+      body: "Pagar tu tarjeta desde tu cuenta no es un gasto: no suma ni resta en estas cifras.",
+    },
+    {
+      icon: CalendarDays,
+      title: "Contra el mes pasado",
+      body: "La comparación llega hasta el mismo día del mes anterior, no al mes entero.",
+    },
+    {
+      icon: MousePointerClick,
+      title: "Toca para ver",
+      body: "Ingresos y Gastos abren los movimientos que forman cada cifra.",
+    },
+  ],
+};
 
 /** The totals a group carries for one currency, or null if it has none. */
 function totalsFor(

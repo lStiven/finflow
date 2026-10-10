@@ -1,6 +1,8 @@
 import { ArrowRight, Hourglass, MailCheck, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { Notice } from "@/components/ui/Notice";
+import { SuccessMark } from "@/components/ui/SuccessMark";
 import { formatDateTime, formatRelative } from "@/lib/dates";
 import { useNow } from "@/lib/useNow";
 import { CopyField } from "@/onboarding/CopyField";
@@ -12,7 +14,7 @@ import {
 } from "@/onboarding/GmailMocks";
 import { GmailTutorial } from "@/onboarding/GmailTutorial";
 import { GMAIL_FORWARDING_URL } from "@/onboarding/gmail";
-import { ExternalButton, Notice, StepHeading, SuccessMark } from "@/onboarding/parts";
+import { ExternalButton, StepHeading } from "@/onboarding/parts";
 
 /** Past this, a wait for Google is worth explaining rather than just showing. */
 const SLOW_AFTER_SECONDS = 5 * 60;

@@ -19,8 +19,11 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   CalendarDays,
+  CalendarRange,
+  MousePointerClick,
   Receipt,
   Scale,
 } from "lucide-react";
@@ -41,6 +44,7 @@ import { Columns } from "@/components/charts/Columns";
 import { bandPalette } from "@/components/charts/palette";
 import { RankedBars } from "@/components/charts/RankedBars";
 import { Money } from "@/components/Money";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { StatTile } from "@/components/ui/StatTile";
 import { cn } from "@/lib/cn";
@@ -246,12 +250,11 @@ function ReportsScreen() {
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
-        <header>
-          <h1 className="font-semibold text-2xl tracking-tight">Reportes</h1>
-          <p className="mt-1 text-muted text-sm">
-            En qué se va tu plata, y cómo cambia periodo a periodo.
-          </p>
-        </header>
+        <PageHeader
+          title="Reportes"
+          lead="En qué se va tu plata, y cómo cambia periodo a periodo."
+          help={HELP}
+        />
 
         <Filters
           search={search}
@@ -474,6 +477,27 @@ function ReportsScreen() {
     </AppShell>
   );
 }
+
+const HELP: PageHelp = {
+  id: "reportes",
+  points: [
+    {
+      icon: MousePointerClick,
+      title: "Toca para ver el detalle",
+      body: "Las cifras, las categorías y los comercios abren los movimientos que las forman.",
+    },
+    {
+      icon: CalendarRange,
+      title: "Elige el periodo",
+      body: "Arriba cambias el rango. Uno que aún no termina se ve más tenue y dice «en curso».",
+    },
+    {
+      icon: ArrowLeftRight,
+      title: "Sin traslados",
+      body: "Pagar tu tarjeta desde otra cuenta tuya no aparece como gasto.",
+    },
+  ],
+};
 
 /* ------------------------------------------------------------------ parts */
 

@@ -332,10 +332,14 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-10 — **Cada pantalla dice lo justo, y explica bajo demanda** (plan UX,
+  UX-01 + UX-02). Título, una línea y su acción; lo demás en «Cómo funciona»,
+  que se abre solo la primera vez, como el asistente de conexión. `just e2e`
+  completo en verde. En el árbol, sin commit. Sigue F2: UX-07 y UX-10.
 - 2026-10-10 — **Los bancos y el filtro de Gmail los da el backend** (plan UX,
   ARC-02 + ARC-04). `known_banks` sale del registro de parsers y el filtro se
   arma con los remitentes aprobados; el frontend ya no tiene lista de bancos.
-  `just e2e-connect` en verde. En el árbol, sin commit. Sigue UX-01 + UX-02.
+  `just e2e-connect` en verde. En `dev` (83af044).
 - 2026-10-10 — **Auditoría de pantallas del plan UX (ARC-00).** Varias mejoras
   que el plan daba por construir ya existían; el pendiente bajó a 82–172 h.
   Sigue ARC-02 + ARC-04 (bancos y filtro desde el backend). Detalle en
@@ -350,5 +354,3 @@ AWS (ver Trabas).
   Nada se marca listo sin evidencia del servidor. `just e2e-connect` lo
   recorre de una cuenta nueva a su primer movimiento. En `dev` (8531ea0),
   todavía sin desplegar.
-- 2026-10-05 — **El pipeline pasa validaciones y e2e en un runner limpio**:
-  el `.env` de CI ahora trae el secreto de tokens y la dirección del buzón.
