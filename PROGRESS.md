@@ -332,6 +332,10 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-13 — **Ahorros, efectivo e inversión en negativo avisan en vez de
+  callar.** La tarjeta de la cuenta lo dice y lleva a los sin asignar o a
+  corregir el saldo, que ya no acepta un negativo en esos tipos. El seed asigna
+  la nómina demo; el logo lleva al Resumen. En el árbol, sin commit.
 - 2026-10-10 — **Las listas desplegables son de la app, y el carrusel ya no salta.**
   Menú propio en escritorio, hoja desde abajo en el teléfono, búsqueda en las
   largas y teclado completo, en todos los selectores sin cambiar pantallas.
@@ -352,7 +356,3 @@ AWS (ver Trabas).
   movimientos —las e2e comprueban que suman lo mismo— y la cola de comercios
   se responde en la lista. F4 completa; `just e2e` (12 suites) en verde. En
   el árbol, sin commit.
-- 2026-10-10 — **Facturas: cada acción con su nombre, ningún error en silencio**
-  (plan UX, UX-09). Los iconos de 32 px son palabras de 44 px detrás de
-  «Opciones», y un cobro pagado lleva a su movimiento. `just e2e` en verde.
-  En el árbol, sin commit.

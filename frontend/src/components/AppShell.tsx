@@ -104,12 +104,20 @@ function Dot({ className }: { className?: string }) {
   );
 }
 
+/** Home, as on every other site: the mark is the way back to the summary. */
 function Wordmark({ className }: { className?: string }) {
   return (
-    <span className={cn("flex items-center gap-2", className)}>
+    <Link
+      to="/"
+      aria-label="Finflow, ir al resumen"
+      className={cn(
+        "flex items-center gap-2 rounded-xl transition-opacity hover:opacity-85",
+        className,
+      )}
+    >
       <Logo className="size-8" />
       <span className="text-base font-semibold tracking-tight">Finflow</span>
-    </span>
+    </Link>
   );
 }
 

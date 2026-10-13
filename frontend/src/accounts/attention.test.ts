@@ -54,6 +54,46 @@ describe("what an account still needs", () => {
     ).toBeNull();
   });
 
+  /* The bank never lets these go there, so below zero means Finflow is missing something. */
+  it.each(["savings", "cash"])(
+    "says so when %s is below zero, before asking for a link",
+    (kind) => {
+      expect(attentionOf(account({ kind, balance: "-89050" }))).toEqual({
+        kind: "below-zero",
+      });
+    },
+  );
+
+  it("says nothing of an overdrawn checking account: sobregiro is real", () => {
+    expect(
+      attentionOf(
+        account({
+          kind: "checking",
+          balance: "-89050",
+          instruments: ["11:bancolombia|7:account|4:0530|"],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("says nothing of a zero balance, signed or not", () => {
+    expect(
+      attentionOf(
+        account({
+          balance: "-0.00",
+          instruments: ["11:bancolombia|7:account|4:0530|"],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("still asks for an investment's terms first", () => {
+    expect(attentionOf(account({ kind: "investment", balance: "-1000" }))).toEqual({
+      kind: "terms",
+      shape: "investment",
+    });
+  });
+
   it("asks nothing of a closed account", () => {
     expect(attentionOf(account({ closed_at: 1_700_000_000 }))).toBeNull();
   });

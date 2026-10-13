@@ -203,7 +203,15 @@ function AccountsScreen() {
             </p>
           ) : null}
 
-          <ScopeTabs scope={scope} pending={pending} onChange={showScope} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 font-medium text-sm">
+              Tus cuentas
+              <span className="rounded-full bg-surface-raised px-2 py-0.5 text-faint text-xs tabular-nums">
+                {accounts.length}
+              </span>
+            </h2>
+            <ScopeTabs scope={scope} pending={pending} onChange={showScope} />
+          </div>
 
           {accounts.length === 0 ? (
             <Card lift={false}>
@@ -216,7 +224,9 @@ function AccountsScreen() {
           ) : (
             <section
               className={cn(
-                "grid grid-cols-1 gap-4 [&>*]:min-w-0 md:grid-cols-2",
+                // Stretched so a row's feet line up, except while a card has a
+                // section open: its neighbour would grow by the whole panel.
+                "grid grid-cols-1 gap-4 has-data-open:items-start [&>*]:min-w-0 md:grid-cols-2",
                 pending && "opacity-60",
               )}
             >
@@ -276,7 +286,7 @@ function ScopeTabs({
       <div
         role="tablist"
         aria-label="Qué cuentas ver"
-        className="flex flex-1 gap-1 rounded-xl border border-line bg-surface p-1 sm:max-w-sm"
+        className="flex gap-1 rounded-xl border border-line bg-surface p-1"
       >
         {SCOPE_TABS.map((tab) => (
           <button
@@ -287,8 +297,8 @@ function ScopeTabs({
             onClick={() => onChange(tab.value)}
             className={
               scope === tab.value
-                ? "flex-1 rounded-lg bg-accent-soft py-2 font-medium text-sm text-text transition-colors"
-                : "flex-1 rounded-lg py-2 text-muted text-sm transition-colors hover:text-text"
+                ? "min-h-11 rounded-lg bg-accent-soft px-3.5 font-medium text-sm text-text transition-colors sm:min-h-9"
+                : "min-h-11 rounded-lg px-3.5 text-muted text-sm transition-colors hover:text-text sm:min-h-9"
             }
           >
             {tab.label}
@@ -539,10 +549,11 @@ function AccountCard({
       glow={closed ? "none" : owed ? "accent" : "cyan"}
       lift={false}
       className={cn(
-        "rise relative flex flex-col gap-5 overflow-hidden",
+        "rise relative flex flex-col gap-4 overflow-hidden",
         closed && "border-dashed",
       )}
       style={{ animationDelay: `${index * 60}ms` }}
+      data-open={open === null ? undefined : ""}
     >
       <span
         aria-hidden
@@ -552,11 +563,11 @@ function AccountCard({
         )}
       />
 
-      <div className="flex items-start gap-4">
+      <div className="flex items-start gap-3.5">
         <span
           aria-hidden
           className={cn(
-            "grid size-11 shrink-0 place-items-center rounded-xl ring-1",
+            "grid size-10 shrink-0 place-items-center rounded-xl ring-1",
             closed
               ? "bg-surface-raised text-faint ring-line"
               : owed
@@ -579,9 +590,25 @@ function AccountCard({
               </span>
             ) : null}
           </p>
+          {/* Kind, bank and how much it holds, in one line: the count used to
+              be a line of its own and the card was taller than its content. */}
           <p className="mt-0.5 line-clamp-2 text-faint text-xs">
             {copy.label}
-            {account.bank ? ` · ${account.bank}` : ""}
+            {account.bank ? (
+              <>
+                {" · "}
+                <span className="capitalize">{account.bank}</span>
+              </>
+            ) : null}
+            {" · "}
+            {account.movements_applied === 0
+              ? "sin movimientos"
+              : `${account.movements_applied} ${
+                  account.movements_applied === 1 ? "movimiento" : "movimientos"
+                }`}
+            {closed && account.closed_at !== null
+              ? ` · cerrada el ${formatDate(account.closed_at)}`
+              : ""}
           </p>
         </div>
 
@@ -611,33 +638,37 @@ function AccountCard({
         </p>
       ) : null}
 
-      <p className="text-faint text-xs">
-        {account.movements_applied === 0
-          ? "Todavía no se le ha asignado ningún movimiento."
-          : `${account.movements_applied} ${
-              account.movements_applied === 1
-                ? "movimiento asignado"
-                : "movimientos asignados"
-            }.`}
-        {closed && account.closed_at !== null
-          ? ` Cerrada el ${formatDate(account.closed_at)}.`
-          : ""}
-      </p>
-
       {attention ? (
         <AttentionNotice
           account={account}
           attention={attention}
           onLink={() => setOpen("alerts")}
+          onRestate={() => setOpen("settings")}
         />
       ) : null}
 
-      <CardSections account={account} open={open} onToggle={toggle} />
+      {/*
+        The card's foot, always at its bottom: the spare height of a shorter
+        card sits above this line instead of opening a hole in the middle.
+        What a section opens goes *below* it, so the button just pressed stays
+        exactly where it was.
+      */}
+      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 border-line/60 border-t pt-3">
+        <CardSections account={account} open={open} onToggle={toggle} />
+        <Link
+          to="/transacciones"
+          search={{ account: account.id }}
+          className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-1 text-cyan text-sm transition-colors hover:text-text sm:min-h-9"
+        >
+          Ver movimientos
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      </div>
 
       {open === "alerts" ? (
         <div
           id={`${account.id}-alerts`}
-          className="rise flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
+          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
         >
           <Instruments account={account} />
         </div>
@@ -645,7 +676,7 @@ function AccountCard({
       {open === "financing" ? (
         <div
           id={`${account.id}-financing`}
-          className="rise flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
+          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
         >
           <Financing account={account} />
         </div>
@@ -653,20 +684,11 @@ function AccountCard({
       {open === "settings" ? (
         <div
           id={`${account.id}-settings`}
-          className="rise flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
+          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
         >
           <Settings account={account} onClosed={onClosed} />
         </div>
       ) : null}
-
-      <Link
-        to="/transacciones"
-        search={{ account: account.id }}
-        className="-m-1 mt-auto flex items-center gap-1.5 self-start rounded-lg p-1 text-cyan text-sm transition-colors hover:text-text"
-      >
-        Ver sus movimientos
-        <ArrowRight className="size-3.5" />
-      </Link>
     </Card>
   );
 }
@@ -818,7 +840,7 @@ function CardSections({
           aria-expanded={open === section.id}
           aria-controls={`${account.id}-${section.id}`}
           className={cn(
-            "inline-flex min-h-11 items-center gap-1.5 rounded-xl border px-3 text-xs transition-colors",
+            "inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors sm:min-h-9",
             open === section.id
               ? "border-cyan/40 bg-cyan/10 text-text"
               : "border-line text-muted hover:border-cyan/30 hover:text-text",
@@ -854,11 +876,49 @@ function AttentionNotice({
   account,
   attention,
   onLink,
+  onRestate,
 }: {
   account: Account;
   attention: NonNullable<ReturnType<typeof attentionOf>>;
   onLink: () => void;
+  onRestate: () => void;
 }) {
+  if (attention.kind === "below-zero") {
+    return (
+      <Notice
+        tone="warn"
+        icon={TriangleAlert}
+        title="Esta cuenta no puede estar en negativo"
+      >
+        <p>
+          {account.kind === "cash"
+            ? "Falta registrar plata que te entró, o lo que tenías al empezar no era eso."
+            : "Tu banco no lo permite: a Finflow le falta un ingreso que nunca vio, o el saldo de partida no era el real."}
+        </p>
+        <div className="mt-1 flex flex-wrap gap-x-4">
+          {canLinkAlerts(account.kind) ? (
+            <Link
+              to="/transacciones"
+              search={{ unassigned: true }}
+              className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+            >
+              Ver movimientos sin asignar
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={onRestate}
+            className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+          >
+            Corregir el saldo
+            <ArrowRight className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      </Notice>
+    );
+  }
+
   if (attention.kind === "terms") {
     return (
       <Notice
@@ -1265,7 +1325,7 @@ function BalanceForm({ account }: { account: Account }) {
   const [balance, setBalance] = useState(account.balance);
   const [saved, setSaved] = useState(false);
 
-  const issue = balanceIssue(balance);
+  const issue = balanceIssue(balance, account.kind);
   const changed = balance.trim() !== account.balance;
   const canSave = issue === undefined && changed && !restate.isPending;
   const owed = account.category === "liability";
@@ -1512,24 +1572,16 @@ function ReopenForm({ account }: { account: Account }) {
 }
 
 function GuideLink() {
+  // A line, not a card: it is the way to the long answer, and a card the
+  // size of an account weighed as much as the accounts above it.
   return (
     <Link
       to="/guias/cuentas-y-movimientos"
-      className="surface flex items-center gap-4 rounded-card border border-line bg-surface p-4 glow-cyan"
+      className="-my-2 inline-flex min-h-11 items-center gap-2 self-start text-muted text-sm transition-colors hover:text-text"
     >
-      <span
-        aria-hidden
-        className="grid size-10 shrink-0 place-items-center rounded-xl border border-line bg-ink"
-      >
-        <BookOpen className="size-4 text-cyan" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium text-sm">Cuentas y movimientos</span>
-        <span className="mt-0.5 block text-muted text-sm">
-          Qué es cada cosa, cómo se juntan y qué hacer cuando algo no cuadre.
-        </span>
-      </span>
-      <ArrowRight className="size-4 shrink-0 text-faint" />
+      <BookOpen className="size-4 text-cyan" aria-hidden />
+      ¿Algo no cuadra? Lee la guía de cuentas y movimientos
+      <ArrowRight className="size-3.5" aria-hidden />
     </Link>
   );
 }
