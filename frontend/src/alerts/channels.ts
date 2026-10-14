@@ -128,3 +128,15 @@ export function formatMinimumAmount(preference: AlertPreference | undefined): st
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   return cents !== "" && Number(cents) > 0 ? `${grouped},${cents}` : grouped;
 }
+
+/**
+ * Cómo se nombra el destino en pantalla.
+ *
+ * El nombre que la persona tiene en Telegram, y detrás el final de la
+ * dirección — que es lo que de verdad identifica el chat cuando hay dos
+ * cuentas con el mismo nombre, y lo único que esta app llegó a guardar.
+ */
+export function describeChat(channel: AlertChannel): string {
+  if (!channel.label) return channel.chat_hint ?? "Telegram";
+  return channel.chat_hint ? `${channel.label} · ${channel.chat_hint}` : channel.label;
+}

@@ -2,7 +2,12 @@ from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
     BancolombiaParser,
 )
 from personal_finance.contexts.ingestion.domain.parsing.lulobank import LuloBankParser
-from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
+from personal_finance.contexts.ingestion.domain.parsing.registry import (
+    BANK_DOMAINS,
+    ParserRegistry,
+    default_parsers,
+    known_banks,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 
 
@@ -112,3 +117,35 @@ def test_a_lookalike_domain_in_a_forward_header_does_not_match_either() -> None:
     )
 
     assert registry.for_forwarded_message(text) is None
+
+
+def test_known_banks_group_every_domain_under_its_bank() -> None:
+    banks = {bank.id: bank for bank in known_banks()}
+
+    assert set(banks) == set(BANK_DOMAINS.values())
+    assert {domain for bank in banks.values() for domain in bank.domains} == set(
+        BANK_DOMAINS,
+    )
+    # The transfer domain travels with the alert ones: approving only some of
+    # them accepts purchases and silently drops every transfer.
+    assert "bancolombia.com.co" in banks["bancolombia"].domains
+    assert banks["bancolombia"].name == "Bancolombia"
+
+
+def test_a_known_banks_id_is_what_its_parser_writes_into_a_movement() -> None:
+    for bank in known_banks():
+        assert default_parsers()[bank.id].bank == bank.id
+
+
+def test_a_parser_registered_with_its_domains_is_a_known_bank_without_more_work() -> (
+    None
+):
+    banks = known_banks(
+        {"a.banco.co": "banco nuevo", "b.banco.co": "banco nuevo"},
+        display_names={},
+    )
+
+    assert len(banks) == 1
+    assert banks[0].id == "banco nuevo"
+    assert banks[0].name == "Banco Nuevo"
+    assert banks[0].domains == ("a.banco.co", "b.banco.co")

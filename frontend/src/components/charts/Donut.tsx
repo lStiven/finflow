@@ -6,7 +6,8 @@
  * layout engine, a tooltip system and a tick formatter that this never uses.
  */
 
-import type { CSSProperties } from "react";
+import { Link } from "@tanstack/react-router";
+import type { CSSProperties, ReactNode } from "react";
 import { Money } from "@/components/Money";
 import { cn } from "@/lib/cn";
 
@@ -50,11 +51,18 @@ export function Donut({
   total,
   currency,
   className,
+  movementsOf,
 }: {
   slices: Slice[];
   total: string;
   currency: string;
   className?: string;
+  /**
+   * The Transacciones filters behind one wedge, or null for one no list can
+   * show (the folded «Otros», spending no merchant owns yet). With it, every
+   * legend row that has rows behind it opens them.
+   */
+  movementsOf?: (slice: Slice) => Record<string, unknown> | null;
 }) {
   let travelled = 0;
 
@@ -101,28 +109,47 @@ export function Donut({
         </div>
       </div>
 
-      <ul className="flex w-full min-w-0 flex-col gap-2.5">
-        {slices.map((slice, index) => (
-          <li key={slice.key} className="flex items-center gap-3 text-sm">
-            <span
-              aria-hidden
-              className={cn(
-                "size-2.5 shrink-0 rounded-full",
-                DOT_COLOURS[index % DOT_COLOURS.length],
+      <ul className="flex w-full min-w-0 flex-col">
+        {slices.map((slice, index) => {
+          const row: ReactNode = (
+            <>
+              <span
+                aria-hidden
+                className={cn(
+                  "size-2.5 shrink-0 rounded-full",
+                  DOT_COLOURS[index % DOT_COLOURS.length],
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate text-muted">{slice.label}</span>
+              <span className="tabular text-faint text-xs">
+                {Math.round(slice.share * 100)}%
+              </span>
+              <Money
+                amount={slice.amount}
+                currency={currency}
+                size="sm"
+                className="w-24 text-right text-sm"
+              />
+            </>
+          );
+          const search = movementsOf?.(slice) ?? null;
+
+          return (
+            <li key={slice.key}>
+              {search ? (
+                <Link
+                  to="/transacciones"
+                  search={search}
+                  className="-mx-2 flex min-h-11 items-center gap-3 rounded-lg px-2 text-sm transition-colors hover:bg-surface-raised"
+                >
+                  {row}
+                </Link>
+              ) : (
+                <span className="flex min-h-11 items-center gap-3 text-sm">{row}</span>
               )}
-            />
-            <span className="min-w-0 flex-1 truncate text-muted">{slice.label}</span>
-            <span className="tabular text-faint text-xs">
-              {Math.round(slice.share * 100)}%
-            </span>
-            <Money
-              amount={slice.amount}
-              currency={currency}
-              size="sm"
-              className="w-24 text-right text-sm"
-            />
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

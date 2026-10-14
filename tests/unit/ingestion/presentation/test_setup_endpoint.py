@@ -109,13 +109,17 @@ def _rejected(sender: str) -> NotificationSummary:
 def _inbox(
     *,
     domains: frozenset[str] = frozenset(),
+    addresses: frozenset[str] = frozenset(),
     forwarding_confirmed_at: int | None = None,
     first_accepted_at: int | None = None,
 ) -> UserInbox:
     return UserInbox(
         user_id=USER,
         address=EmailAddress(ALIAS),
-        sender_policy=AuthorizedSenderPolicy(allowed_domains=domains),
+        sender_policy=AuthorizedSenderPolicy(
+            allowed_domains=domains,
+            allowed_addresses=frozenset(EmailAddress(value) for value in addresses),
+        ),
         forwarding_confirmed_at=(
             None
             if forwarding_confirmed_at is None
@@ -225,6 +229,51 @@ def test_it_names_the_sender_being_turned_away() -> None:
 
     assert body["unapproved_senders"] == ["alertas@otrobanco.com"]
     assert body["ready"] is False
+
+
+def test_the_gmail_filter_is_built_from_the_approved_senders() -> None:
+    client = next(
+        _client(
+            _inbox(
+                domains=frozenset({BANK_DOMAIN, "lulobank.com"}),
+                addresses=frozenset({"alertas@otrobanco.com"}),
+            ),
+        ),
+    )
+
+    body = client.get(PATH).json()
+
+    assert body["gmail_filter_terms"] == [
+        f"@{BANK_DOMAIN}",
+        "@lulobank.com",
+        "alertas@otrobanco.com",
+    ]
+    assert body["gmail_filter"] == (
+        f"@{BANK_DOMAIN} OR @lulobank.com OR alertas@otrobanco.com"
+    )
+
+
+def test_the_filter_is_still_there_once_the_setup_is_finished() -> None:
+    """A finished setup skips the diagnosis, not the filter: somebody adding
+    a bank later still needs the new text to paste."""
+    client = next(
+        _client(
+            _inbox(
+                domains=frozenset({BANK_DOMAIN}),
+                forwarding_confirmed_at=CONFIRMED_AT,
+                first_accepted_at=FIRST_ALERT_AT,
+            ),
+        ),
+    )
+
+    assert client.get(PATH).json()["gmail_filter"] == f"@{BANK_DOMAIN}"
+
+
+def test_nobody_approved_means_no_filter(fresh_client: TestClient) -> None:
+    body = fresh_client.get(PATH).json()
+
+    assert body["gmail_filter"] == ""
+    assert body["gmail_filter_terms"] == []
 
 
 def test_an_account_without_an_inbox_is_a_404() -> None:

@@ -1689,7 +1689,8 @@ export interface paths {
         };
         /**
          * Get Catalog
-         * @description What this context's states are called, and what an instrument may be.
+         * @description What this context's states are called, what an instrument may be, and
+         *     which banks have a parser of their own.
          */
         get: operations["get_catalog_ingestion_catalog_get"];
         put?: never;
@@ -3232,6 +3233,10 @@ export interface components {
             address: string;
             /** Current */
             current: string | null;
+            /** Gmail Filter */
+            gmail_filter: string;
+            /** Gmail Filter Terms */
+            gmail_filter_terms: string[];
             /** Ready */
             ready: boolean;
             /** Steps */
@@ -3272,6 +3277,8 @@ export interface components {
             ignored_reasons: components["schemas"]["CatalogOption"][];
             /** Instrument Kinds */
             instrument_kinds: components["schemas"]["CatalogOption"][];
+            /** Known Banks */
+            known_banks: components["schemas"]["KnownBankResponse"][];
             /** Processing Statuses */
             processing_statuses: components["schemas"]["CatalogOption"][];
             /** Setup Steps */
@@ -3363,6 +3370,21 @@ export interface components {
             rate: components["schemas"]["RateResponse"] | null;
             /** Statement Day */
             statement_day: number;
+        };
+        /**
+         * KnownBankResponse
+         * @description A bank Finflow reads with its own template, and every domain it sends from.
+         *
+         *     Listing a bank approves nothing for anybody: each user approves senders
+         *     through their inbox. A bank absent from here still works as «otro banco».
+         */
+        KnownBankResponse: {
+            /** Domains */
+            domains: string[];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
         };
         /**
          * LinkChargePayload

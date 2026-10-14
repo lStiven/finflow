@@ -522,7 +522,7 @@
                 "catalog"
               ]
             },
-            "description": "Processing statuses, the reasons behind them, and instrument_kinds — the words a bank alert arrives with. An account declared with any other spelling is accepted and then never matches an alert."
+            "description": "Processing statuses, the reasons behind them, and instrument_kinds — the words a bank alert arrives with. An account declared with any other spelling is accepted and then never matches an alert.\n\n`known_banks` lists the banks with a deterministic parser, derived from the parser registry: `id` (what the parser writes into a movement's `bank`), `name`, and every `domains` entry the bank sends from. Listing a bank approves nothing for anybody — each user approves senders through `PATCH /identity/inbox`."
           },
           "response": []
         },
@@ -591,7 +591,7 @@
                 "setup"
               ]
             },
-            "description": "How far the authenticated caller got connecting their bank, for the screen that walks them through it. Four steps — `address_assigned`, `senders_approved`, `forwarding_confirmed`, `first_alert` — each with `done` and, for the two that are events rather than states, `at` (epoch seconds). `current` names the step to point at, or is null once there is nothing left; `ready` says expenses are arriving on their own right now, which does not require a Gmail confirmation — somebody forwarding each alert by hand is connected too. `unapproved_senders` names whoever is being turned away by the allow-list, the one failure that looks exactly like silence from a screen; it is empty once `ready`.\n\nNothing here is stored progress: there is no endpoint to advance a step. The state is derived from the inbox record on every call, so it is the same in every browser and cannot drift from what the mailbox did. Two of the four steps close in a worker — Google confirms a forwarding request by mailing an address only this deployment can read — which is why this is cheap enough to poll while a user watches the screen."
+            "description": "How far the authenticated caller got connecting their bank, for the screen that walks them through it. Four steps — `address_assigned`, `senders_approved`, `forwarding_confirmed`, `first_alert` — each with `done` and, for the two that are events rather than states, `at` (epoch seconds). `current` names the step to point at, or is null once there is nothing left; `ready` says expenses are arriving on their own right now, which does not require a Gmail confirmation — somebody forwarding each alert by hand is connected too. `unapproved_senders` names whoever is being turned away by the allow-list, the one failure that looks exactly like silence from a screen; it is empty once `ready`. `gmail_filter` is the text to paste into Gmail's «De» (`@domain OR address`, built from the approved senders; empty when nobody is approved), and `gmail_filter_terms` is the same filter one term per approval.\n\nNothing here is stored progress: there is no endpoint to advance a step. The state is derived from the inbox record on every call, so it is the same in every browser and cannot drift from what the mailbox did. Two of the four steps close in a worker — Google confirms a forwarding request by mailing an address only this deployment can read — which is why this is cheap enough to poll while a user watches the screen."
           },
           "response": []
         },

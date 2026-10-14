@@ -15,8 +15,10 @@ import {
   User,
 } from "lucide-react";
 import { type SubmitEvent, useState } from "react";
+import { ConnectTelegram } from "@/alerts/ConnectTelegram";
 import {
   channelState,
+  describeChat,
   formatMinimumAmount,
   linkedChannel,
   movementPreference,
@@ -24,11 +26,9 @@ import {
   weeklyPreference,
 } from "@/alerts/channels";
 import { ApiError } from "@/api/client";
-import type { AlertChannel } from "@/api/queries";
 import {
   alertChannelsQuery,
   profileQuery,
-  useCreateAlertChannel,
   useDeleteAlertChannel,
   useUpdateAlertPreference,
   useUpdateProfile,
@@ -220,11 +220,9 @@ function ProfileScreen() {
  */
 function TelegramCard() {
   const { data } = useQuery(alertChannelsQuery);
-  const create = useCreateAlertChannel();
   const update = useUpdateAlertPreference();
   const remove = useDeleteAlertChannel();
 
-  const [link, setLink] = useState<string | null>(null);
   const [minimum, setMinimum] = useState<string | null>(null);
   const [minimumError, setMinimumError] = useState<string | null>(null);
   // Every write here reports its own failure. Believing an unlink that did
@@ -238,9 +236,6 @@ function TelegramCard() {
   const preference = movementPreference(linked);
   const weekly = weeklyPreference(linked);
 
-  // El enlace deja de tener sentido en cuanto el canal queda vinculado.
-  if (state === "linked" && link !== null) setLink(null);
-
   const minimumText = minimum ?? formatMinimumAmount(preference);
 
   async function guard(work: () => Promise<unknown>) {
@@ -250,15 +245,6 @@ function TelegramCard() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Algo salió mal");
     }
-  }
-
-  async function onLink() {
-    setLink(null);
-    await guard(async () => {
-      const created = await create.mutateAsync();
-      setLink(created.link_url);
-      window.open(created.link_url, "_blank", "noopener,noreferrer");
-    });
   }
 
   async function onToggle(enabled: boolean) {
@@ -394,7 +380,7 @@ function TelegramCard() {
               icon={Bell}
               inputMode="numeric"
               placeholder="20.000"
-              hint="Déjalo vacío para que te avise de todo. Un café de $3.000 gasta la atención que necesita un cargo de $400.000."
+              hint="Vacío, te avisa de todo."
               value={minimumText}
               onChange={(e) => {
                 setMinimum(e.target.value);
@@ -442,49 +428,7 @@ function TelegramCard() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          <Button disabled={create.isPending} onClick={() => void onLink()}>
-            {create.isPending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Preparando…
-              </>
-            ) : (
-              <>
-                <Send className="size-4" />
-                Conectar Telegram
-              </>
-            )}
-          </Button>
-
-          {link ? (
-            <div className="rounded-xl border border-line bg-ink p-3.5">
-              <p className="flex items-center gap-2 text-sm">
-                <Loader2 className="size-4 animate-spin text-violet" />
-                Esperando a que pulses Empezar en Telegram…
-              </p>
-              <p className="mt-2 text-faint text-xs">
-                Si no se abrió solo,{" "}
-                <a
-                  href={link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-violet underline underline-offset-2"
-                >
-                  abre el bot aquí
-                </a>
-                . El enlace sirve una sola vez y vence en unos minutos; si se pasa,
-                vuelve a pulsar Conectar.
-              </p>
-            </div>
-          ) : null}
-
-          {error ? (
-            <p role="alert" className="text-outgoing text-sm">
-              {error}
-            </p>
-          ) : null}
-        </div>
+        <ConnectTelegram />
       )}
     </Card>
   );
@@ -678,18 +622,6 @@ function Detail({
       </div>
     </div>
   );
-}
-
-/**
- * Cómo se nombra el destino en pantalla.
- *
- * El nombre que la persona tiene en Telegram, y detrás el final de la
- * dirección — que es lo que de verdad identifica el chat cuando hay dos
- * cuentas con el mismo nombre, y lo único que esta app llegó a guardar.
- */
-function describeChat(channel: AlertChannel): string {
-  if (!channel.label) return channel.chat_hint ?? "Telegram";
-  return channel.chat_hint ? `${channel.label} · ${channel.chat_hint}` : channel.label;
 }
 
 /** The avatar stands in for a picture there is no way to upload. */

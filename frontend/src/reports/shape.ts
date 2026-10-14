@@ -93,6 +93,27 @@ export function drilldown(view: View, extra: Record<string, unknown> = {}) {
 }
 
 /**
+ * The filters that reproduce one column — one bucket of the run — as a list.
+ *
+ * Clamped to the window on screen: a month bucket can start before a custom
+ * range does, and the column only counts the part inside it.
+ */
+export function bucketDrilldown(
+  view: View,
+  bucket: Pick<TrendBucket, "starts_at" | "ends_at">,
+  extra: Record<string, unknown> = {},
+) {
+  const from = Math.max(bucket.starts_at, view.range.from);
+  const to = Math.min(bucket.ends_at, view.range.to);
+
+  return {
+    ...drilldown(view, extra),
+    from: dayStringOf(from),
+    to: dayStringOf(to - 1),
+  };
+}
+
+/**
  * What to call one step of the axis.
  *
  * Read off the bucket's own `starts_at` rather than parsed out of its key: a

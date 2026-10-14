@@ -786,6 +786,54 @@ def _declare_accounts(client: TestClient, *, token: str) -> dict[str, str]:
     return accounts
 
 
+#: Bancolombia's payroll alert names the account type and never its digits, so
+#: no fingerprint can adopt it and it lands unassigned — exactly as it does for
+#: a real owner, who then assigns it by hand.
+PAYROLL = ("ACME SAS", "Ahorros Bancolombia")
+
+
+def _assign_payroll(
+    client: TestClient,
+    *,
+    token: str,
+    accounts: dict[str, str],
+) -> None:
+    """Put the payroll on the account it was paid into, the way its owner would.
+
+    Left unassigned, the savings account only ever sees money leave and its
+    balance falls below zero — something no bank allows a savings account to
+    do. Re-runnable: once assigned it is no longer among the unassigned.
+    """
+    headers = _authorization(token)
+    counterparty, account_name = PAYROLL
+    unassigned = _expect(
+        client.get(
+            "/financial/transactions",
+            params={"unassigned": True, "limit": 200},
+            headers=headers,
+        ),
+        status.HTTP_200_OK,
+    ).json()
+    payroll = [
+        movement
+        for movement in unassigned["transactions"]
+        if movement["counterparty"] == counterparty
+        and movement["direction"] == "incoming"
+    ]
+
+    for movement in payroll:
+        _expect(
+            client.patch(
+                f"/financial/transactions/{movement['id']}",
+                json={"account_id": accounts[account_name]},
+                headers=headers,
+            ),
+            status.HTTP_200_OK,
+        )
+
+    print(f"  payroll   {len(payroll)} assigned to {account_name}")
+
+
 def _enter_manual(
     client: TestClient,
     *,
@@ -1620,6 +1668,7 @@ def main() -> None:
     _forward_alerts(client, address=address)
     _drain_workers()
     accounts = _declare_accounts(client, token=token)
+    _assign_payroll(client, token=token, accounts=accounts)
     _enter_manual(client, token=token, accounts=accounts)
     _enter_transfer_legs(client, token=token, accounts=accounts)
     _enter_series(client, token=token, accounts=accounts)

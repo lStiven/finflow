@@ -6,9 +6,8 @@ import {
   bankState,
   customSenders,
   filterDrift,
-  filterTerms,
   isApproved,
-  KNOWN_BANKS,
+  type KnownBank,
   parseSender,
   type Senders,
   senderErrorMessage,
@@ -18,14 +17,23 @@ import {
   withSender,
 } from "@/onboarding/banks";
 
-function bank(id: string) {
-  const found = KNOWN_BANKS.find((candidate) => candidate.id === id);
-  if (!found) throw new Error(`no bank ${id}`);
-  return found;
-}
-
-const BANCOLOMBIA = bank("bancolombia");
-const LULO = bank("lulo");
+/** What `/ingestion/catalog` answers in `known_banks`, as a fixture. */
+const BANCOLOMBIA: KnownBank = {
+  id: "bancolombia",
+  name: "Bancolombia",
+  domains: [
+    "an.notificacionesbancolombia.com",
+    "notificacionesbancolombia.com",
+    "ayn.notificacionesbancolombia.com",
+    "bancolombia.com.co",
+  ],
+};
+const LULO: KnownBank = {
+  id: "lulo bank",
+  name: "Lulo Bank",
+  domains: ["lulobank.com"],
+};
+const BANKS = [BANCOLOMBIA, LULO];
 const NONE: Senders = { domains: [], addresses: [] };
 
 describe("a known bank's state", () => {
@@ -80,7 +88,7 @@ describe("approvals no known bank accounts for", () => {
       addresses: ["alertas@banco.com"],
     };
 
-    expect(customSenders(senders)).toEqual([
+    expect(customSenders(senders, BANKS)).toEqual([
       { type: "domain", value: "davivienda.com" },
       { type: "address", value: "alertas@banco.com" },
     ]);
@@ -101,7 +109,7 @@ describe("approvals no known bank accounts for", () => {
       addresses: ["alertas@banco.com"],
     };
 
-    expect(approvedBanks(senders)).toEqual([
+    expect(approvedBanks(senders, BANKS)).toEqual([
       { name: "Bancolombia", partial: true },
       { name: "Lulo Bank", partial: false },
       { name: "alertas@banco.com", partial: false },
@@ -127,15 +135,21 @@ describe("matching a sender the way the intake does", () => {
 
   it("knows which bank an address belongs to", () => {
     expect(
-      bankOfSender("alertasynotificaciones@an.notificacionesbancolombia.com")?.id,
+      bankOfSender("alertasynotificaciones@an.notificacionesbancolombia.com", BANKS)
+        ?.id,
     ).toBe("bancolombia");
-    expect(bankOfSender("alertas@banco.com")).toBeUndefined();
+    expect(bankOfSender("alertas@banco.com", BANKS)).toBeUndefined();
   });
 
   it("spells a movement's bank the way the bank does", () => {
-    expect(bankDisplayName("lulo bank")).toBe("Lulo Bank");
-    expect(bankDisplayName("bancolombia")).toBe("Bancolombia");
-    expect(bankDisplayName("Davivienda")).toBe("Davivienda");
+    expect(bankDisplayName("lulo bank", BANKS)).toBe("Lulo Bank");
+    expect(bankDisplayName("bancolombia", BANKS)).toBe("Bancolombia");
+    expect(bankDisplayName("Davivienda", BANKS)).toBe("Davivienda");
+  });
+
+  it("knows no bank at all until the catalogue says so", () => {
+    expect(bankOfSender("notificaciones@lulobank.com", [])).toBeUndefined();
+    expect(bankDisplayName("lulo bank", [])).toBe("lulo bank");
   });
 });
 
@@ -230,12 +244,6 @@ describe("reading what somebody pasted", () => {
 });
 
 describe("the Gmail filter", () => {
-  it("has one term per approval, domains marked with @", () => {
-    expect(
-      filterTerms({ domains: ["lulobank.com"], addresses: ["alertas@banco.com"] }),
-    ).toEqual(["@lulobank.com", "alertas@banco.com"]);
-  });
-
   it("says what was added and removed since the filter was made", () => {
     expect(
       filterDrift(

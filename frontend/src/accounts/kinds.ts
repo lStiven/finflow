@@ -179,6 +179,22 @@ export function canLinkAlerts(kind: string): boolean {
 }
 
 /**
+ * The kinds whose real balance cannot go below zero.
+ *
+ * A savings account, the cash in a pocket and an investment have no overdraft:
+ * the bank refuses the movement before it happens. So when Finflow's running
+ * total for one of them is negative, Finflow is missing something — an income
+ * it never saw, or an opening balance that was not the real one. A checking
+ * account is absent on purpose (sobregiro is real), and so is every kind this
+ * build has no copy for: a false alarm is worse than none.
+ */
+const NEVER_BELOW_ZERO = new Set(["savings", "cash", "investment"]);
+
+export function neverBelowZero(kind: string): boolean {
+  return NEVER_BELOW_ZERO.has(kind);
+}
+
+/**
  * Where a movement came from, said in Spanish.
  *
  * The catalogue's own labels are English (`Bank alert`, `Manual`), and this is

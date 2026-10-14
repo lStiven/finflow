@@ -174,6 +174,23 @@ async function moneyState(call) {
   };
 }
 
+/**
+ * Picks an option in the app's own Select, the way a person does: open it by
+ * its label, press the option. The list lives in a portal, so it is found on
+ * the page, by the same label.
+ */
+async function choose(page, scope, label, pick) {
+  await scope.getByRole("combobox", { name: label, exact: true }).click();
+  const listbox = page.getByRole("listbox", { name: label, exact: true });
+  const option =
+    "value" in pick
+      ? listbox.locator(`[role="option"][data-value="${pick.value}"]`)
+      : "label" in pick
+        ? listbox.getByRole("option", { name: pick.label, exact: true })
+        : listbox.getByRole("option").nth(pick.index);
+  await option.click();
+}
+
 async function main() {
   for (const [what, url] of [
     ["el frontend", WEB],
@@ -202,8 +219,11 @@ async function main() {
 
   const problems = [];
   page.on("pageerror", (error) => problems.push(`error: ${error.message}`));
+  // True only while this suite makes the server fail on purpose.
+  let forcing = false;
   page.on("console", (message) => {
     if (message.type() !== "error") return;
+    if (forcing && message.text().includes("500")) return;
 
     // The browser logs a failed request as a console error without saying
     // which one, and this app asks for 404s on purpose: «no hay plan
@@ -254,7 +274,7 @@ async function main() {
     // confirmation below be checked against a balance rather than against a
     // row count — a balance that moved by the wrong amount is the failure
     // worth catching, and an unassigned charge cannot show it.
-    await page.getByLabel("Sale de").selectOption({ index: 1 });
+    await choose(page, page, "Sale de", { index: 1 });
     // `exact`, and not by accident: the suggestions section at the foot of
     // this screen has buttons called «Declarar SPOTIFY COL como factura», and
     // Playwright matches an accessible name by substring unless told not to.
@@ -302,6 +322,21 @@ async function main() {
     );
 
     // ------------------------------------------------------------ amend, UI
+    // A tile's actions sit behind one labelled «Opciones», each a word at 44 px.
+    await page.getByRole("button", { name: `Opciones de ${NAME}` }).click();
+    const sizes = [];
+    for (const label of ["Editar", "Cobrar sola", "Pausar", "Borrar"]) {
+      const box = await page
+        .getByRole("button", { name: `${label} ${NAME}` })
+        .boundingBox();
+      sizes.push(box ? Math.round(box.height) >= 44 : false);
+    }
+    check("las cuatro acciones de la tarjeta son palabras de 44 px", sizes, [
+      true,
+      true,
+      true,
+      true,
+    ]);
     await page.getByRole("button", { name: `Editar ${NAME}` }).click();
     await page.getByLabel("Monto").fill(AMENDED);
     await page.getByRole("button", { name: "Guardar" }).click();
@@ -324,6 +359,17 @@ async function main() {
     );
     check("el cobro queda pagado en el servidor", paid?.state, "paid");
     check("y nombra el movimiento que lo respalda", paid?.movement_id !== null, true);
+    // Other bills' paid charges share the timeline; this one is found by the
+    // movement the API says paid it.
+    const toMovement = page.locator(`a[href="/transacciones/${paid?.movement_id}"]`);
+    await toMovement.waitFor({ timeout: 10_000 }).catch(() => {});
+    check(
+      "el cobro pagado lleva a ese mismo movimiento",
+      (await toMovement.count()) > 0
+        ? (await toMovement.first().innerText()).trim()
+        : null,
+      "Ver el movimiento",
+    );
     check("con lo que de verdad salió", paid?.settled_amount, "135000");
 
     const afterPay = await moneyState(call);
@@ -387,6 +433,24 @@ async function main() {
       (charge) => charge?.state !== "skipped",
     );
 
+    // ------------------------------------------------- a failure is said, UI
+    // Pausing used to fail in silence: the tile simply stayed as it was.
+    forcing = true;
+    await page.route(`${API}/financial/bills/${billId}/pause`, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "No se pudo pausar" }),
+      }),
+    );
+    await page.getByRole("button", { name: `Opciones de ${NAME}` }).click();
+    await page.getByRole("button", { name: `Pausar ${NAME}` }).click();
+    const said = page.getByRole("alert").filter({ hasText: /pausar|servidor/i });
+    await said.first().waitFor({ timeout: 10_000 });
+    check("si pausar falla, la tarjeta lo dice", await said.first().isVisible(), true);
+    await page.unroute(`${API}/financial/bills/${billId}/pause`);
+    forcing = false;
+
     // ------------------------------------------------------------ pause, UI
     await page.getByRole("button", { name: `Pausar ${NAME}` }).click();
 
@@ -402,6 +466,7 @@ async function main() {
     );
 
     // ----------------------------------------------------------- resume, UI
+    await page.getByRole("button", { name: `Opciones de ${NAME}` }).click();
     await page.getByRole("button", { name: `Reanudar ${NAME}` }).click();
 
     stored = await until(call, "reanudar", (b) => b?.status === "active");
@@ -411,6 +476,7 @@ async function main() {
     // ----------------------------------------------------------- delete, UI
     // Deleting asks first, in place — a tap that removes something should
     // have to be meant.
+    await page.getByRole("button", { name: `Opciones de ${NAME}` }).click();
     await page.getByRole("button", { name: `Borrar ${NAME}` }).click();
     const confirm = page.getByRole("button", { name: `Sí, borrar ${NAME}` });
     check("borrar pregunta antes", await confirm.isVisible(), true);
@@ -503,6 +569,7 @@ async function main() {
     check("y no borra el movimiento", await moneyState(call), withMovement);
 
     // ------------------------------------------------------- autopay, UI
+    await page.getByRole("button", { name: `Opciones de ${MATCHED_NAME}` }).click();
     await page.getByRole("button", { name: `Cobrar sola ${MATCHED_NAME}` }).click();
     check(
       "armar el cobro automático avisa antes de que escriba plata",

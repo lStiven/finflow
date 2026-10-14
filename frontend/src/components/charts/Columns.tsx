@@ -13,6 +13,8 @@
  * number gates the chart on a pointer.
  */
 
+import { Link } from "@tanstack/react-router";
+import { ArrowRight } from "lucide-react";
 import { useId, useState } from "react";
 import { Money } from "@/components/Money";
 import { cn } from "@/lib/cn";
@@ -58,6 +60,7 @@ export function Columns({
   currency,
   className,
   caption,
+  movementsOf,
 }: {
   buckets: ColumnBucket[];
   series: ColumnSeries[];
@@ -66,9 +69,20 @@ export function Columns({
   className?: string;
   /** What the chart is, for the reader who cannot see it. */
   caption: string;
+  /**
+   * The Transacciones filters behind one column, or null where no list can
+   * say it. With it, choosing a column offers its movements below the chart.
+   *
+   * Two steps rather than a column that navigates: on a phone the tap that
+   * would navigate is the same tap that shows the readout, so the figures
+   * would vanish before anybody read them.
+   */
+  movementsOf?: (index: number) => Record<string, unknown> | null;
 }) {
   const tableId = useId();
   const [active, setActive] = useState<number | null>(null);
+  const [chosen, setChosen] = useState<number | null>(null);
+  const chosenSearch = chosen === null ? null : (movementsOf?.(chosen) ?? null);
 
   // Stacked measures the tallest total; grouped the tallest single bar. Both
   // fall back to 1 so an all-zero run draws a flat baseline instead of
@@ -131,9 +145,12 @@ export function Columns({
                 <button
                   type="button"
                   aria-label={describeSlot(bucket, series, index, currency)}
+                  aria-pressed={movementsOf ? chosen === index : undefined}
+                  onClick={movementsOf ? () => setChosen(index) : undefined}
                   className={cn(
                     "absolute inset-0 rounded-md transition-colors duration-100",
-                    active === index && "bg-text/5",
+                    (active === index || chosen === index) && "bg-text/5",
+                    chosen === index && "ring-1 ring-cyan/40",
                   )}
                   onPointerEnter={() => setActive(index)}
                   onPointerLeave={() => setActive((at) => (at === index ? null : at))}
@@ -170,6 +187,19 @@ export function Columns({
           </div>
         </div>
       </div>
+
+      {chosen !== null && chosenSearch && buckets[chosen] ? (
+        <Link
+          to="/transacciones"
+          search={chosenSearch}
+          className="rise -my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-sm transition-colors hover:text-text"
+        >
+          Ver los movimientos de {buckets[chosen].full}
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      ) : movementsOf ? (
+        <p className="text-faint text-xs">Toca una columna para ver sus movimientos.</p>
+      ) : null}
 
       {anyPartial ? (
         <p className="text-faint text-xs">

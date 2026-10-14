@@ -1,17 +1,24 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  ArrowRight,
   Ban,
   Bell,
   BellOff,
-  Send,
+  Check,
   ShieldCheck,
-  Sparkles,
-  Users,
 } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import { type ComponentType, type ReactNode, useEffect, useRef, useState } from "react";
+import { ConnectTelegram } from "@/alerts/ConnectTelegram";
+import { channelState, describeChat, linkedChannel } from "@/alerts/channels";
+import { alertChannelsQuery } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { SuccessMark } from "@/components/ui/SuccessMark";
+import { cn } from "@/lib/cn";
+import { WaitingDot } from "@/onboarding/parts";
 
 export const Route = createFileRoute("/guias/avisos")({
   beforeLoad: ({ context }) => {
@@ -23,257 +30,237 @@ export const Route = createFileRoute("/guias/avisos")({
 /**
  * Por qué la app puede escribirte, y qué controlas de eso.
  *
- * Escrita para alguien que está a punto de darle a una app de finanzas
- * permiso para escribirle al teléfono, así que el orden es el de las
- * preguntas con las que se llega: qué me va a llegar, cómo se conecta, qué
- * pasa si me molesta, y quién más puede ver esto. Cada afirmación de aquí
- * corresponde a una regla que el backend hace cumplir — una guía que promete
- * algo que la API rechaza es peor que no tener guía.
+ * Una guía que se hace, no solo se lee: arriba está el estado real del canal
+ * y el botón para conectarlo, los mismos que en Perfil. Debajo, en una línea
+ * cada una, las respuestas a lo que se pregunta antes de darle a una app de
+ * finanzas permiso para escribirte. Cada afirmación corresponde a una regla
+ * que el backend hace cumplir — una guía que promete algo que la API rechaza
+ * es peor que no tener guía.
  */
 function AlertsGuide() {
   return (
     <AppShell>
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
-        <header className="flex flex-col gap-4">
-          <Link
-            to="/guias"
-            className="flex items-center gap-1.5 self-start text-muted text-xs transition-colors hover:text-text"
-          >
-            <ArrowLeft className="size-3.5" />
-            Guías
-          </Link>
-
-          <div>
-            <h1 className="font-semibold text-2xl tracking-tight">
-              Avisos en tu teléfono
-            </h1>
-            <p className="mt-1.5 text-muted text-sm leading-relaxed">
-              Finflow te escribe por Telegram cada vez que se mueve plata. Es lo que
-              hace que no tengas que acordarte de abrirla: si algo no cuadra, te enteras
-              en el momento y no a fin de mes.
-            </p>
-          </div>
-        </header>
-
-        <Section
-          icon={Bell}
-          glow="violet"
-          title="Qué te llega"
-          lead="Tres o cuatro líneas, segundos después del movimiento"
-          delay={0}
+        <Link
+          to="/guias"
+          className="-my-2 flex min-h-11 items-center gap-1.5 self-start text-muted text-xs transition-colors hover:text-text"
         >
+          <ArrowLeft className="size-3.5" />
+          Guías
+        </Link>
+
+        <PageHeader
+          title="Avisos en tu teléfono"
+          lead="Finflow te escribe por Telegram cada vez que se mueve plata."
+        />
+
+        <Status />
+
+        <Section icon={Bell} title="Qué te llega">
           <pre className="overflow-x-auto rounded-xl border border-line bg-ink p-3.5 font-mono text-text text-xs leading-relaxed">
             {
               "Gasto $84.300\nCOMPRA EN *PAYU*COL\nBancolombia · 13/09 04:46 p. m.\nSin cuenta asignada"
             }
           </pre>
-
-          <p>
-            Entra todo lo que Finflow registra: lo que llega por el correo del banco y
-            lo que escribes a mano, tanto gastos como ingresos.
-          </p>
-
-          <Note>
-            El nombre que ves es el texto tal cual lo escribió tu banco, no el nombre
-            bonito del comercio. Es a propósito: es lo mismo que diría la alerta del
-            banco, y así el aviso no depende de que Finflow haya alcanzado a ordenar
-            nada todavía.
-          </Note>
-
-          <p className="font-medium text-sm text-text">Lo que nunca te va a llegar</p>
-          <ul className="flex flex-col gap-2">
-            <Never>
-              Los intereses y seguros que Finflow calcula de tus créditos. Aparecen de a
-              varios cuando abres la pantalla del crédito, y avisártelos mientras los
-              estás mirando es justo el ruido que hace que la gente apague todo.
-            </Never>
-            <Never>
-              Nada mientras no hayas conectado un canal. La app no puede escribirte
-              hasta que tú lo pidas.
-            </Never>
-          </ul>
+          <Line>
+            Cada gasto e ingreso que Finflow registra, del correo del banco o escrito a
+            mano, segundos después. Y los lunes, el resumen de tu semana.
+          </Line>
+          <Line>
+            El nombre es el texto del banco tal cual: el aviso no espera a que Finflow
+            ordene nada.
+          </Line>
+          <Line icon={Ban}>
+            Nunca los intereses que Finflow calcula de tus créditos: llegarían de a
+            varios mientras los estás mirando.
+          </Line>
         </Section>
 
-        <Section
-          icon={Send}
-          glow="accent"
-          title="Cómo se conecta"
-          lead="Un toque, sin códigos y sin buscar tu identificador"
-          delay={60}
-        >
-          <ol className="flex flex-col gap-3">
-            <Step n={1}>
-              En <strong className="text-text">Perfil</strong>, pulsa{" "}
-              <strong className="text-text">Conectar Telegram</strong>.
-            </Step>
-            <Step n={2}>
-              Se abre Telegram en el bot de Finflow. Pulsa{" "}
-              <strong className="text-text">Empezar</strong>.
-            </Step>
-            <Step n={3}>
-              El bot te responde «listo, te aviso por aquí». Eso es la confirmación de
-              que de verdad puede escribirte.
-            </Step>
-            <Step n={4}>
-              La pantalla lo detecta sola. No tienes que volver ni copiar nada.
-            </Step>
-          </ol>
-
-          <Note>
-            El enlace sirve <strong className="text-text">una sola vez</strong> y vence
-            a los 15 minutos. Si se te pasa, pulsa Conectar otra vez: eso retira el
-            anterior, así que nunca queda un enlace tuyo dando vueltas.
-          </Note>
-
-          <p>
-            Finflow no te pide tu número ni tu usuario de Telegram, y no guarda la
-            dirección entera: en la pantalla solo verás los últimos cuatro caracteres,
-            que es todo lo que hace falta para reconocer cuál es.
-          </p>
+        <Section icon={BellOff} title="Si te molesta">
+          <Line>
+            <strong className="text-text">Monto mínimo:</strong> no te avisa por debajo
+            de esa cifra.
+          </Line>
+          <Line>
+            <strong className="text-text">Movimientos apagado:</strong> el canal sigue
+            conectado, en silencio.
+          </Line>
+          <Line>
+            <strong className="text-text">Desvincular:</strong> no llega nada más, y ese
+            Telegram queda libre.
+          </Line>
+          <Link
+            to="/perfil"
+            className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-sm hover:text-text"
+          >
+            Todo eso está en Perfil
+            <ArrowRight className="size-3.5" aria-hidden />
+          </Link>
         </Section>
 
-        <Section
-          icon={BellOff}
-          glow="cyan"
-          title="Si te molesta, es tuyo"
-          lead="Apagarlo, ponerle un piso, o desconectarlo del todo"
-          delay={120}
-        >
-          <Case title="Bajarle el volumen">
-            Ponle un <strong className="text-text">monto mínimo</strong> y no te avisará
-            por debajo de esa cifra. Sirve para que un café de $3.000 no gaste la
-            atención que necesita un cargo de $400.000.
-          </Case>
-
-          <Case title="Apagarlo sin desconectar">
-            El interruptor de <strong className="text-text">Movimientos</strong> deja el
-            canal conectado y en silencio. Volver a encenderlo es un toque.
-          </Case>
-
-          <Case title="Desconectar">
-            <strong className="text-text">Desvincular</strong> y ya. No se manda nada
-            más, y ese Telegram queda libre para conectarse otra vez —aquí o en otra
-            cuenta— cuando quieras.
-          </Case>
-        </Section>
-
-        <Section
-          icon={Users}
-          glow="none"
-          title="Un Telegram, una cuenta"
-          lead="Por qué no puedes conectar el mismo chat dos veces"
-          delay={180}
-        >
-          <p>
-            Si intentas conectar un Telegram que ya está en otra cuenta de Finflow, el
-            bot te lo dice ahí mismo y no lo conecta. Desvincúlalo en la otra cuenta
-            primero.
-          </p>
-          <p>
-            No es una limitación técnica: dos personas recibiendo sus movimientos en la
-            misma conversación es una fuga que ninguna de las dos aceptó, y no hay forma
-            de deshacer un mensaje que ya llegó.
-          </p>
-
-          <Note>
-            <ShieldCheck aria-hidden className="hidden" />
-            Lo que viaja en el aviso es el monto, la descripción del banco y la hora.
-            Nunca un saldo, ni el número de una tarjeta, ni nada con lo que se pueda
-            mover plata.
-          </Note>
+        <Section icon={ShieldCheck} title="Lo que nunca pasa">
+          <Line>
+            Un Telegram no se conecta a dos cuentas de Finflow: el bot lo rechaza ahí
+            mismo, porque un mensaje que llegó no se puede deshacer.
+          </Line>
+          <Line>
+            En el aviso viajan el monto, la descripción y la hora. Nunca un saldo ni el
+            número de una tarjeta.
+          </Line>
+          <Line>
+            No pedimos tu número ni tu usuario; del chat guardamos solo el final.
+          </Line>
         </Section>
 
         <p className="text-faint text-xs leading-relaxed">
-          ¿No te llega nada después de conectar? Escríbele{" "}
-          <code className="rounded bg-ink px-1.5 py-0.5 font-mono">/start</code> al bot
-          una vez más: si te responde, el canal está vivo y lo que falta es que entre un
-          movimiento nuevo.
+          ¿Conectaste y no te llega nada? Escríbele{" "}
+          <code className="rounded bg-ink px-1.5 py-0.5 font-mono">/start</code> al bot:
+          si responde, el canal está vivo y falta que entre un movimiento nuevo.
         </p>
       </div>
     </AppShell>
   );
 }
 
-function Section({
-  icon: Icon,
-  glow,
-  title,
-  lead,
-  delay,
-  children,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  glow: "cyan" | "accent" | "violet" | "none";
-  title: string;
-  lead: string;
-  delay: number;
-  children: ReactNode;
-}) {
-  return (
-    <Card
-      glow={glow}
-      lift={false}
-      className="rise flex flex-col gap-5"
-      style={{ animationDelay: `${delay}ms` }}
-    >
-      <div className="flex items-start gap-3.5">
-        <span
-          aria-hidden
-          className="grid size-10 shrink-0 place-items-center rounded-xl border border-line bg-ink"
-        >
-          <Icon className="size-4 text-cyan" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="font-medium">{title}</h2>
-          <p className="mt-0.5 text-faint text-xs">{lead}</p>
-        </div>
-      </div>
+const STEPS = [
+  "Pulsa «Conectar Telegram»",
+  "En Telegram, pulsa Empezar",
+  "El bot te responde y queda listo",
+] as const;
 
-      <div className="flex flex-col gap-3.5 text-muted text-sm leading-relaxed">
-        {children}
-      </div>
+/**
+ * Where this person stands, from the server, with the next step in reach.
+ *
+ * The channel list polls while a link is out, so the moment «Empezar» is
+ * pressed in Telegram this turns into the confirmation on its own — and if
+ * that happened while somebody watched, it celebrates, the way the connect
+ * guide does when the first movement lands.
+ */
+function Status() {
+  const { data } = useQuery(alertChannelsQuery);
+  const channels = data?.channels ?? [];
+  const state = channelState(channels);
+  const linked = linkedChannel(channels);
+  const sawPending = useRef(false);
+  const [celebrate, setCelebrate] = useState(false);
+
+  useEffect(() => {
+    if (state === "pending") sawPending.current = true;
+    if (state === "linked" && sawPending.current) setCelebrate(true);
+  }, [state]);
+
+  if (!data) return null;
+
+  if (state === "linked" && linked) {
+    return (
+      <Card
+        glow="green"
+        lift={false}
+        className="rise flex flex-col items-center gap-4 p-6 text-center"
+      >
+        <SuccessMark celebrate={celebrate} />
+        <div>
+          <h2 className="font-semibold text-lg">Tus avisos están conectados</h2>
+          <p className="mt-1 text-muted text-sm">
+            Te escribimos a {describeChat(linked)}.
+          </p>
+        </div>
+        <Link
+          to="/perfil"
+          className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan text-sm hover:text-text"
+        >
+          Ajustar el mínimo o el resumen
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      </Card>
+    );
+  }
+
+  // The first step is done once a link exists; the second is the wait.
+  const current = state === "pending" ? 1 : 0;
+
+  return (
+    <Card glow="violet" lift={false} className="rise flex flex-col gap-5">
+      <h2 className="font-medium">Conéctalo en un toque</h2>
+      <ol className="flex flex-col gap-3">
+        {STEPS.map((label, index) => (
+          <li key={label} className="flex items-center gap-3 text-sm">
+            <span
+              aria-hidden
+              className={cn(
+                "grid size-7 shrink-0 place-items-center rounded-lg text-xs ring-1",
+                index < current
+                  ? "bg-incoming/15 text-incoming ring-incoming/30"
+                  : index === current
+                    ? "bg-violet/15 text-violet ring-violet/40"
+                    : "bg-surface-raised text-faint ring-line",
+              )}
+            >
+              {index < current ? <Check className="size-3.5" /> : index + 1}
+            </span>
+            <span
+              className={cn(
+                "min-w-0 flex-1",
+                index < current
+                  ? "text-muted line-through"
+                  : index === current
+                    ? ""
+                    : "text-muted",
+              )}
+            >
+              {label}
+            </span>
+            {index === current && current === 1 ? <WaitingDot /> : null}
+            <span className="sr-only">
+              {index < current ? "(hecho)" : index === current ? "(ahora)" : ""}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <ConnectTelegram />
+      <p className="text-faint text-xs">
+        Sin códigos y sin buscar tu identificador: la pantalla se entera sola.
+      </p>
     </Card>
   );
 }
 
-/** The aside that carries the thing people get wrong most often. */
-function Note({ children }: { children: ReactNode }) {
+function Section({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  children: ReactNode;
+}) {
   return (
-    <p className="flex items-start gap-2.5 rounded-xl border border-line bg-ink p-3.5">
-      <Sparkles aria-hidden className="mt-0.5 size-4 shrink-0 text-cyan" />
+    <Card lift={false} className="flex flex-col gap-4">
+      <h2 className="flex items-center gap-2.5 font-medium">
+        <span
+          aria-hidden
+          className="grid size-8 shrink-0 place-items-center rounded-lg border border-line bg-ink"
+        >
+          <Icon className="size-4 text-cyan" />
+        </span>
+        {title}
+      </h2>
+      <div className="flex flex-col gap-3 text-muted text-sm">{children}</div>
+    </Card>
+  );
+}
+
+function Line({
+  icon: Icon = Check,
+  children,
+}: {
+  icon?: ComponentType<{ className?: string }>;
+  children: ReactNode;
+}) {
+  return (
+    <p className="flex items-start gap-2.5">
+      <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-faint" />
       <span className="min-w-0">{children}</span>
     </p>
-  );
-}
-
-function Case({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="border-line/70 border-l-2 pl-4">
-      <p className="font-medium text-sm text-text">{title}</p>
-      <p className="mt-1">{children}</p>
-    </div>
-  );
-}
-
-function Never({ children }: { children: ReactNode }) {
-  return (
-    <li className="flex items-start gap-2.5">
-      <Ban aria-hidden className="mt-0.5 size-4 shrink-0 text-faint" />
-      <span className="min-w-0">{children}</span>
-    </li>
-  );
-}
-
-function Step({ n, children }: { n: number; children: ReactNode }) {
-  return (
-    <li className="flex items-start gap-3">
-      <span
-        aria-hidden
-        className="grid size-6 shrink-0 place-items-center rounded-lg bg-violet/15 font-medium text-violet text-xs ring-1 ring-violet/30"
-      >
-        {n}
-      </span>
-      <span className="min-w-0">{children}</span>
-    </li>
   );
 }

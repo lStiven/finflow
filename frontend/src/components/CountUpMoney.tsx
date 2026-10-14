@@ -17,6 +17,11 @@ const DURATION = 620;
 
 type Props = {
   amount: string;
+  /**
+   * Where the count starts — a balance before a movement, so the figure is
+   * seen to move from one to the other. Zero by default: a figure arriving.
+   */
+  from?: string;
   currency: string;
   signed?: boolean;
   tone?: "positive" | "negative" | "neutral" | "plain";
@@ -24,8 +29,9 @@ type Props = {
   className?: string;
 };
 
-export function CountUpMoney({ amount, ...rest }: Props) {
+export function CountUpMoney({ amount, from = "0", ...rest }: Props) {
   const target = Number(amount);
+  const start = Number(from) || 0;
   const reduced = useReducedMotion();
   const animatable = Number.isFinite(target) && !reduced;
 
@@ -34,7 +40,7 @@ export function CountUpMoney({ amount, ...rest }: Props) {
    * paint, so seeding this with the real amount would show the final figure,
    * snap back to zero and count up to it again.
    */
-  const [shown, setShown] = useState<string | null>(animatable ? "0" : null);
+  const [shown, setShown] = useState<string | null>(animatable ? from : null);
 
   useEffect(() => {
     if (!animatable) {
@@ -51,7 +57,7 @@ export function CountUpMoney({ amount, ...rest }: Props) {
       // only the last digits settle.
       const eased = 1 - (1 - progress) ** 3;
       if (progress < 1) {
-        setShown((target * eased).toFixed(2));
+        setShown((start + (target - start) * eased).toFixed(2));
         frame = requestAnimationFrame(tick);
       } else {
         setShown(null);
@@ -60,7 +66,7 @@ export function CountUpMoney({ amount, ...rest }: Props) {
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [target, animatable]);
+  }, [target, start, animatable]);
 
   return <Money amount={shown ?? amount} {...rest} />;
 }

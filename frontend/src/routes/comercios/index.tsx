@@ -4,6 +4,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Combine,
   ChevronRight as Enter,
   Loader2,
   Search,
@@ -22,15 +23,24 @@ import {
   merchantCatalogQuery,
   merchantsQuery,
   useConfirmMerchant,
+  useCreateCategory,
+  useEditMerchant,
 } from "@/api/queries";
 import { AppShell } from "@/components/AppShell";
+import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
 import { aliasCountLabel, sortLabel, timesSeenLabel } from "@/merchants/aliases";
 import { CategoryManager } from "@/merchants/CategoryManager";
-import { categoryLabel, categoryLabels, labelFrom } from "@/merchants/categories";
+import { CategoryNameForm } from "@/merchants/CategoryNameForm";
+import {
+  categoryLabel,
+  categoryLabels,
+  createCategoryError,
+  labelFrom,
+} from "@/merchants/categories";
 
 const PAGE_SIZE = 25;
 
@@ -128,19 +138,19 @@ function MerchantsScreen() {
   // Nothing at all, ever — the only case the explanation is for. Somebody who
   // has merchants but filtered them all away needs a different sentence.
   const nothingYet = page.total === 0 && !filtering;
+  // What the last review in the list did, said once above it: the row it
+  // happened on leaves the queue, so the row cannot be where it is said.
+  const [reviewed, setReviewed] = useState<string | null>(null);
 
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
-        <header>
-          <h1 className="font-semibold text-2xl tracking-tight">Comercios</h1>
-          <p className="mt-1.5 max-w-2xl text-muted text-sm leading-relaxed">
-            El negocio real detrás del texto que escribe tu banco.{" "}
-            <span className="text-text">TIENDAS ARA 123</span> y{" "}
-            <span className="text-text">ARA 900</span> son el mismo sitio, y agruparlos
-            es lo que hace que tus gastos por categoría signifiquen algo.
-          </p>
-        </header>
+        <PageHeader
+          title="Comercios"
+          lead="El negocio real detrás del texto que escribe tu banco."
+          // Before any merchant exists, the first-run card is the explanation.
+          help={{ ...HELP, openFirstTime: !nothingYet }}
+        />
 
         {nothingYet ? (
           <FirstRun />
@@ -221,6 +231,16 @@ function MerchantsScreen() {
               {search.search || search.category ? " con estos filtros" : ""}
             </p>
 
+            {reviewed ? (
+              <p
+                role="status"
+                className="rise flex items-center gap-2 text-incoming text-sm"
+              >
+                <Check className="size-4 shrink-0" aria-hidden />
+                Listo: {reviewed}
+              </p>
+            ) : null}
+
             {page.merchants.length === 0 ? (
               <Empty inQueue={search.review === true} />
             ) : (
@@ -228,7 +248,13 @@ function MerchantsScreen() {
                 <ul>
                   {page.merchants.map((merchant, index) => (
                     <li key={merchant.id}>
-                      <Row merchant={merchant} index={index} labels={labels} />
+                      <Row
+                        merchant={merchant}
+                        index={index}
+                        inQueue={search.review === true}
+                        labels={labels}
+                        onReviewed={setReviewed}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -290,6 +316,32 @@ function MerchantsScreen() {
   );
 }
 
+const HELP: PageHelp = {
+  id: "comercios",
+  points: [
+    {
+      icon: Store,
+      title: "Aparecen solos",
+      body: "Cada alerta trae el texto del negocio. Finflow lo limpia y lo junta con sus otras formas.",
+    },
+    {
+      icon: Combine,
+      title: "Uno solo, muchos nombres",
+      body: "«TIENDAS ARA 123» y «ARA 900» son el mismo sitio. Unirlos hace que tus categorías cuadren.",
+    },
+    {
+      icon: Tag,
+      title: "La categoría es del comercio",
+      body: "Cámbiala en el comercio y todos sus movimientos, los de antes también, la toman.",
+    },
+    {
+      icon: Sparkles,
+      title: "Pendientes de revisar",
+      body: "Los que Finflow dedujo solo. «Está bien» u «Otra categoría», sin salir de la lista.",
+    },
+  ],
+};
+
 /* ------------------------------------------------------------------- la cola */
 
 /**
@@ -336,10 +388,8 @@ function ReviewBanner({
               ? "1 comercio que nadie ha mirado"
               : `${pending} comercios que nadie ha mirado`}
           </p>
-          <p className="mt-1 text-muted text-sm leading-relaxed">
-            Finflow los dedujo solo, a partir del texto de tus alertas. Revisarlos es
-            decir «sí, es ese negocio» —o ponerle el nombre y la categoría que tú usas—.
-            No corre prisa: mientras tanto todo sigue funcionando igual.
+          <p className="mt-1 text-muted text-sm">
+            Finflow los dedujo de tus alertas. Revisarlos no corre prisa.
           </p>
         </div>
         {inQueue ? null : (
@@ -442,17 +492,24 @@ function SearchBar({
 function Row({
   merchant,
   index,
+  inQueue,
   // A row holds a value and nothing else, so a category this person wrote
   // would render as `custom:mascotas` without the names beside it.
   labels,
+  onReviewed,
 }: {
   merchant: Merchant;
   index: number;
+  /** In «Por revisar» every row is unreviewed, so saying it again is noise. */
+  inQueue: boolean;
   labels: Record<string, string>;
+  onReviewed: (message: string) => void;
 }) {
+  const reviewing = merchant.needs_review;
+
   return (
     <div
-      className="rise flex items-center gap-2 border-line/40 border-b pr-3"
+      className="rise flex flex-col border-line/40 border-b sm:flex-row sm:items-center"
       style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       <Link
@@ -464,7 +521,7 @@ function Row({
           aria-hidden
           className={cn(
             "grid size-9 shrink-0 place-items-center rounded-lg transition-transform duration-200 group-hover:scale-110",
-            merchant.needs_review
+            reviewing
               ? "bg-gradient-to-br from-accent/25 to-violet/5 text-accent"
               : "bg-surface-raised text-muted",
           )}
@@ -477,67 +534,178 @@ function Row({
             <span className="truncate font-medium text-sm">
               {merchant.display_name}
             </span>
-            {merchant.needs_review ? (
+            {reviewing && !inQueue ? (
               <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[0.625rem] text-accent uppercase tracking-wider">
                 Sin revisar
               </span>
             ) : null}
           </span>
-          {/* One line, and short enough to finish it: the category is what
-              this queue is about. The last-seen date used to be here and was
-              the half that got clipped on a phone — it is on the merchant's
-              own screen, and the list is sorted by recency anyway. */}
+          {/* One line, short enough to finish. The category is left out
+              while it is a control right beside this — said twice, it was
+              the first thing to look like clutter. */}
           <span className="mt-0.5 block truncate text-faint text-xs">
-            <span className="inline-flex items-center gap-1 align-middle">
-              <Tag className="size-3" aria-hidden />
-              {labelFrom(labels, merchant.category)}
-            </span>
-            <span> · {timesSeenLabel(merchant.times_seen)}</span>
+            {reviewing ? null : (
+              <span className="inline-flex items-center gap-1 align-middle">
+                <Tag className="size-3" aria-hidden />
+                {labelFrom(labels, merchant.category)} ·{" "}
+              </span>
+            )}
+            <span>{timesSeenLabel(merchant.times_seen)}</span>
             {merchant.alias_count > 1 ? (
               <span> · {aliasCountLabel(merchant.alias_count)}</span>
             ) : null}
           </span>
         </span>
 
+        {/* On a wide screen the controls sit right after this, and a chevron
+            between the name and them points at nothing. */}
         <Enter
-          className="size-4 shrink-0 text-faint transition-transform duration-200 group-hover:translate-x-0.5"
+          className={cn(
+            "size-4 shrink-0 text-faint transition-transform duration-200 group-hover:translate-x-0.5",
+            reviewing && "sm:hidden",
+          )}
           aria-hidden
         />
       </Link>
 
       {/*
-        Outside the link, not inside it: a button nested in an anchor is
-        invalid and swallows the click on the row it sits in. It is here at
-        all because the queue is only bearable if the common answer —"sí, es
-        ese"— takes one tap and never leaves the list.
+        Outside the link: a control nested in an anchor is invalid and
+        swallows the click. Beside the name on a wide screen, under it on a
+        phone — one row either way, not a second block per merchant.
       */}
-      {merchant.needs_review ? <ConfirmButton merchant={merchant} /> : null}
+      {reviewing ? (
+        <ReviewControls merchant={merchant} labels={labels} onReviewed={onReviewed} />
+      ) : null}
     </div>
   );
 }
 
-function ConfirmButton({ merchant }: { merchant: Merchant }) {
+/** A control that shares the row's quiet look: a pill, not a block. */
+const PILL =
+  "inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs transition-colors hover:border-cyan/40 disabled:opacity-50 sm:min-h-9";
+
+/** The dropdown entry that opens the name field. Never a category value. */
+const CREATE = "__create__";
+
+/**
+ * Reviewing a merchant is saying what it is, so the category *is* the
+ * control: choosing one saves it, and that counts as reviewed. «Está bien»
+ * is for when the guess was already right.
+ *
+ * The category is the app's own `Select` in its pill form: a menu on a wide
+ * screen, a sheet on a phone, the same keyboard and screen-reader behaviour.
+ */
+function ReviewControls({
+  merchant,
+  labels,
+  onReviewed,
+}: {
+  merchant: Merchant;
+  labels: Record<string, string>;
+  onReviewed: (message: string) => void;
+}) {
+  const { data } = useSuspenseQuery(categoriesQuery);
   const confirm = useConfirmMerchant(merchant.id);
+  const edit = useEditMerchant(merchant.id);
+  const create = useCreateCategory();
+  const [naming, setNaming] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const busy = confirm.isPending || edit.isPending;
+  const failure = confirm.error ?? edit.error;
+
+  function choose(category: string) {
+    edit.mutate(
+      { category },
+      {
+        onSuccess: () =>
+          onReviewed(
+            `${merchant.display_name} quedó en ${labels[category] ?? labelFrom(labels, category)}.`,
+          ),
+      },
+    );
+  }
+
+  async function onCreate(name: string) {
+    setNameError(null);
+    try {
+      const created = await create.mutateAsync({ label: name });
+      setNaming(false);
+      edit.mutate(
+        { category: created.value },
+        { onSuccess: () => onReviewed(`${merchant.display_name} quedó en ${name}.`) },
+      );
+    } catch (cause) {
+      setNameError(createCategoryError(cause));
+    }
+  }
 
   return (
-    <Button
-      variant="ghost"
-      className="shrink-0 px-2.5 py-2 text-xs"
-      disabled={confirm.isPending}
-      title={`Aceptar «${merchant.display_name}» tal como está`}
-      onClick={() => {
-        // The list refetches on success and this row leaves the queue; a
-        // failure is reported by the row staying exactly where it was.
-        confirm.mutate();
-      }}
-    >
-      {confirm.isPending ? (
-        <Loader2 className="size-3.5 animate-spin" />
-      ) : (
-        <Check className="size-3.5" />
-      )}
-      <span className="hidden sm:inline">Está bien</span>
-    </Button>
+    <div className="flex flex-col gap-2 px-4 pb-3 pl-16 sm:py-3 sm:pl-0">
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          variant="pill"
+          icon={Tag}
+          label={`Categoría de ${merchant.display_name}`}
+          value={merchant.category}
+          disabled={busy}
+          options={[
+            ...data.categories.map((option) => ({
+              value: option.value,
+              label: categoryLabel(option.value, option.label),
+            })),
+            { value: CREATE, label: "＋ Crear una categoría…" },
+          ]}
+          onChange={(event) => {
+            if (event.target.value === CREATE) {
+              setNaming(true);
+              return;
+            }
+            choose(event.target.value);
+          }}
+        />
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            confirm.mutate(undefined, {
+              onSuccess: () => onReviewed(`${merchant.display_name} quedó revisado.`),
+            })
+          }
+          aria-label={`Está bien ${merchant.display_name}`}
+          className={cn(PILL, "text-text")}
+        >
+          {confirm.isPending ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Check className="size-3.5 text-incoming" aria-hidden />
+          )}
+          Está bien
+        </button>
+      </div>
+
+      {naming ? (
+        <CategoryNameForm
+          label="Nueva categoría"
+          submitLabel="Crear y usar"
+          pendingLabel="Creando…"
+          pending={create.isPending}
+          error={nameError}
+          categories={data.categories}
+          onSubmit={(name) => void onCreate(name)}
+          onCancel={() => {
+            setNaming(false);
+            setNameError(null);
+          }}
+        />
+      ) : null}
+
+      {failure ? (
+        <p role="alert" className="text-outgoing text-xs">
+          {failure.message}
+        </p>
+      ) : null}
+    </div>
   );
 }
 

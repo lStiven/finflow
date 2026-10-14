@@ -1,4 +1,8 @@
-from personal_finance.contexts.ingestion.domain.forwarding import forwarding_address
+from personal_finance.contexts.ingestion.domain.forwarding import (
+    forwarding_address,
+    gmail_filter_terms,
+)
+from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -42,3 +46,20 @@ def test_it_respects_the_base_address_domain() -> None:
 
     assert address.domain == "outlook.com"
     assert address.value.startswith("someoneelse+")
+
+
+def test_the_filter_terms_put_each_domain_behind_an_at_sign() -> None:
+    policy = AuthorizedSenderPolicy(
+        allowed_domains=frozenset({"lulobank.com", "bancolombia.com.co"}),
+        allowed_addresses=frozenset({EmailAddress("alertas@otrobanco.com")}),
+    )
+
+    assert gmail_filter_terms(policy) == (
+        "@bancolombia.com.co",
+        "@lulobank.com",
+        "alertas@otrobanco.com",
+    )
+
+
+def test_nobody_approved_is_an_empty_filter() -> None:
+    assert gmail_filter_terms(AuthorizedSenderPolicy()) == ()

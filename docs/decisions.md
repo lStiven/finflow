@@ -155,6 +155,15 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   starts at zero with its real opening balance unknown, so an asset's running
   total legitimately goes below zero — a known-incomplete history, where
   refusing to represent it would mean inventing a starting number.
+  *Represented, never hidden (2026-10-13):* a savings account, cash and an
+  investment have no overdraft at the bank, so below zero on one of them is
+  always a gap in Finflow — an income it never saw (Bancolombia's payroll
+  alert names no account digits and lands unassigned), or a wrong opening
+  balance. The ledger still accepts the movement, because the bank already
+  let it through and alerts arrive out of order; refusing it would lose real
+  spending. The accounts screen says so on the card instead, and refuses a
+  negative *restated* balance on those kinds. Checking is left out:
+  sobregiro is real.
 - **Accounts auto-create** on first sighting of a new (bank, instrument) pair,
   with a generic renameable name — same spirit as Merchant's auto-grouping.
 - **Manual account creation also required**, for mortgages/loans that never

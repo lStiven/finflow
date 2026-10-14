@@ -11,6 +11,8 @@
  */
 
 import { MAX_NAME_LENGTH } from "@/accounts/draft";
+import { neverBelowZero } from "@/accounts/kinds";
+import { signOf } from "@/lib/money";
 
 /** A decimal, optionally negative, written the way a person writes one. */
 const SIGNED_AMOUNT = /^-?\d+(\.\d+)?$/;
@@ -18,11 +20,20 @@ const AMOUNT = /^\d+(\.\d+)?$/;
 
 const DIGITS_ONLY = "Escribe solo números, sin puntos de miles.";
 
-/** What is wrong with a restated balance, or nothing. Empty is not valid. */
-export function balanceIssue(value: string): string | undefined {
+/**
+ * What is wrong with a restated balance, or nothing. Empty is not valid.
+ *
+ * Signed, because an overdrawn checking account and an overpaid card are both
+ * real — but not on a kind no bank lets go below zero, where a negative can
+ * only be a typo or the very gap this form exists to close.
+ */
+export function balanceIssue(value: string, kind: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return "Escribe el saldo que muestra tu banco hoy.";
   if (!SIGNED_AMOUNT.test(trimmed)) return DIGITS_ONLY;
+  if (neverBelowZero(kind) && signOf(trimmed) < 0) {
+    return "Esta cuenta no puede quedar en negativo. Escribe el saldo que muestra hoy.";
+  }
   return undefined;
 }
 

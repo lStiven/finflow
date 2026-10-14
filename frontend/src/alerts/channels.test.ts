@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AlertChannel, AlertPreference } from "@/api/queries";
 import {
   channelState,
+  describeChat,
   formatMinimumAmount,
   hasPendingLink,
   movementPreference,
@@ -146,3 +147,14 @@ function preference(minimum: string | null): AlertPreference {
     minimum_currency: minimum ? "COP" : null,
   } as AlertPreference;
 }
+
+describe("cómo se nombra el chat", () => {
+  it("el nombre en Telegram y el final de la dirección", () => {
+    expect(describeChat({ ...channel("verified"), label: "Ana" })).toBe("Ana · …6789");
+  });
+
+  it("sin nombre, lo que se guardó; sin nada, Telegram", () => {
+    expect(describeChat(channel("verified"))).toBe("…6789");
+    expect(describeChat(channel("pending"))).toBe("Telegram");
+  });
+});

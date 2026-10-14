@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Transaction } from "@/api/queries";
+import type { Account, Transaction } from "@/api/queries";
 import {
+  assignableAccounts,
   buildCorrection,
   type CorrectionForm,
   DETACH,
@@ -96,5 +97,26 @@ describe("buildCorrection", () => {
     const body = build({ account: "acc2" });
     expect(body.account_id).toBe("acc2");
     expect(body.detach).toBe(false);
+  });
+});
+
+describe("assignableAccounts", () => {
+  const account = (id: string, currency: string, closed_at: number | null = null) =>
+    ({ id, name: id, currency, closed_at }) as unknown as Account;
+
+  it("offers the open accounts in the movement's currency", () => {
+    const offered = assignableAccounts({ currency: "COP" }, [
+      account("ahorros", "COP"),
+      account("dolares", "USD"),
+      account("vieja", "COP", 1_700_000_000),
+    ]);
+
+    expect(offered.map((each) => each.id)).toEqual(["ahorros"]);
+  });
+
+  it("offers nothing when no account could take it", () => {
+    expect(
+      assignableAccounts({ currency: "USD" }, [account("ahorros", "COP")]),
+    ).toEqual([]);
   });
 });

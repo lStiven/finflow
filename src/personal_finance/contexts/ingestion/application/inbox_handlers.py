@@ -9,7 +9,10 @@ from personal_finance.contexts.ingestion.application.ports import (
     UserInboxRepository,
 )
 from personal_finance.contexts.ingestion.domain.entities import UserInbox
-from personal_finance.contexts.ingestion.domain.forwarding import forwarding_address
+from personal_finance.contexts.ingestion.domain.forwarding import (
+    forwarding_address,
+    gmail_filter_terms,
+)
 from personal_finance.contexts.ingestion.domain.policies import AuthorizedSenderPolicy
 from personal_finance.contexts.ingestion.domain.setup import InboxSetup
 from personal_finance.contexts.ingestion.domain.value_objects import (
@@ -98,6 +101,10 @@ class InboxSetupView:
 
     address: EmailAddress
     setup: InboxSetup
+    # What the user's Gmail filter should match: the approved senders, in
+    # Gmail's own terms. Derived here so no client rebuilds the list it is
+    # meant to mirror.
+    filter_terms: tuple[str, ...] = ()
     # Senders whose mail arrived and was thrown away for not being approved.
     # The single most likely reason a setup looks finished and produces
     # nothing, and the one failure a user cannot diagnose from the outside:
@@ -144,7 +151,11 @@ class GetInboxSetupUseCase:
             # Nothing left to diagnose, and the walk below grows with
             # everything the account ever received. A rejection that happens
             # after this point belongs to the notification list.
-            return InboxSetupView(address=inbox.address, setup=setup)
+            return InboxSetupView(
+                address=inbox.address,
+                setup=setup,
+                filter_terms=gmail_filter_terms(inbox.sender_policy),
+            )
 
         return self._diagnose(inbox, setup)
 
@@ -191,6 +202,7 @@ class GetInboxSetupUseCase:
         return InboxSetupView(
             address=inbox.address,
             setup=setup,
+            filter_terms=gmail_filter_terms(inbox.sender_policy),
             unapproved_senders=(
                 ()
                 if setup.ready

@@ -298,6 +298,68 @@
     }
   }
 
+  /*
+   * A dropdown's list arriving and leaving. Opacity and transform only, so
+   * the compositor runs it without a layout pass. `--menu-from` is set by the
+   * list: it drops in from above when it opens downwards and the other way
+   * round.
+   */
+  @keyframes menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(var(--menu-from, -6px)) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes menu-out {
+    to {
+      opacity: 0;
+      transform: translateY(var(--menu-from, -6px)) scale(0.98);
+    }
+  }
+
+  /* On a phone the list is a sheet from the bottom edge, over a dimmed page. */
+  @keyframes sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: none;
+    }
+  }
+
+  @keyframes sheet-out {
+    to {
+      transform: translateY(100%);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+
+  /* A share of something filling in, from the left: the parts of a payment. */
+  @keyframes grow-x {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
   @keyframes shimmer {
     to {
       background-position: -200% 0;
@@ -615,6 +677,45 @@
 
   .burst {
     animation: burst 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .menu-in {
+    animation: menu-in 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .menu-out {
+    animation: menu-out 110ms ease-in both;
+  }
+
+  .sheet-in {
+    animation: sheet-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .sheet-out {
+    animation: sheet-out 180ms ease-in both;
+  }
+
+  .fade-in {
+    animation: fade-in 200ms ease-out both;
+  }
+
+  .fade-out {
+    animation: fade-out 160ms ease-in both;
+  }
+
+  /*
+   * A carousel slide kept only to reserve its height: never painted, so
+   * nothing in it has any reason to move.
+   */
+  .ghost-slide,
+  .ghost-slide * {
+    /* biome-ignore lint/complexity/noImportantStyles: the animations it stops are set by classes on the elements themselves */
+    animation: none !important;
+  }
+
+  .grow-x {
+    transform-origin: left;
+    animation: grow-x 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
   /* A check that draws itself once. The path carries `pathLength="1"`. */

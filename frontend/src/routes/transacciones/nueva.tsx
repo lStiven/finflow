@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ArrowLeftRight } from "lucide-react";
 import { type SubmitEvent, useState } from "react";
 import {
   accountsQuery,
@@ -13,6 +13,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
 import { Select } from "@/components/ui/Select";
 import { TextArea } from "@/components/ui/TextArea";
 import { cn } from "@/lib/cn";
@@ -170,16 +171,14 @@ function NewTransactionScreen() {
 
             {isTransfer ? (
               <>
-                <p className="rounded-xl border border-violet/25 bg-violet/8 p-3.5 text-muted text-xs leading-relaxed">
-                  Para pagar una tarjeta o un crédito con plata que no salió de una
-                  cuenta que lleves aquí — otro banco, Nequi, efectivo. No cuenta como
-                  gasto ni como ingreso: solo mueve el saldo.
-                  <br />
-                  <span className="text-faint">
-                    Si pagas una tarjeta desde una cuenta del mismo banco, no registres
-                    nada: ese correo llega solo y Finflow escribe las dos mitades.
-                  </span>
-                </p>
+                <Notice
+                  icon={ArrowLeftRight}
+                  title="No es gasto ni ingreso: solo mueve un saldo"
+                >
+                  Para pagar una tarjeta o un crédito con plata de fuera de Finflow:
+                  otro banco, Nequi, efectivo. Si la pagaste desde una cuenta del mismo
+                  banco, no escribas nada: llega sola.
+                </Notice>
 
                 <fieldset className="flex flex-col gap-2">
                   <legend className="mb-2 text-muted text-sm">¿Qué hiciste?</legend>
@@ -279,7 +278,7 @@ function NewTransactionScreen() {
               <CategoryPicker
                 label="Categoría (opcional)"
                 placeholder="Sin categoría"
-                hint="Se la queda el comercio, no este movimiento: los anteriores con ese mismo nombre también la toman. Sin ella, este gasto no aparece en «Gastos por categoría»."
+                hint="Se guarda en el comercio: sus otros movimientos también la toman."
                 value={category}
                 onChange={setCategory}
               />

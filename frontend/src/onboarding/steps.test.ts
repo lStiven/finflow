@@ -43,6 +43,8 @@ function setup(
     current: null,
     ready,
     unapproved_senders: unapproved,
+    gmail_filter: "",
+    gmail_filter_terms: [],
   };
 }
 

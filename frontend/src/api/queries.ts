@@ -29,6 +29,7 @@ export type TransferView = components["schemas"]["TransferView"];
 export type RegisteredInbox = components["schemas"]["RegisteredInboxResponse"];
 export type Profile = components["schemas"]["CurrentUserResponse"];
 export type InboxSetup = components["schemas"]["InboxSetupResponse"];
+export type KnownBank = components["schemas"]["KnownBankResponse"];
 export type Summary = components["schemas"]["SpendingSummaryResponse"];
 export type SummaryGroup = components["schemas"]["SummaryGroupResponse"];
 export type SpendingTotals = components["schemas"]["SpendingTotalsResponse"];
@@ -172,6 +173,17 @@ export const financialCatalogQuery = queryOptions({
 export const merchantCatalogQuery = queryOptions({
   queryKey: [...queryKeys.catalog, "merchant"],
   queryFn: () => unwrap(api.GET("/merchants/catalog")),
+  staleTime: Number.POSITIVE_INFINITY,
+});
+
+/**
+ * Ingestion's vocabulary, and the banks Finflow reads with a template of its
+ * own. Those come from the backend's parser registry: a bank on the connect
+ * screen is one with a parser, never a list kept here.
+ */
+export const ingestionCatalogQuery = queryOptions({
+  queryKey: [...queryKeys.catalog, "ingestion"],
+  queryFn: () => unwrap(api.GET("/ingestion/catalog")),
   staleTime: Number.POSITIVE_INFINITY,
 });
 
@@ -563,8 +575,11 @@ export function useUpdateInbox(): UseMutationResult<RegisteredInbox, Error, Inbo
     onSuccess: (data) => {
       client.setQueryData(queryKeys.inbox, data);
       // Approving a sender is exactly what closes the `senders_approved`
-      // step, so the onboarding answer is stale the moment this lands.
-      client.invalidateQueries({ queryKey: queryKeys.setup });
+      // step, so the onboarding answer is stale the moment this lands. And
+      // it carries the Gmail filter, so the write is not over until it is
+      // back: a filter missing the bank just chosen must never be on screen
+      // to be copied.
+      return client.invalidateQueries({ queryKey: queryKeys.setup });
     },
   });
 }

@@ -31,6 +31,9 @@ from personal_finance.contexts.ingestion.application.inbox_handlers import (
     GetInboxSetupUseCase,
     InboxSetupView,
 )
+from personal_finance.contexts.ingestion.domain.forwarding import (
+    GMAIL_FILTER_SEPARATOR,
+)
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     DynamoDBNotificationReader,
@@ -73,6 +76,12 @@ class InboxSetupResponse(BaseModel):
     # Senders whose mail arrived and was discarded for not being approved.
     # Empty once `ready`.
     unapproved_senders: list[str]
+    # What goes into Gmail's «De» to forward the approved senders and nothing
+    # else, ready to paste. Empty when nobody is approved.
+    gmail_filter: str
+    # The same filter, one term per approval, so a client can tell which
+    # senders a filter made earlier is missing.
+    gmail_filter_terms: list[str]
 
 
 @functools.lru_cache(maxsize=1)
@@ -142,4 +151,6 @@ def _setup_response(view: InboxSetupView) -> InboxSetupResponse:
         current=None if current is None else current.value,
         ready=view.setup.ready,
         unapproved_senders=[sender.value for sender in view.unapproved_senders],
+        gmail_filter=GMAIL_FILTER_SEPARATOR.join(view.filter_terms),
+        gmail_filter_terms=list(view.filter_terms),
     )

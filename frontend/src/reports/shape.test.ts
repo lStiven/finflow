@@ -11,6 +11,7 @@ import { bandPalette, REMAINDER_FILL } from "@/components/charts/palette";
 import { labelFrom } from "@/merchants/categories";
 import {
   bandsOf,
+  bucketDrilldown,
   bucketsOf,
   cashflowSeries,
   describePrevious,
@@ -385,6 +386,30 @@ describe("drilldown", () => {
     expect(search.from).toBe("2026-08-01");
     expect(search.to).toBe("2026-08-31");
     expect(search.transfers).toBe("exclude");
+  });
+});
+
+describe("bucketDrilldown", () => {
+  it("lists one column: the days its bucket covers", () => {
+    const week = {
+      starts_at: AUGUST_START + 604_800,
+      ends_at: AUGUST_START + 2 * 604_800,
+    };
+    const search = bucketDrilldown(VIEW, week, { direction: "outgoing" });
+
+    expect([search.from, search.to]).toEqual(["2026-08-08", "2026-08-14"]);
+    expect(search).toMatchObject({ direction: "outgoing", transfers: "exclude" });
+  });
+
+  /* A month bucket can begin before a custom range; the column only counts the overlap. */
+  it("never reaches outside the window on screen", () => {
+    const wide = {
+      starts_at: AUGUST_START - 10 * 86_400,
+      ends_at: SEPTEMBER_START + 86_400,
+    };
+    const search = bucketDrilldown(VIEW, wide);
+
+    expect([search.from, search.to]).toEqual(["2026-08-01", "2026-08-31"]);
   });
 });
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import dataclasses
 from typing import Protocol
 
 from personal_finance.contexts.ingestion.domain.parsing.bancolombia import (
@@ -16,6 +17,7 @@ from personal_finance.contexts.ingestion.domain.parsing.lulobank import (
 )
 from personal_finance.contexts.ingestion.domain.transactions import ExtractedMovement
 from personal_finance.contexts.ingestion.domain.value_objects import EmailAddress
+from personal_finance.shared.domain.value_objects import ValueObject
 
 
 class DeterministicParser(Protocol):
@@ -52,6 +54,52 @@ BANK_DOMAINS: Mapping[str, str] = {
     # bank, and it is the one DKIM signs.
     "lulobank.com": LULO_BANK,
 }
+
+# How each bank spells itself on a screen. A parser's `BANK_NAME` is lowercase
+# because it is an identifier written into every movement, not a label.
+BANK_DISPLAY_NAMES: Mapping[str, str] = {
+    BANCOLOMBIA: "Bancolombia",
+    LULO_BANK: "Lulo Bank",
+}
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class KnownBank(ValueObject):
+    """A bank with a deterministic parser, as a connect-your-bank screen shows it.
+
+    Knowing a bank approves nothing: each user still approves its senders.
+    """
+
+    # The parser's `BANK_NAME`, which is also what lands in a movement's `bank`.
+    id: str
+    name: str
+    domains: tuple[str, ...]
+
+
+def known_banks(
+    bank_domains: Mapping[str, str] = BANK_DOMAINS,
+    display_names: Mapping[str, str] = BANK_DISPLAY_NAMES,
+) -> tuple[KnownBank, ...]:
+    """Every bank in `bank_domains`, in the order it first appears there.
+
+    Derived rather than listed a second time, so a parser registered with its
+    domains reaches the screen without touching anything else. All of a bank's
+    domains travel together: approving only some of Bancolombia's accepts card
+    purchases and silently drops every transfer.
+    """
+    domains_by_bank: dict[str, list[str]] = {}
+
+    for domain, bank in bank_domains.items():
+        domains_by_bank.setdefault(bank, []).append(domain)
+
+    return tuple(
+        KnownBank(
+            id=bank,
+            name=display_names.get(bank, bank.title()),
+            domains=tuple(domains),
+        )
+        for bank, domains in domains_by_bank.items()
+    )
 
 
 class ParserRegistry:

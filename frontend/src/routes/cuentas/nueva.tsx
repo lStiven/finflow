@@ -1,18 +1,23 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  redirect,
+  useNavigate,
+  useRouter,
+} from "@tanstack/react-router";
 import {
   ArrowLeft,
   ArrowRight,
   Check,
   Loader2,
-  PartyPopper,
   Radio,
   ShieldCheck,
   Sparkles,
   TrendingDown,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   type AccountDraft,
   type Currency,
@@ -31,16 +36,28 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
+import { SuccessMark } from "@/components/ui/SuccessMark";
 import { cn } from "@/lib/cn";
 
 export const Route = createFileRoute("/cuentas/nueva")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
   },
+  validateSearch: (raw: Record<string, unknown>): NewAccountSearch => {
+    const paso = Number(raw.paso);
+    return paso === 2 || paso === 3 ? { paso } : {};
+  },
   loader: ({ context }) =>
     context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
   component: NewAccountScreen,
 });
+
+/**
+ * The step on screen, in the address — the connect guide's lesson: the
+ * browser's back walks the steps instead of leaving the form. Step one is the
+ * bare address.
+ */
+type NewAccountSearch = { paso?: 2 | 3 };
 
 const STEPS = ["Tipo", "Datos", "Confirmar"] as const;
 
@@ -56,11 +73,30 @@ const STEPS = ["Tipo", "Datos", "Confirmar"] as const;
  */
 function NewAccountScreen() {
   const navigate = useNavigate();
+  const router = useRouter();
+  const { paso } = Route.useSearch();
   const { data: catalog } = useSuspenseQuery(financialCatalogQuery);
   const create = useCreateAccount();
 
-  const [step, setStep] = useState(0);
   const [draft, setDraft] = useState<AccountDraft>(emptyDraft);
+  // A later step with no kind chosen is a reload or a pasted link: the draft
+  // lives in memory, so there is nothing to show there but the first step.
+  const step = paso !== undefined && draft.kind !== "" ? paso - 1 : 0;
+
+  useEffect(() => {
+    if (paso !== undefined && draft.kind === "") {
+      void navigate({ to: "/cuentas/nueva", search: {}, replace: true });
+    }
+  }, [paso, draft.kind, navigate]);
+
+  /** Forward pushes a step; going back is the browser's own back. */
+  function setStep(next: number, replace = false) {
+    void navigate({
+      to: "/cuentas/nueva",
+      search: next === 0 ? {} : { paso: next === 1 ? 2 : 3 },
+      replace,
+    });
+  }
   /** Once somebody edits the name, the kind stops rewriting it under them. */
   const [namedByHand, setNamedByHand] = useState(false);
   /** Only after a failed attempt: nobody wants to be corrected mid-typing. */
@@ -115,7 +151,7 @@ function NewAccountScreen() {
   async function submit() {
     if (issues.length > 0) {
       setChecked(true);
-      setStep(1);
+      setStep(1, true);
       return;
     }
     try {
@@ -135,7 +171,7 @@ function NewAccountScreen() {
             setDraft(emptyDraft());
             setNamedByHand(false);
             setChecked(false);
-            setStep(0);
+            setStep(0, true);
           }}
         />
       </AppShell>
@@ -150,7 +186,7 @@ function NewAccountScreen() {
             variant="quiet"
             className="self-start px-0 py-0 text-xs"
             onClick={() =>
-              step === 0 ? void navigate({ to: "/cuentas" }) : setStep(step - 1)
+              step === 0 ? void navigate({ to: "/cuentas" }) : router.history.back()
             }
           >
             <ArrowLeft className="size-3.5" />
@@ -205,7 +241,7 @@ function NewAccountScreen() {
               watched={watched}
               pending={create.isPending}
               error={create.error}
-              onBack={() => setStep(1)}
+              onBack={() => router.history.back()}
               onConfirm={submit}
             />
           ) : null}
@@ -729,12 +765,9 @@ function Done({ account, onAgain }: { account: Account; onAgain: () => void }) {
         lift={false}
         className="rise flex flex-col items-center gap-5 p-8 text-center"
       >
-        <span
-          aria-hidden
-          className="pulse-ring grid size-14 place-items-center rounded-2xl bg-incoming/15 ring-1 ring-incoming/30"
-        >
-          <PartyPopper className="size-6 text-incoming" />
-        </span>
+        {/* The connect guide's one celebration, for the other moment that
+            earns it: something the owner declared now exists and is counted. */}
+        <SuccessMark celebrate />
 
         <div>
           <h1 className="font-semibold text-xl tracking-tight">

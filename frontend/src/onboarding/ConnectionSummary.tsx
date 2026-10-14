@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Ban,
@@ -13,9 +13,11 @@ import {
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import {
+  type KnownBank,
   latestAlertMovementQuery,
   type Notification,
   recentMailQuery,
+  setupQuery,
 } from "@/api/queries";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -28,7 +30,6 @@ import {
   approvedBanks,
   bankOfSender,
   filterDrift,
-  filterTerms,
   isApproved,
   withSender,
 } from "@/onboarding/banks";
@@ -37,6 +38,7 @@ import { GMAIL_FILTERS_URL } from "@/onboarding/gmail";
 import { MovementCard, MovementPlaceholder } from "@/onboarding/MovementCard";
 import { ExternalButton } from "@/onboarding/parts";
 import type { OnboardingState, StageId } from "@/onboarding/steps";
+import { useKnownBanks } from "@/onboarding/useKnownBanks";
 import { type SendersControl, useSenders } from "@/onboarding/useSenders";
 
 /**
@@ -61,13 +63,15 @@ export function ConnectionSummary({
 }) {
   const control = useSenders();
   const { senders } = control;
+  const banks = useKnownBanks();
+  const { data: setup } = useSuspenseQuery(setupQuery);
   const now = useNow(60_000);
   const mail = useQuery({ ...recentMailQuery, refetchInterval: 60_000 });
   const latest = useQuery(latestAlertMovementQuery);
 
   const notifications = mail.data?.notifications ?? [];
   const health = mail.data ? healthOf(notifications, senders, now) : null;
-  const terms = filterTerms(senders);
+  const terms = setup.gmail_filter_terms;
   const drift = filterDrift(state.filterSenders, terms);
   const movement = latest.data?.transactions[0] ?? null;
   const headline = headlineOf(health, state, now);
@@ -97,7 +101,8 @@ export function ConnectionSummary({
         <FilterUpdate
           added={drift.added}
           removed={drift.removed}
-          filter={terms.join(" OR ")}
+          filter={setup.gmail_filter}
+          banks={banks}
           onDone={() => onFilterUpdated(terms)}
         />
       ) : null}
@@ -106,7 +111,7 @@ export function ConnectionSummary({
         <Card lift={false} className="flex min-w-0 flex-col gap-5 lg:col-span-3">
           <Row icon={Landmark} title="Tus bancos">
             <div className="flex flex-wrap items-center gap-2">
-              {approvedBanks(senders).map((bank) => (
+              {approvedBanks(senders, banks).map((bank) => (
                 <span
                   key={bank.name}
                   className={cn(
@@ -170,7 +175,12 @@ export function ConnectionSummary({
         </div>
       </div>
 
-      <RecentMail notifications={notifications} control={control} now={now} />
+      <RecentMail
+        notifications={notifications}
+        control={control}
+        banks={banks}
+        now={now}
+      />
 
       <div className="flex flex-wrap gap-2">
         <Button variant="ghost" onClick={() => onOpenStage("banks")}>
@@ -183,7 +193,7 @@ export function ConnectionSummary({
         </Button>
       </div>
 
-      <Troubleshooting filter={terms.join(" OR ")} />
+      <Troubleshooting filter={setup.gmail_filter} />
     </div>
   );
 }
@@ -289,12 +299,12 @@ function Row({
   );
 }
 
-function termsToNames(terms: string[]): string {
+function termsToNames(terms: string[], banks: readonly KnownBank[]): string {
   const names = [
     ...new Set(
       terms.map((term) => {
         const sender = term.startsWith("@") ? `x${term}` : term;
-        return bankOfSender(sender)?.name ?? term;
+        return bankOfSender(sender, banks)?.name ?? term;
       }),
     ),
   ];
@@ -312,11 +322,13 @@ function FilterUpdate({
   added,
   removed,
   filter,
+  banks,
   onDone,
 }: {
   added: string[];
   removed: string[];
   filter: string;
+  banks: readonly KnownBank[];
   onDone: () => void;
 }) {
   const urgent = added.length > 0;
@@ -336,8 +348,8 @@ function FilterUpdate({
       >
         <Filter className="size-4 shrink-0" aria-hidden />
         {urgent
-          ? `Tu filtro de Gmail no incluye ${termsToNames(added)}`
-          : `Tu filtro de Gmail todavía reenvía ${termsToNames(removed)}`}
+          ? `Tu filtro de Gmail no incluye ${termsToNames(added, banks)}`
+          : `Tu filtro de Gmail todavía reenvía ${termsToNames(removed, banks)}`}
       </p>
       <p className="mt-1 text-muted text-sm leading-relaxed">
         {urgent
@@ -392,10 +404,12 @@ const OUTCOME_LOOK: Record<
 function RecentMail({
   notifications,
   control,
+  banks,
   now,
 }: {
   notifications: Notification[];
   control: SendersControl;
+  banks: readonly KnownBank[];
   now: number;
 }) {
   if (notifications.length === 0) return null;
@@ -410,7 +424,7 @@ function RecentMail({
           const outcome = outcomeOf(notification.status);
           const look = OUTCOME_LOOK[outcome];
           const Icon = look.icon;
-          const bank = bankOfSender(notification.sender);
+          const bank = bankOfSender(notification.sender, banks);
           const turnedAway =
             outcome === "discarded" &&
             !isApproved(notification.sender, control.senders);

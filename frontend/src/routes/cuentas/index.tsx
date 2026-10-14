@@ -1,5 +1,11 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  redirect,
+  useNavigate,
+  useRouterState,
+} from "@tanstack/react-router";
 import {
   Archive,
   ArrowRight,
@@ -25,11 +31,12 @@ import {
   Wallet,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
-import { type SubmitEvent, useState, useTransition } from "react";
+import { type SubmitEvent, useState } from "react";
+import { attentionOf, watchedCount } from "@/accounts/attention";
 import { balanceIssue, creditLimitIssue, nameIssue } from "@/accounts/edits";
 import { isFinanceable, RATE_BASIS_COPY, toPercent } from "@/accounts/financing";
 import { describeInstrument, parseInstrument } from "@/accounts/instruments";
-import { instrumentLabel, kindCopy } from "@/accounts/kinds";
+import { canLinkAlerts, instrumentLabel, kindCopy } from "@/accounts/kinds";
 import {
   type Account,
   accountsQuery,
@@ -46,10 +53,13 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
 import { Money } from "@/components/Money";
-import { Button } from "@/components/ui/Button";
+import { PageHeader } from "@/components/PageHeader";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Field } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
 import { Select } from "@/components/ui/Select";
+import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/dates";
 import { describeBalance, signOf, toChartValue } from "@/lib/money";
@@ -63,12 +73,39 @@ const SCOPE_TABS: { value: Scope; label: string }[] = [
   { value: "all", label: "Todas" },
 ];
 
+/**
+ * The tab, in the address: back undoes it, and closing an account lands on
+ * «Cerradas» as a step somebody can take back. Absent means «Abiertas».
+ */
+type AccountsSearch = { ver?: "cerradas" | "todas" };
+
+const SCOPE_OF = { cerradas: "closed", todas: "all" } as const;
+
+function scopeOf(search: AccountsSearch): Scope {
+  return search.ver ? SCOPE_OF[search.ver] : "open";
+}
+
+function searchOf(scope: Scope): AccountsSearch {
+  return scope === "closed"
+    ? { ver: "cerradas" }
+    : scope === "all"
+      ? { ver: "todas" }
+      : {};
+}
+
 export const Route = createFileRoute("/cuentas/")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
   },
-  loader: ({ context }) =>
+  validateSearch: (raw: Record<string, unknown>): AccountsSearch =>
+    raw.ver === "cerradas" || raw.ver === "todas" ? { ver: raw.ver } : {},
+  loaderDeps: ({ search }) => search,
+  loader: ({ context, deps }) =>
     Promise.all([
+      context.queryClient.query({
+        ...accountsQuery(scopeOf(deps)),
+        staleTime: "static",
+      }),
       /*
        * `open`, the same scope the dashboard reports on. The net worth that
        * travels with this list is computed over the scope asked for, so the
@@ -91,13 +128,13 @@ export const Route = createFileRoute("/cuentas/")({
 });
 
 function AccountsScreen() {
-  const [scope, setScope] = useState<Scope>("open");
-  /*
-   * Switching scope changes a query key, so the screen would suspend and blank
-   * out on every tap. Inside a transition React keeps the current list on
-   * screen until the new one is ready, and `pending` is what says so.
-   */
-  const [pending, startScopeChange] = useTransition();
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const scope = scopeOf(search);
+  // The router keeps this list on screen while the next tab loads; this is
+  // what says so.
+  const pending = useRouterState({ select: (state) => state.isLoading });
+  const showScope = (next: Scope) => void navigate({ search: searchOf(next) });
 
   const { data: open } = useSuspenseQuery(accountsQuery("open"));
   const { data: every } = useSuspenseQuery(accountsQuery("all"));
@@ -118,26 +155,31 @@ function AccountsScreen() {
 
   return (
     <AppShell>
-      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-semibold text-2xl tracking-tight">Cuentas</h1>
-          <p className="mt-1.5 max-w-xl text-muted text-sm">
-            {declaredAny
-              ? "Lo que tienes y lo que debes, con los movimientos que ya se les asignaron."
-              : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."}
-          </p>
-        </div>
-
-        {declaredAny ? (
-          <Link
-            to="/cuentas/nueva"
-            className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
-          >
-            <Plus className="size-4" />
-            Nueva cuenta
-          </Link>
-        ) : null}
-      </header>
+      <div className="mb-8">
+        <PageHeader
+          title="Cuentas"
+          lead={
+            declaredAny
+              ? "Lo que tienes y lo que debes."
+              : "Dónde vive tu plata: la cuenta del banco, la tarjeta, el efectivo."
+          }
+          // Without any account the first-run card below is the explanation.
+          help={{
+            id: "cuentas",
+            openFirstTime: declaredAny,
+            points: HELP_POINTS,
+            story: storyOf("traslado"),
+          }}
+          actions={
+            declaredAny ? (
+              <Link to="/cuentas/nueva" className={buttonClass("primary")}>
+                <Plus className="size-4" />
+                Nueva cuenta
+              </Link>
+            ) : null
+          }
+        />
+      </div>
 
       {!declaredAny ? (
         <EmptyState />
@@ -149,6 +191,7 @@ function AccountsScreen() {
               assets={primary.assets}
               liabilities={primary.liabilities}
               currency={primary.currency}
+              watched={watchedCount(open.accounts)}
             />
           ) : null}
 
@@ -160,11 +203,15 @@ function AccountsScreen() {
             </p>
           ) : null}
 
-          <ScopeTabs
-            scope={scope}
-            pending={pending}
-            onChange={(next) => startScopeChange(() => setScope(next))}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 font-medium text-sm">
+              Tus cuentas
+              <span className="rounded-full bg-surface-raised px-2 py-0.5 text-faint text-xs tabular-nums">
+                {accounts.length}
+              </span>
+            </h2>
+            <ScopeTabs scope={scope} pending={pending} onChange={showScope} />
+          </div>
 
           {accounts.length === 0 ? (
             <Card lift={false}>
@@ -176,7 +223,12 @@ function AccountsScreen() {
             </Card>
           ) : (
             <section
-              className={cn("grid gap-4 md:grid-cols-2", pending && "opacity-60")}
+              className={cn(
+                // Stretched so a row's feet line up, except while a card has a
+                // section open: its neighbour would grow by the whole panel.
+                "grid grid-cols-1 gap-4 has-data-open:items-start [&>*]:min-w-0 md:grid-cols-2",
+                pending && "opacity-60",
+              )}
             >
               {accounts.map((account, index) => (
                 <AccountCard
@@ -184,7 +236,7 @@ function AccountsScreen() {
                   account={account}
                   kindLabel={labelOf(account.kind)}
                   index={index}
-                  onClosed={() => startScopeChange(() => setScope("closed"))}
+                  onClosed={() => showScope("closed")}
                 />
               ))}
             </section>
@@ -196,6 +248,29 @@ function AccountsScreen() {
     </AppShell>
   );
 }
+
+const HELP_POINTS = [
+  {
+    icon: ShieldCheck,
+    title: "Las declaras tú",
+    body: "Finflow no entra a tu banco: una cuenta es una etiqueta tuya para ordenar lo que llega.",
+  },
+  {
+    icon: Radio,
+    title: "Enlaza sus tarjetas",
+    body: "Las alertas traen el banco y los últimos cuatro dígitos. Enlázalos en «Alertas» y sus movimientos caen en esa cuenta.",
+  },
+  {
+    icon: Scale,
+    title: "Patrimonio",
+    body: "Lo que tienes menos lo que debes. Préstamos e hipotecas se vigilan sin sumar.",
+  },
+  {
+    icon: Pencil,
+    title: "Todo se ajusta",
+    body: "Nombre, saldo, cupo, cerrar o reabrir: en «Ajustes», dentro de cada cuenta.",
+  },
+];
 
 function ScopeTabs({
   scope,
@@ -211,7 +286,7 @@ function ScopeTabs({
       <div
         role="tablist"
         aria-label="Qué cuentas ver"
-        className="flex flex-1 gap-1 rounded-xl border border-line bg-surface p-1 sm:max-w-sm"
+        className="flex gap-1 rounded-xl border border-line bg-surface p-1"
       >
         {SCOPE_TABS.map((tab) => (
           <button
@@ -222,8 +297,8 @@ function ScopeTabs({
             onClick={() => onChange(tab.value)}
             className={
               scope === tab.value
-                ? "flex-1 rounded-lg bg-accent-soft py-2 font-medium text-sm text-text transition-colors"
-                : "flex-1 rounded-lg py-2 text-muted text-sm transition-colors hover:text-text"
+                ? "min-h-11 rounded-lg bg-accent-soft px-3.5 font-medium text-sm text-text transition-colors sm:min-h-9"
+                : "min-h-11 rounded-lg px-3.5 text-muted text-sm transition-colors hover:text-text sm:min-h-9"
             }
           >
             {tab.label}
@@ -349,26 +424,59 @@ const PITCH = [
 
 /* ------------------------------------------------------------- con cuentas */
 
+/**
+ * The three figures, each with the line that says what it is made of.
+ *
+ * «Debes» is the one that needed it: a loan watched rather than counted sits
+ * in the list below with a debt on it, and a «Debes» that leaves it out reads
+ * as a sum that does not add up until somebody says why.
+ */
 function NetWorthStrip({
   total,
   assets,
   liabilities,
   currency,
+  watched,
 }: {
   total: string;
   assets: string;
   liabilities: string;
   currency: string;
+  /** Open accounts kept outside every total. */
+  watched: number;
 }) {
   const figures = [
-    { label: "Patrimonio", amount: total, hue: "violet" as const, icon: Wallet },
-    { label: "Tienes", amount: assets, hue: "green" as const, icon: Landmark },
-    { label: "Debes", amount: liabilities, hue: "accent" as const, icon: CreditCard },
+    {
+      label: "Patrimonio",
+      amount: total,
+      hue: "violet" as const,
+      icon: Wallet,
+      caption: "Lo que tienes menos lo que debes",
+    },
+    {
+      label: "Tienes",
+      amount: assets,
+      hue: "green" as const,
+      icon: Landmark,
+      caption: "Cuentas, efectivo e inversiones",
+    },
+    {
+      label: "Debes",
+      amount: liabilities,
+      hue: "accent" as const,
+      icon: CreditCard,
+      // Loans and mortgages are watched, never counted (the catalogue's
+      // `informational`), so what is owed here is the cards.
+      caption:
+        watched === 0
+          ? "Tus tarjetas de crédito"
+          : `Tus tarjetas; sin ${watched === 1 ? "el crédito" : `los ${watched} créditos`} que solo vigilas`,
+    },
   ];
 
   return (
     <section aria-label="Tu posición" className="grid gap-3 sm:grid-cols-3">
-      {figures.map(({ label, amount, hue, icon: Icon }, index) => (
+      {figures.map(({ label, amount, hue, icon: Icon, caption }, index) => (
         <div
           key={label}
           className={cn(
@@ -401,6 +509,7 @@ function NetWorthStrip({
               hue === "green" ? "positive" : hue === "accent" ? "negative" : "plain"
             }
           />
+          <p className="text-faint text-xs">{caption}</p>
         </div>
       ))}
     </section>
@@ -429,6 +538,12 @@ function AccountCard({
   const closed = account.closed_at !== null;
   const copy = kindCopy(account.kind, kindLabel);
   const Icon = copy.icon;
+  const attention = attentionOf(account);
+  const shape = isFinanceable(account.kind);
+  // One section at a time, so the notice above can open the one it names.
+  const [open, setOpen] = useState<Section | null>(null);
+  const toggle = (section: Section) =>
+    setOpen((current) => (current === section ? null : section));
 
   return (
     <Card
@@ -439,6 +554,7 @@ function AccountCard({
         closed && "border-dashed",
       )}
       style={{ animationDelay: `${index * 60}ms` }}
+      data-open={open === null ? undefined : ""}
     >
       <span
         aria-hidden
@@ -477,7 +593,12 @@ function AccountCard({
           </p>
           <p className="mt-0.5 line-clamp-2 text-faint text-xs">
             {copy.label}
-            {account.bank ? ` · ${account.bank}` : ""}
+            {account.bank ? (
+              <>
+                {" · "}
+                <span className="capitalize">{account.bank}</span>
+              </>
+            ) : null}
           </p>
         </div>
 
@@ -496,18 +617,23 @@ function AccountCard({
 
       {owed && !account.informational ? <CreditBar account={account} /> : null}
 
-      {/* On the card and not folded into a panel: right above this sits a
-          "Debes" tile that leaves this figure out, and the two read as a
-          contradiction until somebody is told which question each answers. */}
+      {/* On the card and not folded away: right above this sits a «Debes»
+          that leaves this figure out, and the two read as a contradiction
+          until somebody is told which question each answers. */}
       {account.informational ? (
         <p className="flex items-start gap-2 rounded-xl border border-line bg-ink p-3 text-faint text-xs leading-relaxed">
           <Eye aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          <span className="min-w-0">
-            Fuera de tu patrimonio y de tus gastos, a propósito. Ya sabes lo que debes
-            aquí, y la cuota se registra como gasto cuando sale de tu cuenta; esto es
-            para seguirle el rastro a la deuda.
-          </span>
+          Solo la vigilas: no suma ni resta en tu patrimonio ni en tus gastos.
         </p>
+      ) : null}
+
+      {attention ? (
+        <AttentionNotice
+          account={account}
+          attention={attention}
+          onLink={() => setOpen("alerts")}
+          onRestate={() => setOpen("settings")}
+        />
       ) : null}
 
       <p className="text-faint text-xs">
@@ -523,9 +649,40 @@ function AccountCard({
           : ""}
       </p>
 
-      <Instruments account={account} />
-      <Financing account={account} />
-      <Settings account={account} onClosed={onClosed} />
+      <div className="flex flex-col gap-2.5">
+        {canLinkAlerts(account.kind) ? (
+          <Panel
+            id={`${account.id}-alerts`}
+            icon={Radio}
+            summary="Alertas"
+            badge={account.instruments.length}
+            open={open === "alerts"}
+            onToggle={() => toggle("alerts")}
+          >
+            <Instruments account={account} />
+          </Panel>
+        ) : null}
+        {shape === null ? null : (
+          <Panel
+            id={`${account.id}-financing`}
+            icon={Percent}
+            summary={financingSummary(account, shape)}
+            open={open === "financing"}
+            onToggle={() => toggle("financing")}
+          >
+            <Financing account={account} />
+          </Panel>
+        )}
+        <Panel
+          id={`${account.id}-settings`}
+          icon={Pencil}
+          summary="Ajustes de la cuenta"
+          open={open === "settings"}
+          onToggle={() => toggle("settings")}
+        >
+          <Settings account={account} onClosed={onClosed} />
+        </Panel>
+      </div>
 
       <Link
         to="/transacciones"
@@ -533,69 +690,47 @@ function AccountCard({
         className="-m-1 mt-auto flex items-center gap-1.5 self-start rounded-lg p-1 text-cyan text-sm transition-colors hover:text-text"
       >
         Ver sus movimientos
-        <ArrowRight className="size-3.5" />
+        <ArrowRight className="size-3.5" aria-hidden />
       </Link>
     </Card>
   );
 }
 
 /**
- * The panel a loan or an investment gets, and nothing else does.
+ * What a loan or an investment costs or yields, and the way to the screen
+ * that keeps it.
  *
- * It exists because the gap it names is invisible: a mortgage declared with a
- * balance and no terms looks complete, its number falls by exactly what is
- * paid, and it is wrong every month by the interest nobody charged. So the
- * summary line says what is missing rather than what is there — and once the
- * terms exist it says the rate, which is the one figure worth checking
- * against a contract at a glance.
+ * The gap it names is invisible otherwise: a mortgage declared with a balance
+ * and no terms looks complete, its number falls by exactly what is paid, and
+ * it is wrong every month by the interest nobody charged. Once the terms
+ * exist it says the rate, the one figure worth checking against a contract.
  */
 function Financing({ account }: { account: Account }) {
   const shape = isFinanceable(account.kind);
   if (shape === null) return null;
 
   const terms = account.loan ?? account.investment ?? null;
-  const rate = account.loan?.rate ?? account.investment?.rate ?? null;
 
+  // The rate is already on the panel's line; this says what it does.
   return (
-    <Panel
-      icon={Percent}
-      summary={
-        terms === null
-          ? shape === "loan"
-            ? "Falta decir qué intereses te cobran"
-            : "Falta decir cómo rinde"
-          : rate === null
-            ? `Su valor lo registras tú · corte el ${terms.statement_day}`
-            : `${toPercent(rate.value)} % ${
-                RATE_BASIS_COPY[rate.basis]?.label ?? rate.basis
-              } · corte el ${terms.statement_day}`
-      }
-    >
-      <p className="text-muted text-sm leading-relaxed">
+    <>
+      <p className="text-muted text-sm">
         {terms === null
           ? shape === "loan"
-            ? "Sin la tasa y los seguros, este saldo baja exactamente lo que pagas — y una deuda no funciona así. Ninguna alerta del banco trae esos datos."
-            : "Con la tasa pactada Finflow abona los rendimientos cada corte. Si el valor se mueve solo, lo registras cuando quieras."
-          : "Los intereses y los seguros de cada corte quedan como movimientos, así el saldo sigue siendo la suma de cosas que puedes ver."}
+            ? "Sin la tasa y los seguros, este saldo baja exactamente lo que pagas, y una deuda no funciona así."
+            : "Con la tasa pactada, Finflow abona los rendimientos en cada corte."
+          : "Lo que cobra o rinde cada corte queda como movimientos, así el saldo sigue siendo la suma de cosas que puedes ver."}
       </p>
-
-      {account.informational ? (
-        <p className="text-faint text-xs leading-relaxed">
-          Este saldo no entra en tu patrimonio ni en tus gastos. Ya sabes lo que debes,
-          y la cuota se registra como gasto cuando sale de tu cuenta — esto es solo para
-          seguirle el rastro a la deuda.
-        </p>
-      ) : null}
 
       <Link
         to="/cuentas/$accountId/financiacion"
         params={{ accountId: account.id }}
-        className="-m-1 flex items-center gap-1.5 self-start rounded-lg p-1 text-cyan text-sm transition-colors hover:text-text"
+        className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-sm transition-colors hover:text-text"
       >
         {terms === null ? "Registrar las condiciones" : "Ver la tabla y actualizar"}
         <ArrowRight className="size-3.5" />
       </Link>
-    </Panel>
+    </>
   );
 }
 
@@ -621,12 +756,22 @@ function CreditBar({ account }: { account: Account }) {
       ? 0
       : Math.min(1, toChartValue(account.balance) / limit);
 
+  const percent = Math.round(used * 100);
+
   return (
     <div className="flex flex-col gap-2">
-      <div className="h-1.5 overflow-hidden rounded-full bg-surface-raised">
+      <div
+        role="progressbar"
+        aria-label="Cupo usado"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={`${percent} % del cupo usado`}
+        className="h-1.5 overflow-hidden rounded-full bg-surface-raised"
+      >
         <div
           className="h-full rounded-full bg-gradient-to-r from-accent to-violet transition-[width] duration-700 ease-out"
-          style={{ width: `${Math.round(used * 100)}%` }}
+          style={{ width: `${percent}%` }}
         />
       </div>
       <p className="flex flex-wrap items-baseline gap-x-1.5 text-faint text-xs">
@@ -649,29 +794,44 @@ function CreditBar({ account }: { account: Account }) {
   );
 }
 
-/** One foldable section at the bottom of a card. */
+type Section = "alerts" | "financing" | "settings";
+
+/** One foldable section at the bottom of a card, opened by the card. */
 function Panel({
+  id,
   icon: Icon,
   summary,
+  badge,
+  open,
+  onToggle,
   children,
 }: {
+  id: string;
   icon: ComponentType<{ className?: string }>;
   summary: string;
+  badge?: number;
+  open: boolean;
+  onToggle: () => void;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-
   return (
     <div className="rounded-xl border border-line bg-ink/60">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         aria-expanded={open}
-        className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
+        aria-controls={id}
+        className="flex min-h-11 w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
       >
         <Icon className="size-3.5 shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate text-muted text-xs">{summary}</span>
+        {badge === undefined ? null : (
+          <span className="rounded-full bg-surface-raised px-1.5 text-[0.625rem] text-muted tabular-nums">
+            {badge}
+          </span>
+        )}
         <ChevronDown
+          aria-hidden
           className={cn(
             "size-3.5 shrink-0 text-faint transition-transform duration-200",
             open && "rotate-180",
@@ -680,11 +840,119 @@ function Panel({
       </button>
 
       {open ? (
-        <div className="rise flex flex-col gap-4 border-line border-t p-3.5">
+        <div id={id} className="rise flex flex-col gap-4 border-line border-t p-3.5">
           {children}
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The financing panel's line. Neutral while the terms are missing — the
+ * notice above the panels already says so, with its action — and the rate
+ * once they exist, the one figure worth checking against a contract.
+ */
+function financingSummary(account: Account, shape: "loan" | "investment"): string {
+  const terms = account.loan ?? account.investment ?? null;
+  if (terms === null) return shape === "loan" ? "Intereses y seguros" : "Rendimiento";
+
+  const rate = account.loan?.rate ?? account.investment?.rate ?? null;
+  return rate === null
+    ? `Su valor lo registras tú · corte el ${terms.statement_day}`
+    : `${toPercent(rate.value)} % ${
+        RATE_BASIS_COPY[rate.basis]?.label ?? rate.basis
+      } · corte el ${terms.statement_day}`;
+}
+
+/**
+ * The one thing this account still needs, said first and with its action.
+ *
+ * Without it, an account nothing reaches looks exactly like one that works:
+ * the alerts that should land here wait unassigned, and nothing on the card
+ * says so.
+ */
+function AttentionNotice({
+  account,
+  attention,
+  onLink,
+  onRestate,
+}: {
+  account: Account;
+  attention: NonNullable<ReturnType<typeof attentionOf>>;
+  onLink: () => void;
+  onRestate: () => void;
+}) {
+  if (attention.kind === "below-zero") {
+    return (
+      <Notice
+        tone="warn"
+        icon={TriangleAlert}
+        title="Esta cuenta no puede estar en negativo"
+      >
+        <p>
+          {account.kind === "cash"
+            ? "Falta registrar plata que te entró, o lo que tenías al empezar no era eso."
+            : "Tu banco no lo permite: a Finflow le falta un ingreso que nunca vio, o el saldo de partida no era el real."}
+        </p>
+        <div className="mt-1 flex flex-wrap gap-x-4">
+          {canLinkAlerts(account.kind) ? (
+            <Link
+              to="/transacciones"
+              search={{ unassigned: true }}
+              className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+            >
+              Ver movimientos sin asignar
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={onRestate}
+            className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+          >
+            Corregir el saldo
+            <ArrowRight className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      </Notice>
+    );
+  }
+
+  if (attention.kind === "terms") {
+    return (
+      <Notice
+        tone="warn"
+        icon={Percent}
+        title={
+          attention.shape === "loan"
+            ? "Falta decir qué intereses te cobran"
+            : "Falta decir cómo rinde"
+        }
+      >
+        <Link
+          to="/cuentas/$accountId/financiacion"
+          params={{ accountId: account.id }}
+          className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+        >
+          Registrar las condiciones
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      </Notice>
+    );
+  }
+
+  return (
+    <Notice tone="warn" icon={Radio} title="Ninguna alerta cae aquí todavía">
+      <button
+        type="button"
+        onClick={onLink}
+        className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan hover:underline"
+      >
+        Enlazar su tarjeta o cuenta
+        <ArrowRight className="size-3.5" aria-hidden />
+      </button>
+    </Notice>
   );
 }
 
@@ -702,19 +970,11 @@ function Instruments({ account }: { account: Account }) {
   const count = account.instruments.length;
 
   return (
-    <Panel
-      icon={Radio}
-      summary={
-        count === 0
-          ? "Ninguna alerta del banco cae en esta cuenta"
-          : `${count} ${count === 1 ? "tarjeta o cuenta enlazada" : "tarjetas o cuentas enlazadas"}`
-      }
-    >
-      <p className="text-faint text-xs leading-relaxed">
-        Las alertas de tu banco no dicen a cuál de tus cuentas pertenecen: solo traen el
-        banco, si fue tarjeta o cuenta, y los últimos cuatro dígitos. Enlazar esos datos
-        aquí es lo que hace que esos movimientos entren en{" "}
-        <strong className="text-muted">{account.name}</strong> y muevan su saldo.
+    <>
+      <p className="text-muted text-sm">
+        Las alertas solo traen el banco, si fue tarjeta o cuenta y los últimos cuatro
+        dígitos. Enlázalos y sus movimientos caen en{" "}
+        <strong className="text-text">{account.name}</strong>.
       </p>
 
       {count > 0 ? (
@@ -733,7 +993,7 @@ function Instruments({ account }: { account: Account }) {
           enlazarle más alertas.
         </p>
       )}
-    </Panel>
+    </>
   );
 }
 
@@ -768,7 +1028,7 @@ function InstrumentRow({
           <button
             type="button"
             aria-label={`Desenlazar ${describeInstrument(instrument)}`}
-            className="shrink-0 rounded p-1 text-faint hover:text-outgoing"
+            className="-my-2 grid size-11 shrink-0 place-items-center rounded-lg text-faint hover:bg-outgoing/10 hover:text-outgoing"
             onClick={() => setConfirming(true)}
           >
             <Trash2 className="size-3.5" />
@@ -936,7 +1196,7 @@ function Settings({ account, onClosed }: { account: Account; onClosed: () => voi
   const owed = account.category === "liability";
 
   return (
-    <Panel icon={Pencil} summary="Ajustes de la cuenta">
+    <>
       <RenameForm account={account} />
       <BalanceForm account={account} />
       {owed ? <CreditLimitForm account={account} /> : null}
@@ -945,7 +1205,7 @@ function Settings({ account, onClosed }: { account: Account; onClosed: () => voi
       ) : (
         <ReopenForm account={account} />
       )}
-    </Panel>
+    </>
   );
 }
 
@@ -1065,7 +1325,7 @@ function BalanceForm({ account }: { account: Account }) {
   const [balance, setBalance] = useState(account.balance);
   const [saved, setSaved] = useState(false);
 
-  const issue = balanceIssue(balance);
+  const issue = balanceIssue(balance, account.kind);
   const changed = balance.trim() !== account.balance;
   const canSave = issue === undefined && changed && !restate.isPending;
   const owed = account.category === "liability";
@@ -1312,24 +1572,16 @@ function ReopenForm({ account }: { account: Account }) {
 }
 
 function GuideLink() {
+  // A line, not a card: it is the way to the long answer, and a card the
+  // size of an account weighed as much as the accounts above it.
   return (
     <Link
       to="/guias/cuentas-y-movimientos"
-      className="surface flex items-center gap-4 rounded-card border border-line bg-surface p-4 glow-cyan"
+      className="-my-2 inline-flex min-h-11 items-center gap-2 self-start text-muted text-sm transition-colors hover:text-text"
     >
-      <span
-        aria-hidden
-        className="grid size-10 shrink-0 place-items-center rounded-xl border border-line bg-ink"
-      >
-        <BookOpen className="size-4 text-cyan" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-medium text-sm">Cuentas y movimientos</span>
-        <span className="mt-0.5 block text-muted text-sm">
-          Qué es cada cosa, cómo se juntan y qué hacer cuando algo no cuadre.
-        </span>
-      </span>
-      <ArrowRight className="size-4 shrink-0 text-faint" />
+      <BookOpen className="size-4 text-cyan" aria-hidden />
+      ¿Algo no cuadra? Lee la guía de cuentas y movimientos
+      <ArrowRight className="size-3.5" aria-hidden />
     </Link>
   );
 }

@@ -96,9 +96,13 @@ class DynamoDBUserInboxRepository:
         self._table_name = table_name
 
     def find_by_address(self, address: EmailAddress) -> UserInbox | None:
+        # Strongly consistent: the connect screen reads this right after the
+        # user approves a bank, and an eventually consistent answer could hand
+        # them a Gmail filter that is missing the bank they just added.
         response = self._client.get_item(
             TableName=self._table_name,
             Key={INBOX_PARTITION_KEY: {"S": address.value}},
+            ConsistentRead=True,
         )
         item = response.get("Item")
 

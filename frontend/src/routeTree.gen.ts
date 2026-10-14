@@ -24,6 +24,7 @@ import { Route as CuentasNuevaRouteImport } from './routes/cuentas/nueva'
 import { Route as GuiasIndexRouteImport } from './routes/guias/index'
 import { Route as GuiasAvisosRouteImport } from './routes/guias/avisos'
 import { Route as GuiasCuentasYMovimientosRouteImport } from './routes/guias/cuentas-y-movimientos'
+import { Route as GuiasFlujosRouteImport } from './routes/guias/flujos'
 import { Route as GuiasPrestamosEInversionesRouteImport } from './routes/guias/prestamos-e-inversiones'
 import { Route as ReportesIndexRouteImport } from './routes/reportes/index'
 import { Route as TransaccionesIndexRouteImport } from './routes/transacciones/index'
@@ -107,6 +108,11 @@ const GuiasCuentasYMovimientosRoute =
     path: '/guias/cuentas-y-movimientos',
     getParentRoute: () => rootRouteImport,
   } as any)
+const GuiasFlujosRoute = GuiasFlujosRouteImport.update({
+  id: '/guias/flujos',
+  path: '/guias/flujos',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const GuiasPrestamosEInversionesRoute =
   GuiasPrestamosEInversionesRouteImport.update({
     id: '/guias/prestamos-e-inversiones',
@@ -154,6 +160,7 @@ export interface FileRoutesByFullPath {
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/flujos': typeof GuiasFlujosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
@@ -177,6 +184,7 @@ export interface FileRoutesByTo {
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/flujos': typeof GuiasFlujosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
@@ -201,6 +209,7 @@ export interface FileRoutesById {
   '/cuentas/nueva': typeof CuentasNuevaRoute
   '/guias/avisos': typeof GuiasAvisosRoute
   '/guias/cuentas-y-movimientos': typeof GuiasCuentasYMovimientosRoute
+  '/guias/flujos': typeof GuiasFlujosRoute
   '/guias/prestamos-e-inversiones': typeof GuiasPrestamosEInversionesRoute
   '/transacciones/$transactionId': typeof TransaccionesTransactionIdRoute
   '/transacciones/nueva': typeof TransaccionesNuevaRoute
@@ -226,6 +235,7 @@ export interface FileRouteTypes {
     | '/cuentas/nueva'
     | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/flujos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
@@ -249,6 +259,7 @@ export interface FileRouteTypes {
     | '/cuentas/nueva'
     | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/flujos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
@@ -272,6 +283,7 @@ export interface FileRouteTypes {
     | '/cuentas/nueva'
     | '/guias/avisos'
     | '/guias/cuentas-y-movimientos'
+    | '/guias/flujos'
     | '/guias/prestamos-e-inversiones'
     | '/transacciones/$transactionId'
     | '/transacciones/nueva'
@@ -296,6 +308,7 @@ export interface RootRouteChildren {
   CuentasNuevaRoute: typeof CuentasNuevaRoute
   GuiasAvisosRoute: typeof GuiasAvisosRoute
   GuiasCuentasYMovimientosRoute: typeof GuiasCuentasYMovimientosRoute
+  GuiasFlujosRoute: typeof GuiasFlujosRoute
   GuiasPrestamosEInversionesRoute: typeof GuiasPrestamosEInversionesRoute
   TransaccionesTransactionIdRoute: typeof TransaccionesTransactionIdRoute
   TransaccionesNuevaRoute: typeof TransaccionesNuevaRoute
@@ -414,6 +427,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuiasCuentasYMovimientosRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/guias/flujos': {
+      id: '/guias/flujos'
+      path: '/guias/flujos'
+      fullPath: '/guias/flujos'
+      preLoaderRoute: typeof GuiasFlujosRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/guias/prestamos-e-inversiones': {
       id: '/guias/prestamos-e-inversiones'
       path: '/guias/prestamos-e-inversiones'
@@ -472,6 +492,7 @@ const rootRouteChildren: RootRouteChildren = {
   CuentasNuevaRoute: CuentasNuevaRoute,
   GuiasAvisosRoute: GuiasAvisosRoute,
   GuiasCuentasYMovimientosRoute: GuiasCuentasYMovimientosRoute,
+  GuiasFlujosRoute: GuiasFlujosRoute,
   GuiasPrestamosEInversionesRoute: GuiasPrestamosEInversionesRoute,
   TransaccionesTransactionIdRoute: TransaccionesTransactionIdRoute,
   TransaccionesNuevaRoute: TransaccionesNuevaRoute,
