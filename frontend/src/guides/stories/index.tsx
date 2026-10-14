@@ -355,7 +355,7 @@ const loan: Story = {
 
 const bill: Story = {
   id: "factura",
-  title: "De previsto a pagado",
+  title: "Cómo se cobra una factura",
   slides: [
     {
       title: "Declaras lo que se cobra solo",

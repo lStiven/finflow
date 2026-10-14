@@ -314,15 +314,23 @@ async function main() {
     await page.setViewportSize({ width: 390, height: 844 });
 
     // -------------------------------------- every link leads somewhere real
-    const hrefs = [
-      ...new Set(
-        await page
-          .locator("a.group[href^='/']")
+    // One topic opens at a time, so each is opened in turn and its links
+    // gathered while it is the open one.
+    const topics = page.locator("main button[aria-expanded]");
+    const gathered = [];
+    for (let index = 0; index < (await topics.count()); index += 1) {
+      const topic = topics.nth(index);
+      if ((await topic.getAttribute("aria-expanded")) !== "true") await topic.click();
+      gathered.push(
+        ...(await page
+          .locator(`[id="${await topic.getAttribute("aria-controls")}"] a[href^='/']`)
           .evaluateAll((anchors) =>
             anchors.map((anchor) => anchor.getAttribute("href")),
-          ),
-      ),
-    ].filter((href) => href !== "/guias");
+          )),
+      );
+    }
+    check("cada tema se abre con lo suyo", gathered.length > 10, true);
+    const hrefs = [...new Set(gathered)].filter((href) => href !== "/guias");
     note(`${hrefs.length} destinos distintos en Guías`);
     const broken = [];
     for (const href of hrefs) {

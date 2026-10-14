@@ -539,7 +539,8 @@ function AccountCard({
   const copy = kindCopy(account.kind, kindLabel);
   const Icon = copy.icon;
   const attention = attentionOf(account);
-  // One section at a time: three open at once is the wall this replaced.
+  const shape = isFinanceable(account.kind);
+  // One section at a time, so the notice above can open the one it names.
   const [open, setOpen] = useState<Section | null>(null);
   const toggle = (section: Section) =>
     setOpen((current) => (current === section ? null : section));
@@ -549,7 +550,7 @@ function AccountCard({
       glow={closed ? "none" : owed ? "accent" : "cyan"}
       lift={false}
       className={cn(
-        "rise relative flex flex-col gap-4 overflow-hidden",
+        "rise relative flex flex-col gap-5 overflow-hidden",
         closed && "border-dashed",
       )}
       style={{ animationDelay: `${index * 60}ms` }}
@@ -563,11 +564,11 @@ function AccountCard({
         )}
       />
 
-      <div className="flex items-start gap-3.5">
+      <div className="flex items-start gap-4">
         <span
           aria-hidden
           className={cn(
-            "grid size-10 shrink-0 place-items-center rounded-xl ring-1",
+            "grid size-11 shrink-0 place-items-center rounded-xl ring-1",
             closed
               ? "bg-surface-raised text-faint ring-line"
               : owed
@@ -590,8 +591,6 @@ function AccountCard({
               </span>
             ) : null}
           </p>
-          {/* Kind, bank and how much it holds, in one line: the count used to
-              be a line of its own and the card was taller than its content. */}
           <p className="mt-0.5 line-clamp-2 text-faint text-xs">
             {copy.label}
             {account.bank ? (
@@ -600,15 +599,6 @@ function AccountCard({
                 <span className="capitalize">{account.bank}</span>
               </>
             ) : null}
-            {" · "}
-            {account.movements_applied === 0
-              ? "sin movimientos"
-              : `${account.movements_applied} ${
-                  account.movements_applied === 1 ? "movimiento" : "movimientos"
-                }`}
-            {closed && account.closed_at !== null
-              ? ` · cerrada el ${formatDate(account.closed_at)}`
-              : ""}
           </p>
         </div>
 
@@ -629,12 +619,11 @@ function AccountCard({
 
       {/* On the card and not folded away: right above this sits a «Debes»
           that leaves this figure out, and the two read as a contradiction
-          until somebody is told which question each answers. One line —
-          «Cómo funciona» and the financing screen say the rest. */}
+          until somebody is told which question each answers. */}
       {account.informational ? (
-        <p className="flex items-center gap-2 text-faint text-xs">
-          <Eye aria-hidden className="size-3.5 shrink-0" />
-          Solo la vigilas: no suma ni resta en tu patrimonio.
+        <p className="flex items-start gap-2 rounded-xl border border-line bg-ink p-3 text-faint text-xs leading-relaxed">
+          <Eye aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          Solo la vigilas: no suma ni resta en tu patrimonio ni en tus gastos.
         </p>
       ) : null}
 
@@ -647,48 +636,62 @@ function AccountCard({
         />
       ) : null}
 
-      {/*
-        The card's foot, always at its bottom: the spare height of a shorter
-        card sits above this line instead of opening a hole in the middle.
-        What a section opens goes *below* it, so the button just pressed stays
-        exactly where it was.
-      */}
-      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 border-line/60 border-t pt-3">
-        <CardSections account={account} open={open} onToggle={toggle} />
-        <Link
-          to="/transacciones"
-          search={{ account: account.id }}
-          className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-1 text-cyan text-sm transition-colors hover:text-text sm:min-h-9"
-        >
-          Ver movimientos
-          <ArrowRight className="size-3.5" aria-hidden />
-        </Link>
-      </div>
+      <p className="text-faint text-xs">
+        {account.movements_applied === 0
+          ? "Todavía no se le ha asignado ningún movimiento."
+          : `${account.movements_applied} ${
+              account.movements_applied === 1
+                ? "movimiento asignado"
+                : "movimientos asignados"
+            }.`}
+        {closed && account.closed_at !== null
+          ? ` Cerrada el ${formatDate(account.closed_at)}.`
+          : ""}
+      </p>
 
-      {open === "alerts" ? (
-        <div
-          id={`${account.id}-alerts`}
-          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
-        >
-          <Instruments account={account} />
-        </div>
-      ) : null}
-      {open === "financing" ? (
-        <div
-          id={`${account.id}-financing`}
-          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
-        >
-          <Financing account={account} />
-        </div>
-      ) : null}
-      {open === "settings" ? (
-        <div
+      <div className="flex flex-col gap-2.5">
+        {canLinkAlerts(account.kind) ? (
+          <Panel
+            id={`${account.id}-alerts`}
+            icon={Radio}
+            summary="Alertas"
+            badge={account.instruments.length}
+            open={open === "alerts"}
+            onToggle={() => toggle("alerts")}
+          >
+            <Instruments account={account} />
+          </Panel>
+        ) : null}
+        {shape === null ? null : (
+          <Panel
+            id={`${account.id}-financing`}
+            icon={Percent}
+            summary={financingSummary(account, shape)}
+            open={open === "financing"}
+            onToggle={() => toggle("financing")}
+          >
+            <Financing account={account} />
+          </Panel>
+        )}
+        <Panel
           id={`${account.id}-settings`}
-          className="rise -mt-1 flex flex-col gap-4 rounded-xl border border-line bg-ink/60 p-3.5"
+          icon={Pencil}
+          summary="Ajustes de la cuenta"
+          open={open === "settings"}
+          onToggle={() => toggle("settings")}
         >
           <Settings account={account} onClosed={onClosed} />
-        </div>
-      ) : null}
+        </Panel>
+      </div>
+
+      <Link
+        to="/transacciones"
+        search={{ account: account.id }}
+        className="-m-1 mt-auto flex items-center gap-1.5 self-start rounded-lg p-1 text-cyan text-sm transition-colors hover:text-text"
+      >
+        Ver sus movimientos
+        <ArrowRight className="size-3.5" aria-hidden />
+      </Link>
     </Card>
   );
 }
@@ -707,8 +710,8 @@ function Financing({ account }: { account: Account }) {
   if (shape === null) return null;
 
   const terms = account.loan ?? account.investment ?? null;
-  const rate = account.loan?.rate ?? account.investment?.rate ?? null;
 
+  // The rate is already on the panel's line; this says what it does.
   return (
     <>
       <p className="text-muted text-sm">
@@ -716,11 +719,7 @@ function Financing({ account }: { account: Account }) {
           ? shape === "loan"
             ? "Sin la tasa y los seguros, este saldo baja exactamente lo que pagas, y una deuda no funciona así."
             : "Con la tasa pactada, Finflow abona los rendimientos en cada corte."
-          : rate === null
-            ? `Su valor lo registras tú. Corte el ${terms.statement_day}.`
-            : `${toPercent(rate.value)} % ${
-                RATE_BASIS_COPY[rate.basis]?.label ?? rate.basis
-              }, corte el ${terms.statement_day}. Cada corte queda como movimientos.`}
+          : "Lo que cobra o rinde cada corte queda como movimientos, así el saldo sigue siendo la suma de cosas que puedes ver."}
       </p>
 
       <Link
@@ -797,72 +796,73 @@ function CreditBar({ account }: { account: Account }) {
 
 type Section = "alerts" | "financing" | "settings";
 
-/**
- * The card's three drawers as one row, one open at a time.
- *
- * They used to be three full-width folds stacked under every card, each the
- * same size as the next, so the card's actual content was a third of it.
- * A row of labels says the same three things in one line.
- */
-function CardSections({
-  account,
+/** One foldable section at the bottom of a card, opened by the card. */
+function Panel({
+  id,
+  icon: Icon,
+  summary,
+  badge,
   open,
   onToggle,
+  children,
 }: {
-  account: Account;
-  open: Section | null;
-  onToggle: (section: Section) => void;
+  id: string;
+  icon: ComponentType<{ className?: string }>;
+  summary: string;
+  badge?: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
 }) {
-  const shape = isFinanceable(account.kind);
-  const count = account.instruments.length;
-  const sections: { id: Section; label: string; badge?: number }[] = [
-    ...(canLinkAlerts(account.kind)
-      ? [{ id: "alerts" as const, label: "Alertas", badge: count }]
-      : []),
-    ...(shape === null
-      ? []
-      : [
-          {
-            id: "financing" as const,
-            label: shape === "loan" ? "Intereses" : "Rendimiento",
-          },
-        ]),
-    { id: "settings", label: "Ajustes" },
-  ];
-
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {sections.map((section) => (
-        <button
-          key={section.id}
-          type="button"
-          onClick={() => onToggle(section.id)}
-          aria-expanded={open === section.id}
-          aria-controls={`${account.id}-${section.id}`}
+    <div className="rounded-xl border border-line bg-ink/60">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={id}
+        className="flex min-h-11 w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
+      >
+        <Icon className="size-3.5 shrink-0 text-faint" />
+        <span className="min-w-0 flex-1 truncate text-muted text-xs">{summary}</span>
+        {badge === undefined ? null : (
+          <span className="rounded-full bg-surface-raised px-1.5 text-[0.625rem] text-muted tabular-nums">
+            {badge}
+          </span>
+        )}
+        <ChevronDown
+          aria-hidden
           className={cn(
-            "inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors sm:min-h-9",
-            open === section.id
-              ? "border-cyan/40 bg-cyan/10 text-text"
-              : "border-line text-muted hover:border-cyan/30 hover:text-text",
+            "size-3.5 shrink-0 text-faint transition-transform duration-200",
+            open && "rotate-180",
           )}
-        >
-          {section.label}
-          {section.badge === undefined ? null : (
-            <span className="rounded-full bg-surface-raised px-1.5 text-[0.625rem] tabular-nums">
-              {section.badge}
-            </span>
-          )}
-          <ChevronDown
-            aria-hidden
-            className={cn(
-              "size-3.5 transition-transform duration-200",
-              open === section.id && "rotate-180",
-            )}
-          />
-        </button>
-      ))}
+        />
+      </button>
+
+      {open ? (
+        <div id={id} className="rise flex flex-col gap-4 border-line border-t p-3.5">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The financing panel's line. Neutral while the terms are missing — the
+ * notice above the panels already says so, with its action — and the rate
+ * once they exist, the one figure worth checking against a contract.
+ */
+function financingSummary(account: Account, shape: "loan" | "investment"): string {
+  const terms = account.loan ?? account.investment ?? null;
+  if (terms === null) return shape === "loan" ? "Intereses y seguros" : "Rendimiento";
+
+  const rate = account.loan?.rate ?? account.investment?.rate ?? null;
+  return rate === null
+    ? `Su valor lo registras tú · corte el ${terms.statement_day}`
+    : `${toPercent(rate.value)} % ${
+        RATE_BASIS_COPY[rate.basis]?.label ?? rate.basis
+      } · corte el ${terms.statement_day}`;
 }
 
 /**

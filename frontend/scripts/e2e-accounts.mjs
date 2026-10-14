@@ -311,13 +311,13 @@ async function main() {
       [44, 44],
     );
 
-    await ahorro.getByRole("button", { name: "Ajustes" }).click();
+    await ahorro.getByRole("button", { name: "Ajustes de la cuenta" }).click();
     check(
       "abrir Ajustes cierra Alertas: una sección a la vez",
       [
         await alerts.getAttribute("aria-expanded"),
         await ahorro
-          .getByRole("button", { name: "Ajustes" })
+          .getByRole("button", { name: "Ajustes de la cuenta" })
           .getAttribute("aria-expanded"),
       ],
       ["false", "true"],

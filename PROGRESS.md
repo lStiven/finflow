@@ -332,6 +332,12 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-14 — **Cuentas y Guías vuelven al estilo de producción.** Cuentas con
+  paneles apilados (Alertas, condiciones, Ajustes de la cuenta), uno abierto a
+  la vez; Guías en cinco tarjetas por tema que se despliegan con sus tareas,
+  problemas, guía y recorrido; los temas con recorrido llevan «Paso a paso» y lo
+  ponen primero. `just e2e-cuentas` y `e2e-guias` en verde. En
+  el árbol, sin commit.
 - 2026-10-13 — **Ahorros, efectivo e inversión en negativo avisan en vez de
   callar.** La tarjeta de la cuenta lo dice y lleva a los sin asignar o a
   corregir el saldo, que ya no acepta un negativo en esos tipos. El seed asigna
@@ -351,8 +357,3 @@ AWS (ver Trabas).
   (plan UX, UX-05 + UX-13). El motivo sale de la evidencia de la conexión y
   lleva al paso que lo arregla; lo pendiente en Guías lo marca el servidor. F5
   completa; `just e2e` (13 suites) en verde. En el árbol, sin commit.
-- 2026-10-10 — **Resumen, Reportes y Comercios: cada cifra abre lo que la forma**
-  (plan UX, UX-06, UX-11, UX-12). Categorías, cuentas y columnas llevan a sus
-  movimientos —las e2e comprueban que suman lo mismo— y la cola de comercios
-  se responde en la lista. F4 completa; `just e2e` (12 suites) en verde. En
-  el árbol, sin commit.
