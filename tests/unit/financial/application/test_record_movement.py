@@ -428,3 +428,120 @@ def test_an_alert_whose_card_nobody_declared_announces_no_account() -> None:
     recorded = _announced(publisher)
     assert recorded.account_fingerprint is not None
     assert recorded.account_id is None
+
+
+# ------------------------------------------- an account type, and no digits
+
+
+def _payment_into_savings(**overrides: object) -> RecordMovementCommand:
+    """«Recibiste un pago … a tu cuenta AHORROS»: the type, never the digits."""
+    parts: dict[str, object] = {
+        "direction": MovementDirection.INCOMING,
+        "counterparty": "FONDO DE CESANT",
+        "instrument_kind": "savings_account",
+        "last_four": None,
+    }
+    parts.update(overrides)
+
+    return _command(**parts)
+
+
+def _savings(accounts: FakeAccounts, **overrides: object) -> Account:
+    parts: dict[str, object] = {
+        "name": "Ahorros",
+        "kind": AccountKind.SAVINGS,
+        "instrument_kind": InstrumentKind.ACCOUNT,
+        "last_four": "5261",
+    }
+    parts.update(overrides)
+
+    return _declare(accounts, **parts)
+
+
+def test_a_type_with_no_digits_lands_on_the_one_account_of_that_type() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare(accounts)  # a card at the same bank is not a candidate
+    savings = _savings(accounts)
+
+    result = _use_case(accounts, ledger, publisher).execute(_payment_into_savings())
+
+    assert result.outcome is Outcome.APPLIED
+    assert result.account is not None
+    assert result.account.id == savings.id
+    assert result.account.balance.amount.amount == Decimal("50000")
+
+
+def test_two_accounts_of_that_type_at_that_bank_mean_it_waits() -> None:
+    """The guess the fingerprint exists to refuse: either could be right."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _savings(accounts)
+    _savings(accounts, name="Ahorros 2", last_four="0530")
+
+    result = _use_case(accounts, ledger, publisher).execute(_payment_into_savings())
+
+    assert result.outcome is Outcome.UNASSIGNED
+
+
+def test_a_closed_account_or_one_at_another_bank_is_not_a_candidate() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    closed = _savings(accounts)
+    closed.close(closed_at=PURCHASE_TIME)
+    closed.pull_events()
+    accounts.save(closed)
+    _savings(accounts, name="Lulo", bank="lulo bank", last_four="4407")
+
+    result = _use_case(accounts, ledger, publisher).execute(_payment_into_savings())
+
+    assert result.outcome is Outcome.UNASSIGNED
+
+
+def test_a_word_that_names_no_account_type_is_never_inferred() -> None:
+    """«tu cuenta» alone could be savings or checking, and a card is no account."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _savings(accounts)
+    use_case = _use_case(accounts, ledger, publisher)
+
+    plain = use_case.execute(_payment_into_savings(instrument_kind="account"))
+    card = use_case.execute(
+        _payment_into_savings(instrument_kind="credit_card", counterparty="OTRO"),
+    )
+
+    assert plain.outcome is Outcome.UNASSIGNED
+    assert card.outcome is Outcome.UNASSIGNED
+
+
+def test_digits_no_key_can_use_are_a_reason_to_wait_not_to_infer() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _savings(accounts)
+
+    result = _use_case(accounts, ledger, publisher).execute(
+        _payment_into_savings(last_four="²³⁴⁵"),
+    )
+
+    assert result.outcome is Outcome.UNASSIGNED
+
+
+def test_money_leaving_is_never_inferred() -> None:
+    """The exception is for payments arriving. A debit read without digits —
+    most likely by the LLM fallback — waits rather than leaving an account."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _savings(accounts)
+
+    result = _use_case(accounts, ledger, publisher).execute(
+        _payment_into_savings(direction=MovementDirection.OUTGOING),
+    )
+
+    assert result.outcome is Outcome.UNASSIGNED
+
+
+def test_a_blank_last_four_and_a_differently_spelled_type_still_infer() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    savings = _savings(accounts)
+
+    result = _use_case(accounts, ledger, publisher).execute(
+        _payment_into_savings(instrument_kind=" Savings_Account ", last_four="  "),
+    )
+
+    assert result.outcome is Outcome.APPLIED
+    assert result.account is not None
+    assert result.account.id == savings.id

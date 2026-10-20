@@ -68,6 +68,14 @@ INCOMING_PAYROLL = (
     "llamanos al 018000931987. A tu lado siempre."
 )
 
+# Verbatim from a real alert (2026-10-19): a second wording of the same fact,
+# with the time written before the date.
+INCOMING_PAYMENT_TO_ACCOUNT = (
+    "Bancolombia: Recibiste un pago por $19,624,563.16 de FONDO DE CESANT a tu "
+    "cuenta AHORROS, el 16:58 a las 19/10/2026. ¿Tienes dudas? Encuentranos "
+    "aqui:018000931987. Estamos cerca"
+)
+
 
 @pytest.fixture
 def parser() -> BancolombiaParser:
@@ -144,6 +152,24 @@ def test_incoming_payroll(parser: BancolombiaParser) -> None:
     assert transaction.direction is TransactionDirection.INCOMING
     assert transaction.amount.amount == Decimal("19850806.00")
     assert transaction.counterparty == "BOLD.CO SAS"
+    assert transaction.instrument is not None
+    assert transaction.instrument.kind is InstrumentKind.SAVINGS_ACCOUNT
+    assert transaction.instrument.last_four is None
+
+
+def test_incoming_payment_in_its_second_wording(parser: BancolombiaParser) -> None:
+    """Read by the template, not left to the LLM: the order of its words and
+    of its date and time both differ from the payroll alert's."""
+    transaction = parser.parse(INCOMING_PAYMENT_TO_ACCOUNT)
+
+    assert isinstance(transaction, ExtractedTransaction)
+    assert transaction.kind is TransactionKind.INCOMING_PAYMENT
+    assert transaction.direction is TransactionDirection.INCOMING
+    assert transaction.amount.amount == Decimal("19624563.16")
+    assert transaction.counterparty == "FONDO DE CESANT"
+    assert transaction.occurred_at == PosixTime.from_datetime(
+        dt.datetime(2026, 10, 19, 21, 58, tzinfo=dt.UTC),  # 16:58 in Bogotá
+    )
     assert transaction.instrument is not None
     assert transaction.instrument.kind is InstrumentKind.SAVINGS_ACCOUNT
     assert transaction.instrument.last_four is None

@@ -85,7 +85,7 @@ export function PageHeader({
                 ref={toggle}
                 type="button"
                 aria-expanded={open}
-                aria-controls={panelId}
+                aria-controls={open ? panelId : undefined}
                 onClick={() => {
                   if (open) return close();
                   setAsked(true);

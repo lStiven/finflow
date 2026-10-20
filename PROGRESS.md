@@ -332,6 +332,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-20 — **Un pago a «tu cuenta AHORROS» cae en la cuenta.** Plantilla
+  para la segunda redacción de Bancolombia (hora antes que fecha) y, sin
+  dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
+  varias, espera. `just prepare` en verde. En el árbol, sin commit; el pago del 19/10 ya
+  guardado sigue sin asignar.
 - 2026-10-14 — **Cuentas y Guías vuelven al estilo de producción.** Cuentas con
   paneles apilados (Alertas, condiciones, Ajustes de la cuenta), uno abierto a
   la vez; Guías en cinco tarjetas por tema que se despliegan con sus tareas,
@@ -353,7 +358,3 @@ AWS (ver Trabas).
   paso a paso desde el «Cómo funciona» de su pantalla y en `/guias/flujos`.
   La cola de Comercios se rehízo en una fila por comercio. `just e2e` (15
   suites, 22 pantallas) en verde. En el árbol, sin commit.
-- 2026-10-10 — **Una lista vacía dice por qué, y Guías es una lista de tareas**
-  (plan UX, UX-05 + UX-13). El motivo sale de la evidencia de la conexión y
-  lleva al paso que lo arregla; lo pendiente en Guías lo marca el servidor. F5
-  completa; `just e2e` (13 suites) en verde. En el árbol, sin commit.
