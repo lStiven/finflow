@@ -20,6 +20,15 @@ BOGOTA = ZoneInfo("America/Bogota")
 # one, but it is still a movement nobody sees.
 DATE_TIME_PATTERN = r"\d{2}/\d{2}/\d{4}(?:\s+a\s+las)?\s+\d{1,2}:\d{2}"
 
+# Bancolombia's incoming-payment alert swaps the two: "el 16:58 a las
+# 19/10/2026". Read in its own order rather than tolerated by the pattern
+# above, which would then also accept a date written as nothing else does.
+TIME_FIRST_PATTERN = r"\d{1,2}:\d{2}\s+a\s+las\s+\d{2}/\d{2}/\d{4}"
+
+_TIME_FIRST = re.compile(
+    r"^(?P<time>\d{1,2}:\d{2})\s+a\s+las\s+(?P<date>\d{2}/\d{2}/\d{4})$",
+)
+
 _DATE_TIME = re.compile(
     r"^(?P<day>\d{2})/(?P<month>\d{2})/(?P<year>\d{4})"
     r"(?:\s+a\s+las)?\s+(?P<hour>\d{1,2}):(?P<minute>\d{2})$",
@@ -51,6 +60,16 @@ def parse_date_time(raw: str) -> PosixTime:
         raise DateParseError(f"Impossible date: {raw!r}") from error
 
     return PosixTime.from_datetime(local)
+
+
+def parse_time_first(raw: str) -> PosixTime:
+    """Read `16:58 a las 19/10/2026` — time before date — as an instant."""
+    match = _TIME_FIRST.match(raw.strip())
+
+    if match is None:
+        raise DateParseError(f"Not a bank alert date: {raw!r}")
+
+    return parse_date_time(f"{match.group('date')} {match.group('time')}")
 
 
 _SPANISH_MONTHS = {

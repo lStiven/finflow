@@ -8,7 +8,9 @@ from personal_finance.contexts.ingestion.domain.parsing.amounts import (
 )
 from personal_finance.contexts.ingestion.domain.parsing.dates import (
     DATE_TIME_PATTERN,
+    TIME_FIRST_PATTERN,
     parse_date_time,
+    parse_time_first,
 )
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedMovement,
@@ -94,6 +96,17 @@ _INCOMING_PAYMENT = re.compile(
     re.IGNORECASE,
 )
 
+# The same fact in a second wording, seen in production: amount before payer,
+# no concept, "a tu cuenta AHORROS," and the time written before the date —
+# "el 16:58 a las 19/10/2026". Like the first, it names the account's type and
+# never its digits, which Financial resolves only when one account fits.
+_INCOMING_PAYMENT_TO = re.compile(
+    _PREFIX + rf"Recibiste\s+un\s+pago\s+por\s+{_AMOUNT}"
+    r"\s+de\s+(?P<payer>.+?)\s+a\s+tu\s+cuenta\s+(?:de\s+)?(?P<account_type>\w+)"
+    rf"\s*,?\s+el\s+(?P<when>{TIME_FIRST_PATTERN})",
+    re.IGNORECASE,
+)
+
 _CARD_KINDS = {
     "t.cred": InstrumentKind.CREDIT_CARD,
     "t.deb": InstrumentKind.DEBIT_CARD,
@@ -132,6 +145,7 @@ class BancolombiaParser:
             self._transfer,
             self._payment_to,
             self._incoming_payment,
+            self._incoming_payment_to,
         ):
             transaction = handler(normalized)
 
@@ -254,6 +268,26 @@ class BancolombiaParser:
             direction=TransactionDirection.INCOMING,
             amount=parse_amount(match.group("amount")),
             occurred_at=parse_date_time(match.group("when")),
+            bank=self.bank,
+            counterparty=match.group("payer").strip(),
+            instrument=Instrument(
+                kind=_ACCOUNT_KINDS.get(account_type, InstrumentKind.ACCOUNT),
+            ),
+        )
+
+    def _incoming_payment_to(self, text: str) -> ExtractedTransaction | None:
+        match = _INCOMING_PAYMENT_TO.search(text)
+
+        if match is None:
+            return None
+
+        account_type = match.group("account_type").lower()
+
+        return ExtractedTransaction(
+            kind=TransactionKind.INCOMING_PAYMENT,
+            direction=TransactionDirection.INCOMING,
+            amount=parse_amount(match.group("amount")),
+            occurred_at=parse_time_first(match.group("when")),
             bank=self.bank,
             counterparty=match.group("payer").strip(),
             instrument=Instrument(

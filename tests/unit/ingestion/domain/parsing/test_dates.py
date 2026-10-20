@@ -14,6 +14,7 @@ from personal_finance.contexts.ingestion.domain.parsing.dates import (
     DateParseError,
     parse_date_time,
     parse_spanish_date_time,
+    parse_time_first,
 )
 from personal_finance.shared.domain.value_objects import PosixTime
 
@@ -35,6 +36,19 @@ def _moment(
 
 def test_a_slashed_date_is_read_in_bogota() -> None:
     assert parse_date_time("20/08/2026 a las 12:00") == _moment(2026, 8, 20, 12, 0)
+
+
+def test_the_time_written_before_the_date_is_read_in_its_own_order() -> None:
+    """Bancolombia's incoming-payment alert: "el 16:58 a las 19/10/2026"."""
+    assert parse_time_first("16:58 a las 19/10/2026") == _moment(2026, 10, 19, 16, 58)
+
+
+@pytest.mark.parametrize(
+    "raw", ["19/10/2026 a las 16:58", "16:58 19/10/2026", "25:00 a las 19/10/2026"]
+)
+def test_a_time_first_date_in_any_other_shape_is_refused(raw: str) -> None:
+    with pytest.raises(DateParseError):
+        parse_time_first(raw)
 
 
 @pytest.mark.parametrize(

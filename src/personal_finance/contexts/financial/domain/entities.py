@@ -1771,6 +1771,52 @@ class Transaction(AggregateRoot[MovementId]):
         ]
 
 
+def account_kind_named(instrument_kind: str | None) -> AccountKind | None:
+    """The account kind an alert's instrument names, or None.
+
+    Normalized the way `AccountFingerprint` normalizes the same field, so the
+    two routing paths never read one word two ways.
+    """
+    if instrument_kind is None:
+        return None
+
+    try:
+        return InstrumentKind(instrument_kind.strip().lower()).named_account_kind
+    except ValueError:
+        return None
+
+
+def sole_account_of(
+    accounts: Iterable[Account],
+    *,
+    bank: str,
+    kind: AccountKind,
+) -> Account | None:
+    """The one account an alert can only mean, when it names a type but no digits.
+
+    Some alerts never carry the last four: Bancolombia's «Recibiste un pago …
+    a tu cuenta AHORROS» says which *kind* of account and stops there. A
+    fingerprint is still the rule, and still refuses to guess between two
+    accounts — but when the owner has declared exactly one open account of
+    that kind at that bank, there is nothing left to guess. Zero or several,
+    and the movement waits for a person as before.
+
+    The risk knowingly accepted: an account at that bank the owner never
+    declared is invisible here, so a payment into it would land on the one
+    they did declare.
+    """
+    institution = bank.strip().lower()
+    candidates = [
+        account
+        for account in accounts
+        if account.kind is kind
+        and account.bank == institution
+        and not account.is_closed
+    ]
+
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _account_fingerprint(
     *,
     bank: str,

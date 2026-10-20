@@ -138,8 +138,11 @@ function BudgetsScreen() {
   const { data: view } = useSuspenseQuery(budgetsQuery(mes ?? null));
   const { data: categories } = useSuspenseQuery(categoriesQuery);
   const [declaring, setDeclaring] = useState(false);
-  // Said once, where it happened, the moment the first cap exists.
-  const [firstDone, setFirstDone] = useState(false);
+  // Said once, where it happened, the moment the first cap exists — and only
+  // on that month: another month's screen did not just get a cap.
+  const month = mes ?? "";
+  const [firstDoneIn, setFirstDoneIn] = useState<string | null>(null);
+  const firstDone = firstDoneIn === month;
   const empty = view.budgets.length === 0;
 
   const labels = Object.fromEntries(
@@ -172,7 +175,7 @@ function BudgetsScreen() {
           <BudgetForm month={view.month} onClose={() => setDeclaring(false)} />
         ) : empty ? (
           <FirstBudget
-            onDeclared={() => setFirstDone(true)}
+            onDeclared={() => setFirstDoneIn(month)}
             onChooseCategories={() => setDeclaring(true)}
           />
         ) : (

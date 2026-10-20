@@ -117,6 +117,23 @@ class InstrumentKind(enum.Enum):
     CHECKING_ACCOUNT = "checking_account"
     ACCOUNT = "account"
 
+    @property
+    def named_account_kind(self) -> AccountKind | None:
+        """The account kind this instrument *names*, when it names one.
+
+        Only the two words a bank uses for the type of an account — "cuenta
+        de AHORROS", "cuenta CORRIENTE". A bare `ACCOUNT` and every card name
+        no kind: a card is not an account, and "tu cuenta" alone could be
+        either.
+        """
+        return _NAMED_ACCOUNT_KINDS.get(self)
+
+
+_NAMED_ACCOUNT_KINDS = {
+    InstrumentKind.SAVINGS_ACCOUNT: AccountKind.SAVINGS,
+    InstrumentKind.CHECKING_ACCOUNT: AccountKind.CHECKING,
+}
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class AccountId(ValueObject):
@@ -176,7 +193,8 @@ class AccountFingerprint(ValueObject):
     them "a savings account at Bancolombia" would match every savings account
     the user holds there, and two real accounts would silently merge into one
     wrong balance. A movement whose instrument has no last four stays
-    unassigned instead.
+    unassigned instead — unless it names an account type and the owner has
+    exactly one such account at that bank, which `sole_account_of` decides.
 
     Built through `from_parts` so every caller normalizes the same way; the
     constructor stays open for reading a stored value back.

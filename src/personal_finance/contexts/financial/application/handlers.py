@@ -28,7 +28,12 @@ from personal_finance.contexts.financial.application.ports import (
     BalanceReversal,
     TransactionLedger,
 )
-from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.entities import (
+    Account,
+    Transaction,
+    account_kind_named,
+    sole_account_of,
+)
 from personal_finance.contexts.financial.domain.exceptions import (
     AccountClosedError,
     CurrencyMismatchError,
@@ -40,6 +45,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     Balance,
     LedgerMovement,
+    MovementDirection,
 )
 from personal_finance.shared.application.ports import EventPublisher
 from personal_finance.shared.domain.value_objects import (
@@ -153,6 +159,7 @@ class RecordMovementUseCase:
                 instrument_kind=command.instrument_kind,
                 last_four=command.last_four,
             ),
+            named_kind=_named_without_digits(command),
         )
 
 
@@ -263,25 +270,52 @@ class MovementPlacer:
         self._ledger = ledger
         self._events = event_publisher
 
-    def place(self, transaction: Transaction) -> RecordMovementResult:
+    def place(
+        self,
+        transaction: Transaction,
+        *,
+        named_kind: str | None = None,
+    ) -> RecordMovementResult:
+        """`named_kind` is the instrument an alert named without digits —
+        «a tu cuenta AHORROS» — and is used only when no fingerprint exists,
+        to find the one account of that kind the owner declared at that bank.
+        """
         fingerprint = transaction.account_fingerprint
 
         if fingerprint is None:
-            return self._record_unassigned(
-                transaction,
-                reason="the alert named no instrument this could route",
+            kind = account_kind_named(named_kind)
+
+            if kind is None:
+                return self._record_unassigned(
+                    transaction,
+                    reason="the alert named no instrument this could route",
+                )
+
+            account = sole_account_of(
+                self._accounts.list_by_user(transaction.user_id),
+                bank=transaction.bank,
+                kind=kind,
             )
 
-        account = self._accounts.find_by_fingerprint(
-            user_id=transaction.user_id,
-            fingerprint=fingerprint,
-        )
-
-        if account is None:
-            return self._record_unassigned(
-                transaction,
-                reason="no account has been declared for this card",
+            if account is None:
+                return self._record_unassigned(
+                    transaction,
+                    reason=(
+                        f"the alert named a {kind.value} account and no digits, "
+                        "and the owner has none or several of them at this bank"
+                    ),
+                )
+        else:
+            account = self._accounts.find_by_fingerprint(
+                user_id=transaction.user_id,
+                fingerprint=fingerprint,
             )
+
+            if account is None:
+                return self._record_unassigned(
+                    transaction,
+                    reason="no account has been declared for this card",
+                )
 
         balance_before = account.balance
 
@@ -1111,3 +1145,21 @@ def _refuse_unless_it_can_take(account: Account, *, currency: Currency) -> None:
             f"A {currency.value} movement cannot go on a "
             f"{account.currency.value} account",
         )
+
+
+def _named_without_digits(command: RecordMovementCommand) -> str | None:
+    """The instrument a movement named with no digits, when inferring is allowed.
+
+    Only money arriving: the exception exists for Bancolombia's incoming-payment
+    alerts, and a debit read without digits — most likely by the LLM fallback,
+    whose output is untrusted — waits for a person rather than leaving an
+    account on its own. Only no digits at all: digits that no key can use are
+    a reason to wait, not to infer, and a blank is no digits.
+    """
+    if command.direction is not MovementDirection.INCOMING:
+        return None
+
+    if (command.last_four or "").strip():
+        return None
+
+    return command.instrument_kind

@@ -171,6 +171,16 @@ about twenty thousand tokens. Search it for the specific "why" in question.
 - A transaction with no matching account, or no instrument at all, is kept
   **unassigned** rather than guessed at — same philosophy as
   `pending_fallback`.
+  *One exception, not a guess (2026-10-20):* an alert that names an account
+  *type* with no digits — Bancolombia's incoming payments say only «a tu
+  cuenta AHORROS» — lands on the owner's one open account of that kind at
+  that bank (`sole_account_of`), and only for money arriving: a debit read
+  without digits, most likely by the LLM, waits. Zero or several accounts and
+  it still waits. Only `savings_account`/`checking_account` qualify; a bare «cuenta» and any card
+  never do, and digits that no key can use mean wait, not infer. Risk
+  accepted: an account at that bank the owner never declared is invisible,
+  so money into it would land on the declared one. Not retroactive — an
+  account declared later does not adopt these.
 - **The ledger is the authority; the balance is a running total.**
   `Account.apply` never asks whether it has seen a movement before — that
   answer cannot be reached from memory when the queue is at-least-once and
@@ -2666,6 +2676,25 @@ to whatever ends up serving the bundle, which the bundle is not told.
   copies components into the repo rather than adding a dependency — but
   pulling Radix in for a button and a card would be paying its cost before
   anything needs a dialog or a dropdown.
+
+- **The UX plan of 2026-10-10, and what it refused to build.** The plan
+  itself (`front_refactor/`) was deleted on 2026-10-20 once every ticket was
+  done; these are the choices a fresh session would otherwise reopen:
+  - *Known banks are the parser registry, published* (`known_banks` in
+    `GET /ingestion/catalog`, from `BANK_DOMAINS`), not an admin catalog in
+    DynamoDB. "Known" means "has a deterministic parser", which is code; a
+    row added without a deploy gets no parser and lets catalog and parsers
+    disagree. A bank without one already works as «Otro banco». The Gmail
+    filter text is likewise built server-side (`gmail_filter`).
+  - *Help progress stays in `localStorage`.* Everything the server can
+    verify already syncs because it comes from the API; what is left —
+    «leí esto», «creé el filtro» — is unverifiable, and storing it beside
+    verified facts would mix the two. Cost accepted: another browser repeats
+    a help, never a real step.
+  - *No DOM-bound tours.* They break with every layout change; each screen
+    carries its own «Cómo funciona», and the four animated walk-throughs
+    (`guides/stories/`) are self-contained slides, not overlays.
+  - *No UX analytics yet* — too few users to measure anything.
 
 ### Billing (2026-08-25)
 
