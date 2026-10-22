@@ -1519,6 +1519,61 @@ way out, and still stores nothing.
   somebody gets wrong the first time they press Pagar, and the answer to
   wanting the first is a screen that already exists.
 
+- **A movement is matched to its bill as it lands, not only when the bills
+  screen opens** (2026-10-22). The sweep used to run only on that screen, so a
+  bank movement for a declared bill was counted twice everywhere else until
+  somebody opened it — once as spent, once as still to pay — and the
+  allowance read low by the whole bill. The financial worker now runs the same
+  sweep after recording each movement, with `match_only`: it links, and never
+  writes an automatic charge, which stays lazy for the reason above (it lands
+  where it can be undone). A failure there is logged and the message is still
+  handled — the movement is recorded, and the screen's sweep is the fallback.
+  It costs the worker a read of the `merchants` table (granted in
+  `template.yaml`), and one read of the owner's bills per movement, skipped
+  when they have none active.
+  **A link is written alone** (`ScheduledBillRepository.store_link`): an
+  `UpdateItem` of that one period's entry — with the skip it takes back —
+  conditional on the period being empty or already naming the same movement.
+  Once a worker writes bills in parallel with itself and with the screen, a
+  whole-row put from a copy read a moment earlier would un-pause a bill or
+  drop another period's link; and a second movement never replaces the one
+  that answered first. Accepted, knowingly: the screen's own edits (pause,
+  amend) are still whole-row puts and can drop a link the worker wrote in the
+  same instant. That loses a *claim*, never money — the ledger is untouched
+  by linking — and the next sweep writes it back. Also accepted: "one
+  payment settles one thing" is checked on a read, so two sweeps running at
+  once could in principle give one movement to two charges. Both read the
+  same ledger and decide the same way, so it takes a charge settled between
+  their two reads; a per-movement claim row was rejected for the reason
+  `paid` is not stored — a second copy that drifts from the bills, and one a
+  deleted bill would leave behind blocking that movement for ever. The
+  bounded `linked` map stays bounded per period: `ScheduledBill.link` answers
+  what it pushed out and `store_link` removes it in the same write, and a
+  period older than everything kept is refused rather than "linked" to
+  nothing.
+  **A movement certain for two open charges answers neither on its own**
+  (`_certain_for_several`), across bills and not only within one. The same
+  gym declared twice, or the water and the electricity paid to one utility:
+  picking the one read first is guessing, and it would hide the duplicate.
+  Also accepted: linking as movements land decides on what has arrived so far,
+  so of two payments to one merchant in a week the first is linked before the
+  second exists. Totals stay right — both are spending, the charge is paid
+  once — and the wrong one is fixed by unlinking. The worker reads in
+  `DEFAULT_TIMEZONE`, which is the only one the app's screens send today.
+
+- **A bill can say its figure varies** (2026-10-22). `variable_amount` makes
+  `amount` an average: a payment from the bill's own merchant within half of
+  it (`VARIABLE_AMOUNT_TOLERANCE`) is `CERTAIN`, where a fixed bill allows a
+  tenth. The wider band only counts **through the merchant** — on its own, a
+  figure half a bill away is any purchase that week and would make every one
+  a proposal — and it is still a bound: three times the electricity, to the
+  electricity company, is a debt being settled, not this month. Two charges
+  from one varying merchant in a window (Centroaguas sends two) are two
+  `CERTAIN` candidates and link neither; two bills with their own averages is
+  the answer there. The band is half the average either way, so an arrears
+  payment under one and a half times it can be linked — undone by unlinking. A detected series the detector called variable is
+  declared varying.
+
 ### Spending budgets (2026-09-18)
 
 - **The Telegram alert at 80 % is deferred, and not for the reason the plan

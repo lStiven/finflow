@@ -554,6 +554,10 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Sub "${ResourcePrefix}financial"
+        # Read-only: a bank movement is matched against the owner's declared
+        # bills as it lands, and «is this the gym?» is Merchant's answer.
+        - DynamoDBReadPolicy:
+            TableName: !Sub "${ResourcePrefix}merchants"
         - EventBridgePutEventsPolicy:
             EventBusName: !Sub "${ResourcePrefix}finflow"
 

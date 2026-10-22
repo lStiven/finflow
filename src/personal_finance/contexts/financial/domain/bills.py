@@ -358,6 +358,11 @@ class ScheduledBill(AggregateRoot[BillId]):
     direction: MovementDirection = MovementDirection.OUTGOING
     account_id: AccountId | None = None
     category: str | None = None
+    #: The figure changes every month — the electricity, the water — so
+    #: `amount` is an average, not a price. Recognising a payment then rests
+    #: on the merchant, within a wider band (`VARIABLE_AMOUNT_TOLERANCE`),
+    #: instead of on a figure the bill was never going to hit.
+    variable_amount: bool = False
     status: BillStatus = BillStatus.ACTIVE
     #: The periods the owner said would not happen. Stored, unlike "paid",
     #: because nothing else records them: a skip moves no money, so there is
@@ -398,6 +403,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         direction: MovementDirection = MovementDirection.OUTGOING,
         account_id: AccountId | None = None,
         category: str | None = None,
+        variable_amount: bool = False,
     ) -> Self:
         """Record what the owner says is going to be charged.
 
@@ -416,6 +422,7 @@ class ScheduledBill(AggregateRoot[BillId]):
             direction=direction,
             account_id=account_id,
             category=_valid_category(category),
+            variable_amount=variable_amount,
         )
 
     def amend(
@@ -428,6 +435,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         direction: MovementDirection | None = None,
         account_id: AccountId | None = None,
         category: str | None = None,
+        variable_amount: bool | None = None,
         clear_account: bool = False,
         clear_category: bool = False,
     ) -> None:
@@ -469,6 +477,9 @@ class ScheduledBill(AggregateRoot[BillId]):
             self.category = None
         elif category is not None:
             self.category = _valid_category(category)
+
+        if variable_amount is not None:
+            self.variable_amount = variable_amount
 
     def pause(self) -> None:
         """Stop expecting charges, without forgetting the bill.
@@ -617,7 +628,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         """
         self.skipped = self.skipped - {period}
 
-    def link(self, period: dt.date, movement_id: str) -> None:
+    def link(self, period: dt.date, movement_id: str) -> frozenset[dt.date]:
         """Say this charge is what that movement already paid for.
 
         The other half of confirming, and the half that writes nothing: the
@@ -629,6 +640,9 @@ class ScheduledBill(AggregateRoot[BillId]):
         **It takes a skip back.** A skip is the owner's guess that no charge
         was coming; a movement is evidence that one did. Leaving both would
         mean a charge at once settled and not going to happen.
+
+        Answers the periods that fell out of the bounded map, so a store
+        that writes one period at a time can drop them too.
 
         Refused on a period this bill is not charged on, for the reason
         `occurs_on` gives. Whether the movement is really a plausible match —
@@ -644,11 +658,25 @@ class ScheduledBill(AggregateRoot[BillId]):
         if not self.occurs_on(period):
             raise ValueError(f"This bill is not charged on {period.isoformat()}")
 
-        self.skipped = self.skipped - {period}
         linked = {**self.linked, period: identity}
-
         # Oldest first out, for the reason the skipped periods give.
-        self.linked = dict(sorted(linked.items())[-MAX_LINKED_PERIODS:])
+        kept = dict(sorted(linked.items())[-MAX_LINKED_PERIODS:])
+
+        if period not in kept:
+            # Older than every period this bill still remembers: storing it
+            # would drop it on the spot, and a link that answers "done" and
+            # keeps nothing is a charge shown paid by nothing.
+            raise ValueError(
+                f"{period.isoformat()} is older than every charge this bill "
+                "still keeps a link for",
+            )
+
+        self.skipped = self.skipped - {period}
+        self.linked = kept
+
+        # What fell out, so a store that writes one period at a time can drop
+        # it too instead of keeping a map that never stops growing.
+        return frozenset(linked) - frozenset(kept)
 
     def unlink(self, period: dt.date) -> None:
         """Forget that a movement answered for this charge.

@@ -73,6 +73,20 @@ class InMemoryBills:
     def list_by_user(self, user_id: UserId) -> list[ScheduledBill]:
         return [bill for bill in self.rows.values() if bill.user_id == user_id]
 
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: object,
+        *,
+        dropped: object = frozenset(),
+    ) -> bool:
+
+        del dropped
+        del period
+        self.save(bill)
+
+        return True
+
     def save(self, bill: ScheduledBill) -> None:
         self.rows[bill.id] = bill
 

@@ -744,3 +744,36 @@ def test_one_bill_remembers_a_bounded_number_of_links() -> None:
     assert len(bill.linked) == MAX_LINKED_PERIODS
     assert periods[-1] in bill.linked
     assert periods[0] not in bill.linked
+
+
+def test_linking_says_which_periods_fell_out_of_the_bound() -> None:
+    """So a store that writes one period at a time can drop them too, and the
+    stored map stays as bounded as this one."""
+    bill = _bill(cadence=BillCadence.WEEKLY, starts_on=dt.date(2020, 1, 1))
+    periods = [
+        dt.date(2020, 1, 1) + dt.timedelta(days=7 * week)
+        for week in range(MAX_LINKED_PERIODS + 1)
+    ]
+
+    for index, period in enumerate(periods[:-1]):
+        assert bill.link(period, f"movement-{index}") == frozenset()
+
+    assert bill.link(periods[-1], "movement-last") == frozenset({periods[0]})
+
+
+def test_a_charge_older_than_everything_the_bill_keeps_cannot_be_linked() -> None:
+    """It would fall out on the spot: an answer of "paid" that keeps nothing."""
+    bill = _bill(cadence=BillCadence.WEEKLY, starts_on=dt.date(2020, 1, 1))
+    periods = [
+        dt.date(2020, 1, 1) + dt.timedelta(days=7 * week)
+        for week in range(MAX_LINKED_PERIODS + 1)
+    ]
+
+    for index, period in enumerate(periods[1:]):
+        bill.link(period, f"movement-{index}")
+
+    with pytest.raises(ValueError, match="older than every charge"):
+        bill.link(periods[0], "movement-oldest")
+
+    assert periods[0] not in bill.linked
+    assert len(bill.linked) == MAX_LINKED_PERIODS

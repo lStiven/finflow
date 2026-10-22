@@ -2208,6 +2208,8 @@ export interface components {
             name?: string | null;
             /** Starts On */
             starts_on?: string | null;
+            /** Variable Amount */
+            variable_amount?: boolean | null;
         };
         /**
          * AmortizationStyle
@@ -2332,6 +2334,8 @@ export interface components {
              */
             starts_on: string;
             status: components["schemas"]["BillStatus"];
+            /** Variable Amount */
+            variable_amount: boolean;
         };
         /**
          * BillStatus
@@ -2877,6 +2881,11 @@ export interface components {
              * Format: date
              */
             starts_on: string;
+            /**
+             * Variable Amount
+             * @default false
+             */
+            variable_amount: boolean;
         };
         /**
          * DeclarePlanPayload

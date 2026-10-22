@@ -2780,7 +2780,7 @@
             "description": "A charge the owner says is going to happen, every so often — the gym, the rent, a domiciled subscription the bank stopped emailing about. **Nothing is recorded as spent:** a bill is a statement about the future, and it reaches the ledger only when a charge is confirmed. `starts_on` is the first expected charge and the day every later one derives from, which is why a bill anchored on the 31st lands on the 28th in February and is back on the 31st in March.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Gimnasio\",\n  \"amount\": \"120000\",\n  \"currency\": \"COP\",\n  \"cadence\": \"monthly\",\n  \"starts_on\": \"2026-09-04\",\n  \"direction\": \"outgoing\",\n  \"account_id\": null,\n  \"category\": \"salud\"\n}",
+              "raw": "{\n  \"name\": \"Gimnasio\",\n  \"amount\": \"120000\",\n  \"currency\": \"COP\",\n  \"cadence\": \"monthly\",\n  \"starts_on\": \"2026-09-04\",\n  \"direction\": \"outgoing\",\n  \"account_id\": null,\n  \"category\": \"salud\",\n  \"variable_amount\": false\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -2818,7 +2818,7 @@
             "description": "Correct what the bill says: the gym raised its price, the charge moved to another account, the day turned out to be the 6th. What is absent is left alone — so taking the account or the category off needs `clear_account` / `clear_category`, since absence already means 'leave it'. Changing the amount needs its currency too.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"amount\": \"135000\",\n  \"currency\": \"COP\"\n}",
+              "raw": "{\n  \"amount\": \"135000\",\n  \"currency\": \"COP\",\n  \"variable_amount\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"

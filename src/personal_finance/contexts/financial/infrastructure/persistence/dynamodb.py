@@ -29,6 +29,7 @@ balance can never move without a row behind it.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import contextlib
 import datetime as dt
 from decimal import Decimal
 import enum
@@ -1668,6 +1669,11 @@ def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
     if bill.autopay:
         item["autopay"] = {"BOOL": True}
 
+    if bill.variable_amount:
+        # Absent means fixed, so every bill stored before this existed reads
+        # back exactly as it was declared.
+        item["variable_amount"] = {"BOOL": True}
+
     if bill.autopay_from is not None:
         # ISO and not epoch, for the reason `starts_on` gives: it is a
         # calendar day, and a day stored as an instant is a different day
@@ -1724,6 +1730,7 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         ),
         account_id=AccountId.from_string(account_id) if account_id else None,
         category=_string(item, "category"),
+        variable_amount=item.get("variable_amount", {}).get("BOOL", False),
         status=_enum(BillStatus, _string(item, "status") or "", "bill status"),
         skipped=frozenset(
             dt.date.fromisoformat(day) for day in item.get("skipped", {}).get("SS", [])
@@ -1778,6 +1785,100 @@ class DynamoDBScheduledBillRepository:
 
     def save(self, bill: ScheduledBill) -> None:
         self._client.put_item(TableName=self._table_name, Item=bill_to_item(bill))
+
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: dt.date,
+        *,
+        dropped: frozenset[dt.date] = frozenset(),
+    ) -> bool:
+        """One period's link, by `UpdateItem`, never the whole row.
+
+        Linking takes the period's skip back, and removes what fell out of the
+        bounded map, in the same write. Unlinking removes the entry and is
+        silent when there was none. The map is created first when the bill
+        has never been linked: a nested `SET` on a map that does not exist is
+        refused, and one expression cannot both create the map and write
+        into it.
+        """
+        key = _key(bill.user_id, f"{BILL_PREFIX}{bill.id.value}")
+        movement = bill.linked.get(period)
+        names: dict[str, str] = {
+            "#sk": SORT_KEY,
+            "#linked": "linked",
+            "#period": period.isoformat(),
+        }
+        conditional = self._client.exceptions.ConditionalCheckFailedException
+
+        if movement is None:
+            try:
+                self._client.update_item(
+                    TableName=self._table_name,
+                    Key=key,
+                    UpdateExpression="REMOVE #linked.#period",
+                    ConditionExpression=(
+                        "attribute_exists(#sk) AND attribute_exists(#linked.#period)"
+                    ),
+                    ExpressionAttributeNames=names,
+                )
+            except conditional:
+                # Nothing linked there, or no bill: either way nothing is.
+                return True
+
+            # The last link gone takes the map with it, as a whole-row put
+            # would have: absent is what an ordinary bill looks like. Refused
+            # while any link remains, which is the answer wanted then too.
+            with contextlib.suppress(conditional):
+                self._client.update_item(
+                    TableName=self._table_name,
+                    Key=key,
+                    UpdateExpression="REMOVE #linked",
+                    ConditionExpression="size(#linked) = :none",
+                    ExpressionAttributeNames={"#linked": "linked"},
+                    ExpressionAttributeValues={":none": {"N": "0"}},
+                )
+
+            return True
+
+        # Sorted, so the same link writes the same expression every time.
+        gone = {
+            f"#gone{index}": day.isoformat()
+            for index, day in enumerate(sorted(dropped - {period}))
+        }
+        removing = (
+            f" REMOVE {', '.join(f'#linked.{name}' for name in gone)}" if gone else ""
+        )
+
+        try:
+            self._client.update_item(
+                TableName=self._table_name,
+                Key=key,
+                UpdateExpression="SET #linked = if_not_exists(#linked, :empty)",
+                ConditionExpression="attribute_exists(#sk)",
+                ExpressionAttributeNames={"#sk": SORT_KEY, "#linked": "linked"},
+                ExpressionAttributeValues={":empty": {"M": {}}},
+            )
+            self._client.update_item(
+                TableName=self._table_name,
+                Key=key,
+                UpdateExpression=(
+                    f"SET #linked.#period = :movement{removing} DELETE #skipped :period"
+                ),
+                ConditionExpression=(
+                    "attribute_exists(#sk) AND (attribute_not_exists(#linked.#period)"
+                    " OR #linked.#period = :movement)"
+                ),
+                ExpressionAttributeNames=names | gone | {"#skipped": "skipped"},
+                ExpressionAttributeValues={
+                    ":movement": {"S": movement},
+                    ":period": {"SS": [period.isoformat()]},
+                },
+            )
+        except conditional:
+            return False
+
+        return True
 
     def remove(self, *, user_id: UserId, bill_id: BillId) -> bool:
         """Delete, and say whether there was anything there.

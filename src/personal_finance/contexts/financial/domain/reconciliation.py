@@ -22,7 +22,8 @@ The two qualities are not degrees of confidence in the same thing, they are
 different evidence:
 
 * `CERTAIN` — the merchant matches *and* the amount is what the bill says,
-  give or take. This is what may be linked without asking.
+  give or take — a tenth, or half for a bill declared as varying. This is
+  what may be linked without asking.
 * `LIKELY` — one of the two. The merchant matches but the figure moved a lot
   (the electricity bill), or the figure is exactly right but nothing has ever
   attributed that spelling to the bill's name (the ordinary case for a bill
@@ -62,6 +63,13 @@ from personal_finance.shared.domain.value_objects import Money, ValueObject
 # does on a foreign charge, and not enough for two different charges at one
 # merchant to be taken for each other.
 AMOUNT_TOLERANCE = Decimal("0.10")
+
+# The same question for a bill its owner said varies: half the average either
+# way, so 60 000 to 180 000 on a 120 000 electricity bill. Wide enough for a
+# hot month, and still a bound — twice the figure to the same utility is a
+# debt being settled, not this month — though an arrears payment under one
+# and a half times it does get through, and is undone by unlinking it.
+VARIABLE_AMOUNT_TOLERANCE = Decimal("0.50")
 
 # How many candidates one charge offers. A charge with more plausible answers
 # than this is not a list to choose from, it is a merchant somebody buys from
@@ -236,7 +244,22 @@ def _candidate(
         )
         in keys
     )
-    close_enough = _within_tolerance(movement.amount, bill.amount)
+    close_enough = _within_tolerance(
+        movement.amount,
+        bill.amount,
+        tolerance=AMOUNT_TOLERANCE,
+    )
+    # Only through the merchant: on its own, a figure half a bill away is any
+    # purchase that week, and would put every one of them up as a proposal.
+    varied_as_declared = (
+        bill.variable_amount
+        and same_merchant
+        and _within_tolerance(
+            movement.amount,
+            bill.amount,
+            tolerance=VARIABLE_AMOUNT_TOLERANCE,
+        )
+    )
 
     if not same_merchant and not close_enough:
         return None
@@ -256,7 +279,7 @@ def _candidate(
         occurred_on=occurred_on,
         quality=(
             MatchQuality.CERTAIN
-            if same_merchant and close_enough and not contested
+            if same_merchant and (close_enough or varied_as_declared) and not contested
             else MatchQuality.LIKELY
         ),
     )
@@ -276,5 +299,5 @@ def _same_account(movement: Transaction, bill: ScheduledBill) -> bool:
     return movement.account_id == bill.account_id
 
 
-def _within_tolerance(charged: Money, projected: Money) -> bool:
-    return abs(charged.amount - projected.amount) <= projected.amount * AMOUNT_TOLERANCE
+def _within_tolerance(charged: Money, projected: Money, *, tolerance: Decimal) -> bool:
+    return abs(charged.amount - projected.amount) <= projected.amount * tolerance

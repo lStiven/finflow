@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
+import datetime as dt
 from decimal import Decimal
 from typing import Protocol
 
@@ -415,11 +416,28 @@ class ScheduledBillRepository(Protocol):
         ...
 
     def save(self, bill: ScheduledBill) -> None:
-        """Store a bill, new or amended.
+        """Store a bill, new or amended. A plain put of the whole row."""
+        ...
 
-        A plain put, unlike `AccountRepository.save`: nothing else writes
-        these rows and none of their fields is a running total, so there is
-        no half of the record that a write could quietly discard.
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: dt.date,
+        *,
+        dropped: frozenset[dt.date] = frozenset(),
+    ) -> bool:
+        """Store what `bill` now says about one period's link, and nothing else.
+
+        `dropped` is what `ScheduledBill.link` pushed out of the bounded map,
+        removed in the same write so the stored map stays bounded too.
+
+        Not `save`: the financial worker links as movements land, in parallel
+        with itself and with somebody editing the bill on screen, and a whole
+        row written back from a copy read a moment earlier would erase
+        whatever the other writer just did. So only this period's entry is
+        written — with the skip it takes back — and conditionally: False
+        when the bill is gone, or when that period already names a *different*
+        movement, which is somebody else having answered first.
         """
         ...
 

@@ -29,6 +29,7 @@ function bill(overrides: Partial<Bill> = {}): Bill {
     direction: "outgoing",
     account_id: null,
     category: null,
+    variable_amount: false,
     status: "active",
     autopay: false,
     autopay_from: null,

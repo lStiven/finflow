@@ -54,6 +54,7 @@ def bill(
     amount: str = "120000",
     direction: MovementDirection = MovementDirection.OUTGOING,
     account_id: AccountId | None = None,
+    variable_amount: bool = False,
 ) -> ScheduledBill:
     return ScheduledBill.declare(
         user_id=USER,
@@ -63,6 +64,7 @@ def bill(
         starts_on=PERIOD,
         direction=direction,
         account_id=account_id,
+        variable_amount=variable_amount,
     )
 
 
@@ -334,3 +336,62 @@ def test_a_movement_two_charges_both_reach_is_never_certain() -> None:
 
         assert [each.quality for each in found] == [MatchQuality.LIKELY]
         assert only_certain(found) is None
+
+
+# ----------------------------------------------------------------------
+# A bill whose figure changes every month
+# ----------------------------------------------------------------------
+
+
+def test_a_varying_bill_from_its_merchant_is_certain_well_past_a_tenth() -> None:
+    """Declared 120 000 for the electricity, charged 165 000 in a hot month."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="Energia", amount="165000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.CERTAIN]
+
+
+def test_the_same_figure_on_a_fixed_bill_is_only_likely() -> None:
+    found = candidates(
+        bill(name="Energia"),
+        movement(counterparty="Energia", amount="165000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_a_varying_bill_still_has_a_bound() -> None:
+    """Three times the figure, to the same utility, is a debt being settled."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="Energia", amount="360000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_the_wider_band_never_reaches_a_movement_from_another_merchant() -> None:
+    """Half a bill away, on its own, is any purchase that week."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="TIENDAS ARA", amount="160000"),
+    )
+
+    assert found == ()
+
+
+def test_two_charges_from_a_varying_merchant_are_a_question() -> None:
+    """Centroaguas presents two charges a month; neither is linked alone."""
+    found = candidates(
+        bill(name="Centroaguas", amount="105000", variable_amount=True),
+        movement(counterparty="Centroaguas", amount="82036"),
+        movement(
+            counterparty="Centroaguas",
+            amount="73738",
+            day=PERIOD + dt.timedelta(days=1),
+        ),
+    )
+
+    assert only_certain(found) is None
