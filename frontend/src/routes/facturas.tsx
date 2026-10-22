@@ -857,6 +857,9 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   // The category is what the tile draws its icon and its hue from, and what a
   // confirmed charge will carry into the reports. Empty is a real answer.
   const [category, setCategory] = useState(bill?.category ?? "");
+  // Electricity, water: the amount above is an average, and a payment from
+  // the same merchant within half of it pays the bill without asking.
+  const [variable, setVariable] = useState(bill?.variable_amount ?? false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
@@ -875,6 +878,7 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
       currency: "COP" as const,
       cadence,
       starts_on: startsOn,
+      variable_amount: variable,
     };
 
     if (bill) {
@@ -937,6 +941,22 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         placeholder="120.000"
         onChange={(event) => setAmount(event.target.value)}
       />
+
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
+        <span className="min-w-0">
+          <span className="block font-medium text-sm">El monto cambia cada mes</span>
+          <span className="block text-faint text-xs">
+            Como la luz o el agua: pon un promedio, y el pago de ese comercio se marca
+            solo aunque llegue distinto.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          className="size-5 shrink-0 accent-violet"
+          checked={variable}
+          onChange={(event) => setVariable(event.target.checked)}
+        />
+      </label>
 
       <Select
         label="Cada cuánto"

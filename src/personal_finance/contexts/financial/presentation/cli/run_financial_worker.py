@@ -7,18 +7,29 @@ from __future__ import annotations
 
 import logging
 
+from personal_finance.contexts.financial.application.autopay import (
+    SettleDueChargesUseCase,
+)
+from personal_finance.contexts.financial.application.bills import (
+    SettleBillChargeUseCase,
+)
 from personal_finance.contexts.financial.application.handlers import (
+    ManageTransactionsUseCase,
     RecordMovementUseCase,
     RecordTransferUseCase,
 )
 from personal_finance.contexts.financial.infrastructure.events import (
     build_financial_event_publisher,
 )
+from personal_finance.contexts.financial.infrastructure.merchant.merchant_directory import (  # noqa: E501
+    build_merchant_directory,
+)
 from personal_finance.contexts.financial.infrastructure.messaging.sqs_worker import (
     SQSFinancialWorker,
 )
 from personal_finance.contexts.financial.infrastructure.persistence.dynamodb import (
     DynamoDBAccountRepository,
+    DynamoDBScheduledBillRepository,
     DynamoDBTransactionLedger,
 )
 from personal_finance.shared.infrastructure.aws.session import (
@@ -52,6 +63,7 @@ def build_worker() -> SQSFinancialWorker:
     accounts = DynamoDBAccountRepository(client=dynamodb, table_name=table_name)
     ledger = DynamoDBTransactionLedger(client=dynamodb, table_name=table_name)
     events = build_financial_event_publisher()
+    bills = DynamoDBScheduledBillRepository(client=dynamodb, table_name=table_name)
 
     return SQSFinancialWorker(
         client=get_sqs_client(),
@@ -67,6 +79,24 @@ def build_worker() -> SQSFinancialWorker:
             accounts=accounts,
             ledger=ledger,
             event_publisher=events,
+        ),
+        # Match only, as each movement lands; built like the bills screen's
+        # sweep so the two can never disagree about what pays a charge.
+        reconcile=SettleDueChargesUseCase(
+            bills=bills,
+            charges=ledger,
+            ledger=ledger,
+            settle=SettleBillChargeUseCase(
+                bills=bills,
+                accounts=accounts,
+                charges=ledger,
+                transactions=ManageTransactionsUseCase(
+                    accounts=accounts,
+                    ledger=ledger,
+                    event_publisher=events,
+                ),
+            ),
+            merchants=build_merchant_directory(),
         ),
     )
 

@@ -123,7 +123,14 @@ describe("aceptar una sugerencia", () => {
       direction: "outgoing",
       account_id: "account-1",
       category: "subscriptions",
+      variable_amount: false,
     });
+  });
+
+  it("declara como variable lo que el detector vio cambiar", () => {
+    // A series of different figures has a median for an amount; the bill
+    // should be recognised by its merchant, not by that figure.
+    expect(asDeclaration(series({ variable: true })).variable_amount).toBe(true);
   });
 
   it("no arrastra «sin categoría» como si fuera una categoría", () => {

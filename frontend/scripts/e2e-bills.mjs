@@ -268,7 +268,7 @@ async function main() {
 
     await page.getByRole("button", { name: "Declarar una factura" }).click();
     await page.getByLabel("Nombre").fill(NAME);
-    await page.getByLabel("Monto").fill(AMOUNT);
+    await page.getByLabel("Monto", { exact: true }).fill(AMOUNT);
     await page.getByLabel("Primer cobro").fill(firstOfThisMonth());
     // Index 0 is "Ninguna cuenta". Picking a real one is what lets the
     // confirmation below be checked against a balance rather than against a
@@ -338,7 +338,7 @@ async function main() {
       true,
     ]);
     await page.getByRole("button", { name: `Editar ${NAME}` }).click();
-    await page.getByLabel("Monto").fill(AMENDED);
+    await page.getByLabel("Monto", { exact: true }).fill(AMENDED);
     await page.getByRole("button", { name: "Guardar" }).click();
 
     stored = await until(call, "corregir el monto", (b) => b?.amount === "135000");

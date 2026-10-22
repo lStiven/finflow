@@ -3422,6 +3422,10 @@ class DeclareBillPayload(BaseModel):
     #: out has no accounts declared, and the bill is still worth knowing.
     account_id: str | None = None
     category: str | None = Field(default=None, max_length=64)
+    #: The figure changes every month — electricity, water — so `amount` is an
+    #: average, and a payment from the same merchant within half of it is
+    #: recognised as this charge without asking.
+    variable_amount: bool = False
 
 
 class AmendBillPayload(BaseModel):
@@ -3444,6 +3448,7 @@ class AmendBillPayload(BaseModel):
     direction: MovementDirection | None = None
     account_id: str | None = None
     category: str | None = Field(default=None, max_length=64)
+    variable_amount: bool | None = None
     clear_account: bool = False
     clear_category: bool = False
 
@@ -3467,6 +3472,7 @@ class AmendBillPayload(BaseModel):
                 self.direction is not None,
                 self.account_id is not None,
                 self.category is not None,
+                self.variable_amount is not None,
                 self.clear_account,
                 self.clear_category,
             ),
@@ -3556,6 +3562,8 @@ class BillResponse(BaseModel):
     direction: MovementDirection
     account_id: str | None
     category: str | None
+    #: `amount` is an average: the figure changes every month.
+    variable_amount: bool
     status: BillStatus
     #: Whether this bill charges itself once a charge's match window has
     #: closed and nothing in the ledger looks like it. Off unless somebody
@@ -3850,6 +3858,7 @@ def declare_bill(
                     else _account_id(payload.account_id)
                 ),
                 category=category,
+                variable_amount=payload.variable_amount,
             ),
         )
 
@@ -3893,6 +3902,7 @@ def amend_bill(
                     else _account_id(payload.account_id)
                 ),
                 category=category,
+                variable_amount=payload.variable_amount,
                 clear_account=payload.clear_account,
                 clear_category=payload.clear_category,
             ),
@@ -4271,6 +4281,7 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         direction=bill.direction,
         account_id=None if bill.account_id is None else str(bill.account_id.value),
         category=bill.category,
+        variable_amount=bill.variable_amount,
         status=bill.status,
         autopay=bill.autopay,
         autopay_from=bill.autopay_from,

@@ -277,6 +277,25 @@ def test_pausing_survives_a_reload(
     assert reloaded.status is BillStatus.PAUSED
 
 
+def test_a_varying_amount_survives_a_reload_and_can_be_turned_off(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    bill = manage.declare(_declare(name="Energia", variable_amount=True)).bill
+
+    reloaded = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert reloaded is not None
+    assert reloaded.variable_amount is True
+
+    manage.amend(
+        AmendBillCommand(user_id=OWNER, bill_id=bill.id, variable_amount=False),
+    )
+    fixed = bills.find(user_id=OWNER, bill_id=bill.id)
+
+    assert fixed is not None
+    assert fixed.variable_amount is False
+
+
 # ----------------------------------------------------------------------
 # One person's bills are their own
 # ----------------------------------------------------------------------
@@ -769,3 +788,67 @@ def _entered(
     ledger.record(transaction=movement, balance_delta=None)
 
     return movement
+
+
+# ----------------------------------------------------------------------
+# A link is written alone, so it never undoes another writer
+# ----------------------------------------------------------------------
+
+
+def test_a_link_from_a_stale_copy_never_undoes_a_pause_made_meanwhile(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    """The worker read the bill, somebody paused it on screen, then the
+    worker linked. A whole-row write would have un-paused it."""
+    declared = manage.declare(_declare()).bill
+    stale = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert stale is not None
+    manage.pause(user_id=OWNER, bill_id=declared.id)
+
+    stale.link(dt.date(2026, 9, 4), "movement-1")
+    assert bills.store_link(stale, dt.date(2026, 9, 4))
+
+    reloaded = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert reloaded is not None
+    assert reloaded.status is BillStatus.PAUSED
+    assert reloaded.linked_movement(dt.date(2026, 9, 4)) == "movement-1"
+
+
+def test_a_second_movement_never_replaces_the_one_that_answered_first(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    declared = manage.declare(_declare()).bill
+    first = bills.find(user_id=OWNER, bill_id=declared.id)
+    second = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert first is not None and second is not None
+
+    first.link(dt.date(2026, 9, 4), "movement-1")
+    second.link(dt.date(2026, 9, 4), "movement-2")
+
+    assert bills.store_link(first, dt.date(2026, 9, 4))
+    assert not bills.store_link(second, dt.date(2026, 9, 4))
+    # The same answer again is not a conflict: a redelivery repeats it.
+    assert bills.store_link(first, dt.date(2026, 9, 4))
+
+    reloaded = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert reloaded is not None
+    assert reloaded.linked_movement(dt.date(2026, 9, 4)) == "movement-1"
+
+
+def test_a_stored_link_takes_the_skip_back_in_the_same_write(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    declared = manage.declare(_declare()).bill
+    declared.skip(dt.date(2026, 9, 4))
+    declared.skip(dt.date(2026, 10, 4))
+    bills.save(declared)
+
+    declared.link(dt.date(2026, 9, 4), "movement-1")
+    assert bills.store_link(declared, dt.date(2026, 9, 4))
+
+    reloaded = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert reloaded is not None
+    assert reloaded.skipped == frozenset({dt.date(2026, 10, 4)})

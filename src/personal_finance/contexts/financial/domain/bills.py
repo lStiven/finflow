@@ -358,6 +358,11 @@ class ScheduledBill(AggregateRoot[BillId]):
     direction: MovementDirection = MovementDirection.OUTGOING
     account_id: AccountId | None = None
     category: str | None = None
+    #: The figure changes every month — the electricity, the water — so
+    #: `amount` is an average, not a price. Recognising a payment then rests
+    #: on the merchant, within a wider band (`VARIABLE_AMOUNT_TOLERANCE`),
+    #: instead of on a figure the bill was never going to hit.
+    variable_amount: bool = False
     status: BillStatus = BillStatus.ACTIVE
     #: The periods the owner said would not happen. Stored, unlike "paid",
     #: because nothing else records them: a skip moves no money, so there is
@@ -398,6 +403,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         direction: MovementDirection = MovementDirection.OUTGOING,
         account_id: AccountId | None = None,
         category: str | None = None,
+        variable_amount: bool = False,
     ) -> Self:
         """Record what the owner says is going to be charged.
 
@@ -416,6 +422,7 @@ class ScheduledBill(AggregateRoot[BillId]):
             direction=direction,
             account_id=account_id,
             category=_valid_category(category),
+            variable_amount=variable_amount,
         )
 
     def amend(
@@ -428,6 +435,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         direction: MovementDirection | None = None,
         account_id: AccountId | None = None,
         category: str | None = None,
+        variable_amount: bool | None = None,
         clear_account: bool = False,
         clear_category: bool = False,
     ) -> None:
@@ -469,6 +477,9 @@ class ScheduledBill(AggregateRoot[BillId]):
             self.category = None
         elif category is not None:
             self.category = _valid_category(category)
+
+        if variable_amount is not None:
+            self.variable_amount = variable_amount
 
     def pause(self) -> None:
         """Stop expecting charges, without forgetting the bill.

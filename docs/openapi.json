@@ -540,6 +540,17 @@
               }
             ],
             "title": "Starts On"
+          },
+          "variable_amount": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variable Amount"
           }
         },
         "title": "AmendBillPayload",
@@ -788,6 +799,10 @@
           },
           "status": {
             "$ref": "#/components/schemas/BillStatus"
+          },
+          "variable_amount": {
+            "title": "Variable Amount",
+            "type": "boolean"
           }
         },
         "required": [
@@ -800,6 +815,7 @@
           "direction",
           "account_id",
           "category",
+          "variable_amount",
           "status",
           "autopay",
           "autopay_from",
@@ -1921,6 +1937,11 @@
             "format": "date",
             "title": "Starts On",
             "type": "string"
+          },
+          "variable_amount": {
+            "default": false,
+            "title": "Variable Amount",
+            "type": "boolean"
           }
         },
         "required": [

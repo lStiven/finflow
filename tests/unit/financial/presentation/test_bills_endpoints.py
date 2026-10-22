@@ -77,6 +77,12 @@ class InMemoryBills:
     def list_by_user(self, user_id: UserId) -> list[ScheduledBill]:
         return [bill for (owner, _), bill in self.rows.items() if owner == user_id]
 
+    def store_link(self, bill: ScheduledBill, period: object) -> bool:
+        del period
+        self.save(bill)
+
+        return True
+
     def save(self, bill: ScheduledBill) -> None:
         self.rows[(bill.user_id, bill.id)] = bill
 
@@ -380,6 +386,23 @@ def test_a_declared_bill_comes_back_with_its_id(client: TestClient) -> None:
     assert body["amount"] == "120000"
     assert body["status"] == "active"
     assert body["frozen"] is False
+
+
+def test_a_bill_is_fixed_unless_declared_as_varying(client: TestClient) -> None:
+    assert _declare(client)["variable_amount"] is False
+    assert _declare(client, name="Energia", variable_amount=True)["variable_amount"]
+
+
+def test_a_varying_amount_can_be_corrected_later(client: TestClient) -> None:
+    bill = _declare(client, name="Energia")
+
+    response = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"variable_amount": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["variable_amount"] is True
 
 
 def test_money_leaves_as_a_string(client: TestClient) -> None:

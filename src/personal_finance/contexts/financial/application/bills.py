@@ -112,6 +112,7 @@ class DeclareBillCommand:
     direction: MovementDirection = MovementDirection.OUTGOING
     account_id: AccountId | None = None
     category: str | None = None
+    variable_amount: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -128,6 +129,7 @@ class AmendBillCommand:
     direction: MovementDirection | None = None
     account_id: AccountId | None = None
     category: str | None = None
+    variable_amount: bool | None = None
     clear_account: bool = False
     clear_category: bool = False
 
@@ -190,6 +192,7 @@ class ManageBillsUseCase:
             direction=command.direction,
             account_id=command.account_id,
             category=command.category,
+            variable_amount=command.variable_amount,
         )
         self._bills.save(bill)
 
@@ -207,6 +210,7 @@ class ManageBillsUseCase:
             direction=command.direction,
             account_id=command.account_id,
             category=command.category,
+            variable_amount=command.variable_amount,
             clear_account=command.clear_account,
             clear_category=command.clear_category,
         )
@@ -892,7 +896,12 @@ class SettleBillChargeUseCase:
         self._unclaimed(bill, period, movement_id=movement.id.value)
 
         bill.link(period, movement.id.value)
-        self._bills.save(bill)
+
+        if not self._bills.store_link(bill, period):
+            # Another writer answered this charge with a different movement
+            # between the read and this write — the worker as a movement
+            # landed, or a second tab. Theirs stands; nothing here is lost.
+            raise ValueError("Another movement already answers this charge")
 
         return self._settled(
             bill,
@@ -924,7 +933,7 @@ class SettleBillChargeUseCase:
         """
         bill = self._load(user_id, bill_id)
         bill.unlink(period)
-        self._bills.save(bill)
+        self._bills.store_link(bill, period)
 
         return self._settled(bill, period, payment=None)
 

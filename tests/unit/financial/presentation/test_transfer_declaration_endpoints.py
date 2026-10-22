@@ -217,6 +217,12 @@ class NoBills:
 
         return []
 
+    def store_link(self, bill: ScheduledBill, period: object) -> bool:
+        del period
+        self.save(bill)
+
+        return True
+
     def save(self, bill: ScheduledBill) -> None:
         del bill
 

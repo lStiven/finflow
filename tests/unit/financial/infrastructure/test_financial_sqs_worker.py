@@ -18,6 +18,10 @@ import uuid
 from mypy_boto3_sqs.client import SQSClient
 import pytest
 
+from personal_finance.contexts.financial.application.autopay import (
+    SettleDueChargesCommand,
+    SettleDueChargesUseCase,
+)
 from personal_finance.contexts.financial.application.commands import (
     RecordMovementCommand,
     RecordTransferCommand,
@@ -161,10 +165,27 @@ def _envelope(
     )
 
 
+class RecordingReconcile:
+    """Stands in for the bills sweep: records what it was asked, or fails."""
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.commands: list[SettleDueChargesCommand] = []
+        self._fails = fails
+
+    def execute(self, command: SettleDueChargesCommand) -> object:
+        self.commands.append(command)
+
+        if self._fails:
+            raise RuntimeError("bills table not answering")
+
+        return None
+
+
 def _worker(
     *bodies: str,
     use_case: object | None = None,
     transfer_use_case: object | None = None,
+    reconcile: object | None = None,
 ) -> tuple[SQSFinancialWorker, FakeSQSClient, Any]:
     client = FakeSQSClient(*bodies)
     resolved = RecordingUseCase() if use_case is None else use_case
@@ -176,6 +197,7 @@ def _worker(
         queue_url=QUEUE_URL,
         use_case=cast(RecordMovementUseCase, resolved),
         transfer_use_case=cast(RecordTransferUseCase, transfers),
+        reconcile=cast(SettleDueChargesUseCase | None, reconcile),
     )
 
     return worker, client, resolved
@@ -294,6 +316,62 @@ def test_a_redelivered_movement_is_deleted_rather_than_retried() -> None:
 
     assert result.handled == 1
     assert client.deleted == ["receipt-0"]
+
+
+# ----------------------------------------------- answering a declared bill
+
+
+def test_a_recorded_movement_is_matched_against_declared_bills_and_only_matched() -> (
+    None
+):
+    """So a bank movement for a declared bill is not counted twice — spent and
+    still to pay — until somebody opens the bills screen. Match only: an
+    automatic charge stays a thing the screen writes."""
+    reconcile = RecordingReconcile()
+    worker, client, use_case = _worker(_envelope(), reconcile=reconcile)
+
+    worker.poll_once(wait_seconds=0)
+
+    assert len(reconcile.commands) == 1
+    assert reconcile.commands[0].user_id == use_case.commands[0].user_id
+    assert reconcile.commands[0].match_only is True
+    assert client.deleted == ["receipt-0"]
+
+
+def test_a_redelivered_movement_is_matched_too() -> None:
+    """The crash between recording and matching is exactly the redelivery."""
+    reconcile = RecordingReconcile()
+    worker, _, _ = _worker(
+        _envelope(),
+        use_case=RecordingUseCase(outcome=Outcome.DUPLICATE),
+        reconcile=reconcile,
+    )
+
+    worker.poll_once(wait_seconds=0)
+
+    assert len(reconcile.commands) == 1
+
+
+def test_matching_that_fails_never_puts_a_recorded_movement_back() -> None:
+    """The movement is in the ledger; the bills screen's sweep is the fallback."""
+    worker, client, _ = _worker(
+        _envelope(),
+        reconcile=RecordingReconcile(fails=True),
+    )
+
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.handled == 1
+    assert client.deleted == ["receipt-0"]
+
+
+def test_a_movement_that_could_not_be_recorded_is_never_matched() -> None:
+    reconcile = RecordingReconcile()
+    worker, _, _ = _worker(_envelope(), use_case=FailingUseCase(), reconcile=reconcile)
+
+    worker.poll_once(wait_seconds=0)
+
+    assert reconcile.commands == []
 
 
 # --------------------------------------------------------------- transfers

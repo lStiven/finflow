@@ -332,6 +332,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-22 — **Una factura se paga sola cuando llega su movimiento**, y
+  puede declararse de monto variable. El enlace se escribe solo y condicional,
+  y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
+  del worker sobre `merchants`. `e2e-bills` en verde; `just prepare` pide un
+  `contextlib.suppress` en `dynamodb.py:1821`. Sin commit.
 - 2026-10-20 — **Un pago a «tu cuenta AHORROS» cae en la cuenta.** Plantilla
   para la segunda redacción de Bancolombia (hora antes que fecha) y, sin
   dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
@@ -352,9 +357,3 @@ AWS (ver Trabas).
   largas y teclado completo, en todos los selectores sin cambiar pantallas.
   «Siguiente» queda quieto en todos los pasos. `just e2e` en verde. En el
   árbol, sin commit.
-- 2026-10-10 — **Plan UX completo: avisos guiados y cuatro recorridos animados**
-  (UX-14 y lo pedido después). La guía de avisos conecta Telegram desde ella
-  misma; cómo llega un movimiento, un traslado, una cuota y una factura se ven
-  paso a paso desde el «Cómo funciona» de su pantalla y en `/guias/flujos`.
-  La cola de Comercios se rehízo en una fila por comercio. `just e2e` (15
-  suites, 22 pantallas) en verde. En el árbol, sin commit.
