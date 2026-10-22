@@ -96,7 +96,11 @@ aws iam create-role --role-name finflow-deploy-github-development \
 ```
 
 A cada rol, **los mismos permisos que ya tiene el usuario con el que despliegas
-ese entorno a mano**. `infra/iam/finflow-deploy-policy.json` es la referencia,
+ese entorno a mano**, y además `FinflowDeployPublicImages`
+(`infra/iam/finflow-deploy-public-images-policy.json`): el login en ECR Public
+que hace que bajar las imágenes base no dependa del cupo anónimo de la IP del
+runner. Va aparte porque `FinflowDeploy` ya está en el tope de tamaño de una
+política administrada. `infra/iam/finflow-deploy-policy.json` es la referencia,
 pero el 2026-09-15 se comprobó que no es un espejo de lo adjunto; copiar las
 políticas del usuario real es lo que evita descubrir un permiso que falta a
 mitad del primer despliegue.
