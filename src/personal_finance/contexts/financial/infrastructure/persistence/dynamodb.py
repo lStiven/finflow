@@ -29,6 +29,7 @@ balance can never move without a row behind it.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import contextlib
 import datetime as dt
 from decimal import Decimal
 import enum
@@ -1785,14 +1786,21 @@ class DynamoDBScheduledBillRepository:
     def save(self, bill: ScheduledBill) -> None:
         self._client.put_item(TableName=self._table_name, Item=bill_to_item(bill))
 
-    def store_link(self, bill: ScheduledBill, period: dt.date) -> bool:
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: dt.date,
+        *,
+        dropped: frozenset[dt.date] = frozenset(),
+    ) -> bool:
         """One period's link, by `UpdateItem`, never the whole row.
 
-        Linking takes the period's skip back in the same write. Unlinking
-        removes the entry and is silent when there was none. The map is
-        created first when the bill has never been linked: a nested `SET` on
-        a map that does not exist is refused, and one expression cannot both
-        create the map and write into it.
+        Linking takes the period's skip back, and removes what fell out of the
+        bounded map, in the same write. Unlinking removes the entry and is
+        silent when there was none. The map is created first when the bill
+        has never been linked: a nested `SET` on a map that does not exist is
+        refused, and one expression cannot both create the map and write
+        into it.
         """
         key = _key(bill.user_id, f"{BILL_PREFIX}{bill.id.value}")
         movement = bill.linked.get(period)
@@ -1818,9 +1826,10 @@ class DynamoDBScheduledBillRepository:
                 # Nothing linked there, or no bill: either way nothing is.
                 return True
 
-            try:
-                # The last link gone takes the map with it, as a whole-row put
-                # would have: absent is what an ordinary bill looks like.
+            # The last link gone takes the map with it, as a whole-row put
+            # would have: absent is what an ordinary bill looks like. Refused
+            # while any link remains, which is the answer wanted then too.
+            with contextlib.suppress(conditional):
                 self._client.update_item(
                     TableName=self._table_name,
                     Key=key,
@@ -1829,10 +1838,17 @@ class DynamoDBScheduledBillRepository:
                     ExpressionAttributeNames={"#linked": "linked"},
                     ExpressionAttributeValues={":none": {"N": "0"}},
                 )
-            except conditional:
-                pass
 
             return True
+
+        # Sorted, so the same link writes the same expression every time.
+        gone = {
+            f"#gone{index}": day.isoformat()
+            for index, day in enumerate(sorted(dropped - {period}))
+        }
+        removing = (
+            f" REMOVE {', '.join(f'#linked.{name}' for name in gone)}" if gone else ""
+        )
 
         try:
             self._client.update_item(
@@ -1847,13 +1863,13 @@ class DynamoDBScheduledBillRepository:
                 TableName=self._table_name,
                 Key=key,
                 UpdateExpression=(
-                    "SET #linked.#period = :movement DELETE #skipped :period"
+                    f"SET #linked.#period = :movement{removing} DELETE #skipped :period"
                 ),
                 ConditionExpression=(
                     "attribute_exists(#sk) AND (attribute_not_exists(#linked.#period)"
                     " OR #linked.#period = :movement)"
                 ),
-                ExpressionAttributeNames=names | {"#skipped": "skipped"},
+                ExpressionAttributeNames=names | gone | {"#skipped": "skipped"},
                 ExpressionAttributeValues={
                     ":movement": {"S": movement},
                     ":period": {"SS": [period.isoformat()]},

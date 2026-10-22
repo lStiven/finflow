@@ -895,9 +895,9 @@ class SettleBillChargeUseCase:
         self._linkable(bill, movement)
         self._unclaimed(bill, period, movement_id=movement.id.value)
 
-        bill.link(period, movement.id.value)
+        dropped = bill.link(period, movement.id.value)
 
-        if not self._bills.store_link(bill, period):
+        if not self._bills.store_link(bill, period, dropped=dropped):
             # Another writer answered this charge with a different movement
             # between the read and this write — the worker as a movement
             # landed, or a second tab. Theirs stands; nothing here is lost.

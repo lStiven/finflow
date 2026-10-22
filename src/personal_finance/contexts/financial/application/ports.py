@@ -419,8 +419,17 @@ class ScheduledBillRepository(Protocol):
         """Store a bill, new or amended. A plain put of the whole row."""
         ...
 
-    def store_link(self, bill: ScheduledBill, period: dt.date) -> bool:
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: dt.date,
+        *,
+        dropped: frozenset[dt.date] = frozenset(),
+    ) -> bool:
         """Store what `bill` now says about one period's link, and nothing else.
+
+        `dropped` is what `ScheduledBill.link` pushed out of the bounded map,
+        removed in the same write so the stored map stays bounded too.
 
         Not `save`: the financial worker links as movements land, in parallel
         with itself and with somebody editing the bill on screen, and a whole

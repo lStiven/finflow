@@ -628,7 +628,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         """
         self.skipped = self.skipped - {period}
 
-    def link(self, period: dt.date, movement_id: str) -> None:
+    def link(self, period: dt.date, movement_id: str) -> frozenset[dt.date]:
         """Say this charge is what that movement already paid for.
 
         The other half of confirming, and the half that writes nothing: the
@@ -640,6 +640,9 @@ class ScheduledBill(AggregateRoot[BillId]):
         **It takes a skip back.** A skip is the owner's guess that no charge
         was coming; a movement is evidence that one did. Leaving both would
         mean a charge at once settled and not going to happen.
+
+        Answers the periods that fell out of the bounded map, so a store
+        that writes one period at a time can drop them too.
 
         Refused on a period this bill is not charged on, for the reason
         `occurs_on` gives. Whether the movement is really a plausible match —
@@ -655,11 +658,25 @@ class ScheduledBill(AggregateRoot[BillId]):
         if not self.occurs_on(period):
             raise ValueError(f"This bill is not charged on {period.isoformat()}")
 
-        self.skipped = self.skipped - {period}
         linked = {**self.linked, period: identity}
-
         # Oldest first out, for the reason the skipped periods give.
-        self.linked = dict(sorted(linked.items())[-MAX_LINKED_PERIODS:])
+        kept = dict(sorted(linked.items())[-MAX_LINKED_PERIODS:])
+
+        if period not in kept:
+            # Older than every period this bill still remembers: storing it
+            # would drop it on the spot, and a link that answers "done" and
+            # keeps nothing is a charge shown paid by nothing.
+            raise ValueError(
+                f"{period.isoformat()} is older than every charge this bill "
+                "still keeps a link for",
+            )
+
+        self.skipped = self.skipped - {period}
+        self.linked = kept
+
+        # What fell out, so a store that writes one period at a time can drop
+        # it too instead of keeping a map that never stops growing.
+        return frozenset(linked) - frozenset(kept)
 
     def unlink(self, period: dt.date) -> None:
         """Forget that a movement answered for this charge.

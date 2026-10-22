@@ -38,6 +38,7 @@ from personal_finance.contexts.financial.application.handlers import (
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
 )
+from personal_finance.contexts.financial.domain import bills as bills_domain
 from personal_finance.contexts.financial.domain.bills import (
     BillCadence,
     BillId,
@@ -852,3 +853,22 @@ def test_a_stored_link_takes_the_skip_back_in_the_same_write(
     reloaded = bills.find(user_id=OWNER, bill_id=declared.id)
     assert reloaded is not None
     assert reloaded.skipped == frozenset({dt.date(2026, 10, 4)})
+
+
+def test_what_falls_out_of_the_bound_is_removed_from_the_row_too(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One period at a time must still keep the stored map bounded."""
+    monkeypatch.setattr(bills_domain, "MAX_LINKED_PERIODS", 2)
+    declared = manage.declare(_declare()).bill
+    periods = [dt.date(2026, 9, 4), dt.date(2026, 10, 4), dt.date(2026, 11, 4)]
+
+    for index, period in enumerate(periods):
+        dropped = declared.link(period, f"movement-{index}")
+        assert bills.store_link(declared, period, dropped=dropped)
+
+    reloaded = bills.find(user_id=OWNER, bill_id=declared.id)
+    assert reloaded is not None
+    assert set(reloaded.linked) == {dt.date(2026, 10, 4), dt.date(2026, 11, 4)}

@@ -217,7 +217,15 @@ class NoBills:
 
         return []
 
-    def store_link(self, bill: ScheduledBill, period: object) -> bool:
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: object,
+        *,
+        dropped: object = frozenset(),
+    ) -> bool:
+
+        del dropped
         del period
         self.save(bill)
 

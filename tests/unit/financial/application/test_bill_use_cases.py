@@ -87,7 +87,15 @@ class FakeBills:
     def list_by_user(self, user_id: UserId) -> list[ScheduledBill]:
         return [bill for (owner, _), bill in self.rows.items() if owner == user_id]
 
-    def store_link(self, bill: ScheduledBill, period: object) -> bool:
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: object,
+        *,
+        dropped: object = frozenset(),
+    ) -> bool:
+
+        del dropped
         """Like the table: False when another writer already answered it."""
         if self.link_conflict:
             return False

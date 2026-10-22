@@ -1540,7 +1540,17 @@ way out, and still stores nothing.
   that answered first. Accepted, knowingly: the screen's own edits (pause,
   amend) are still whole-row puts and can drop a link the worker wrote in the
   same instant. That loses a *claim*, never money — the ledger is untouched
-  by linking — and the next sweep writes it back.
+  by linking — and the next sweep writes it back. Also accepted: "one
+  payment settles one thing" is checked on a read, so two sweeps running at
+  once could in principle give one movement to two charges. Both read the
+  same ledger and decide the same way, so it takes a charge settled between
+  their two reads; a per-movement claim row was rejected for the reason
+  `paid` is not stored — a second copy that drifts from the bills, and one a
+  deleted bill would leave behind blocking that movement for ever. The
+  bounded `linked` map stays bounded per period: `ScheduledBill.link` answers
+  what it pushed out and `store_link` removes it in the same write, and a
+  period older than everything kept is refused rather than "linked" to
+  nothing.
   **A movement certain for two open charges answers neither on its own**
   (`_certain_for_several`), across bills and not only within one. The same
   gym declared twice, or the water and the electricity paid to one utility:

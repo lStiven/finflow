@@ -75,7 +75,15 @@ class FakeBills:
     def list_by_user(self, user_id: UserId) -> Sequence[ScheduledBill]:
         return [bill for bill in self.bills if bill.user_id == user_id]
 
-    def store_link(self, bill: ScheduledBill, period: object) -> bool:
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: object,
+        *,
+        dropped: object = frozenset(),
+    ) -> bool:
+
+        del dropped
         del period
         self.save(bill)
 

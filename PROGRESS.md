@@ -335,8 +335,8 @@ AWS (ver Trabas).
 - 2026-10-22 — **Una factura se paga sola cuando llega su movimiento**, y
   puede declararse de monto variable. El enlace se escribe solo y condicional,
   y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
-  del worker sobre `merchants`. `e2e-bills` en verde; `just prepare` pide un
-  `contextlib.suppress` en `dynamodb.py:1821`. Sin commit.
+  del worker sobre `merchants` (sale solo con el pipeline). `e2e-bills`,
+  pruebas, pyright y Ruff en verde. Sin commit.
 - 2026-10-20 — **Un pago a «tu cuenta AHORROS» cae en la cuenta.** Plantilla
   para la segunda redacción de Bancolombia (hora antes que fecha) y, sin
   dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
