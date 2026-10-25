@@ -30,6 +30,7 @@ function bill(overrides: Partial<Bill> = {}): Bill {
     account_id: null,
     category: null,
     variable_amount: false,
+    merchant_id: null,
     status: "active",
     autopay: false,
     autopay_from: null,

@@ -97,6 +97,7 @@ def build_worker() -> SQSFinancialWorker:
                 ),
             ),
             merchants=build_merchant_directory(),
+            merchant_lookup=build_merchant_directory(),
         ),
     )
 

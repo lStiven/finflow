@@ -46,6 +46,24 @@ class UnknownMerchantCategoryError(Exception):
     """
 
 
+class MerchantLookup(Protocol):
+    """Which merchants still exist, for a bill that names one.
+
+    Apart from `MerchantDirectory` on purpose: only the bills need it, and a
+    merchant merged into another is deleted, so a bill's stored id can go
+    stale while every other use of the directory never holds an id at all.
+    """
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        merchant_ids: Sequence[str],
+    ) -> frozenset[str]:
+        """The ones among these that are still this user's merchants."""
+        ...
+
+
 class MerchantDirectory(Protocol):
     """Reads the counterparty text on a movement back as a merchant.
 

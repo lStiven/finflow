@@ -106,20 +106,25 @@ class ChargeCandidate(ValueObject):
     quality: MatchQuality
 
 
-def bill_keys(bill: ScheduledBill, merchant_id: str | None) -> frozenset[str]:
+def bill_keys(bill: ScheduledBill, *merchant_ids: str | None) -> frozenset[str]:
     """Every counterparty key this bill could be recognised under.
 
-    Two, when a merchant owns the bill's name: through the merchant, which is
-    how "Gimnasio" is recognised in a charge that says `GYMSA*BOG`, and
-    through the folded name itself, which is the only thing that works for the
-    ordinary case where nothing has ever attributed it.
+    The folded name always, for a movement somebody typed with the bill's own
+    words. And every merchant the bill is known through — the one its owner
+    named (while it still exists), which is how "Luz casa mamá" is recognised
+    in `COMP ELECTRICIDAD TU`; and the one that owns the bill's name, which is
+    how "Gimnasio" is recognised in `GYMSA*BOG`. Added, never one in place of
+    the other: naming a merchant must not cost a spelling the name already
+    had.
     """
-    text = counterparty_key(bill.name, None)
+    keys = {counterparty_key(bill.name, None)}
+    keys.update(
+        counterparty_key(bill.name, merchant_id)
+        for merchant_id in merchant_ids
+        if merchant_id is not None
+    )
 
-    if merchant_id is None:
-        return frozenset({text})
-
-    return frozenset({counterparty_key(bill.name, merchant_id), text})
+    return frozenset(keys)
 
 
 def candidates_for(
@@ -178,6 +183,101 @@ def candidates_for(
     )
 
     return tuple(found[:MAX_CANDIDATES])
+
+
+# How much clearer one pairing has to be than the next before it is taken
+# without asking, in relative distance from the bill's figure: ten points.
+# 2 % against 31 % is the electricity of two houses telling themselves apart;
+# 2 % against 3 % is a coin toss, and stays a question.
+PAIRING_MARGIN = Decimal("0.10")
+
+
+def resolve_contests(
+    charges: Sequence[tuple[Money, Sequence[ChargeCandidate]]],
+) -> list[tuple[ChargeCandidate, ...]]:
+    """Settle which certain match each open charge keeps, across all of them.
+
+    Each entry is one open charge — the figure its bill projects, and its
+    candidates. A certain match **stays certain only when the two choose each
+    other clearly**: the movement is nearer this charge's figure than any
+    other charge it is certain for, and this charge's figure is nearer that
+    movement than any other movement certain for it — both by at least
+    `PAIRING_MARGIN`. Every other certain match becomes likely: a question.
+
+    And the charge's other certain payments must each be clearly another
+    charge's: pairing settles a contest *between* bills, and never picks
+    between two payments for a single bill — that stays a question.
+
+    That is what tells several bills to one merchant apart. Two houses' light
+    paid to Celsia the same week, one bill near 155 000 and one near 120 000:
+    157 731 and 119 914 each sit far nearer one of them, so each is linked to
+    its own. Two figures nearly alike are a coin toss, and stay a proposal —
+    and so do identical bills, which nothing can tell apart. A match with no
+    rival anywhere is untouched, so everything that linked before still does.
+    """
+    nearest_charges: dict[str, list[tuple[Decimal, int]]] = {}
+    nearest_movements: dict[int, list[tuple[Decimal, str]]] = {}
+
+    for index, (projected, candidates) in enumerate(charges):
+        for candidate in candidates:
+            if candidate.quality is not MatchQuality.CERTAIN:
+                continue
+
+            distance = _distance(candidate.amount, projected)
+            nearest_charges.setdefault(candidate.movement_id, []).append(
+                (distance, index),
+            )
+            nearest_movements.setdefault(index, []).append(
+                (distance, candidate.movement_id),
+            )
+
+    def first_charge(movement_id: str) -> int | None:
+        ranked = nearest_charges[movement_id]
+        best = min(ranked, key=lambda pair: pair[0])[1]
+
+        return best if _clearly_first(ranked, best) else None
+
+    def chosen(index: int, movement_id: str) -> bool:
+        if not (
+            first_charge(movement_id) == index
+            and _clearly_first(nearest_movements[index], movement_id)
+        ):
+            return False
+
+        # Every other payment this charge could take has to be clearly some
+        # *other* charge's. Otherwise one bill with two payments — Centroaguas
+        # charging twice against a single declaration — would keep the nearer
+        # without asking, and that is a guess, not a pairing.
+        return all(
+            first_charge(other) not in (None, index)
+            for _, other in nearest_movements[index]
+            if other != movement_id
+        )
+
+    return [
+        tuple(
+            candidate
+            if candidate.quality is not MatchQuality.CERTAIN
+            or chosen(index, candidate.movement_id)
+            else dataclasses.replace(candidate, quality=MatchQuality.LIKELY)
+            for candidate in candidates
+        )
+        for index, (_, candidates) in enumerate(charges)
+    ]
+
+
+def _distance(charged: Money, projected: Money) -> Decimal:
+    return abs(charged.amount - projected.amount) / projected.amount
+
+
+def _clearly_first[T](ranked: Sequence[tuple[Decimal, T]], wanted: T) -> bool:
+    """Whether `wanted` is the nearest, and by the margin, or the only one."""
+    ordered = sorted(ranked, key=lambda pair: pair[0])
+
+    if ordered[0][1] != wanted:
+        return False
+
+    return len(ordered) == 1 or ordered[1][0] - ordered[0][0] >= PAIRING_MARGIN
 
 
 def only_certain(candidates: Sequence[ChargeCandidate]) -> ChargeCandidate | None:

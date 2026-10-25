@@ -2202,8 +2202,15 @@ export interface components {
              * @default false
              */
             clear_category: boolean;
+            /**
+             * Clear Merchant
+             * @default false
+             */
+            clear_merchant: boolean;
             currency?: components["schemas"]["Currency"] | null;
             direction?: components["schemas"]["MovementDirection"] | null;
+            /** Merchant Id */
+            merchant_id?: string | null;
             /** Name */
             name?: string | null;
             /** Starts On */
@@ -2325,6 +2332,8 @@ export interface components {
             frozen: boolean;
             /** Id */
             id: string;
+            /** Merchant Id */
+            merchant_id: string | null;
             /** Name */
             name: string;
             next_occurrence: components["schemas"]["BillOccurrenceResponse"] | null;
@@ -2874,6 +2883,8 @@ export interface components {
             currency: components["schemas"]["Currency"];
             /** @default outgoing */
             direction: components["schemas"]["MovementDirection"];
+            /** Merchant Id */
+            merchant_id?: string | null;
             /** Name */
             name: string;
             /**

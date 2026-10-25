@@ -1669,6 +1669,9 @@ def bill_to_item(bill: ScheduledBill) -> dict[str, AttributeValueTypeDef]:
     if bill.autopay:
         item["autopay"] = {"BOOL": True}
 
+    if bill.merchant_id is not None:
+        item["merchant_id"] = {"S": bill.merchant_id}
+
     if bill.variable_amount:
         # Absent means fixed, so every bill stored before this existed reads
         # back exactly as it was declared.
@@ -1731,6 +1734,7 @@ def bill_to_entity(item: Mapping[str, AttributeValueTypeDef]) -> ScheduledBill:
         account_id=AccountId.from_string(account_id) if account_id else None,
         category=_string(item, "category"),
         variable_amount=item.get("variable_amount", {}).get("BOOL", False),
+        merchant_id=_string(item, "merchant_id"),
         status=_enum(BillStatus, _string(item, "status") or "", "bill status"),
         skipped=frozenset(
             dt.date.fromisoformat(day) for day in item.get("skipped", {}).get("SS", [])

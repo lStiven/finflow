@@ -353,6 +353,7 @@ def _bill_keys(
     """Every counterparty key this bill could be recognised under."""
     return bill_keys(
         bill,
+        bill.merchant_id,
         None if attribution is None else attribution.merchant_id,
     )
 

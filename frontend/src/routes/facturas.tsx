@@ -61,6 +61,7 @@ import {
   billsQuery,
   type ChargeProposal,
   categoriesQuery,
+  merchantsForFilterQuery,
   type RecurringSeries,
   recurringQuery,
   useAmendBill,
@@ -125,6 +126,8 @@ export const Route = createFileRoute("/facturas")({
       // declared is refused by the server — better to offer only what exists.
       context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
       context.queryClient.query({ ...categoriesQuery, staleTime: "static" }),
+      // Who charges a bill is one of these; the form offers only them.
+      context.queryClient.query(merchantsForFilterQuery),
     ]),
   component: BillsScreen,
 });
@@ -845,6 +848,7 @@ function Failure({ error }: { error: Error }) {
 function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   const { data: accounts } = useSuspenseQuery(accountsQuery("open"));
   const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const { data: merchants } = useSuspenseQuery(merchantsForFilterQuery);
   const declare = useDeclareBill();
   const amend = useAmendBill(bill?.id ?? "");
   const saving = bill ? amend : declare;
@@ -860,6 +864,8 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   // Electricity, water: the amount above is an average, and a payment from
   // the same merchant within half of it pays the bill without asking.
   const [variable, setVariable] = useState(bill?.variable_amount ?? false);
+  // The name is the owner's words; this is who the bank will say charged it.
+  const [merchantId, setMerchantId] = useState(bill?.merchant_id ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
@@ -890,8 +896,10 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
           // Absence means "leave it alone" on a correction, so taking the
           // account off has to say so out loud.
           account_id: accountId === "" ? null : accountId,
+          merchant_id: merchantId === "" ? null : merchantId,
           clear_account: accountId === "" && bill.account_id !== null,
           clear_category: category === "" && bill.category !== null,
+          clear_merchant: merchantId === "" && bill.merchant_id !== null,
         },
         { onSuccess },
       );
@@ -905,6 +913,7 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         direction: "outgoing",
         category: category === "" ? null : category,
         account_id: accountId === "" ? null : accountId,
+        merchant_id: merchantId === "" ? null : merchantId,
       },
       { onSuccess },
     );
@@ -931,6 +940,26 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         maxLength={120}
         placeholder="Gimnasio"
         onChange={(event) => setName(event.target.value)}
+      />
+
+      <Select
+        label="¿Quién te cobra?"
+        value={merchantId}
+        onChange={(event) => setMerchantId(event.target.value)}
+        placeholder="Elige el comercio"
+        hint="El nombre de arriba es como tú la llamas. Con el comercio, Finflow reconoce el pago aunque el banco lo escriba distinto."
+        options={[
+          ...merchants.merchants.map((merchant) => ({
+            value: merchant.id,
+            label: merchant.display_name,
+          })),
+          // Kept visible when the list does not reach it — past the first
+          // hundred, or merged away since — rather than reading as "none".
+          ...(bill?.merchant_id &&
+          !merchants.merchants.some((merchant) => merchant.id === bill.merchant_id)
+            ? [{ value: bill.merchant_id, label: "El comercio que ya tenía" }]
+            : []),
+        ]}
       />
 
       <Field

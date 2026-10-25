@@ -496,6 +496,11 @@
             "title": "Clear Category",
             "type": "boolean"
           },
+          "clear_merchant": {
+            "default": false,
+            "title": "Clear Merchant",
+            "type": "boolean"
+          },
           "currency": {
             "anyOf": [
               {
@@ -515,6 +520,18 @@
                 "type": "null"
               }
             ]
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
           },
           "name": {
             "anyOf": [
@@ -778,6 +795,17 @@
             "title": "Id",
             "type": "string"
           },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -816,6 +844,7 @@
           "account_id",
           "category",
           "variable_amount",
+          "merchant_id",
           "status",
           "autopay",
           "autopay_from",
@@ -1926,6 +1955,18 @@
           "direction": {
             "$ref": "#/components/schemas/MovementDirection",
             "default": "outgoing"
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
           },
           "name": {
             "maxLength": 120,

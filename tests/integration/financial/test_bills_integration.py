@@ -297,6 +297,23 @@ def test_a_varying_amount_survives_a_reload_and_can_be_turned_off(
     assert fixed.variable_amount is False
 
 
+def test_the_merchant_a_bill_names_survives_a_reload_and_can_be_cleared(
+    manage: ManageBillsUseCase,
+    bills: DynamoDBScheduledBillRepository,
+) -> None:
+    bill = manage.declare(_declare(name="Luz casa mamá", merchant_id="celsia")).bill
+
+    reloaded = bills.find(user_id=OWNER, bill_id=bill.id)
+    assert reloaded is not None
+    assert reloaded.merchant_id == "celsia"
+
+    manage.amend(AmendBillCommand(user_id=OWNER, bill_id=bill.id, clear_merchant=True))
+    cleared = bills.find(user_id=OWNER, bill_id=bill.id)
+
+    assert cleared is not None
+    assert cleared.merchant_id is None
+
+
 # ----------------------------------------------------------------------
 # One person's bills are their own
 # ----------------------------------------------------------------------

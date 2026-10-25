@@ -332,6 +332,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-23 — **Facturas por comercio, y varias del mismo comercio se
+  separan solas.** La factura nombra quién la cobra (aparte de su nombre) y
+  dos pagos del mismo comercio en la misma semana van cada uno a su factura
+  cuando los montos lo dejan claro. Pruebas, pyright, Ruff y `e2e-bills` en
+  verde. Sin commit.
 - 2026-10-22 — **Una factura se paga sola cuando llega su movimiento**, y
   puede declararse de monto variable. El enlace se escribe solo y condicional,
   y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
@@ -352,8 +357,3 @@ AWS (ver Trabas).
   callar.** La tarjeta de la cuenta lo dice y lleva a los sin asignar o a
   corregir el saldo, que ya no acepta un negativo en esos tipos. El seed asigna
   la nómina demo; el logo lleva al Resumen. En el árbol, sin commit.
-- 2026-10-10 — **Las listas desplegables son de la app, y el carrusel ya no salta.**
-  Menú propio en escritorio, hoja desde abajo en el teléfono, búsqueda en las
-  largas y teclado completo, en todos los selectores sin cambiar pantallas.
-  «Siguiente» queda quieto en todos los pasos. `just e2e` en verde. En el
-  árbol, sin commit.

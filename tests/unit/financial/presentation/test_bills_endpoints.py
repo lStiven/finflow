@@ -413,6 +413,28 @@ def test_a_varying_amount_can_be_corrected_later(client: TestClient) -> None:
     assert response.json()["variable_amount"] is True
 
 
+def test_a_bill_can_name_who_charges_it(client: TestClient) -> None:
+    assert _declare(client)["merchant_id"] is None
+
+    body = _declare(client, name="Luz casa mamá", merchant_id="celsia")
+
+    assert body["name"] == "Luz casa mamá"
+    assert body["merchant_id"] == "celsia"
+
+
+def test_setting_and_clearing_the_merchant_at_once_is_refused(
+    client: TestClient,
+) -> None:
+    bill = _declare(client, merchant_id="celsia")
+
+    response = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"merchant_id": "otro", "clear_merchant": True},
+    )
+
+    assert response.status_code == 422
+
+
 def test_money_leaves_as_a_string(client: TestClient) -> None:
     """Like everywhere else money crosses a boundary here: a JSON float loses
     cents without ever raising."""

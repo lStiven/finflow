@@ -124,6 +124,7 @@ describe("aceptar una sugerencia", () => {
       account_id: "account-1",
       category: "subscriptions",
       variable_amount: false,
+      merchant_id: "netflix",
     });
   });
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import datetime as dt
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
@@ -40,6 +41,10 @@ from personal_finance.contexts.financial.application.handlers import (
     AccountNotFoundError,
     ManageTransactionsUseCase,
     TransactionNotFoundError,
+)
+from personal_finance.contexts.financial.application.ports import (
+    MerchantAttribution,
+    MerchantDirectory,
 )
 from personal_finance.contexts.financial.domain.bills import (
     BillCadence,
@@ -1701,6 +1706,38 @@ def test_one_movement_certain_for_two_bills_answers_neither_on_its_own() -> None
     )
 
 
+def test_two_bills_to_one_merchant_paid_the_same_week_each_take_their_own() -> None:
+    """The light of two houses, both Celsia, both varying, two days apart:
+    each payment is far nearer one bill's figure, so each lands on its own."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    mama = _keep(
+        bills,
+        name="Celsia",
+        amount=_money("155000"),
+        starts_on=due,
+        variable_amount=True,
+    )
+    mine = _keep(
+        bills,
+        name="Celsia",
+        amount=_money("120000"),
+        starts_on=due,
+        variable_amount=True,
+    )
+    high = _moved(counterparty="Celsia", amount="157731", day=due)
+    low = _moved(counterparty="Celsia", amount="119914", day=due + dt.timedelta(days=2))
+    charges.add(high)
+    charges.add(low)
+
+    view = _sweep(sweep)
+
+    assert len(view.settled) == 2
+    assert view.proposals == ()
+    assert bills.rows[(USER, mama.id)].linked_movement(due) == high.id.value
+    assert bills.rows[(USER, mine.id)].linked_movement(due) == low.id.value
+
+
 def test_a_movement_certain_for_one_bill_and_likely_for_another_is_linked() -> None:
     """Only certainty twice is a question; a weaker fit elsewhere is not."""
     sweep, bills, charges, _ = _sweeping()
@@ -1818,3 +1855,187 @@ def test_a_movement_the_lookup_no_longer_holds_does_not_break_the_screen() -> No
     view = _sweep(sweep)
 
     assert view.settled == ()
+
+
+# ----------------------------------------------------------------------
+# Several bills to one merchant, and the merchant a bill names
+# ----------------------------------------------------------------------
+
+
+class FakeMerchants:
+    """Attribution by exact spelling, and which merchants still exist."""
+
+    def __init__(self, spellings: dict[str, str], alive: set[str]) -> None:
+        self._spellings = spellings
+        self._alive = alive
+
+    def attribute(
+        self,
+        *,
+        user_id: UserId,
+        counterparties: Sequence[str],
+    ) -> dict[str, MerchantAttribution]:
+        del user_id
+        return {
+            text: MerchantAttribution(
+                merchant_id=self._spellings[text],
+                display_name=self._spellings[text],
+                category="utilities",
+                needs_review=False,
+            )
+            for text in counterparties
+            if text in self._spellings
+        }
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        merchant_ids: Sequence[str],
+    ) -> frozenset[str]:
+        del user_id
+        return frozenset(each for each in merchant_ids if each in self._alive)
+
+
+def _sweeping_with(
+    merchants: FakeMerchants,
+) -> tuple[SettleDueChargesUseCase, FakeBills, FakeCharges]:
+    settle, bills, charges, _ = _settling()
+
+    return (
+        SettleDueChargesUseCase(
+            bills=bills,
+            charges=charges,
+            ledger=FakeHistory(charges),
+            settle=settle,
+            merchants=cast(MerchantDirectory, merchants),
+            merchant_lookup=merchants,
+        ),
+        bills,
+        charges,
+    )
+
+
+def test_one_bill_with_two_payments_from_its_merchant_still_asks() -> None:
+    """Pairing settles a contest between bills; it never picks between two
+    payments for one bill — Centroaguas charging twice against one
+    declaration stays a question, however far apart the figures are."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    _keep(
+        bills,
+        name="Centroaguas",
+        amount=_money("105000"),
+        starts_on=due,
+        variable_amount=True,
+    )
+    charges.add(_moved(counterparty="Centroaguas", amount="100000", day=due))
+    charges.add(_moved(counterparty="Centroaguas", amount="60000", day=due))
+
+    view = _sweep(sweep)
+
+    assert view.settled == ()
+    assert len(view.proposals) == 1
+
+
+def test_a_payment_claimed_by_one_bill_frees_its_rival_for_the_next() -> None:
+    """The gym takes the 100 000 clearly; the varying bill was torn between
+    it and 121 000 — and with the first gone, the second is plainly its."""
+    sweep, bills, charges, _ = _sweeping()
+    due = _today() - dt.timedelta(days=10)
+    fixed = _keep(bills, name="Gimnasio", amount=_money("100000"), starts_on=due)
+    varying = _keep(
+        bills,
+        name="Gimnasio",
+        amount=_money("115000"),
+        starts_on=due,
+        variable_amount=True,
+    )
+    first = _moved(amount="100000", day=due)
+    second = _moved(amount="121000", day=due + dt.timedelta(days=1))
+    charges.add(first)
+    charges.add(second)
+
+    view = _sweep(sweep)
+
+    assert len(view.settled) == 2
+    assert bills.rows[(USER, fixed.id)].linked_movement(due) == first.id.value
+    assert bills.rows[(USER, varying.id)].linked_movement(due) == second.id.value
+
+
+def test_a_bill_is_recognised_through_the_merchant_it_names() -> None:
+    sweep, bills, charges = _sweeping_with(
+        FakeMerchants({"COMP ELECTRICIDAD TU": "celsia"}, alive={"celsia"}),
+    )
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(
+        bills,
+        name="Luz casa mamá",
+        amount=_money("150000"),
+        starts_on=due,
+        merchant_id="celsia",
+    )
+    paid = _moved(counterparty="COMP ELECTRICIDAD TU", amount="150000", day=due)
+    charges.add(paid)
+
+    view = _sweep(sweep)
+
+    assert [each.action for each in view.settled] == [SettlementAction.MATCHED]
+    assert bills.rows[(USER, bill.id)].linked_movement(due) == paid.id.value
+
+
+def test_a_merchant_merged_away_falls_back_to_the_bills_own_name() -> None:
+    """Its id now answers nothing; the bill must not wait on it for ever."""
+    sweep, bills, charges = _sweeping_with(
+        FakeMerchants({"COMP ELECTRICIDAD TU": "celsia-nuevo"}, alive={"celsia-nuevo"}),
+    )
+    due = _today() - dt.timedelta(days=10)
+    bill = _keep(
+        bills,
+        name="Luz casa mamá",
+        amount=_money("150000"),
+        starts_on=due,
+        merchant_id="celsia-viejo",
+    )
+    typed = _moved(counterparty="Luz casa mamá", amount="150000", day=due)
+    charges.add(typed)
+
+    view = _sweep(sweep)
+
+    assert [each.action for each in view.settled] == [SettlementAction.MATCHED]
+    assert bills.rows[(USER, bill.id)].linked_movement(due) == typed.id.value
+
+
+def test_a_bill_may_only_name_one_of_its_owners_merchants() -> None:
+    merchants = FakeMerchants({}, alive={"celsia"})
+    manage = ManageBillsUseCase(
+        bills=FakeBills(),
+        accounts=FakeAccounts(),
+        charges=FakeCharges(),
+        merchants=merchants,
+    )
+
+    named = manage.declare(
+        DeclareBillCommand(
+            user_id=USER,
+            name="Luz casa mamá",
+            amount=_money("150000"),
+            cadence=BillCadence.MONTHLY,
+            starts_on=dt.date(2026, 9, 4),
+            merchant_id="celsia",
+        ),
+    )
+
+    assert named.bill.merchant_id == "celsia"
+
+    with pytest.raises(ValueError, match="not one of yours"):
+        manage.declare(
+            DeclareBillCommand(
+                user_id=USER,
+                name="Luz mi casa",
+                amount=_money("120000"),
+                cadence=BillCadence.MONTHLY,
+                starts_on=dt.date(2026, 9, 4),
+                merchant_id="de-otra-persona",
+            ),
+        )

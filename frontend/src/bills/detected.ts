@@ -134,5 +134,8 @@ export function asDeclaration(series: RecurringSeries): DeclareBillBody {
     // The detector already knows: a series of different figures is declared
     // as varying, so next month's figure pays it without asking.
     variable_amount: series.variable,
+    // The detector found it through its merchant, so the bill is recognised
+    // the same way — whatever the bank calls it next month.
+    merchant_id: series.merchant_id,
   };
 }

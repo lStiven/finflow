@@ -113,6 +113,9 @@ MAX_SKIPPED_PERIODS = 240
 # and harmless where refusing today's is a button that does nothing.
 MAX_LINKED_PERIODS = 240
 
+# A merchant's id is a UUID; anything far longer is not one.
+MAX_MERCHANT_ID_LENGTH = 64
+
 # How far from its expected day a movement may land and still be this charge.
 #
 # Five days, and deliberately wider than `GRACE_DAYS`. The grace answers "is
@@ -358,6 +361,12 @@ class ScheduledBill(AggregateRoot[BillId]):
     direction: MovementDirection = MovementDirection.OUTGOING
     account_id: AccountId | None = None
     category: str | None = None
+    #: Who charges it, as Merchant knows them — when the name is the owner's
+    #: own words. "Luz casa mamá" and "Luz mi casa" are both Celsia, and the
+    #: name alone would never recognise `COMP ELECTRICIDAD TU` as either.
+    #: Recognising a payment then goes through the merchant, through every
+    #: spelling it has had. An opaque id: Financial never reads the merchant.
+    merchant_id: str | None = None
     #: The figure changes every month — the electricity, the water — so
     #: `amount` is an average, not a price. Recognising a payment then rests
     #: on the merchant, within a wider band (`VARIABLE_AMOUNT_TOLERANCE`),
@@ -404,6 +413,7 @@ class ScheduledBill(AggregateRoot[BillId]):
         account_id: AccountId | None = None,
         category: str | None = None,
         variable_amount: bool = False,
+        merchant_id: str | None = None,
     ) -> Self:
         """Record what the owner says is going to be charged.
 
@@ -423,6 +433,7 @@ class ScheduledBill(AggregateRoot[BillId]):
             account_id=account_id,
             category=_valid_category(category),
             variable_amount=variable_amount,
+            merchant_id=_valid_merchant_id(merchant_id),
         )
 
     def amend(
@@ -436,8 +447,10 @@ class ScheduledBill(AggregateRoot[BillId]):
         account_id: AccountId | None = None,
         category: str | None = None,
         variable_amount: bool | None = None,
+        merchant_id: str | None = None,
         clear_account: bool = False,
         clear_category: bool = False,
+        clear_merchant: bool = False,
     ) -> None:
         """Correct what the bill says.
 
@@ -480,6 +493,11 @@ class ScheduledBill(AggregateRoot[BillId]):
 
         if variable_amount is not None:
             self.variable_amount = variable_amount
+
+        if clear_merchant:
+            self.merchant_id = None
+        elif merchant_id is not None:
+            self.merchant_id = _valid_merchant_id(merchant_id)
 
     def pause(self) -> None:
         """Stop expecting charges, without forgetting the bill.
@@ -825,6 +843,21 @@ def _valid_category(category: str | None) -> str | None:
         return None
 
     stripped = category.strip()
+
+    return stripped or None
+
+
+def _valid_merchant_id(merchant_id: str | None) -> str | None:
+    """Blank is none. Anything else is kept as given: it is Merchant's id,
+    and an id this context reshaped would stop matching the one it came from.
+    """
+    if merchant_id is None:
+        return None
+
+    stripped = merchant_id.strip()
+
+    if len(stripped) > MAX_MERCHANT_ID_LENGTH:
+        raise ValueError("A merchant id is longer than any merchant's")
 
     return stripped or None
 

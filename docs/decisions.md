@@ -1551,15 +1551,45 @@ way out, and still stores nothing.
   what it pushed out and `store_link` removes it in the same write, and a
   period older than everything kept is refused rather than "linked" to
   nothing.
-  **A movement certain for two open charges answers neither on its own**
-  (`_certain_for_several`), across bills and not only within one. The same
-  gym declared twice, or the water and the electricity paid to one utility:
-  picking the one read first is guessing, and it would hide the duplicate.
+  **A movement certain for two open charges answers neither on its own —
+  unless the figures choose each other clearly** (`resolve_contests`, across
+  bills and not only within one). The same gym declared twice is a coin toss
+  and stays a question, which also surfaces the duplicate. But the light of
+  two houses paid to Celsia the same week — bills near 155 000 and 120 000,
+  payments of 157 731 and 119 914 — is not: a certain match is kept when the
+  movement is nearer this charge's figure than any other it is certain for,
+  and the charge nearer this movement than any other, both by
+  `PAIRING_MARGIN` (ten points of relative distance) — and the charge's
+  other certain payments must each be clearly another charge's. That last
+  part keeps pairing a contest *between* bills: one bill with two payments
+  (Centroaguas charging twice against one declaration) never keeps the
+  nearer without asking. Without pairing, several bills to one merchant on
+  one card in one week could never link on their own, and that is how
+  utilities are paid. The sweep links in passes until a pass links nothing:
+  a payment claimed in one pass is a rival gone in the next. Only then are
+  automatic charges and proposals decided, so a bill never charges itself
+  for money a later pass would have recognised.
   Also accepted: linking as movements land decides on what has arrived so far,
   so of two payments to one merchant in a week the first is linked before the
   second exists. Totals stay right — both are spending, the charge is paid
   once — and the wrong one is fixed by unlinking. The worker reads in
   `DEFAULT_TIMEZONE`, which is the only one the app's screens send today.
+
+- **A bill names who charges it, apart from its own name** (2026-10-23).
+  The name is the owner's words — "Luz casa mamá", "Luz mi casa" — and the
+  bank never uses them; `merchant_id` is the Merchant that charges it, and
+  recognising a payment goes through that merchant and every spelling it has
+  had (`bill_keys`). Kept as an opaque id: Financial never reads a merchant.
+  It is checked against the owner's merchants when written (`MerchantLookup`,
+  a port apart from `MerchantDirectory` so its eleven fakes did not have to
+  learn it), and again on every sweep: Merchant deletes a merchant merged
+  into another and leaves no redirect, so a bill still naming it falls back
+  to its own name instead of waiting for ever on an id nothing is attributed
+  to any more. Naming a merchant adds a key, never replaces one: the merchant
+  owning the bill's name still counts too. A charge the app
+  writes still carries the bill's name as its counterparty, as before:
+  re-filing it under the merchant would need Merchant to move a spelling,
+  which is not a call Financial makes.
 
 - **A bill can say its figure varies** (2026-10-22). `variable_amount` makes
   `amount` an average: a payment from the bill's own merchant within half of

@@ -11,6 +11,7 @@ from personal_finance.contexts.merchant.application.handlers import (
 )
 from personal_finance.contexts.merchant.application.queries import (
     AttributeCounterpartiesUseCase,
+    GetMerchantUseCase,
 )
 from personal_finance.contexts.merchant.domain.categories import Category
 from personal_finance.contexts.merchant.domain.entities import Merchant
@@ -127,6 +128,7 @@ def _directory(
 
     return MerchantContextDirectory(
         use_case=AttributeCounterpartiesUseCase(repository=repository),
+        lookup=GetMerchantUseCase(repository=repository),
         catalog=catalog,
         classify=ClassifyCounterpartyUseCase(
             repository=repository,
@@ -187,3 +189,27 @@ def test_every_category_comes_back_with_the_name_it_is_shown_by() -> None:
         InMemoryMerchantRepository(),
         categories=categories,
     ).categories(user_id=USER_ID)
+
+
+def test_only_merchants_that_still_exist_are_answered() -> None:
+    """A merchant merged into another is deleted; a bill naming it has to
+    find out, and an id that is not even an id is simply not one."""
+    repository = InMemoryMerchantRepository()
+    merchant = Merchant.seed(
+        user_id=USER_ID,
+        fingerprint=AliasFingerprint.from_raw("COMP ELECTRICIDAD TU"),
+        raw_text="COMP ELECTRICIDAD TU",
+        seen_at=NOW,
+        display_name="Celsia",
+        category=CategoryKey.default(MerchantCategory.GROCERIES),
+    )
+    repository.save(merchant)
+    alive = str(merchant.id.value)
+    gone = "6f8f1f2e-6a5c-4d63-9c2e-9d3b1f7c5a99"
+
+    found = _directory(repository).existing(
+        user_id=USER_ID,
+        merchant_ids=[alive, gone, "no-es-un-id", alive.upper()],
+    )
+
+    assert found == frozenset({alive})

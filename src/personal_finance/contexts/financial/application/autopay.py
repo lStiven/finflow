@@ -32,7 +32,7 @@ quarter of charges in one go.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 import dataclasses
 import datetime as dt
 import enum
@@ -56,6 +56,7 @@ from personal_finance.contexts.financial.application.handlers import (
 from personal_finance.contexts.financial.application.ports import (
     ChargeLookup,
     MerchantDirectory,
+    MerchantLookup,
     MovementHistory,
     ScheduledBillRepository,
 )
@@ -73,10 +74,10 @@ from personal_finance.contexts.financial.domain.exceptions import (
 )
 from personal_finance.contexts.financial.domain.reconciliation import (
     ChargeCandidate,
-    MatchQuality,
     bill_keys,
     candidates_for,
     only_certain,
+    resolve_contests,
 )
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -154,12 +155,14 @@ class SettleDueChargesUseCase:
         ledger: MovementHistory,
         settle: SettleBillChargeUseCase,
         merchants: MerchantDirectory | None = None,
+        merchant_lookup: MerchantLookup | None = None,
     ) -> None:
         self._bills = bills
         self._charges = charges
         self._ledger = ledger
         self._settle = settle
         self._merchants = merchants
+        self._merchant_lookup = merchant_lookup
 
     def execute(self, command: SettleDueChargesCommand) -> SettlementView:
         zone = zone_of(command.timezone)
@@ -206,8 +209,17 @@ class SettleDueChargesUseCase:
             tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
         ] = []
 
+        # A merchant merged into another is deleted. A bill still naming it
+        # falls back to its own name rather than waiting on an id nothing
+        # will ever be attributed to again.
+        alive = self._existing_merchants(command.user_id, active)
+
         for bill in active:
-            keys = bill_keys(bill, merchant_ids.get(bill.name))
+            keys = bill_keys(
+                bill,
+                bill.merchant_id if bill.merchant_id in alive else None,
+                merchant_ids.get(bill.name),
+            )
 
             for occurrence in bill.occurrences(
                 since=since,
@@ -234,21 +246,51 @@ class SettleDueChargesUseCase:
                     ),
                 )
 
-        contested = _certain_for_several(
-            candidates for _, _, candidates in open_charges
-        )
         settled: list[AutomaticSettlement] = []
+        remaining = open_charges
+
+        # Links first, pass after pass, while each pass still links something:
+        # a payment claimed in one pass is a rival gone in the next, so the
+        # charge it was contesting can now be answered clearly. A certain
+        # match survives only where charge and movement choose each other
+        # clearly — several bills to one merchant told apart by their figures.
+        while remaining:
+            unanswered: list[
+                tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
+            ] = []
+
+            for (bill, occurrence, found), candidates in self._resolved(
+                remaining,
+                taken,
+            ):
+                answered = self._answer(
+                    bill,
+                    occurrence,
+                    candidates=candidates,
+                    today=today,
+                    match_only=True,
+                )
+
+                if answered is None:
+                    unanswered.append((bill, occurrence, found))
+                    continue
+
+                settled.append(answered)
+
+                if answered.settled.occurrence.payment is not None:
+                    taken.add(answered.settled.occurrence.payment.movement_id)
+
+            if len(unanswered) == len(remaining):
+                break
+
+            remaining = unanswered
+
+        # Then what nothing answered: an automatic charge where the bill
+        # charges itself and no movement looks like it, a proposal where one
+        # does but not clearly.
         proposals: list[ChargeProposal] = []
 
-        for bill, occurrence, found in open_charges:
-            candidates = tuple(
-                _as_likely(candidate)
-                if candidate.movement_id in contested
-                else candidate
-                for candidate in found
-                # Claimed by a charge answered earlier in this same run.
-                if candidate.movement_id not in taken
-            )
+        for (bill, occurrence, _), candidates in self._resolved(remaining, taken):
             answered = self._answer(
                 bill,
                 occurrence,
@@ -257,33 +299,66 @@ class SettleDueChargesUseCase:
                 match_only=command.match_only,
             )
 
-            if answered is None:
-                if candidates:
-                    proposals.append(
-                        ChargeProposal(
-                            bill_id=bill.id,
-                            bill_name=bill.name,
-                            occurrence=occurrence,
-                            candidates=candidates,
-                        ),
-                    )
-
-                continue
-
-            settled.append(answered)
-
-            paid_with = answered.settled.occurrence.payment
-
-            # So the next charge in this same run cannot be settled by
-            # the movement this one just claimed.
-            if answered.action is SettlementAction.MATCHED and paid_with:
-                taken.add(paid_with.movement_id)
+            if answered is not None:
+                settled.append(answered)
+            elif candidates:
+                proposals.append(
+                    ChargeProposal(
+                        bill_id=bill.id,
+                        bill_name=bill.name,
+                        occurrence=occurrence,
+                        candidates=candidates,
+                    ),
+                )
 
         return SettlementView(
             today=today,
             settled=tuple(settled),
             proposals=tuple(proposals),
         )
+
+    def _existing_merchants(
+        self,
+        user_id: UserId,
+        bills: Sequence[ScheduledBill],
+    ) -> frozenset[str]:
+        named = sorted({bill.merchant_id for bill in bills if bill.merchant_id})
+
+        if not named:
+            return frozenset()
+
+        if self._merchant_lookup is None:
+            return frozenset(named)
+
+        return self._merchant_lookup.existing(user_id=user_id, merchant_ids=named)
+
+    @staticmethod
+    def _resolved(
+        charges: Sequence[
+            tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
+        ],
+        taken: set[str],
+    ) -> list[
+        tuple[
+            tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]],
+            tuple[ChargeCandidate, ...],
+        ]
+    ]:
+        """Each open charge with its candidates as they stand now: without the
+        movements already claimed, and with contests between charges settled
+        against what is left."""
+        available = [
+            tuple(c for c in found if c.movement_id not in taken)
+            for _, _, found in charges
+        ]
+        resolved = resolve_contests(
+            [
+                (bill.amount, candidates)
+                for (bill, _, _), candidates in zip(charges, available, strict=True)
+            ],
+        )
+
+        return list(zip(charges, resolved, strict=True))
 
     def _answer(
         self,
@@ -416,27 +491,3 @@ def _day_of(movement: Transaction, zone: dt.tzinfo) -> dt.date:
     window spent on that difference is a day of window lost.
     """
     return movement.occurred_at.to_datetime().astimezone(zone).date()
-
-
-def _certain_for_several(
-    per_charge: Iterable[Sequence[ChargeCandidate]],
-) -> frozenset[str]:
-    """Movements that are a certain answer for more than one open charge.
-
-    The water and the electricity paid to one utility, both declared as
-    varying: a single payment can sit inside both bands, and whichever bill
-    happened to be read first would take it. Being certain twice is being a
-    question, so neither takes it on its own.
-    """
-    seen: dict[str, int] = {}
-
-    for candidates in per_charge:
-        for candidate in candidates:
-            if candidate.quality is MatchQuality.CERTAIN:
-                seen[candidate.movement_id] = seen.get(candidate.movement_id, 0) + 1
-
-    return frozenset(movement for movement, count in seen.items() if count > 1)
-
-
-def _as_likely(candidate: ChargeCandidate) -> ChargeCandidate:
-    return dataclasses.replace(candidate, quality=MatchQuality.LIKELY)
