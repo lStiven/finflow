@@ -3577,6 +3577,11 @@ class BillResponse(BaseModel):
     variable_amount: bool
     #: Who charges it, when its owner said: a merchant from `GET /merchants`.
     merchant_id: str | None
+    #: Some charge of it was already paid by a movement the bank reported.
+    #: What tells the screen to say "it marks itself when the bank's email
+    #: arrives" rather than "mark it when you pay" — and to warn that marking
+    #: it by hand first would count the same money twice.
+    reported_by_bank: bool
     status: BillStatus
     #: Whether this bill charges itself once a charge's match window has
     #: closed and nothing in the ledger looks like it. Off unless somebody
@@ -4302,6 +4307,7 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         category=bill.category,
         variable_amount=bill.variable_amount,
         merchant_id=bill.merchant_id,
+        reported_by_bank=bool(bill.linked),
         status=bill.status,
         autopay=bill.autopay,
         autopay_from=bill.autopay_from,

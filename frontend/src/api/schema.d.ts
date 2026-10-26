@@ -2337,6 +2337,8 @@ export interface components {
             /** Name */
             name: string;
             next_occurrence: components["schemas"]["BillOccurrenceResponse"] | null;
+            /** Reported By Bank */
+            reported_by_bank: boolean;
             /**
              * Starts On
              * Format: date

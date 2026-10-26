@@ -21,6 +21,7 @@ from personal_finance.contexts.financial.domain.entities import Transaction
 from personal_finance.contexts.financial.domain.reconciliation import (
     MAX_CANDIDATES,
     ChargeCandidate,
+    KnownMerchant,
     MatchQuality,
     bill_keys,
     candidates_for,
@@ -57,6 +58,7 @@ def bill(
     account_id: AccountId | None = None,
     variable_amount: bool = False,
     merchant_id: str | None = None,
+    category: str | None = None,
 ) -> ScheduledBill:
     return ScheduledBill.declare(
         user_id=USER,
@@ -68,6 +70,7 @@ def bill(
         account_id=account_id,
         variable_amount=variable_amount,
         merchant_id=merchant_id,
+        category=category,
     )
 
 
@@ -98,6 +101,7 @@ def candidates(
     merchant_ids: dict[str, str] | None = None,
     taken: frozenset[str] = frozenset(),
     period: dt.date = PERIOD,
+    known: dict[str, KnownMerchant] | None = None,
 ) -> tuple[ChargeCandidate, ...]:
     attributed = merchant_ids or {}
 
@@ -109,6 +113,8 @@ def candidates(
         merchant_ids=attributed,
         zone=BOGOTA,
         taken=taken,
+        known=known,
+        named_merchant=declared.merchant_id,
     )
 
 
@@ -505,3 +511,118 @@ def test_one_bill_never_picks_between_two_of_its_payments() -> None:
     resolved = resolve_contests([(water.amount, candidates(water, near, far))])
 
     assert only_certain(resolved[0]) is None
+
+
+# ----------------------------------------------------------------------
+# A figure alone, from someone who is plainly someone else
+# ----------------------------------------------------------------------
+
+
+def _eneba(
+    category: str | None, *, confirmed: bool = False
+) -> dict[str, KnownMerchant]:
+    return {
+        "via Eneba": KnownMerchant(
+            merchant_id="eneba",
+            category=category,
+            confirmed=confirmed,
+        ),
+    }
+
+
+def test_games_are_never_proposed_as_the_electricity() -> None:
+    """Seen in dev: 136 176 at Eneba, the same day as a 150 000 light bill.
+    Close enough in figure, an entirely different kind of spending."""
+    light = bill(name="Celsia - San benito", amount="150000", category="utilities")
+
+    found = candidates(
+        light,
+        movement(counterparty="via Eneba", amount="136176"),
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("entertainment"),
+    )
+
+    assert found == ()
+
+
+def test_a_figure_alone_is_still_proposed_when_nothing_says_whose_it_is() -> None:
+    """No merchant yet, or one filed under nothing: it may well be the bill."""
+    light = bill(name="Celsia - San benito", amount="150000", category="utilities")
+    paid = movement(counterparty="via Eneba", amount="136176")
+
+    unknown = candidates(light, paid)
+    uncategorized = candidates(
+        light,
+        paid,
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("uncategorized"),
+    )
+
+    assert [each.quality for each in unknown] == [MatchQuality.LIKELY]
+    assert [each.quality for each in uncategorized] == [MatchQuality.LIKELY]
+
+
+def test_a_bill_without_a_category_cannot_rule_one_out_by_category() -> None:
+    light = bill(name="Celsia - San benito", amount="150000")
+
+    found = candidates(
+        light,
+        movement(counterparty="via Eneba", amount="136176"),
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("entertainment"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_another_merchant_its_owner_confirmed_is_never_a_named_bills() -> None:
+    """Centroaguas, reviewed, is not Celsia — even if both are utilities."""
+    light = bill(
+        name="Luz casa mamá",
+        amount="150000",
+        category="utilities",
+        merchant_id="celsia",
+    )
+    water = movement(counterparty="CENTROAGUAS", amount="145000")
+
+    confirmed = candidates(
+        light,
+        water,
+        merchant_ids={"CENTROAGUAS": "centroaguas"},
+        known={
+            "CENTROAGUAS": KnownMerchant("centroaguas", "utilities", confirmed=True)
+        },
+    )
+    guessed = candidates(
+        light,
+        water,
+        merchant_ids={"CENTROAGUAS": "centroaguas"},
+        known={
+            "CENTROAGUAS": KnownMerchant("centroaguas", "utilities", confirmed=False)
+        },
+    )
+
+    assert confirmed == ()
+    # A merchant Merchant made up may be the same company under a new name.
+    assert [each.quality for each in guessed] == [MatchQuality.LIKELY]
+
+
+def test_the_bills_own_merchant_is_never_ruled_out_by_its_category() -> None:
+    """The rule is about a figure alone; the right merchant always counts."""
+    light = bill(
+        name="Luz casa mamá",
+        amount="150000",
+        category="utilities",
+        merchant_id="celsia",
+    )
+
+    found = candidates(
+        light,
+        movement(counterparty="COMP ELECTRICIDAD TU", amount="150000"),
+        merchant_ids={"COMP ELECTRICIDAD TU": "celsia"},
+        known={
+            "COMP ELECTRICIDAD TU": KnownMerchant("celsia", "shopping", confirmed=True),
+        },
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.CERTAIN]

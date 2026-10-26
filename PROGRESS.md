@@ -332,6 +332,15 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-26 — **Facturas: «Cobros de octubre» por lo que falta, y sin
+  propuestas de otro comercio.** Pendientes primero, cada uno dice cuándo
+  vence y qué va a pasar; lo pagado, plegado y diciendo cómo. «Ya lo pagué»
+  advierte del doble conteo si el banco avisa. Un pago de otra categoría ya no
+  se propone. `e2e-bills` en verde. Sin commit.
+- 2026-10-26 — **Un comercio en revisión se responde desde el movimiento.**
+  «Está bien», «Otra categoría» o «Revisar el comercio» en el detalle, sin ir
+  a Comercios. `e2e-transacciones` lo cubre sin gastar la cola del demo. Sin
+  commit.
 - 2026-10-23 — **Facturas por comercio, y varias del mismo comercio se
   separan solas.** La factura nombra quién la cobra (aparte de su nombre) y
   dos pagos del mismo comercio en la misma semana van cada uno a su factura
@@ -347,13 +356,3 @@ AWS (ver Trabas).
   dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
   varias, espera. `just prepare` en verde. En el árbol, sin commit; el pago del 19/10 ya
   guardado sigue sin asignar.
-- 2026-10-14 — **Cuentas y Guías vuelven al estilo de producción.** Cuentas con
-  paneles apilados (Alertas, condiciones, Ajustes de la cuenta), uno abierto a
-  la vez; Guías en cinco tarjetas por tema que se despliegan con sus tareas,
-  problemas, guía y recorrido; los temas con recorrido llevan «Paso a paso» y lo
-  ponen primero. `just e2e-cuentas` y `e2e-guias` en verde. En
-  el árbol, sin commit.
-- 2026-10-13 — **Ahorros, efectivo e inversión en negativo avisan en vez de
-  callar.** La tarjeta de la cuenta lo dice y lleva a los sin asignar o a
-  corregir el saldo, que ya no acepta un negativo en esos tipos. El seed asigna
-  la nómina demo; el logo lleva al Resumen. En el árbol, sin commit.

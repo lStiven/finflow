@@ -349,7 +349,16 @@ async function main() {
     // The one control on this screen that moves money. It lives on the
     // timeline, not on the card, because what gets paid is one charge of one
     // month rather than the bill.
-    await page.getByRole("button", { name: `Pagar ${NAME}` }).click();
+    check(
+      "un cobro pendiente dice qué va a pasar con él",
+      await page
+        .getByText("Tu banco no lo avisa: márcalo cuando lo pagues.", { exact: true })
+        .first()
+        .isVisible()
+        .catch(() => false),
+      true,
+    );
+    await page.getByRole("button", { name: `Ya lo pagué ${NAME}` }).click();
     await page.getByRole("button", { name: "Confirmar" }).click();
 
     const paid = await untilCharge(
@@ -410,13 +419,13 @@ async function main() {
     check("y no mueve nada la segunda vez", await moneyState(call), afterPay);
 
     // ---------------------------------------------------------- undo, UI
-    await page.getByRole("button", { name: `Deshacer el pago ${NAME}` }).click();
+    await page.getByRole("button", { name: `Desmarcar ${NAME}` }).click();
 
     await untilCharge(call, "deshacer el pago", (charge) => charge?.state !== "paid");
     check("deshacer devuelve el saldo tal como estaba", await moneyState(call), before);
 
     // ---------------------------------------------------------- skip, UI
-    await page.getByRole("button", { name: `Saltar ${NAME}` }).click();
+    await page.getByRole("button", { name: `Este mes no ${NAME}` }).click();
 
     const skipped = await untilCharge(
       call,
@@ -426,7 +435,7 @@ async function main() {
     check("saltar queda guardado", skipped?.state, "skipped");
     check("y no escribe nada en el ledger", await moneyState(call), before);
 
-    await page.getByRole("button", { name: `Ya no saltarlo ${NAME}` }).click();
+    await page.getByRole("button", { name: `Sí va este mes ${NAME}` }).click();
     await untilCharge(
       call,
       "deshacer el salto",
@@ -554,8 +563,11 @@ async function main() {
 
     // And the way back, which is not the same undo: forgetting the link must
     // leave the bank's own movement exactly where it is.
+    // What is done is folded under what is still pending.
+    const showDone = page.getByRole("button", { name: /^Ver los (pagados|listos)/ });
+    if (await showDone.isVisible().catch(() => false)) await showDone.click();
     await page
-      .getByRole("button", { name: `No es este ${MATCHED_NAME}` })
+      .getByRole("button", { name: `No era este movimiento ${MATCHED_NAME}` })
       .first()
       .click();
     const unlinked = await untilCharge(

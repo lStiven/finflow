@@ -3,6 +3,7 @@ import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-ro
 import {
   ArrowLeft,
   ArrowLeftRight,
+  ArrowRight,
   Check,
   Landmark,
   Pencil,
@@ -21,6 +22,7 @@ import {
   financialCatalogQuery,
   type Transaction,
   transactionQuery,
+  useConfirmMerchant,
   useDeleteTransaction,
   useEditMerchant,
   useEditTransaction,
@@ -174,6 +176,19 @@ function TransactionScreen() {
           {movement.note ? <Row label="Nota">{movement.note}</Row> : null}
         </Card>
 
+        {movement.merchant?.needs_review && !changingCategory ? (
+          <ReviewMerchant
+            movementId={movement.id}
+            merchant={movement.merchant}
+            labels={labels}
+            onOtherCategory={() => {
+              setDone(null);
+              setChangingCategory(true);
+            }}
+            onReviewed={setDone}
+          />
+        ) : null}
+
         {done ? (
           <Notice tone="success" icon={Check} title={done} className="rise" />
         ) : null}
@@ -212,6 +227,93 @@ function TransactionScreen() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * A merchant Finflow guessed, answered where the movement is being read.
+ *
+ * It used to be a pill saying «En revisión» and nothing else: the answer
+ * lived on the merchants screen, so checking one movement meant finding its
+ * merchant there and coming back to see it had taken. The same two answers
+ * the queue gives are offered here — «Está bien», or another category, which
+ * counts as reviewed too — and the merchant's own page for anything more,
+ * a wrong name or two merchants that are one.
+ */
+function ReviewMerchant({
+  movementId,
+  merchant,
+  labels,
+  onOtherCategory,
+  onReviewed,
+}: {
+  movementId: string;
+  merchant: NonNullable<Transaction["merchant"]>;
+  labels: Record<string, string>;
+  onOtherCategory: () => void;
+  onReviewed: (message: string) => void;
+}) {
+  const confirm = useConfirmMerchant(merchant.id);
+  const client = useQueryClient();
+
+  async function onConfirm() {
+    if (confirm.isPending) return;
+    try {
+      await confirm.mutateAsync();
+      // Re-read before saying so, like a category change: otherwise the
+      // pill above still reads «En revisión» until the refetch lands.
+      await client.refetchQueries({ queryKey: transactionQuery(movementId).queryKey });
+      onReviewed(`${merchant.display_name} quedó revisado.`);
+    } catch {
+      // `confirm.error` carries it, shown below.
+    }
+  }
+
+  return (
+    <Notice
+      tone="warn"
+      icon={Tag}
+      title={`Finflow dedujo este comercio: «${merchant.display_name}»`}
+      className="rise"
+    >
+      <p>
+        Categoría: {labelFrom(labels, merchant.category)}. ¿Está bien? Lo que decidas
+        vale para todos sus movimientos.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          variant="ghost"
+          className="py-2 text-xs"
+          disabled={confirm.isPending}
+          onClick={() => void onConfirm()}
+        >
+          <Check className="size-3.5 text-incoming" aria-hidden />
+          {confirm.isPending ? "Guardando…" : "Está bien"}
+        </Button>
+        <Button
+          variant="ghost"
+          className="py-2 text-xs"
+          disabled={confirm.isPending}
+          onClick={onOtherCategory}
+        >
+          <Tag className="size-3.5" aria-hidden />
+          Otra categoría
+        </Button>
+        <Link
+          to="/comercios/$merchantId"
+          params={{ merchantId: merchant.id }}
+          className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan text-xs hover:underline"
+        >
+          Revisar el comercio
+          <ArrowRight className="size-3.5" aria-hidden />
+        </Link>
+      </div>
+      {confirm.error ? (
+        <p role="alert" className="mt-2 text-outgoing text-xs">
+          {confirm.error.message}
+        </p>
+      ) : null}
+    </Notice>
   );
 }
 

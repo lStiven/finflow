@@ -106,6 +106,25 @@ class ChargeCandidate(ValueObject):
     quality: MatchQuality
 
 
+#: The category Merchant files a spelling under when it knows nothing; it says
+#: nothing about who the merchant is, so it never rules a candidate out.
+UNCATEGORIZED = "uncategorized"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class KnownMerchant(ValueObject):
+    """Who a movement's counterparty is, as much as matching needs.
+
+    Plain strings, Merchant's own vocabulary carried through: Financial
+    compares them and never reads meaning into them. `confirmed` is the owner
+    having reviewed it — a guess Merchant made on its own is not.
+    """
+
+    merchant_id: str
+    category: str | None
+    confirmed: bool
+
+
 def bill_keys(bill: ScheduledBill, *merchant_ids: str | None) -> frozenset[str]:
     """Every counterparty key this bill could be recognised under.
 
@@ -136,8 +155,15 @@ def candidates_for(
     merchant_ids: Mapping[str, str],
     zone: dt.tzinfo,
     taken: frozenset[str] = frozenset(),
+    known: Mapping[str, KnownMerchant] | None = None,
+    named_merchant: str | None = None,
 ) -> tuple[ChargeCandidate, ...]:
     """The movements that could be this charge, best first.
+
+    `known` describes each counterparty's merchant, when Merchant has one, and
+    `named_merchant` is the merchant the bill names (while it exists). With
+    them, a movement that only shares a figure with the bill is left out when
+    it is plainly someone else's — see `_someone_else`.
 
     `keys` is what `bill_keys` answered for this bill and `merchant_ids` maps
     a counterparty spelling to the merchant that owns it — both handed in,
@@ -166,6 +192,8 @@ def candidates_for(
                 merchant_ids=merchant_ids,
                 zone=zone,
                 taken=taken,
+                known=known or {},
+                named_merchant=named_merchant,
             )
         )
         is not None
@@ -309,6 +337,8 @@ def _candidate(
     merchant_ids: Mapping[str, str],
     zone: dt.tzinfo,
     taken: frozenset[str],
+    known: Mapping[str, KnownMerchant],
+    named_merchant: str | None,
 ) -> ChargeCandidate | None:
     """This movement as a candidate for this charge, or None if it cannot be.
 
@@ -364,6 +394,13 @@ def _candidate(
     if not same_merchant and not close_enough:
         return None
 
+    if not same_merchant and _someone_else(
+        known.get(movement.counterparty),
+        bill=bill,
+        named_merchant=named_merchant,
+    ):
+        return None
+
     # A movement two charges of the same bill both reach is never certain,
     # however well it matches either of them. A weekly bill's charges are
     # seven days apart and this window is five on each side, so the overlap
@@ -382,6 +419,48 @@ def _candidate(
             if same_merchant and (close_enough or varied_as_declared) and not contested
             else MatchQuality.LIKELY
         ),
+    )
+
+
+def _someone_else(
+    merchant: KnownMerchant | None,
+    *,
+    bill: ScheduledBill,
+    named_merchant: str | None,
+) -> bool:
+    """Whether a movement that only shares the bill's figure is plainly not it.
+
+    A figure alone is weak evidence, and it was proposing games bought on
+    Eneba as the electricity: same week, a similar amount, an entirely
+    different kind of spending. Two things say "someone else" outright —
+
+    * **a different kind of spending**: the movement's merchant is filed
+      under a category, the bill under another (neither "uncategorized",
+      which says nothing about who anybody is); or
+    * **a different merchant its owner already confirmed**, when the bill
+      names whom it is paid to. A merchant Merchant made up on its own may yet
+      be the same company under a new spelling, so only a reviewed one rules
+      the movement out.
+
+    Anything less certain stays a proposal, as before: a movement with no
+    merchant yet, or with one nobody has looked at, may well be the bill.
+    """
+    if merchant is None:
+        return False
+
+    bill_category = bill.category
+
+    if (
+        merchant.category not in (None, UNCATEGORIZED)
+        and bill_category not in (None, UNCATEGORIZED)
+        and merchant.category != bill_category
+    ):
+        return True
+
+    return (
+        named_merchant is not None
+        and merchant.confirmed
+        and merchant.merchant_id != named_merchant
     )
 
 

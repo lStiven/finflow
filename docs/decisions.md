@@ -1591,6 +1591,20 @@ way out, and still stores nothing.
   re-filing it under the merchant would need Merchant to move a spelling,
   which is not a call Financial makes.
 
+- **A figure alone, from a merchant that is plainly someone else, is not a
+  candidate** (2026-10-26). Seen in dev: games bought on Eneba (136 176)
+  proposed as the electricity (150 000) because the figures were within a
+  tenth on the same day. A movement that only shares the bill's figure is now
+  left out when its merchant is filed under a different category than the
+  bill (neither "uncategorized"), or when the bill names a merchant and the
+  movement's is a *different one its owner confirmed*. A merchant Merchant
+  made up on its own is not enough to rule one out — it may be the same
+  company under a new spelling — and a movement with no merchant yet still
+  counts. Knowingly: a movement left out no longer blocks a bill's automatic
+  charge either. That is what such a bill is for — the bank never reports
+  it — and keeping an unrelated purchase as the thing that stops it would
+  leave the charge silently unpaid.
+
 - **A bill can say its figure varies** (2026-10-22). `variable_amount` makes
   `amount` an average: a payment from the bill's own merchant within half of
   it (`VARIABLE_AMOUNT_TOLERANCE`) is `CERTAIN`, where a fixed bill allows a

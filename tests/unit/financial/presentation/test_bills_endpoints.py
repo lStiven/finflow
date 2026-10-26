@@ -435,6 +435,10 @@ def test_setting_and_clearing_the_merchant_at_once_is_refused(
     assert response.status_code == 422
 
 
+def test_a_new_bill_has_never_been_reported_by_the_bank(client: TestClient) -> None:
+    assert _declare(client)["reported_by_bank"] is False
+
+
 def test_money_leaves_as_a_string(client: TestClient) -> None:
     """Like everywhere else money crosses a boundary here: a JSON float loses
     cents without ever raising."""
@@ -1182,6 +1186,20 @@ def test_a_movement_can_be_linked_to_a_charge_by_hand(wired: Wiring) -> None:
     assert body.json()["occurrence"]["state"] == "paid"
     assert body.json()["occurrence"]["settled_by"] == "matched"
     assert len(ledger.rows) == 1
+
+
+def test_a_bill_once_paid_by_the_bank_says_so(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    paid = _entered(ledger, day=dt.date(2026, 9, 6), counterparty="PAGO PSE GYMSA")
+    client.post(
+        _charge_url(bill, "2026-09-04", "link"),
+        json={"movement_id": paid.id.value},
+    )
+
+    listed = client.get("/financial/bills").json()["bills"]
+
+    assert [each["reported_by_bank"] for each in listed] == [True]
 
 
 def test_unlinking_leaves_the_movement_where_it_is(wired: Wiring) -> None:

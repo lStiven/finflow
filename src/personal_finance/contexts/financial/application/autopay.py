@@ -74,6 +74,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
 )
 from personal_finance.contexts.financial.domain.reconciliation import (
     ChargeCandidate,
+    KnownMerchant,
     bill_keys,
     candidates_for,
     only_certain,
@@ -190,13 +191,17 @@ class SettleDueChargesUseCase:
             until=until,
             zone=zone,
         )
-        merchant_ids = self._merchant_ids(
+        known = self._known_merchants(
             command.user_id,
             counterparties=[
                 *(movement.counterparty for movement in movements),
                 *(bill.name for bill in active),
             ],
         )
+        merchant_ids = {
+            counterparty: merchant.merchant_id
+            for counterparty, merchant in known.items()
+        }
         # Every movement already answering for a charge, across every bill —
         # paused ones too. One payment settles one thing, and a paused bill's
         # link is still a claim on that movement.
@@ -215,11 +220,8 @@ class SettleDueChargesUseCase:
         alive = self._existing_merchants(command.user_id, active)
 
         for bill in active:
-            keys = bill_keys(
-                bill,
-                bill.merchant_id if bill.merchant_id in alive else None,
-                merchant_ids.get(bill.name),
-            )
+            named = bill.merchant_id if bill.merchant_id in alive else None
+            keys = bill_keys(bill, named, merchant_ids.get(bill.name))
 
             for occurrence in bill.occurrences(
                 since=since,
@@ -242,6 +244,8 @@ class SettleDueChargesUseCase:
                             merchant_ids=merchant_ids,
                             zone=zone,
                             taken=frozenset(taken),
+                            known=known,
+                            named_merchant=named,
                         ),
                     ),
                 )
@@ -453,12 +457,12 @@ class SettleDueChargesUseCase:
             if first <= _day_of(movement, zone) <= last
         ]
 
-    def _merchant_ids(
+    def _known_merchants(
         self,
         user_id: UserId,
         *,
         counterparties: Sequence[str],
-    ) -> Mapping[str, str]:
+    ) -> Mapping[str, KnownMerchant]:
         """Which merchant owns each spelling, in one round trip.
 
         Optional, like everywhere else in this context: without the directory
@@ -475,7 +479,11 @@ class SettleDueChargesUseCase:
             return {}
 
         return {
-            counterparty: attribution.merchant_id
+            counterparty: KnownMerchant(
+                merchant_id=attribution.merchant_id,
+                category=attribution.category,
+                confirmed=not attribution.needs_review,
+            )
             for counterparty, attribution in self._merchants.attribute(
                 user_id=user_id,
                 counterparties=wanted,

@@ -16,7 +16,8 @@
  * 3. **Assigning moves that account's balance, and only by that amount**,
  *    read from the API before and after rather than from the screen.
  * 4. **The category changes the merchant**, as the screen says it will: the
- *    merchant itself is re-read from `/merchants/{id}`.
+ *    merchant itself is re-read from `/merchants/{id}`. A merchant in review
+ *    is answered from the movement too — «Está bien» confirms it in place.
  * 5. **The redundant «Estado» row is gone**, the page does not scroll
  *    sideways on a phone, and nothing is logged as an error.
  *
@@ -325,6 +326,52 @@ async function main() {
       await page.getByRole("button", { name: new RegExp(NEXT_LABEL) }).isVisible(),
       true,
     );
+
+    // ---------------------------------------- a merchant Finflow guessed
+    // Reviewing cannot be undone, so the seeded queue is left alone: the
+    // movement is *shown* as in review — its read answered with the flag on —
+    // while «Está bien» reaches the real endpoint, which is what is checked.
+    let confirmed = false;
+    page.on("request", (request) => {
+      if (
+        request.method() === "POST" &&
+        request.url().endsWith(`/merchants/${merchantId}/confirm`)
+      ) {
+        confirmed = true;
+      }
+    });
+    const inReview = `**/financial/transactions/${movementId}`;
+    await page.route(inReview, async (route) => {
+      if (route.request().method() !== "GET" || confirmed) return route.fallback();
+      const response = await route.fetch();
+      const body = await response.json();
+      if (body.merchant) body.merchant.needs_review = true;
+      await route.fulfill({ response, json: body });
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    check(
+      "un comercio en revisión se responde desde el movimiento",
+      await page.getByText("¿Está bien?", { exact: false }).isVisible(),
+      true,
+    );
+    check(
+      "y lleva a su comercio para lo demás",
+      await page
+        .getByRole("link", { name: "Revisar el comercio" })
+        .getAttribute("href"),
+      `/comercios/${merchantId}`,
+    );
+    await page.getByRole("button", { name: "Está bien", exact: true }).click();
+    await page
+      .getByText(`${COUNTERPARTY} quedó revisado`, { exact: false })
+      .waitFor({ timeout: 10_000 });
+    check("«Está bien» confirmó el comercio en la API", confirmed, true);
+    check(
+      "y la pregunta se fue",
+      await page.getByText("¿Está bien?", { exact: false }).count(),
+      0,
+    );
+    await page.unroute(inReview);
 
     check(
       "la pantalla no se va de lado en un teléfono",

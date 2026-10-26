@@ -7,14 +7,19 @@ import {
   chargeVerbs,
   countsTowardsSpending,
   daysUntil,
+  doneHow,
+  dueLabel,
   formatAmountInput,
   groupByDay,
   initialOf,
   isMatched,
   isSettled,
   parseAmount,
+  paymentMode,
+  pendingHint,
   settledShare,
   singleTotal,
+  splitMonth,
   whenLabel,
 } from "@/bills/schedule";
 
@@ -31,6 +36,7 @@ function bill(overrides: Partial<Bill> = {}): Bill {
     category: null,
     variable_amount: false,
     merchant_id: null,
+    reported_by_bank: false,
     status: "active",
     autopay: false,
     autopay_from: null,
@@ -223,7 +229,7 @@ describe("responder por un cobro", () => {
 
   it("lo resuelto y lo vencido sí", () => {
     expect(chargeLabel(occurrence({ state: "paid" }))).toBe("Pagado");
-    expect(chargeLabel(occurrence({ state: "skipped" }))).toBe("Saltado");
+    expect(chargeLabel(occurrence({ state: "skipped" }))).toBe("Este mes no");
     expect(chargeLabel(occurrence({ state: "overdue" }))).toBe("Sin pagar");
   });
 
@@ -235,7 +241,7 @@ describe("responder por un cobro", () => {
     expect(chargeLabel(occurrence({ ...salary, state: "overdue" }))).toBe("Sin llegar");
     expect(chargeLabel(occurrence({ ...salary, state: "paid" }))).toBe("Recibido");
     expect(chargeVerbs(occurrence(salary)).settle).toBe("Ya llegó");
-    expect(chargeVerbs(occurrence()).settle).toBe("Pagar");
+    expect(chargeVerbs(occurrence()).settle).toBe("Ya lo pagué");
   });
 
   it("una vez pagado manda lo que salió, no lo que la factura proyectaba", () => {
@@ -275,7 +281,95 @@ describe("un cobro respondido por un movimiento que ya estaba", () => {
     const linked = occurrence({ ...paid, settled_by: "matched" });
     const written = occurrence({ ...paid, settled_by: "confirmed" });
 
-    expect(chargeVerbs(linked).undo).toBe("No es este");
-    expect(chargeVerbs(written).undo).toBe("Deshacer el pago");
+    expect(chargeVerbs(linked).undo).toBe("No era este movimiento");
+    expect(chargeVerbs(written).undo).toBe("Desmarcar");
+  });
+});
+
+describe("los cobros del mes, por lo que falta", () => {
+  it("primero lo pendiente, por día; después lo resuelto", () => {
+    const split = splitMonth([
+      occurrence({ bill_id: "luz", due_on: "2026-10-26", state: "expected" }),
+      occurrence({ bill_id: "prestamo", due_on: "2026-10-01", state: "paid" }),
+      occurrence({ bill_id: "admin", due_on: "2026-10-25", state: "overdue" }),
+      occurrence({ bill_id: "revista", due_on: "2026-10-09", state: "skipped" }),
+    ]);
+
+    expect(split.pending.map((each) => each.bill_id)).toEqual(["admin", "luz"]);
+    expect(split.done.map((each) => each.bill_id)).toEqual(["prestamo", "revista"]);
+  });
+
+  it("dice cuándo vence en palabras que dicen si importa hoy", () => {
+    const today = "2026-10-26";
+
+    expect(dueLabel(occurrence({ due_on: "2026-10-26" }), today)).toBe("vence hoy");
+    expect(dueLabel(occurrence({ due_on: "2026-10-27" }), today)).toBe("vence mañana");
+    expect(dueLabel(occurrence({ due_on: "2026-10-30" }), today)).toBe(
+      "vence en 4 días",
+    );
+    expect(dueLabel(occurrence({ due_on: "2026-10-25" }), today)).toBe(
+      "venció hace 1 día",
+    );
+    expect(
+      dueLabel(occurrence({ due_on: "2026-10-20", state: "overdue" }), today),
+    ).toBe("atrasado 6 días");
+  });
+
+  it("un ingreso llega, no vence", () => {
+    const salary = { direction: "incoming" as const };
+
+    expect(
+      dueLabel(occurrence({ ...salary, due_on: "2026-10-26" }), "2026-10-26"),
+    ).toBe("llega hoy");
+    expect(
+      dueLabel(occurrence({ ...salary, due_on: "2026-10-24" }), "2026-10-26"),
+    ).toBe("debía llegar hace 2 días");
+  });
+});
+
+describe("cómo se paga cada factura", () => {
+  it("la que se cobra sola, desde el día en que se armó", () => {
+    const armed = bill({ autopay: true, autopay_from: "2026-10-02" });
+
+    expect(paymentMode(armed, "2026-11-01")).toBe("automatic");
+    // Arming is not retroactive: the charge before it is still the owner's.
+    expect(paymentMode(armed, "2026-10-01")).toBe("manual");
+  });
+
+  it("la que el banco ya pagó alguna vez, o la que nombra a su comercio", () => {
+    expect(paymentMode(bill({ reported_by_bank: true }), "2026-10-26")).toBe("bank");
+    expect(paymentMode(bill({ merchant_id: "celsia" }), "2026-10-26")).toBe("bank");
+    expect(paymentMode(bill(), "2026-10-26")).toBe("manual");
+  });
+
+  it("cada una dice qué va a pasar", () => {
+    const due = occurrence({ due_on: "2026-10-26" });
+    const day = (iso: string) => iso;
+
+    expect(pendingHint("bank", due, day)).toBe(
+      "Se marca solo cuando llegue el correo del banco.",
+    );
+    expect(pendingHint("automatic", due, day)).toBe(
+      "Si para el 2026-10-31 no llega nada del banco, Finflow lo anota solo.",
+    );
+    expect(pendingHint("manual", due, day)).toBe(
+      "Tu banco no lo avisa: márcalo cuando lo pagues.",
+    );
+  });
+
+  it("y lo resuelto dice cómo se resolvió", () => {
+    expect(doneHow(occurrence({ state: "paid", settled_by: "matched" }), bill())).toBe(
+      "llegó del banco",
+    );
+    expect(
+      doneHow(occurrence({ state: "paid", settled_by: "confirmed" }), bill()),
+    ).toBe("lo marcaste tú");
+    expect(
+      doneHow(
+        occurrence({ state: "paid", settled_by: "confirmed" }),
+        bill({ autopay: true }),
+      ),
+    ).toBe("lo anotó Finflow");
+    expect(doneHow(occurrence({ state: "skipped" }), bill())).toBe("este mes no");
   });
 });

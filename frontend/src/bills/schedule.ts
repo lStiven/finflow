@@ -213,7 +213,7 @@ export function chargeLabel(occurrence: BillOccurrence): string | null {
   const incoming = occurrence.direction === "incoming";
 
   if (occurrence.state === "paid") return incoming ? "Recibido" : "Pagado";
-  if (occurrence.state === "skipped") return "Saltado";
+  if (occurrence.state === "skipped") return "Este mes no";
   if (occurrence.state === "overdue") return incoming ? "Sin llegar" : "Sin pagar";
 
   return null;
@@ -246,13 +246,120 @@ export function chargeVerbs(occurrence: BillOccurrence): ChargeVerbs {
     // movement stays exactly where the bank put it. What goes away is this
     // app's claim about which charge it paid.
     return occurrence.direction === "incoming"
-      ? { settle: "Ya llegó", undo: "No es este", amount: "Llegó" }
-      : { settle: "Pagar", undo: "No es este", amount: "Salió" };
+      ? { settle: "Ya llegó", undo: "No era este movimiento", amount: "Llegó" }
+      : { settle: "Ya lo pagué", undo: "No era este movimiento", amount: "Salió" };
   }
 
+  // «Ya lo pagué», not «Pagar»: nothing here pays anything. It writes down
+  // money that already left, and the old verb read as an order to send it.
   return occurrence.direction === "incoming"
-    ? { settle: "Ya llegó", undo: "Deshacer", amount: "Llegó" }
-    : { settle: "Pagar", undo: "Deshacer el pago", amount: "Salió" };
+    ? { settle: "Ya llegó", undo: "Desmarcar", amount: "Llegó" }
+    : { settle: "Ya lo pagué", undo: "Desmarcar", amount: "Salió" };
+}
+
+/**
+ * How a bill's charge gets answered, which is what its pending row tells.
+ *
+ * * `automatic` — it charges itself: armed, and armed by this charge's day.
+ * * `bank` — the bank reports it: some charge of it was already paid by a
+ *   movement the bank sent, or it names whom it is paid to (that merchant's
+ *   payments arrive as alerts). Marking it by hand first counts it twice.
+ * * `manual` — nothing will answer it but its owner.
+ */
+export type PaymentMode = "automatic" | "bank" | "manual";
+
+export function paymentMode(bill: Bill, dueOn: string): PaymentMode {
+  if (bill.autopay && (bill.autopay_from === null || bill.autopay_from <= dueOn)) {
+    return "automatic";
+  }
+
+  if (bill.reported_by_bank || bill.merchant_id !== null) return "bank";
+
+  return "manual";
+}
+
+/** The days an automatic charge waits for the bank, as the server does. */
+export const MATCH_WINDOW_DAYS = 5;
+
+/** `YYYY-MM-DD` plus some days, as a calendar day and never an instant. */
+export function addDays(day: string, days: number): string {
+  const moved = new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000);
+
+  return moved.toISOString().slice(0, 10);
+}
+
+/**
+ * When a pending charge falls, in words that say whether to care today.
+ *
+ * Past its day it says so, and past its grace — the server's `overdue` — it
+ * says it is late. Income arrives rather than falls due.
+ */
+export function dueLabel(occurrence: BillOccurrence, today: string): string {
+  const days = daysUntil(occurrence.due_on, today);
+  const incoming = occurrence.direction === "incoming";
+
+  if (days < 0) {
+    const ago = Math.abs(days) === 1 ? "1 día" : `${Math.abs(days)} días`;
+
+    if (incoming) return `debía llegar hace ${ago}`;
+
+    return occurrence.state === "overdue" ? `atrasado ${ago}` : `venció hace ${ago}`;
+  }
+
+  const verb = incoming ? "llega" : "vence";
+
+  if (days === 0) return `${verb} hoy`;
+  if (days === 1) return `${verb} mañana`;
+
+  return `${verb} en ${days} días`;
+}
+
+/** What will happen to a pending charge, said beside it. */
+export function pendingHint(
+  mode: PaymentMode,
+  occurrence: BillOccurrence,
+  formatDay: (day: string) => string,
+): string {
+  const incoming = occurrence.direction === "incoming";
+
+  if (mode === "automatic") {
+    return `Si para el ${formatDay(addDays(occurrence.due_on, MATCH_WINDOW_DAYS))} no llega nada del banco, Finflow lo anota solo.`;
+  }
+
+  if (mode === "bank") {
+    return incoming
+      ? "Se marca solo cuando el banco avise que llegó."
+      : "Se marca solo cuando llegue el correo del banco.";
+  }
+
+  return incoming
+    ? "Tu banco no lo avisa: márcalo cuando llegue."
+    : "Tu banco no lo avisa: márcalo cuando lo pagues.";
+}
+
+/** How a charge that is done got done, in a few words beside it. */
+export function doneHow(occurrence: BillOccurrence, bill: Bill | undefined): string {
+  if (occurrence.state === "skipped") return "este mes no";
+  if (isMatched(occurrence)) return "llegó del banco";
+
+  return bill?.autopay ? "lo anotó Finflow" : "lo marcaste tú";
+}
+
+/**
+ * The month's charges split by what is left to do: pending first, by day,
+ * then what is done. Arranged by state rather than by date, because the
+ * question somebody opens this with is «what do I still owe?».
+ */
+export function splitMonth(occurrences: readonly BillOccurrence[]): {
+  pending: BillOccurrence[];
+  done: BillOccurrence[];
+} {
+  const byDay = [...occurrences].sort((a, b) => a.due_on.localeCompare(b.due_on));
+
+  return {
+    pending: byDay.filter((occurrence) => !isSettled(occurrence)),
+    done: byDay.filter((occurrence) => isSettled(occurrence)),
+  };
 }
 
 /**
