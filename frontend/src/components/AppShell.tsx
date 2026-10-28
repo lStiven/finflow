@@ -17,7 +17,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { BookOpen, ChevronRight, LogOut, Menu, Plug, Plus, X } from "lucide-react";
-import type { ComponentType, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { profileQuery } from "@/api/queries";
 import { useAuth } from "@/auth/AuthContext";
@@ -130,27 +130,23 @@ function Rail() {
       </div>
 
       <nav aria-label="Secciones" className="flex flex-col gap-1">
-        {DESTINATIONS.map(({ label, icon: Icon, to }) =>
-          to ? (
-            <Link
-              key={label}
-              to={to}
-              activeOptions={{ exact: to === "/" }}
-              className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
-              inactiveProps={{ className: "text-muted" }}
-              activeProps={{
-                className:
-                  "border-accent/25 bg-gradient-to-r from-accent/18 via-violet/12 to-transparent font-medium text-text",
-                "aria-current": "page",
-              }}
-            >
-              <Icon className="size-4 shrink-0" />
-              {label}
-            </Link>
-          ) : (
-            <Pending key={label} label={label} icon={Icon} />
-          ),
-        )}
+        {DESTINATIONS.map(({ label, icon: Icon, to }) => (
+          <Link
+            key={label}
+            to={to}
+            activeOptions={{ exact: to === "/" }}
+            className="flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-sm transition-all duration-200 hover:bg-surface-raised hover:text-text"
+            inactiveProps={{ className: "text-muted" }}
+            activeProps={{
+              className:
+                "border-accent/25 bg-gradient-to-r from-accent/18 via-violet/12 to-transparent font-medium text-text",
+              "aria-current": "page",
+            }}
+          >
+            <Icon className="size-4 shrink-0" />
+            {label}
+          </Link>
+        ))}
         <ConnectLink />
       </nav>
 
@@ -220,50 +216,6 @@ function SignOutButton() {
 function initialOf(name: string | null | undefined, email: string): string {
   const source = name?.trim() || email;
   return source.slice(0, 1).toUpperCase();
-}
-
-/**
- * A destination whose screen has not been built yet.
- *
- * Rendered rather than hidden, and disabled rather than linked: a nav that
- * grows an item per release reads as instability, and a link that goes
- * nowhere reads as a bug. This says "not yet" in the one place someone would
- * look for it.
- */
-function Pending({
-  label,
-  icon: Icon,
-  compact = false,
-}: {
-  label: string;
-  icon: ComponentType<{ className?: string }>;
-  compact?: boolean;
-}) {
-  const shared = "cursor-not-allowed text-faint/55";
-  return (
-    <button
-      type="button"
-      disabled
-      aria-disabled
-      title={`${label} — próximamente`}
-      className={
-        compact
-          ? cn("flex flex-1 flex-col items-center gap-1 py-2 text-[0.6875rem]", shared)
-          : cn(
-              "flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm",
-              shared,
-            )
-      }
-    >
-      <Icon className={compact ? "size-5" : "size-4 shrink-0"} />
-      {label}
-      {compact ? null : (
-        <span className="ml-auto text-[0.5625rem] text-faint/50 uppercase tracking-wider">
-          Pronto
-        </span>
-      )}
-    </button>
-  );
 }
 
 function Bar() {
@@ -350,7 +302,6 @@ function BarPill({ active, children }: { active: boolean; children: ReactNode })
  */
 function BarItem({ item }: { item: Destination }) {
   const { label, icon: Icon, to } = item;
-  if (!to) return <Pending label={label} icon={Icon} compact />;
 
   return (
     <Link
@@ -485,26 +436,22 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
 
         <span aria-hidden className="my-1 h-px bg-line" />
 
-        {OVERFLOW.map(({ label, icon: Icon, to }) =>
-          to ? (
-            <Link
-              key={label}
-              to={to}
-              onClick={onClose}
-              className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-colors hover:bg-surface-raised hover:text-text"
-              inactiveProps={{ className: "text-muted" }}
-              activeProps={{
-                className: "bg-surface-raised font-medium text-text",
-                "aria-current": "page",
-              }}
-            >
-              <Icon className="size-4 shrink-0" />
-              {label}
-            </Link>
-          ) : (
-            <Pending key={label} label={label} icon={Icon} />
-          ),
-        )}
+        {OVERFLOW.map(({ label, icon: Icon, to }) => (
+          <Link
+            key={label}
+            to={to}
+            onClick={onClose}
+            className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-colors hover:bg-surface-raised hover:text-text"
+            inactiveProps={{ className: "text-muted" }}
+            activeProps={{
+              className: "bg-surface-raised font-medium text-text",
+              "aria-current": "page",
+            }}
+          >
+            <Icon className="size-4 shrink-0" />
+            {label}
+          </Link>
+        ))}
         <ConnectLink onNavigate={onClose} />
 
         <span aria-hidden className="my-1 h-px bg-line" />

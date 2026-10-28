@@ -14,7 +14,6 @@ import {
   BarChart3,
   LayoutGrid,
   Receipt,
-  Settings,
   Store,
   Target,
   Wallet,
@@ -24,8 +23,7 @@ import type { ComponentType } from "react";
 export type Destination = {
   label: string;
   icon: ComponentType<{ className?: string }>;
-  /** Absent until the screen exists — rendered as pending, never as a dead link. */
-  to?:
+  to:
     | "/"
     | "/transacciones"
     | "/cuentas"
@@ -47,12 +45,10 @@ export const DESTINATIONS: Destination[] = [
   // todavía no ocurrió, y se busca donde se buscan los gastos.
   { label: "Facturas", icon: Receipt, to: "/facturas" },
   // Junto a Facturas por el mismo argumento: un tope es una decisión sobre
-  // gasto, y se busca donde se buscan los gastos. No en Configuración — lo que
-  // se mira todos los meses no vive en un panel de ajustes.
+  // gasto, y se busca donde se buscan los gastos.
   { label: "Presupuestos", icon: Target, to: "/presupuestos" },
   { label: "Reportes", icon: BarChart3, to: "/reportes" },
   { label: "Comercios", icon: Store, to: "/comercios" },
-  { label: "Configuración", icon: Settings },
 ];
 
 /**
@@ -90,10 +86,7 @@ const SHEET_ONLY = ["/perfil", "/conectar", "/guias"] as const;
  * being in Comercios and `/comercios-de-alguien` would not.
  */
 export function inSheet(pathname: string): boolean {
-  const paths = [
-    ...OVERFLOW.flatMap((destination) => (destination.to ? [destination.to] : [])),
-    ...SHEET_ONLY,
-  ];
+  const paths = [...OVERFLOW.map((destination) => destination.to), ...SHEET_ONLY];
 
   return paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
 }

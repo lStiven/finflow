@@ -20,17 +20,13 @@ describe("las secciones del teléfono", () => {
     expect(BAR_SIZE).toBeLessThanOrEqual(3);
   });
 
-  it("no gasta un puesto de la barra en una pantalla que no existe", () => {
-    // Un botón deshabilitado ocupando uno de los tres huecos del pulgar es
-    // peor que no estar: la barra es lo que más se usa y lo que menos cabe.
-    for (const destination of BAR) {
-      expect(destination.to).toBeDefined();
+  it("cada entrada lleva a una pantalla que existe", () => {
+    // Sin entradas «próximamente»: un botón deshabilitado en la navegación
+    // ocupa un sitio y no lleva a ningún lado.
+    for (const destination of DESTINATIONS) {
+      expect(destination.to).toBeTruthy();
     }
-  });
-
-  it("solo deja Configuración anunciada sin pantalla", () => {
-    const pending = DESTINATIONS.filter((d) => d.to === undefined).map((d) => d.label);
-    expect(pending).toEqual(["Configuración"]);
+    expect(DESTINATIONS.map((d) => d.label)).not.toContain("Configuración");
   });
 
   it("deja Facturas al alcance", () => {
@@ -53,7 +49,7 @@ describe("las secciones del teléfono", () => {
 describe("dónde estoy, según la barra", () => {
   it("da por suya cada sección que la barra no muestra", () => {
     for (const destination of OVERFLOW) {
-      if (destination.to) expect(inSheet(destination.to)).toBe(true);
+      expect(inSheet(destination.to)).toBe(true);
     }
   });
 
@@ -67,7 +63,7 @@ describe("dónde estoy, según la barra", () => {
     // Si «Más» se encendiera aquí, dos entradas dirían a la vez que son la
     // pantalla actual, que es la misma confusión que no encender ninguna.
     for (const destination of BAR) {
-      if (destination.to) expect(inSheet(destination.to)).toBe(false);
+      expect(inSheet(destination.to)).toBe(false);
     }
   });
 

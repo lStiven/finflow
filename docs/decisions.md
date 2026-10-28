@@ -2795,6 +2795,17 @@ to whatever ends up serving the bundle, which the bundle is not told.
     (`guides/stories/`) are self-contained slides, not overlays.
   - *No UX analytics yet* — too few users to measure anything.
 
+- **A screen whose figures change with a choice keeps the old ones on screen
+  while the new ones load** (2026-10-26). Found on Por categoría: every read
+  there is keyed by the category and the month, and `useSuspenseQuery` on
+  them swapped the whole screen for a loading state on every choice — it
+  read as the page reloading. Those reads are `useQuery` with
+  `placeholderData: keepPreviousData`: the previous figures stay, dimmed and
+  `aria-busy`, until the new ones land, and only a first visit shows a
+  loading card — inside the figures, never in place of the selectors. Data
+  that does not change with the choice (accounts, categories) still suspends
+  in the loader, where it is a cache hit.
+
 ### Billing (2026-08-25)
 
 - **DynamoDB runs on-demand, and the free tier was the thing costing money.**
@@ -2862,6 +2873,15 @@ to whatever ends up serving the bundle, which the bundle is not told.
 
 
 ### Review findings worth remembering
+
+- **A test never pairs a fixed date with something that expires against the
+  real clock** (2026-10-28). The Monday-summary integration test summarised
+  the week of 2026-09-21; the summary is dated the Monday after its week and
+  the inbox drops an entry `INBOX_DAYS` (30) later by `PosixTime.now()`. It
+  passed every run until 2026-10-28 13:00 UTC and failed every run after,
+  with nothing changed — so no pipeline before that hour could have caught
+  it. Dates in such a test are counted from today; a fixed date is fine only
+  where nothing compares it with the clock.
 
 - **A field is read for what it says, not for what it usually coincides
   with.** `MovementRecorded.unassigned` was `account_fingerprint is None`:
