@@ -332,6 +332,10 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-26 — **Reportes → Por categoría**, y fuera «Configuración» del menú.
+  Una categoría y un mes: total, frente al mes anterior y al promedio, los
+  últimos 6 meses, comercios, tope y movimientos; cambiar no recarga la
+  pantalla. `e2e-views` (23 pantallas) y `just web-check` en verde. Sin commit.
 - 2026-10-26 — **Facturas: «Cobros de octubre» por lo que falta, y sin
   propuestas de otro comercio.** Pendientes primero, cada uno dice cuándo
   vence y qué va a pasar; lo pagado, plegado y diciendo cómo. «Ya lo pagué»
@@ -351,8 +355,3 @@ AWS (ver Trabas).
   y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
   del worker sobre `merchants` (sale solo con el pipeline). `e2e-bills`,
   pruebas, pyright y Ruff en verde. Sin commit.
-- 2026-10-20 — **Un pago a «tu cuenta AHORROS» cae en la cuenta.** Plantilla
-  para la segunda redacción de Bancolombia (hora antes que fecha) y, sin
-  dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
-  varias, espera. `just prepare` en verde. En el árbol, sin commit; el pago del 19/10 ya
-  guardado sigue sin asignar.
