@@ -2874,6 +2874,15 @@ to whatever ends up serving the bundle, which the bundle is not told.
 
 ### Review findings worth remembering
 
+- **A test never pairs a fixed date with something that expires against the
+  real clock** (2026-10-28). The Monday-summary integration test summarised
+  the week of 2026-09-21; the summary is dated the Monday after its week and
+  the inbox drops an entry `INBOX_DAYS` (30) later by `PosixTime.now()`. It
+  passed every run until 2026-10-28 13:00 UTC and failed every run after,
+  with nothing changed — so no pipeline before that hour could have caught
+  it. Dates in such a test are counted from today; a fixed date is fine only
+  where nothing compares it with the clock.
+
 - **A field is read for what it says, not for what it usually coincides
   with.** `MovementRecorded.unassigned` was `account_fingerprint is None`:
   true for bank alerts routed by card, and wrong for every movement that lands

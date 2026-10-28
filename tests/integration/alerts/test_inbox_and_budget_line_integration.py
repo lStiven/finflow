@@ -393,7 +393,12 @@ def test_monday_reads_the_real_ledger_and_writes_the_inbox(
 ) -> None:
     ledger, _, directory, spending, _ = _financial(tables)
     zone_noon = dt.time(17)
-    last_monday = dt.date(2026, 9, 21)
+    # Last week's Monday, counted from today and never a fixed date: the
+    # summary is dated the Monday after its week, the inbox keeps an entry
+    # INBOX_DAYS and reads against the real clock, so a fixed week stops being
+    # listed a month later — this test went red on 2026-10-28 for no change.
+    today = dt.datetime.now(dt.UTC).date()
+    last_monday = today - dt.timedelta(days=today.weekday() + 7)
     for day, amount in (
         (last_monday - dt.timedelta(days=5), "100000"),
         (last_monday, "40000"),
@@ -428,7 +433,7 @@ def test_monday_reads_the_real_ledger_and_writes_the_inbox(
         deliveries=DynamoDBDeliveryLog(client=tables, table_name=ALERTS_TABLE),
         sender=RecordingSender(),
         inbox=inbox,
-    ).execute(week_of=last_monday, today=last_monday + dt.timedelta(days=8))
+    ).execute(week_of=last_monday, today=last_monday + dt.timedelta(days=7))
 
     assert run.summaries == 1
     stored = [
