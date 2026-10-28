@@ -332,29 +332,27 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-26 — **Facturas: «Cobros de octubre» por lo que falta, y sin
+  propuestas de otro comercio.** Pendientes primero, cada uno dice cuándo
+  vence y qué va a pasar; lo pagado, plegado y diciendo cómo. «Ya lo pagué»
+  advierte del doble conteo si el banco avisa. Un pago de otra categoría ya no
+  se propone. `e2e-bills` en verde. Sin commit.
+- 2026-10-26 — **Un comercio en revisión se responde desde el movimiento.**
+  «Está bien», «Otra categoría» o «Revisar el comercio» en el detalle, sin ir
+  a Comercios. `e2e-transacciones` lo cubre sin gastar la cola del demo. Sin
+  commit.
+- 2026-10-23 — **Facturas por comercio, y varias del mismo comercio se
+  separan solas.** La factura nombra quién la cobra (aparte de su nombre) y
+  dos pagos del mismo comercio en la misma semana van cada uno a su factura
+  cuando los montos lo dejan claro. Pruebas, pyright, Ruff y `e2e-bills` en
+  verde. Sin commit.
+- 2026-10-22 — **Una factura se paga sola cuando llega su movimiento**, y
+  puede declararse de monto variable. El enlace se escribe solo y condicional,
+  y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
+  del worker sobre `merchants` (sale solo con el pipeline). `e2e-bills`,
+  pruebas, pyright y Ruff en verde. Sin commit.
 - 2026-10-20 — **Un pago a «tu cuenta AHORROS» cae en la cuenta.** Plantilla
   para la segunda redacción de Bancolombia (hora antes que fecha) y, sin
   dígitos, una entrada va a la única cuenta de ese tipo en ese banco; con
   varias, espera. `just prepare` en verde. En el árbol, sin commit; el pago del 19/10 ya
   guardado sigue sin asignar.
-- 2026-10-14 — **Cuentas y Guías vuelven al estilo de producción.** Cuentas con
-  paneles apilados (Alertas, condiciones, Ajustes de la cuenta), uno abierto a
-  la vez; Guías en cinco tarjetas por tema que se despliegan con sus tareas,
-  problemas, guía y recorrido; los temas con recorrido llevan «Paso a paso» y lo
-  ponen primero. `just e2e-cuentas` y `e2e-guias` en verde. En
-  el árbol, sin commit.
-- 2026-10-13 — **Ahorros, efectivo e inversión en negativo avisan en vez de
-  callar.** La tarjeta de la cuenta lo dice y lleva a los sin asignar o a
-  corregir el saldo, que ya no acepta un negativo en esos tipos. El seed asigna
-  la nómina demo; el logo lleva al Resumen. En el árbol, sin commit.
-- 2026-10-10 — **Las listas desplegables son de la app, y el carrusel ya no salta.**
-  Menú propio en escritorio, hoja desde abajo en el teléfono, búsqueda en las
-  largas y teclado completo, en todos los selectores sin cambiar pantallas.
-  «Siguiente» queda quieto en todos los pasos. `just e2e` en verde. En el
-  árbol, sin commit.
-- 2026-10-10 — **Plan UX completo: avisos guiados y cuatro recorridos animados**
-  (UX-14 y lo pedido después). La guía de avisos conecta Telegram desde ella
-  misma; cómo llega un movimiento, un traslado, una cuota y una factura se ven
-  paso a paso desde el «Cómo funciona» de su pantalla y en `/guias/flujos`.
-  La cola de Comercios se rehízo en una fila por comercio. `just e2e` (15
-  suites, 22 pantallas) en verde. En el árbol, sin commit.

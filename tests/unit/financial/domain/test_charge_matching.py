@@ -21,10 +21,12 @@ from personal_finance.contexts.financial.domain.entities import Transaction
 from personal_finance.contexts.financial.domain.reconciliation import (
     MAX_CANDIDATES,
     ChargeCandidate,
+    KnownMerchant,
     MatchQuality,
     bill_keys,
     candidates_for,
     only_certain,
+    resolve_contests,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
@@ -54,6 +56,9 @@ def bill(
     amount: str = "120000",
     direction: MovementDirection = MovementDirection.OUTGOING,
     account_id: AccountId | None = None,
+    variable_amount: bool = False,
+    merchant_id: str | None = None,
+    category: str | None = None,
 ) -> ScheduledBill:
     return ScheduledBill.declare(
         user_id=USER,
@@ -63,6 +68,9 @@ def bill(
         starts_on=PERIOD,
         direction=direction,
         account_id=account_id,
+        variable_amount=variable_amount,
+        merchant_id=merchant_id,
+        category=category,
     )
 
 
@@ -93,6 +101,7 @@ def candidates(
     merchant_ids: dict[str, str] | None = None,
     taken: frozenset[str] = frozenset(),
     period: dt.date = PERIOD,
+    known: dict[str, KnownMerchant] | None = None,
 ) -> tuple[ChargeCandidate, ...]:
     attributed = merchant_ids or {}
 
@@ -100,10 +109,12 @@ def candidates(
         declared,
         period=period,
         movements=movements,
-        keys=bill_keys(declared, attributed.get(declared.name)),
+        keys=bill_keys(declared, declared.merchant_id, attributed.get(declared.name)),
         merchant_ids=attributed,
         zone=BOGOTA,
         taken=taken,
+        known=known,
+        named_merchant=declared.merchant_id,
     )
 
 
@@ -334,3 +345,284 @@ def test_a_movement_two_charges_both_reach_is_never_certain() -> None:
 
         assert [each.quality for each in found] == [MatchQuality.LIKELY]
         assert only_certain(found) is None
+
+
+# ----------------------------------------------------------------------
+# A bill whose figure changes every month
+# ----------------------------------------------------------------------
+
+
+def test_a_varying_bill_from_its_merchant_is_certain_well_past_a_tenth() -> None:
+    """Declared 120 000 for the electricity, charged 165 000 in a hot month."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="Energia", amount="165000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.CERTAIN]
+
+
+def test_the_same_figure_on_a_fixed_bill_is_only_likely() -> None:
+    found = candidates(
+        bill(name="Energia"),
+        movement(counterparty="Energia", amount="165000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_a_varying_bill_still_has_a_bound() -> None:
+    """Three times the figure, to the same utility, is a debt being settled."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="Energia", amount="360000"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_the_wider_band_never_reaches_a_movement_from_another_merchant() -> None:
+    """Half a bill away, on its own, is any purchase that week."""
+    found = candidates(
+        bill(name="Energia", variable_amount=True),
+        movement(counterparty="TIENDAS ARA", amount="160000"),
+    )
+
+    assert found == ()
+
+
+def test_two_charges_from_a_varying_merchant_are_a_question() -> None:
+    """Centroaguas presents two charges a month; neither is linked alone."""
+    found = candidates(
+        bill(name="Centroaguas", amount="105000", variable_amount=True),
+        movement(counterparty="Centroaguas", amount="82036"),
+        movement(
+            counterparty="Centroaguas",
+            amount="73738",
+            day=PERIOD + dt.timedelta(days=1),
+        ),
+    )
+
+    assert only_certain(found) is None
+
+
+# ----------------------------------------------------------------------
+# A bill named in its owner's words, charged by a merchant
+# ----------------------------------------------------------------------
+
+
+def test_a_bill_names_its_merchant_and_is_recognised_through_it() -> None:
+    """ "Luz casa mamá" is Celsia; the bank says `COMP ELECTRICIDAD TU`."""
+    found = candidates(
+        bill(name="Luz casa mamá", merchant_id="celsia"),
+        movement(counterparty="COMP ELECTRICIDAD TU"),
+        merchant_ids={"COMP ELECTRICIDAD TU": "celsia"},
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.CERTAIN]
+
+
+def test_without_its_merchant_the_owners_words_match_nothing_by_name() -> None:
+    found = candidates(
+        bill(name="Luz casa mamá"),
+        movement(counterparty="COMP ELECTRICIDAD TU"),
+        merchant_ids={"COMP ELECTRICIDAD TU": "celsia"},
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_a_named_merchant_never_takes_another_merchants_movement() -> None:
+    found = candidates(
+        bill(name="Luz casa mamá", merchant_id="celsia"),
+        movement(counterparty="CENTROAGUAS"),
+        merchant_ids={"CENTROAGUAS": "centroaguas"},
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+# ----------------------------------------------------------------------
+# Several bills to one merchant, told apart by their figures
+# ----------------------------------------------------------------------
+
+
+def _celsia(name: str, amount: str) -> ScheduledBill:
+    return bill(name=name, amount=amount, variable_amount=True, merchant_id="celsia")
+
+
+def test_two_houses_light_paid_the_same_week_each_finds_its_own() -> None:
+    mama = _celsia("Luz casa mamá", "155000")
+    mine = _celsia("Luz mi casa", "120000")
+    high = movement(counterparty="COMP ELECTRICIDAD TU", amount="157731")
+    low = movement(
+        counterparty="COMP ELECTRICIDAD TU",
+        amount="119914",
+        day=PERIOD + dt.timedelta(days=2),
+    )
+    attributed = {"COMP ELECTRICIDAD TU": "celsia"}
+
+    resolved = resolve_contests(
+        [
+            (mama.amount, candidates(mama, high, low, merchant_ids=attributed)),
+            (mine.amount, candidates(mine, high, low, merchant_ids=attributed)),
+        ],
+    )
+
+    first, second = (only_certain(each) for each in resolved)
+    assert first is not None and first.movement_id == high.id.value
+    assert second is not None and second.movement_id == low.id.value
+
+
+def test_figures_too_close_to_tell_apart_stay_a_question() -> None:
+    one = _celsia("Luz casa mamá", "120000")
+    other = _celsia("Luz mi casa", "125000")
+    paid = movement(counterparty="COMP ELECTRICIDAD TU", amount="122000")
+    attributed = {"COMP ELECTRICIDAD TU": "celsia"}
+
+    resolved = resolve_contests(
+        [
+            (one.amount, candidates(one, paid, merchant_ids=attributed)),
+            (other.amount, candidates(other, paid, merchant_ids=attributed)),
+        ],
+    )
+
+    assert [only_certain(each) for each in resolved] == [None, None]
+    assert all(
+        candidate.quality is MatchQuality.LIKELY
+        for each in resolved
+        for candidate in each
+    )
+
+
+def test_a_match_with_no_rival_is_left_exactly_as_it_was() -> None:
+    gym = bill()
+    found = candidates(gym, movement())
+
+    assert resolve_contests([(gym.amount, found)]) == [found]
+
+
+def test_one_bill_never_picks_between_two_of_its_payments() -> None:
+    """However far apart: pairing settles contests between bills only."""
+    water = bill(name="Centroaguas", amount="105000", variable_amount=True)
+    near = movement(counterparty="Centroaguas", amount="100000")
+    far = movement(counterparty="Centroaguas", amount="60000")
+
+    resolved = resolve_contests([(water.amount, candidates(water, near, far))])
+
+    assert only_certain(resolved[0]) is None
+
+
+# ----------------------------------------------------------------------
+# A figure alone, from someone who is plainly someone else
+# ----------------------------------------------------------------------
+
+
+def _eneba(
+    category: str | None, *, confirmed: bool = False
+) -> dict[str, KnownMerchant]:
+    return {
+        "via Eneba": KnownMerchant(
+            merchant_id="eneba",
+            category=category,
+            confirmed=confirmed,
+        ),
+    }
+
+
+def test_games_are_never_proposed_as_the_electricity() -> None:
+    """Seen in dev: 136 176 at Eneba, the same day as a 150 000 light bill.
+    Close enough in figure, an entirely different kind of spending."""
+    light = bill(name="Celsia - San benito", amount="150000", category="utilities")
+
+    found = candidates(
+        light,
+        movement(counterparty="via Eneba", amount="136176"),
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("entertainment"),
+    )
+
+    assert found == ()
+
+
+def test_a_figure_alone_is_still_proposed_when_nothing_says_whose_it_is() -> None:
+    """No merchant yet, or one filed under nothing: it may well be the bill."""
+    light = bill(name="Celsia - San benito", amount="150000", category="utilities")
+    paid = movement(counterparty="via Eneba", amount="136176")
+
+    unknown = candidates(light, paid)
+    uncategorized = candidates(
+        light,
+        paid,
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("uncategorized"),
+    )
+
+    assert [each.quality for each in unknown] == [MatchQuality.LIKELY]
+    assert [each.quality for each in uncategorized] == [MatchQuality.LIKELY]
+
+
+def test_a_bill_without_a_category_cannot_rule_one_out_by_category() -> None:
+    light = bill(name="Celsia - San benito", amount="150000")
+
+    found = candidates(
+        light,
+        movement(counterparty="via Eneba", amount="136176"),
+        merchant_ids={"via Eneba": "eneba"},
+        known=_eneba("entertainment"),
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.LIKELY]
+
+
+def test_another_merchant_its_owner_confirmed_is_never_a_named_bills() -> None:
+    """Centroaguas, reviewed, is not Celsia — even if both are utilities."""
+    light = bill(
+        name="Luz casa mamá",
+        amount="150000",
+        category="utilities",
+        merchant_id="celsia",
+    )
+    water = movement(counterparty="CENTROAGUAS", amount="145000")
+
+    confirmed = candidates(
+        light,
+        water,
+        merchant_ids={"CENTROAGUAS": "centroaguas"},
+        known={
+            "CENTROAGUAS": KnownMerchant("centroaguas", "utilities", confirmed=True)
+        },
+    )
+    guessed = candidates(
+        light,
+        water,
+        merchant_ids={"CENTROAGUAS": "centroaguas"},
+        known={
+            "CENTROAGUAS": KnownMerchant("centroaguas", "utilities", confirmed=False)
+        },
+    )
+
+    assert confirmed == ()
+    # A merchant Merchant made up may be the same company under a new name.
+    assert [each.quality for each in guessed] == [MatchQuality.LIKELY]
+
+
+def test_the_bills_own_merchant_is_never_ruled_out_by_its_category() -> None:
+    """The rule is about a figure alone; the right merchant always counts."""
+    light = bill(
+        name="Luz casa mamá",
+        amount="150000",
+        category="utilities",
+        merchant_id="celsia",
+    )
+
+    found = candidates(
+        light,
+        movement(counterparty="COMP ELECTRICIDAD TU", amount="150000"),
+        merchant_ids={"COMP ELECTRICIDAD TU": "celsia"},
+        known={
+            "COMP ELECTRICIDAD TU": KnownMerchant("celsia", "shopping", confirmed=True),
+        },
+    )
+
+    assert [each.quality for each in found] == [MatchQuality.CERTAIN]

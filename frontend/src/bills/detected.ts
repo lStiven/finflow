@@ -110,6 +110,9 @@ export function nextChargeLabel(
  * so the day every later charge lands on is the day this one has been landing
  * on, and not the day somebody happened to accept the suggestion.
  *
+ * A variable series is declared as varying: its amount is a median, and the
+ * bill should be recognised by its merchant rather than by that figure.
+ *
  * The category is carried over when there is one, because a bill without one
  * produces charges that sit outside every breakdown. `uncategorized` is not
  * one: it is the absence of an answer, and sending it would file the charge
@@ -128,5 +131,11 @@ export function asDeclaration(series: RecurringSeries): DeclareBillBody {
       series.category === null || series.category === UNCATEGORIZED
         ? null
         : series.category,
+    // The detector already knows: a series of different figures is declared
+    // as varying, so next month's figure pays it without asking.
+    variable_amount: series.variable,
+    // The detector found it through its merchant, so the bill is recognised
+    // the same way — whatever the bank calls it next month.
+    merchant_id: series.merchant_id,
   };
 }

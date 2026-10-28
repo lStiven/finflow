@@ -32,6 +32,7 @@ import {
   ArrowRight,
   CalendarClock,
   Check,
+  ChevronDown,
   CircleSlash,
   Ellipsis,
   Link2,
@@ -45,6 +46,7 @@ import {
   Snowflake,
   Sparkles,
   Trash2,
+  TriangleAlert,
   Wallet,
   X,
   Zap,
@@ -61,6 +63,7 @@ import {
   billsQuery,
   type ChargeProposal,
   categoriesQuery,
+  merchantsForFilterQuery,
   type RecurringSeries,
   recurringQuery,
   useAmendBill,
@@ -87,14 +90,17 @@ import {
   CADENCES,
   cadenceLabel,
   chargedAmount,
-  chargeLabel,
   chargeVerbs,
+  doneHow,
+  dueLabel,
   formatAmountInput,
-  groupByDay,
   isMatched,
   isSettled,
   parseAmount,
+  paymentMode,
+  pendingHint,
   settledShare,
+  splitMonth,
   whenLabel,
 } from "@/bills/schedule";
 import { AppShell } from "@/components/AppShell";
@@ -106,7 +112,7 @@ import { Field } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
-import { formatIsoDate, formatIsoDayMonth, todayIso } from "@/lib/dates";
+import { formatIsoDayMonth, formatMonthKey, todayIso } from "@/lib/dates";
 import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
 
 /** The select hands back a string; this is where it becomes a cadence. */
@@ -125,6 +131,8 @@ export const Route = createFileRoute("/facturas")({
       // declared is refused by the server — better to offer only what exists.
       context.queryClient.query({ ...accountsQuery("open"), staleTime: "static" }),
       context.queryClient.query({ ...categoriesQuery, staleTime: "static" }),
+      // Who charges a bill is one of these; the form offers only them.
+      context.queryClient.query(merchantsForFilterQuery),
     ]),
   component: BillsScreen,
 });
@@ -184,7 +192,11 @@ function BillsScreen() {
         )}
 
         {view.occurrences.length > 0 ? (
-          <Timeline occurrences={view.occurrences} bills={view.bills} today={today} />
+          <MonthCharges
+            occurrences={view.occurrences}
+            bills={view.bills}
+            today={today}
+          />
         ) : null}
 
         <Detected today={today} />
@@ -425,6 +437,7 @@ function Proposals({ view }: { view: BillsSettlement }) {
 }
 
 function Proposal({ proposal }: { proposal: ChargeProposal }) {
+  const today = todayIso();
   const link = useLinkCharge();
   const [linked, setLinked] = useState<string | null>(null);
 
@@ -460,9 +473,7 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
           {formatIsoDayMonth(proposal.occurrence.due_on)}
         </span>
         <span className="text-faint"> · </span>
-        <span className="text-muted">
-          {chargeVerbs(proposal.occurrence).settle.toLowerCase()} pendiente
-        </span>
+        <span className="text-muted">{dueLabel(proposal.occurrence, today)}</span>
       </span>
 
       <ul className="flex flex-col gap-1.5">
@@ -845,6 +856,7 @@ function Failure({ error }: { error: Error }) {
 function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   const { data: accounts } = useSuspenseQuery(accountsQuery("open"));
   const { data: categories } = useSuspenseQuery(categoriesQuery);
+  const { data: merchants } = useSuspenseQuery(merchantsForFilterQuery);
   const declare = useDeclareBill();
   const amend = useAmendBill(bill?.id ?? "");
   const saving = bill ? amend : declare;
@@ -857,6 +869,11 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
   // The category is what the tile draws its icon and its hue from, and what a
   // confirmed charge will carry into the reports. Empty is a real answer.
   const [category, setCategory] = useState(bill?.category ?? "");
+  // Electricity, water: the amount above is an average, and a payment from
+  // the same merchant within half of it pays the bill without asking.
+  const [variable, setVariable] = useState(bill?.variable_amount ?? false);
+  // The name is the owner's words; this is who the bank will say charged it.
+  const [merchantId, setMerchantId] = useState(bill?.merchant_id ?? "");
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
@@ -875,6 +892,7 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
       currency: "COP" as const,
       cadence,
       starts_on: startsOn,
+      variable_amount: variable,
     };
 
     if (bill) {
@@ -886,8 +904,10 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
           // Absence means "leave it alone" on a correction, so taking the
           // account off has to say so out loud.
           account_id: accountId === "" ? null : accountId,
+          merchant_id: merchantId === "" ? null : merchantId,
           clear_account: accountId === "" && bill.account_id !== null,
           clear_category: category === "" && bill.category !== null,
+          clear_merchant: merchantId === "" && bill.merchant_id !== null,
         },
         { onSuccess },
       );
@@ -901,6 +921,7 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         direction: "outgoing",
         category: category === "" ? null : category,
         account_id: accountId === "" ? null : accountId,
+        merchant_id: merchantId === "" ? null : merchantId,
       },
       { onSuccess },
     );
@@ -929,6 +950,26 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         onChange={(event) => setName(event.target.value)}
       />
 
+      <Select
+        label="¿Quién te cobra?"
+        value={merchantId}
+        onChange={(event) => setMerchantId(event.target.value)}
+        placeholder="Elige el comercio"
+        hint="El nombre de arriba es como tú la llamas. Con el comercio, Finflow reconoce el pago aunque el banco lo escriba distinto."
+        options={[
+          ...merchants.merchants.map((merchant) => ({
+            value: merchant.id,
+            label: merchant.display_name,
+          })),
+          // Kept visible when the list does not reach it — past the first
+          // hundred, or merged away since — rather than reading as "none".
+          ...(bill?.merchant_id &&
+          !merchants.merchants.some((merchant) => merchant.id === bill.merchant_id)
+            ? [{ value: bill.merchant_id, label: "El comercio que ya tenía" }]
+            : []),
+        ]}
+      />
+
       <Field
         label="Monto"
         icon={Wallet}
@@ -937,6 +978,22 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
         placeholder="120.000"
         onChange={(event) => setAmount(event.target.value)}
       />
+
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-line bg-ink p-3.5">
+        <span className="min-w-0">
+          <span className="block font-medium text-sm">El monto cambia cada mes</span>
+          <span className="block text-faint text-xs">
+            Como la luz o el agua: pon un promedio, y el pago de ese comercio se marca
+            solo aunque llegue distinto.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          className="size-5 shrink-0 accent-violet"
+          checked={variable}
+          onChange={(event) => setVariable(event.target.checked)}
+        />
+      </label>
 
       <Select
         label="Cada cuánto"
@@ -1000,19 +1057,19 @@ function BillForm({ bill, onClose }: { bill?: Bill; onClose: () => void }) {
 }
 
 /**
- * The month as a dated rail, and where each charge is answered for.
+ * The month's charges, by what is left to do.
  *
- * A flat list makes "the 1st, the 4th, the 18th" read as unrelated rows. A
- * rail with a node per day reads as time passing, which is what "when does
- * this land" is actually asking. Today's node is marked, so the split between
- * what has gone and what is coming is visible without reading a date.
+ * It used to be a rail of days, and it asked the reader to work out the one
+ * thing they opened it for — what do I still owe? — from a calendar where
+ * paid and unpaid sat side by side with equal weight. So: what is pending
+ * first, each saying when it falls and what will happen to it; what is done
+ * folded underneath, each saying how it got done.
  *
  * The buttons live here rather than on the cards because **what gets paid is
  * one charge of one month, not the bill**. A card knows nothing about which
- * month somebody means, and the two they are most likely to mean — this one
- * and the one they forgot — are exactly the two it cannot tell apart.
+ * month somebody means.
  */
-function Timeline({
+function MonthCharges({
   occurrences,
   bills,
   today,
@@ -1021,96 +1078,123 @@ function Timeline({
   bills: readonly Bill[];
   today: string;
 }) {
-  const names = new Map(bills.map((bill) => [bill.id, bill.name]));
+  const byId = new Map(bills.map((bill) => [bill.id, bill]));
+  const { pending, done } = splitMonth(occurrences);
+  // Folded while something is still pending — the done ones are the answer
+  // to a question nobody is asking yet. Opened by anything settled here, so
+  // the charge just marked is visible where it went.
+  const [showDone, setShowDone] = useState(false);
+  const onlyOutgoing = occurrences.every((each) => each.direction === "outgoing");
+  // «octubre», from «octubre de 2026»: the year is never in doubt here.
+  const month = formatMonthKey(today.slice(0, 7)).split(" ")[0] ?? "este mes";
 
   return (
     <section className="flex flex-col gap-3">
-      <SectionTitle>Cobros de este mes</SectionTitle>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <SectionTitle>{`Cobros de ${month}`}</SectionTitle>
+        <span className="text-faint text-xs">
+          {pending.length === 0
+            ? "Nada pendiente"
+            : `${pending.length} ${onlyOutgoing ? "por pagar" : "pendientes"}`}
+          {" · "}
+          {done.length} {onlyOutgoing ? "pagados" : "listos"}
+        </span>
+      </div>
 
-      <Card lift={false} className="flex flex-col gap-0">
-        {groupByDay(occurrences).map((group, index) => {
-          const past = group.day < today;
-          const isToday = group.day === today;
+      {pending.length > 0 ? (
+        <Card lift={false} className="flex flex-col gap-0 p-0">
+          {pending.map((occurrence, index) => (
+            <Charge
+              key={`${occurrence.bill_id}-${occurrence.due_on}`}
+              occurrence={occurrence}
+              bill={byId.get(occurrence.bill_id)}
+              today={today}
+              divided={index > 0}
+              onSettled={() => setShowDone(true)}
+            />
+          ))}
+        </Card>
+      ) : (
+        <Card lift={false}>
+          <p className="text-muted text-sm">No queda nada por pagar este mes.</p>
+        </Card>
+      )}
 
-          return (
-            <div
-              key={group.day}
+      {done.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setShowDone((open) => !open)}
+            aria-expanded={showDone || pending.length === 0}
+            className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-muted text-xs transition-colors hover:text-text"
+          >
+            <ChevronDown
+              aria-hidden
               className={cn(
-                "flex gap-4 pl-1",
-                index === 0 ? "pb-5" : "py-5",
-                index > 0 && "border-line/60 border-t",
+                "size-3.5 transition-transform duration-200",
+                (showDone || pending.length === 0) && "rotate-180",
               )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  "mt-1.5 size-2.5 shrink-0 rounded-full",
-                  isToday
-                    ? "bg-accent ring-4 ring-accent/20"
-                    : past
-                      ? "bg-line"
-                      : "bg-muted/60",
-                )}
-              />
+            />
+            {showDone || pending.length === 0
+              ? `Ocultar ${onlyOutgoing ? "los pagados" : "los listos"}`
+              : `Ver ${onlyOutgoing ? "los pagados" : "los listos"} (${done.length})`}
+          </button>
 
-              <div className="flex min-w-0 flex-1 flex-col gap-3">
-                <span
-                  className={cn(
-                    "text-xs uppercase tracking-wider",
-                    isToday ? "text-accent" : "text-faint",
-                  )}
-                >
-                  {formatIsoDate(group.day)}
-                  {isToday ? " · hoy" : ""}
-                </span>
-
-                {group.occurrences.map((occurrence) => (
-                  <Charge
-                    key={`${occurrence.bill_id}-${occurrence.due_on}`}
-                    occurrence={occurrence}
-                    name={names.get(occurrence.bill_id) ?? "Factura"}
-                    past={past}
-                  />
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </Card>
+          {showDone || pending.length === 0 ? (
+            <Card lift={false} className="rise flex flex-col gap-0 p-0">
+              {done.map((occurrence, index) => (
+                <Charge
+                  key={`${occurrence.bill_id}-${occurrence.due_on}`}
+                  occurrence={occurrence}
+                  bill={byId.get(occurrence.bill_id)}
+                  today={today}
+                  divided={index > 0}
+                  onSettled={() => setShowDone(true)}
+                />
+              ))}
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
 
 /**
- * One charge of one day: what it is, what it costs, and what happened to it.
+ * One charge: what it is, what it costs, when it falls, and what will happen
+ * to it — or how it got done.
  *
- * Three shapes, one per answer. Unanswered it offers **Pagar** and **Saltar**;
- * paid or skipped it says so and offers to undo. Undo is not a nicety here —
- * "Pagar" moves a balance, and a tap that cannot be taken back on a money
- * screen is how somebody stops trusting the screen.
+ * Pending, it says how it gets answered (`paymentMode`): the bank's email, the
+ * automatic charge, or its owner. That decides the buttons too. A bill the
+ * bank reports keeps «Ya lo pagué» second and warns before it writes:
+ * marking it first and then receiving the email counts the same money twice.
  *
  * The figure shown once it is paid is what actually moved, not what the bill
- * projects. The two differ whenever a price went up, and showing the
- * projection back at somebody after the money left would put the screen and
- * their bank statement in disagreement.
+ * projects — the two differ whenever a price went up.
  */
 function Charge({
   occurrence,
-  name,
-  past,
+  bill,
+  today,
+  divided,
+  onSettled,
 }: {
   occurrence: BillOccurrence;
-  name: string;
-  past: boolean;
+  bill: Bill | undefined;
+  today: string;
+  divided: boolean;
+  onSettled: () => void;
 }) {
   const [paying, setPaying] = useState(false);
   const settle = useSettleCharge();
   const settled = isSettled(occurrence);
-  const label = chargeLabel(occurrence);
   const paid = occurrence.state === "paid";
   const verbs = chargeVerbs(occurrence);
-
   const matched = isMatched(occurrence);
+  const name = bill?.name ?? "Factura";
+  const mode = bill ? paymentMode(bill, occurrence.due_on) : "manual";
+  const late = occurrence.state === "overdue";
+
   const run = (
     action: "pay" | "unpay" | "skip" | "unskip" | "unlink",
     amount?: string,
@@ -1125,34 +1209,42 @@ function Charge({
         // amount in a currency the bill is not in rather than converting it.
         currency: occurrence.currency,
       },
-      { onSuccess: () => setPaying(false) },
+      {
+        onSuccess: () => {
+          setPaying(false);
+          onSettled();
+        },
+      },
     );
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className={cn(
+        "flex flex-col gap-1.5 px-4 py-3.5",
+        divided && "border-line/60 border-t",
+      )}
+    >
       <div className="flex items-baseline justify-between gap-3">
-        <span className="flex min-w-0 items-baseline gap-2">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
           <span
             className={cn(
               "min-w-0 truncate text-sm",
-              settled || past ? "text-muted" : "text-text",
+              settled ? "text-muted" : "text-text",
               occurrence.state === "skipped" && "line-through",
             )}
           >
             {name}
           </span>
-          {label ? (
-            <span
-              className={cn(
-                "shrink-0 text-[0.6875rem] uppercase tracking-wide",
-                paid ? "text-accent" : "",
-                occurrence.state === "overdue" ? "text-outgoing" : "",
-                occurrence.state === "skipped" ? "text-faint" : "",
-              )}
-            >
-              {label}
-            </span>
-          ) : null}
+          <span
+            className={cn(
+              "shrink-0 text-xs",
+              settled ? "text-faint" : late ? "text-outgoing" : "text-muted",
+            )}
+          >
+            {settled
+              ? `${formatIsoDayMonth(occurrence.due_on)} · ${doneHow(occurrence, bill)}`
+              : dueLabel(occurrence, today)}
+          </span>
         </span>
         <Money
           amount={chargedAmount(occurrence)}
@@ -1161,47 +1253,45 @@ function Charge({
           tone={
             occurrence.direction === "incoming"
               ? "positive"
-              : settled || past
+              : settled
                 ? "neutral"
                 : "plain"
           }
         />
       </div>
 
-      {matched ? (
-        // Worth a line of its own: this charge was answered by money that was
-        // already in the ledger, so there is no movement of this app's making
-        // behind it and «deshacer» does not erase anything.
+      {settled ? null : (
         <span className="text-faint text-xs">
-          Pagada con un movimiento tuyo. No se escribió nada.
+          {pendingHint(mode, occurrence, formatIsoDayMonth)}
         </span>
-      ) : null}
+      )}
 
       {settle.isError ? <Failure error={settle.error} /> : null}
-
-      {paid && occurrence.movement_id ? (
-        <Link
-          to="/transacciones/$transactionId"
-          params={{ transactionId: occurrence.movement_id }}
-          className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-xs transition-colors hover:text-text"
-        >
-          Ver el movimiento
-          <ArrowRight className="size-3.5" aria-hidden />
-        </Link>
-      ) : null}
 
       {paying ? (
         <PayForm
           occurrence={occurrence}
+          bankReports={mode === "bank"}
           pending={settle.isPending}
           onCancel={() => setPaying(false)}
           onConfirm={(amount) => run("pay", amount)}
         />
       ) : (
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {paid && occurrence.movement_id ? (
+            <Link
+              to="/transacciones/$transactionId"
+              params={{ transactionId: occurrence.movement_id }}
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-cyan text-xs transition-colors hover:bg-surface-raised hover:text-text"
+            >
+              Ver el movimiento
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          ) : null}
+
           {settled ? (
             <ChargeAction
-              label={paid ? verbs.undo : "Ya no saltarlo"}
+              label={paid ? verbs.undo : "Sí va este mes"}
               on={name}
               icon={RotateCcw}
               disabled={settle.isPending}
@@ -1210,15 +1300,20 @@ function Charge({
           ) : (
             <>
               <ChargeAction
-                label={verbs.settle}
+                label={
+                  mode === "bank" && occurrence.direction === "outgoing"
+                    ? `${verbs.settle} por otro lado`
+                    : verbs.settle
+                }
                 on={name}
                 icon={Check}
-                tone="accent"
+                // The one to press, unless the bank is going to answer it.
+                tone={mode === "bank" ? "plain" : "accent"}
                 disabled={settle.isPending}
                 onClick={() => setPaying(true)}
               />
               <ChargeAction
-                label="Saltar"
+                label="Este mes no"
                 on={name}
                 icon={CircleSlash}
                 disabled={settle.isPending}
@@ -1244,11 +1339,15 @@ function Charge({
  */
 function PayForm({
   occurrence,
+  bankReports = false,
   pending,
   onCancel,
   onConfirm,
 }: {
   occurrence: BillOccurrence;
+  /** The bank reports this bill: marking it first and then receiving the
+   * email would count the same money twice. */
+  bankReports?: boolean;
   pending: boolean;
   onCancel: () => void;
   onConfirm: (amount: string | undefined) => void;
@@ -1273,6 +1372,13 @@ function PayForm({
 
   return (
     <div className="flex flex-col gap-2 rounded-lg bg-surface-raised/60 p-3">
+      {bankReports ? (
+        <p className="flex items-start gap-2 text-warn text-xs leading-relaxed">
+          <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+          Tu banco avisa este cobro. Márcalo solo si lo pagaste por otro lado: si luego
+          llega el correo, se contaría dos veces.
+        </p>
+      ) : null}
       {/* Said here rather than once at the top of the screen, because this is
           the moment it matters: the difference between «anoté cuánto me va a
           costar» and «se movió mi plata» is exactly what somebody gets wrong

@@ -56,6 +56,7 @@ from personal_finance.contexts.financial.application.handlers import (
 from personal_finance.contexts.financial.application.ports import (
     ChargeLookup,
     MerchantDirectory,
+    MerchantLookup,
     MovementHistory,
     ScheduledBillRepository,
 )
@@ -73,9 +74,11 @@ from personal_finance.contexts.financial.domain.exceptions import (
 )
 from personal_finance.contexts.financial.domain.reconciliation import (
     ChargeCandidate,
+    KnownMerchant,
     bill_keys,
     candidates_for,
     only_certain,
+    resolve_contests,
 )
 from personal_finance.shared.domain.value_objects import UserId
 
@@ -127,6 +130,11 @@ class SettlementView:
 class SettleDueChargesCommand:
     user_id: UserId
     timezone: str
+    #: Recognise and link, never write. What runs the moment a bank movement
+    #: is recorded: linking reads money that is already in the ledger, but
+    #: an automatic charge stays where its owner can see and undo it — on the
+    #: screen, lazily.
+    match_only: bool = False
 
 
 class SettleDueChargesUseCase:
@@ -148,12 +156,14 @@ class SettleDueChargesUseCase:
         ledger: MovementHistory,
         settle: SettleBillChargeUseCase,
         merchants: MerchantDirectory | None = None,
+        merchant_lookup: MerchantLookup | None = None,
     ) -> None:
         self._bills = bills
         self._charges = charges
         self._ledger = ledger
         self._settle = settle
         self._merchants = merchants
+        self._merchant_lookup = merchant_lookup
 
     def execute(self, command: SettleDueChargesCommand) -> SettlementView:
         zone = zone_of(command.timezone)
@@ -181,23 +191,37 @@ class SettleDueChargesUseCase:
             until=until,
             zone=zone,
         )
-        merchant_ids = self._merchant_ids(
+        known = self._known_merchants(
             command.user_id,
             counterparties=[
                 *(movement.counterparty for movement in movements),
                 *(bill.name for bill in active),
             ],
         )
+        merchant_ids = {
+            counterparty: merchant.merchant_id
+            for counterparty, merchant in known.items()
+        }
         # Every movement already answering for a charge, across every bill —
         # paused ones too. One payment settles one thing, and a paused bill's
         # link is still a claim on that movement.
         taken = {movement for bill in declared for movement in bill.linked.values()}
 
-        settled: list[AutomaticSettlement] = []
-        proposals: list[ChargeProposal] = []
+        # Every charge still open, with what could answer it — all of them
+        # first, so a movement certain for two different bills is seen as
+        # the question it is before either takes it.
+        open_charges: list[
+            tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
+        ] = []
+
+        # A merchant merged into another is deleted. A bill still naming it
+        # falls back to its own name rather than waiting on an id nothing
+        # will ever be attributed to again.
+        alive = self._existing_merchants(command.user_id, active)
 
         for bill in active:
-            keys = bill_keys(bill, merchant_ids.get(bill.name))
+            named = bill.merchant_id if bill.merchant_id in alive else None
+            keys = bill_keys(bill, named, merchant_ids.get(bill.name))
 
             for occurrence in bill.occurrences(
                 since=since,
@@ -208,49 +232,137 @@ class SettleDueChargesUseCase:
                 if occurrence.state.is_settled:
                     continue
 
-                candidates = candidates_for(
-                    bill,
-                    period=occurrence.due_on,
-                    movements=movements,
-                    keys=keys,
-                    merchant_ids=merchant_ids,
-                    zone=zone,
-                    taken=frozenset(taken),
+                open_charges.append(
+                    (
+                        bill,
+                        occurrence,
+                        candidates_for(
+                            bill,
+                            period=occurrence.due_on,
+                            movements=movements,
+                            keys=keys,
+                            merchant_ids=merchant_ids,
+                            zone=zone,
+                            taken=frozenset(taken),
+                            known=known,
+                            named_merchant=named,
+                        ),
+                    ),
                 )
+
+        settled: list[AutomaticSettlement] = []
+        remaining = open_charges
+
+        # Links first, pass after pass, while each pass still links something:
+        # a payment claimed in one pass is a rival gone in the next, so the
+        # charge it was contesting can now be answered clearly. A certain
+        # match survives only where charge and movement choose each other
+        # clearly — several bills to one merchant told apart by their figures.
+        while remaining:
+            unanswered: list[
+                tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
+            ] = []
+
+            for (bill, occurrence, found), candidates in self._resolved(
+                remaining,
+                taken,
+            ):
                 answered = self._answer(
                     bill,
                     occurrence,
                     candidates=candidates,
                     today=today,
+                    match_only=True,
                 )
 
                 if answered is None:
-                    if candidates:
-                        proposals.append(
-                            ChargeProposal(
-                                bill_id=bill.id,
-                                bill_name=bill.name,
-                                occurrence=occurrence,
-                                candidates=candidates,
-                            ),
-                        )
-
+                    unanswered.append((bill, occurrence, found))
                     continue
 
                 settled.append(answered)
 
-                paid_with = answered.settled.occurrence.payment
+                if answered.settled.occurrence.payment is not None:
+                    taken.add(answered.settled.occurrence.payment.movement_id)
 
-                # So the next charge in this same run cannot be settled by
-                # the movement this one just claimed.
-                if answered.action is SettlementAction.MATCHED and paid_with:
-                    taken.add(paid_with.movement_id)
+            if len(unanswered) == len(remaining):
+                break
+
+            remaining = unanswered
+
+        # Then what nothing answered: an automatic charge where the bill
+        # charges itself and no movement looks like it, a proposal where one
+        # does but not clearly.
+        proposals: list[ChargeProposal] = []
+
+        for (bill, occurrence, _), candidates in self._resolved(remaining, taken):
+            answered = self._answer(
+                bill,
+                occurrence,
+                candidates=candidates,
+                today=today,
+                match_only=command.match_only,
+            )
+
+            if answered is not None:
+                settled.append(answered)
+            elif candidates:
+                proposals.append(
+                    ChargeProposal(
+                        bill_id=bill.id,
+                        bill_name=bill.name,
+                        occurrence=occurrence,
+                        candidates=candidates,
+                    ),
+                )
 
         return SettlementView(
             today=today,
             settled=tuple(settled),
             proposals=tuple(proposals),
         )
+
+    def _existing_merchants(
+        self,
+        user_id: UserId,
+        bills: Sequence[ScheduledBill],
+    ) -> frozenset[str]:
+        named = sorted({bill.merchant_id for bill in bills if bill.merchant_id})
+
+        if not named:
+            return frozenset()
+
+        if self._merchant_lookup is None:
+            return frozenset(named)
+
+        return self._merchant_lookup.existing(user_id=user_id, merchant_ids=named)
+
+    @staticmethod
+    def _resolved(
+        charges: Sequence[
+            tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]]
+        ],
+        taken: set[str],
+    ) -> list[
+        tuple[
+            tuple[ScheduledBill, BillOccurrence, tuple[ChargeCandidate, ...]],
+            tuple[ChargeCandidate, ...],
+        ]
+    ]:
+        """Each open charge with its candidates as they stand now: without the
+        movements already claimed, and with contests between charges settled
+        against what is left."""
+        available = [
+            tuple(c for c in found if c.movement_id not in taken)
+            for _, _, found in charges
+        ]
+        resolved = resolve_contests(
+            [
+                (bill.amount, candidates)
+                for (bill, _, _), candidates in zip(charges, available, strict=True)
+            ],
+        )
+
+        return list(zip(charges, resolved, strict=True))
 
     def _answer(
         self,
@@ -259,6 +371,7 @@ class SettleDueChargesUseCase:
         *,
         candidates: Sequence[ChargeCandidate],
         today: dt.date,
+        match_only: bool = False,
     ) -> AutomaticSettlement | None:
         """Link, charge, or leave it for its owner.
 
@@ -288,7 +401,11 @@ class SettleDueChargesUseCase:
                     ),
                 )
 
-            if candidates or not bill.charges_itself_on(occurrence.due_on, today=today):
+            if (
+                match_only
+                or candidates
+                or not bill.charges_itself_on(occurrence.due_on, today=today)
+            ):
                 return None
 
             return AutomaticSettlement(
@@ -340,12 +457,12 @@ class SettleDueChargesUseCase:
             if first <= _day_of(movement, zone) <= last
         ]
 
-    def _merchant_ids(
+    def _known_merchants(
         self,
         user_id: UserId,
         *,
         counterparties: Sequence[str],
-    ) -> Mapping[str, str]:
+    ) -> Mapping[str, KnownMerchant]:
         """Which merchant owns each spelling, in one round trip.
 
         Optional, like everywhere else in this context: without the directory
@@ -362,7 +479,11 @@ class SettleDueChargesUseCase:
             return {}
 
         return {
-            counterparty: attribution.merchant_id
+            counterparty: KnownMerchant(
+                merchant_id=attribution.merchant_id,
+                category=attribution.category,
+                confirmed=not attribution.needs_review,
+            )
             for counterparty, attribution in self._merchants.attribute(
                 user_id=user_id,
                 counterparties=wanted,

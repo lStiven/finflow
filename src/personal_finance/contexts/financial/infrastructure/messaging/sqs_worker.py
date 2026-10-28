@@ -15,6 +15,13 @@ from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
+from personal_finance.contexts.financial.application.autopay import (
+    SettleDueChargesCommand,
+    SettleDueChargesUseCase,
+)
+from personal_finance.contexts.financial.application.financing import (
+    DEFAULT_TIMEZONE,
+)
 from personal_finance.contexts.financial.application.handlers import (
     Outcome,
     RecordMovementUseCase,
@@ -29,6 +36,7 @@ from personal_finance.contexts.financial.infrastructure.messaging.inbound import
     TransferExtractedDetail,
     UnsupportedPayloadVersionError,
 )
+from personal_finance.shared.domain.value_objects import UserId
 from personal_finance.shared.infrastructure.messaging.sqs_polling import (
     MessageOutcome,
     SQSPollingWorker,
@@ -52,10 +60,12 @@ class SQSFinancialWorker(SQSPollingWorker):
         queue_url: str,
         use_case: RecordMovementUseCase,
         transfer_use_case: RecordTransferUseCase,
+        reconcile: SettleDueChargesUseCase | None = None,
     ) -> None:
         super().__init__(client=client, queue_url=queue_url)
         self._use_case = use_case
         self._transfer_use_case = transfer_use_case
+        self._reconcile = reconcile
 
     def handle(self, body: str) -> MessageOutcome:
         try:
@@ -146,7 +156,36 @@ class SQSFinancialWorker(SQSPollingWorker):
                 extra={"movement_id": result.transaction.id.value},
             )
 
+        # On a duplicate too: a redelivery after a crash between the two
+        # steps is exactly the case that still has a charge to answer.
+        self._answer_declared_charges(command.user_id)
+
         return MessageOutcome.HANDLED
+
+    def _answer_declared_charges(self, user_id: UserId) -> None:
+        """Link the declared charge this movement pays, while it arrives.
+
+        Without it a bank movement for a declared bill is only recognised when
+        somebody opens the bills screen, and until then the month counts it
+        twice — once as spent, once as still to pay. Match only: an automatic
+        charge is still written on the screen, where it can be undone.
+
+        Never fails the message. The movement is already recorded, and a
+        retry would only redo this; the screen's own sweep is the fallback.
+        """
+        if self._reconcile is None:
+            return
+
+        try:
+            self._reconcile.execute(
+                SettleDueChargesCommand(
+                    user_id=user_id,
+                    timezone=DEFAULT_TIMEZONE,
+                    match_only=True,
+                ),
+            )
+        except Exception:
+            _logger.exception("could not answer declared charges for a movement")
 
     def _handle_transfer(self, envelope: IntegrationEventEnvelope) -> MessageOutcome:
         """Both sides of one email, written together.

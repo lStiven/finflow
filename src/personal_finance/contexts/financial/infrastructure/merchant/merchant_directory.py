@@ -16,9 +16,13 @@ from personal_finance.contexts.merchant.application.handlers import (
 )
 from personal_finance.contexts.merchant.application.queries import (
     AttributeCounterpartiesUseCase,
+    GetMerchantUseCase,
 )
 from personal_finance.contexts.merchant.domain.exceptions import UnknownCategoryError
-from personal_finance.contexts.merchant.domain.value_objects import CategoryKey
+from personal_finance.contexts.merchant.domain.value_objects import (
+    CategoryKey,
+    MerchantId,
+)
 from personal_finance.contexts.merchant.infrastructure.events import (
     build_merchant_event_publisher,
 )
@@ -51,10 +55,47 @@ class MerchantContextDirectory:
         use_case: AttributeCounterpartiesUseCase,
         catalog: CategoryCatalog,
         classify: ClassifyCounterpartyUseCase,
+        lookup: GetMerchantUseCase | None = None,
     ) -> None:
         self._use_case = use_case
         self._catalog = catalog
         self._classify = classify
+        self._lookup = lookup
+
+    def existing(
+        self,
+        *,
+        user_id: UserId,
+        merchant_ids: Sequence[str],
+    ) -> frozenset[str]:
+        """Financial's `MerchantLookup`: which of these are still merchants.
+
+        Without a lookup wired, every id is taken as existing — nothing can be
+        checked, and treating them all as gone would turn every named bill
+        back into its bare name for no reason.
+        """
+        if self._lookup is None:
+            return frozenset(merchant_ids)
+
+        found: set[str] = set()
+
+        for merchant_id in set(merchant_ids):
+            try:
+                identity = MerchantId.from_string(merchant_id)
+            except ValueError:
+                # Not even shaped like an id: certainly not one of theirs.
+                continue
+
+            if str(identity.value) != merchant_id:
+                # The same UUID spelled otherwise — capitals, braces — would
+                # be stored as given and never equal the id an attribution
+                # carries. Only the spelling Merchant itself hands out counts.
+                continue
+
+            if self._lookup.execute(user_id=user_id, merchant_id=identity) is not None:
+                found.add(merchant_id)
+
+        return frozenset(found)
 
     def attribute(
         self,
@@ -150,6 +191,7 @@ def build_merchant_directory() -> MerchantContextDirectory:
 
     return MerchantContextDirectory(
         use_case=AttributeCounterpartiesUseCase(repository=repository),
+        lookup=GetMerchantUseCase(repository=repository),
         catalog=catalog,
         classify=ClassifyCounterpartyUseCase(
             repository=repository,

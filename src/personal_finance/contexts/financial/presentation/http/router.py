@@ -3422,6 +3422,14 @@ class DeclareBillPayload(BaseModel):
     #: out has no accounts declared, and the bill is still worth knowing.
     account_id: str | None = None
     category: str | None = Field(default=None, max_length=64)
+    #: The figure changes every month — electricity, water — so `amount` is an
+    #: average, and a payment from the same merchant within half of it is
+    #: recognised as this charge without asking.
+    variable_amount: bool = False
+    #: Who charges it, from `GET /merchants`, when the name is the owner's own
+    #: words: "Luz casa mamá" is recognised in `COMP ELECTRICIDAD TU` because
+    #: both are Celsia.
+    merchant_id: str | None = Field(default=None, max_length=64)
 
 
 class AmendBillPayload(BaseModel):
@@ -3444,8 +3452,11 @@ class AmendBillPayload(BaseModel):
     direction: MovementDirection | None = None
     account_id: str | None = None
     category: str | None = Field(default=None, max_length=64)
+    variable_amount: bool | None = None
+    merchant_id: str | None = Field(default=None, max_length=64)
     clear_account: bool = False
     clear_category: bool = False
+    clear_merchant: bool = False
 
     @model_validator(mode="after")
     def _coherent(self) -> AmendBillPayload:
@@ -3458,6 +3469,9 @@ class AmendBillPayload(BaseModel):
         if self.clear_category and self.category is not None:
             raise ValueError("Cannot both set and clear the category")
 
+        if self.clear_merchant and self.merchant_id is not None:
+            raise ValueError("Cannot both set and clear the merchant")
+
         if not any(
             (
                 self.name is not None,
@@ -3467,8 +3481,11 @@ class AmendBillPayload(BaseModel):
                 self.direction is not None,
                 self.account_id is not None,
                 self.category is not None,
+                self.variable_amount is not None,
+                self.merchant_id is not None,
                 self.clear_account,
                 self.clear_category,
+                self.clear_merchant,
             ),
         ):
             raise ValueError("Nothing to change")
@@ -3556,6 +3573,15 @@ class BillResponse(BaseModel):
     direction: MovementDirection
     account_id: str | None
     category: str | None
+    #: `amount` is an average: the figure changes every month.
+    variable_amount: bool
+    #: Who charges it, when its owner said: a merchant from `GET /merchants`.
+    merchant_id: str | None
+    #: Some charge of it was already paid by a movement the bank reported.
+    #: What tells the screen to say "it marks itself when the bank's email
+    #: arrives" rather than "mark it when you pay" — and to warn that marking
+    #: it by hand first would count the same money twice.
+    reported_by_bank: bool
     status: BillStatus
     #: Whether this bill charges itself once a charge's match window has
     #: closed and nothing in the ledger looks like it. Off unless somebody
@@ -3709,6 +3735,8 @@ def _build_manage_bills() -> ManageBillsUseCase:
         bills=build_bills(),
         accounts=build_accounts(),
         charges=build_ledger(),
+        # A bill may name only one of its owner's own merchants.
+        merchants=build_merchant_directory(),
     )
 
 
@@ -3754,6 +3782,7 @@ def _build_settle_due_charges() -> SettleDueChargesUseCase:
         ledger=build_ledger(),
         settle=_build_settle_charge(),
         merchants=build_merchant_directory(),
+        merchant_lookup=build_merchant_directory(),
     )
 
 
@@ -3850,6 +3879,8 @@ def declare_bill(
                     else _account_id(payload.account_id)
                 ),
                 category=category,
+                variable_amount=payload.variable_amount,
+                merchant_id=payload.merchant_id,
             ),
         )
 
@@ -3893,7 +3924,10 @@ def amend_bill(
                     else _account_id(payload.account_id)
                 ),
                 category=category,
+                variable_amount=payload.variable_amount,
+                merchant_id=payload.merchant_id,
                 clear_account=payload.clear_account,
+                clear_merchant=payload.clear_merchant,
                 clear_category=payload.clear_category,
             ),
         )
@@ -4271,6 +4305,9 @@ def _bill_summary_response(summary: BillSummary) -> BillResponse:
         direction=bill.direction,
         account_id=None if bill.account_id is None else str(bill.account_id.value),
         category=bill.category,
+        variable_amount=bill.variable_amount,
+        merchant_id=bill.merchant_id,
+        reported_by_bank=bool(bill.linked),
         status=bill.status,
         autopay=bill.autopay,
         autopay_from=bill.autopay_from,

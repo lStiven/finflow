@@ -77,6 +77,20 @@ class InMemoryBills:
     def list_by_user(self, user_id: UserId) -> list[ScheduledBill]:
         return [bill for (owner, _), bill in self.rows.items() if owner == user_id]
 
+    def store_link(
+        self,
+        bill: ScheduledBill,
+        period: object,
+        *,
+        dropped: object = frozenset(),
+    ) -> bool:
+
+        del dropped
+        del period
+        self.save(bill)
+
+        return True
+
     def save(self, bill: ScheduledBill) -> None:
         self.rows[(bill.user_id, bill.id)] = bill
 
@@ -380,6 +394,49 @@ def test_a_declared_bill_comes_back_with_its_id(client: TestClient) -> None:
     assert body["amount"] == "120000"
     assert body["status"] == "active"
     assert body["frozen"] is False
+
+
+def test_a_bill_is_fixed_unless_declared_as_varying(client: TestClient) -> None:
+    assert _declare(client)["variable_amount"] is False
+    assert _declare(client, name="Energia", variable_amount=True)["variable_amount"]
+
+
+def test_a_varying_amount_can_be_corrected_later(client: TestClient) -> None:
+    bill = _declare(client, name="Energia")
+
+    response = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"variable_amount": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["variable_amount"] is True
+
+
+def test_a_bill_can_name_who_charges_it(client: TestClient) -> None:
+    assert _declare(client)["merchant_id"] is None
+
+    body = _declare(client, name="Luz casa mamá", merchant_id="celsia")
+
+    assert body["name"] == "Luz casa mamá"
+    assert body["merchant_id"] == "celsia"
+
+
+def test_setting_and_clearing_the_merchant_at_once_is_refused(
+    client: TestClient,
+) -> None:
+    bill = _declare(client, merchant_id="celsia")
+
+    response = client.patch(
+        f"/financial/bills/{bill['id']}",
+        json={"merchant_id": "otro", "clear_merchant": True},
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_new_bill_has_never_been_reported_by_the_bank(client: TestClient) -> None:
+    assert _declare(client)["reported_by_bank"] is False
 
 
 def test_money_leaves_as_a_string(client: TestClient) -> None:
@@ -1129,6 +1186,20 @@ def test_a_movement_can_be_linked_to_a_charge_by_hand(wired: Wiring) -> None:
     assert body.json()["occurrence"]["state"] == "paid"
     assert body.json()["occurrence"]["settled_by"] == "matched"
     assert len(ledger.rows) == 1
+
+
+def test_a_bill_once_paid_by_the_bank_says_so(wired: Wiring) -> None:
+    client, ledger = wired.client, wired.ledger
+    bill = _declare(client, starts_on="2026-09-04")
+    paid = _entered(ledger, day=dt.date(2026, 9, 6), counterparty="PAGO PSE GYMSA")
+    client.post(
+        _charge_url(bill, "2026-09-04", "link"),
+        json={"movement_id": paid.id.value},
+    )
+
+    listed = client.get("/financial/bills").json()["bills"]
+
+    assert [each["reported_by_bank"] for each in listed] == [True]
 
 
 def test_unlinking_leaves_the_movement_where_it_is(wired: Wiring) -> None:

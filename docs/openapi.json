@@ -496,6 +496,11 @@
             "title": "Clear Category",
             "type": "boolean"
           },
+          "clear_merchant": {
+            "default": false,
+            "title": "Clear Merchant",
+            "type": "boolean"
+          },
           "currency": {
             "anyOf": [
               {
@@ -515,6 +520,18 @@
                 "type": "null"
               }
             ]
+          },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
           },
           "name": {
             "anyOf": [
@@ -540,6 +557,17 @@
               }
             ],
             "title": "Starts On"
+          },
+          "variable_amount": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variable Amount"
           }
         },
         "title": "AmendBillPayload",
@@ -767,6 +795,17 @@
             "title": "Id",
             "type": "string"
           },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -781,6 +820,10 @@
               }
             ]
           },
+          "reported_by_bank": {
+            "title": "Reported By Bank",
+            "type": "boolean"
+          },
           "starts_on": {
             "format": "date",
             "title": "Starts On",
@@ -788,6 +831,10 @@
           },
           "status": {
             "$ref": "#/components/schemas/BillStatus"
+          },
+          "variable_amount": {
+            "title": "Variable Amount",
+            "type": "boolean"
           }
         },
         "required": [
@@ -800,6 +847,9 @@
           "direction",
           "account_id",
           "category",
+          "variable_amount",
+          "merchant_id",
+          "reported_by_bank",
           "status",
           "autopay",
           "autopay_from",
@@ -1911,6 +1961,18 @@
             "$ref": "#/components/schemas/MovementDirection",
             "default": "outgoing"
           },
+          "merchant_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchant Id"
+          },
           "name": {
             "maxLength": 120,
             "minLength": 1,
@@ -1921,6 +1983,11 @@
             "format": "date",
             "title": "Starts On",
             "type": "string"
+          },
+          "variable_amount": {
+            "default": false,
+            "title": "Variable Amount",
+            "type": "boolean"
           }
         },
         "required": [

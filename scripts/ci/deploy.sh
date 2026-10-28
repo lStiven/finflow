@@ -39,6 +39,22 @@ docker_config="$(just --evaluate docker_config)"
 # infra/infra/. Taken after the `cd`, so a rollback reads the older tree's own.
 sam_config="$(pwd)/infra/samconfig.toml"
 
+# Logged in to ECR Public when the role allows it. An anonymous pull draws on a
+# data allowance per source IP, and a GitHub runner shares its IP with every
+# other build on it: on 2026-10-22 public.ecr.aws answered `Data limit
+# exceeded` four times in a row. Logged in, the pull counts against this AWS
+# account instead. Never fatal: without `ecr-public:GetAuthorizationToken` and
+# `sts:GetServiceBearerToken` on the role, the pulls below go out anonymously,
+# exactly as before.
+if aws ecr-public get-login-password --region us-east-1 2>/dev/null \
+  | DOCKER_CONFIG="$docker_config" docker login --username AWS \
+    --password-stdin public.ecr.aws >/dev/null 2>&1; then
+  echo "public.ecr.aws: pull autenticado"
+else
+  echo "public.ecr.aws: sin login (el rol no tiene la política" \
+    "FinflowDeployPublicImages, ver docs/ci.md); pull anónimo" >&2
+fi
+
 # Pull every external image the Dockerfile names, once and in series, before
 # the build. `sam build` builds the seven functions in parallel, and on a fresh
 # runner each build pulled the same three images itself: ~20 anonymous pulls at

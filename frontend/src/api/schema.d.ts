@@ -2202,12 +2202,21 @@ export interface components {
              * @default false
              */
             clear_category: boolean;
+            /**
+             * Clear Merchant
+             * @default false
+             */
+            clear_merchant: boolean;
             currency?: components["schemas"]["Currency"] | null;
             direction?: components["schemas"]["MovementDirection"] | null;
+            /** Merchant Id */
+            merchant_id?: string | null;
             /** Name */
             name?: string | null;
             /** Starts On */
             starts_on?: string | null;
+            /** Variable Amount */
+            variable_amount?: boolean | null;
         };
         /**
          * AmortizationStyle
@@ -2323,15 +2332,21 @@ export interface components {
             frozen: boolean;
             /** Id */
             id: string;
+            /** Merchant Id */
+            merchant_id: string | null;
             /** Name */
             name: string;
             next_occurrence: components["schemas"]["BillOccurrenceResponse"] | null;
+            /** Reported By Bank */
+            reported_by_bank: boolean;
             /**
              * Starts On
              * Format: date
              */
             starts_on: string;
             status: components["schemas"]["BillStatus"];
+            /** Variable Amount */
+            variable_amount: boolean;
         };
         /**
          * BillStatus
@@ -2870,6 +2885,8 @@ export interface components {
             currency: components["schemas"]["Currency"];
             /** @default outgoing */
             direction: components["schemas"]["MovementDirection"];
+            /** Merchant Id */
+            merchant_id?: string | null;
             /** Name */
             name: string;
             /**
@@ -2877,6 +2894,11 @@ export interface components {
              * Format: date
              */
             starts_on: string;
+            /**
+             * Variable Amount
+             * @default false
+             */
+            variable_amount: boolean;
         };
         /**
          * DeclarePlanPayload

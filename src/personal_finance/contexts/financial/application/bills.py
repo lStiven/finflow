@@ -59,6 +59,7 @@ from personal_finance.contexts.financial.application.handlers import (
 from personal_finance.contexts.financial.application.ports import (
     AccountLookup,
     ChargeLookup,
+    MerchantLookup,
     ScheduledBillRepository,
 )
 from personal_finance.contexts.financial.domain.bills import (
@@ -112,6 +113,8 @@ class DeclareBillCommand:
     direction: MovementDirection = MovementDirection.OUTGOING
     account_id: AccountId | None = None
     category: str | None = None
+    variable_amount: bool = False
+    merchant_id: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -128,8 +131,11 @@ class AmendBillCommand:
     direction: MovementDirection | None = None
     account_id: AccountId | None = None
     category: str | None = None
+    variable_amount: bool | None = None
+    merchant_id: str | None = None
     clear_account: bool = False
     clear_category: bool = False
+    clear_merchant: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -173,13 +179,16 @@ class ManageBillsUseCase:
         bills: ScheduledBillRepository,
         accounts: AccountLookup,
         charges: ChargeLookup,
+        merchants: MerchantLookup | None = None,
     ) -> None:
         self._bills = bills
         self._accounts = accounts
         self._charges = charges
+        self._merchants = merchants
 
     def declare(self, command: DeclareBillCommand) -> BillSummary:
         self._require_account(command.user_id, command.account_id)
+        self._require_merchant(command.user_id, command.merchant_id)
 
         bill = ScheduledBill.declare(
             user_id=command.user_id,
@@ -190,6 +199,8 @@ class ManageBillsUseCase:
             direction=command.direction,
             account_id=command.account_id,
             category=command.category,
+            variable_amount=command.variable_amount,
+            merchant_id=command.merchant_id,
         )
         self._bills.save(bill)
 
@@ -198,6 +209,7 @@ class ManageBillsUseCase:
     def amend(self, command: AmendBillCommand) -> BillSummary:
         bill = self._load(command.user_id, command.bill_id)
         self._require_account(command.user_id, command.account_id)
+        self._require_merchant(command.user_id, command.merchant_id)
 
         bill.amend(
             name=command.name,
@@ -207,8 +219,11 @@ class ManageBillsUseCase:
             direction=command.direction,
             account_id=command.account_id,
             category=command.category,
+            variable_amount=command.variable_amount,
+            merchant_id=command.merchant_id,
             clear_account=command.clear_account,
             clear_category=command.clear_category,
+            clear_merchant=command.clear_merchant,
         )
         self._bills.save(bill)
 
@@ -322,6 +337,24 @@ class ManageBillsUseCase:
 
         if self._accounts.find(user_id=user_id, account_id=account_id) is None:
             raise AccountNotFoundError(f"No such account: {account_id.value}")
+
+    def _require_merchant(self, user_id: UserId, merchant_id: str | None) -> None:
+        """Refuse a merchant that is not one of this person's.
+
+        A typo, or one merged away since the list was read, would otherwise be
+        stored and answer nothing: the bill would look named and never be
+        recognised through the name it was given.
+        """
+        if merchant_id is None or self._merchants is None:
+            return
+
+        wanted = merchant_id.strip()
+
+        if wanted and wanted not in self._merchants.existing(
+            user_id=user_id,
+            merchant_ids=[wanted],
+        ):
+            raise ValueError("That merchant is not one of yours")
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -891,8 +924,13 @@ class SettleBillChargeUseCase:
         self._linkable(bill, movement)
         self._unclaimed(bill, period, movement_id=movement.id.value)
 
-        bill.link(period, movement.id.value)
-        self._bills.save(bill)
+        dropped = bill.link(period, movement.id.value)
+
+        if not self._bills.store_link(bill, period, dropped=dropped):
+            # Another writer answered this charge with a different movement
+            # between the read and this write — the worker as a movement
+            # landed, or a second tab. Theirs stands; nothing here is lost.
+            raise ValueError("Another movement already answers this charge")
 
         return self._settled(
             bill,
@@ -924,7 +962,7 @@ class SettleBillChargeUseCase:
         """
         bill = self._load(user_id, bill_id)
         bill.unlink(period)
-        self._bills.save(bill)
+        self._bills.store_link(bill, period)
 
         return self._settled(bill, period, payment=None)
 
