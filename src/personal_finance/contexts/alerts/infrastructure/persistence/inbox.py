@@ -34,6 +34,7 @@ from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
     BudgetState,
     CategoryRise,
+    ModelPause,
     MovementAlert,
     MovementDirection,
     MovementOrigin,
@@ -286,7 +287,22 @@ def _facts(entry: InboxEntry) -> JsonObject:
     if entry.summary is not None:
         return _summary_facts(entry.summary)
 
+    if entry.pause is not None:
+        return _pause_facts(entry.pause)
+
     raise ValueError("An inbox entry without facts")  # pragma: no cover
+
+
+def _pause_facts(pause: ModelPause) -> JsonObject:
+    return {
+        "strike": pause.strike,
+        "paused_until": (
+            None
+            if pause.paused_until is None
+            else pause.paused_until.as_epoch_seconds()
+        ),
+        "offenses": pause.offenses,
+    }
 
 
 def _movement_facts(alert: MovementAlert) -> JsonObject:
@@ -358,6 +374,15 @@ def _entry_from_item(
                 movement=_movement_from(facts),
             )
 
+        if kind is InboxKind.MODEL_PAUSED:
+            return InboxEntry(
+                user_id=user_id,
+                entry_id=entry_id,
+                created_at=created_at,
+                kind=kind,
+                pause=_pause_from(facts),
+            )
+
         return InboxEntry(
             user_id=user_id,
             entry_id=entry_id,
@@ -409,6 +434,20 @@ def _movement_from(facts: JsonObject) -> MovementAlert:
             )
             for budget in budgets
         ),
+    )
+
+
+def _pause_from(facts: JsonObject) -> ModelPause:
+    paused_until = facts.get("paused_until")
+
+    return ModelPause(
+        strike=int(cast("int", facts["strike"])),
+        paused_until=(
+            None
+            if paused_until is None
+            else PosixTime.from_epoch_seconds(int(cast("int", paused_until)))
+        ),
+        offenses=int(cast("int", facts["offenses"])),
     )
 
 

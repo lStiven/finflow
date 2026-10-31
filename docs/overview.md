@@ -50,6 +50,7 @@ flowchart TD
     G -->|"ninguna plantilla<br/>coincidió"| I["Gemini (plan B)"]
     I --> H
     I -.->|"no pudo leerlo"| J["Se conserva<br/>pending_fallback"]
+    G -.->|"ninguna plantilla, y el tope<br/>del día se gastó o el modelo<br/>está suspendido para esa persona"| J
     H --> K["EventBridge<br/>TransactionExtracted"]
     T --> U["EventBridge<br/>TransferExtracted"]
     K --> L["Merchant worker"]
@@ -83,6 +84,91 @@ puede llegar dos veces: la identidad de una notificación se deriva del usuario
 más el `Message-ID`, la deduplicación es una escritura condicional en DynamoDB,
 y ningún contador se incrementa sin haber reclamado antes el `event_id` del
 evento que lo provocó.
+
+## El tope del modelo
+
+El modelo cuesta dinero en cada lectura y las plantillas no, así que el plan B
+tiene un tope: **20 correos por persona y por día**. Las plantillas no tienen
+límite: un usuario que pasó el tope sigue viendo entrar todo lo que venga de
+un banco con plantilla.
+
+| Caso | Cómo se cuenta |
+|---|---|
+| **Qué cuenta** | Cada correo que llega a Gemini porque ninguna plantilla lo reconoció. |
+| **Qué no cuenta** | Lo que lee una plantilla, y un correo que el modelo no alcanzó a leer (caída, timeout): esa lectura se devuelve. |
+| **Qué cuenta aunque no sirva** | Un correo que el modelo leyó y rechazó —una clave de un solo uso, una compra solo autorizada—: la lectura ya se pagó. |
+| **El día** | El de Bogotá, de medianoche a medianoche, para todos. |
+| **Reintentos** | El mismo correo entregado dos veces gasta **una** lectura: se cuenta por correo, no con un contador. |
+| **Pasado el tope** | El correo queda en `pending_fallback` con `deferred_reason: daily_limit_reached`. No es un castigo ni avisa a nadie. |
+
+**Un correo que pasó el tope no se vuelve a intentar.** Nada lo reencola al
+día siguiente; el usuario lo ve en la lista de lo que llegó, marcado «Sin
+leer: tope del día». Es un hueco conocido: si a alguien real le pasa, lo
+siguiente es reintentarlo.
+
+**Dónde se cuenta.** Una fila por persona y día, `MODEL_USAGE#<usuario>#<día>`,
+en la tabla de notificaciones; no hay tabla aparte. Guarda los ids de los
+correos que gastaron lectura, y una escritura condicional de DynamoDB es la
+que niega la número 21. La fila se borra sola siete días después.
+
+**Cambiar la cifra no exige desplegar.** El número vive en un parámetro de SSM
+(`/finflow/<entorno>/llm-daily-calls-per-user`) que la función de parseo relee
+como mucho cada cinco minutos, y solo cuando va a llamar al modelo:
+
+```bash
+just llm-limit-put production 25    # se aplica en menos de 5 minutos
+just llm-limit-put production 0     # apaga el modelo para todos; las plantillas siguen
+```
+
+Leerlo no cuesta nada: es un parámetro estándar, y esas lecturas no se cobran.
+Si SSM falla al releerlo, la función sigue con el último valor bueno. Pero si
+el parámetro no existe, cada correo que necesite el modelo falla y acaba en
+`parse-notifications-dlq`: por eso hay que crearlo antes del primer despliegue
+de cada entorno (ver [deploy.md](deploy.md#el-tope-diario-del-modelo)). En
+local es un número en `.env` (`LLM_DAILY_CALLS_PER_USER=20`) y no toca SSM.
+
+**No hay tope global.** Un techo para toda la cuenta de Google haría que unos
+usuarios gastaran el cupo de los otros. Es un riesgo de costo asumido a
+propósito, y está en [decisions.md](decisions.md) («Limiting the model»).
+
+### Los strikes
+
+El tope diario frena el gasto; los strikes frenan el abuso. Cuando el modelo
+lee un correo, también dice si lo escribió un banco. **Diez correos que no son
+de un banco, llegados en menos de una hora**, son un strike para su dueño:
+
+| Strike | Qué pasa |
+|---|---|
+| 1 | El modelo deja de leer sus correos durante 1 día |
+| 2 | 3 días, y el aviso dice que es el último |
+| 3 | Para siempre, hasta que un operador lo reactive |
+
+- **Solo cuenta lo que el modelo juzga «no es de un banco».** Un correo de un
+  banco que el modelo rechaza (una clave, un extracto, publicidad del banco) no
+  cuenta: eso es banca normal. Si el modelo no dice nada o su respuesta no sirve,
+  tampoco cuenta.
+- **Se cuenta por cuándo llegó el correo**, no por cuándo se leyó: una cola
+  atascada que se vacía de golpe no es una ráfaga.
+- **Un strike caduca a los 90 días.** Pasado ese tiempo, la siguiente ráfaga
+  vuelve a ser el strike 1.
+- **Solo se suspende el modelo.** Las plantillas siguen leyendo, y lo que llega
+  durante la suspensión y necesitaría el modelo se descarta sin leer:
+  `pending_fallback` con `deferred_reason: model_suspended`, sin guardar el
+  cuerpo.
+- **Se avisa por todos lados**: un correo con el texto aprobado en
+  [model-strikes-copy.md](model-strikes-copy.md), la campana, Telegram si lo
+  tiene (aunque haya apagado los avisos), y un banner en la app mientras dure.
+  Ingestion publica `ModelReadingSuspended` y Alerts lo entrega; el correo sale
+  de la dirección que Identity tiene para esa persona.
+- **Reactivar es a mano**, y borra los strikes:
+
+  ```bash
+  just model-access-prod <user_id>               # cómo está
+  just model-access-prod <user_id> --reinstate   # reactivar
+  ```
+
+Por qué es así —y qué riesgos se aceptaron— está en
+[decisions.md](decisions.md) («Limiting the model»).
 
 ## Los contextos acotados
 

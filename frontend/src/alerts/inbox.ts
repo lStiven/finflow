@@ -10,6 +10,7 @@
  * is tested without the API client.
  */
 
+import { pauseLines } from "@/alerts/modelPause";
 import type { AlertsInboxEntry } from "@/api/queries";
 import { formatMoney, percentChange } from "@/lib/money";
 import { categoryLabel } from "@/merchants/categories";
@@ -117,6 +118,10 @@ export function describeEntry(entry: AlertsInboxEntry): Described {
       tone: outgoing ? "outgoing" : "incoming",
       movementId: movement.movement_id,
     };
+  }
+
+  if (entry.kind === "model_paused" && entry.pause) {
+    return { ...pauseLines(entry.pause), tone: "summary", movementId: null };
   }
 
   const summary = entry.summary;

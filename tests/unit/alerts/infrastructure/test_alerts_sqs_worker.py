@@ -18,8 +18,12 @@ import uuid
 from mypy_boto3_sqs.client import SQSClient
 import pytest
 
+from personal_finance.contexts.alerts.application.account_notices import (
+    NotifyModelPauseUseCase,
+)
 from personal_finance.contexts.alerts.application.commands import (
     DeliverMovementAlertCommand,
+    NotifyModelPauseCommand,
 )
 from personal_finance.contexts.alerts.application.handlers import (
     DeliverMovementAlertUseCase,
@@ -29,6 +33,8 @@ from personal_finance.contexts.alerts.application.ports import (
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.inbound import (
     FINANCIAL_SOURCE,
+    INGESTION_SOURCE,
+    MODEL_READING_SUSPENDED,
     MOVEMENT_RECORDED,
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.sqs_worker import (
@@ -68,11 +74,29 @@ class StubUseCase(DeliverMovementAlertUseCase):
         return self._delivered
 
 
-def _worker(use_case: DeliverMovementAlertUseCase) -> SQSAlertsWorker:
+class StubNotices(NotifyModelPauseUseCase):
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self._raises = raises
+        self.commands: list[NotifyModelPauseCommand] = []
+
+    def execute(self, command: NotifyModelPauseCommand) -> int:
+        self.commands.append(command)
+
+        if self._raises is not None:
+            raise self._raises
+
+        return 1
+
+
+def _worker(
+    use_case: DeliverMovementAlertUseCase,
+    notices: NotifyModelPauseUseCase | None = None,
+) -> SQSAlertsWorker:
     return SQSAlertsWorker(
         client=cast("SQSClient", FakeSQSClient()),
         queue_url=QUEUE_URL,
         use_case=use_case,
+        notices=notices or StubNotices(),
     )
 
 
@@ -323,4 +347,87 @@ def test_a_movement_id_that_is_not_one_is_refused(movement_id: str) -> None:
         _worker(use_case).handle(_body(movement_id=movement_id))
         is MessageOutcome.DISCARDED
     )
+    assert use_case.commands == []
+
+
+# ----------------------------------------------------------------------
+# The model stopped reading somebody's mail
+# ----------------------------------------------------------------------
+
+
+def _pause_body(**overrides: Any) -> str:  # noqa: ANN401
+    detail: dict[str, Any] = {
+        "version": 1,
+        "event_id": str(uuid.uuid4()),
+        "occurred_at": 1_757_999_999,
+        "user_id": USER_ID,
+        "strike": 1,
+        "paused_until": 1_758_086_399,
+        "offenses": 10,
+    }
+    detail.update(overrides)
+
+    return json.dumps(
+        {
+            "source": INGESTION_SOURCE,
+            "detail-type": MODEL_READING_SUSPENDED,
+            "detail": detail,
+        },
+    )
+
+
+def test_a_suspension_is_read_into_a_notice() -> None:
+    notices = StubNotices()
+
+    outcome = _worker(StubUseCase(), notices).handle(_pause_body())
+
+    assert outcome is MessageOutcome.HANDLED
+    [command] = notices.commands
+    assert str(command.user_id.value) == USER_ID
+    assert command.pause.strike == 1
+    assert command.pause.paused_until is not None
+    assert command.pause.paused_until.as_epoch_seconds() == 1_758_086_399
+    assert command.recorded_at.as_epoch_seconds() == 1_757_999_999
+
+
+def test_a_suspension_for_good_has_no_end() -> None:
+    notices = StubNotices()
+
+    _worker(StubUseCase(), notices).handle(_pause_body(strike=3, paused_until=None))
+
+    assert notices.commands[0].pause.is_final
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"strike": 0}, {"offenses": 0}, {"user_id": "nobody"}, {"paused_until": -1}],
+)
+def test_a_suspension_that_cannot_be_read_is_discarded(
+    overrides: dict[str, Any],
+) -> None:
+    notices = StubNotices()
+
+    outcome = _worker(StubUseCase(), notices).handle(_pause_body(**overrides))
+
+    assert outcome is MessageOutcome.DISCARDED
+    assert notices.commands == []
+
+
+def test_a_newer_suspension_version_waits_on_the_queue() -> None:
+    outcome = _worker(StubUseCase()).handle(_pause_body(version=2))
+
+    assert outcome is MessageOutcome.RETRY
+
+
+def test_a_notice_the_mail_server_could_not_take_waits_on_the_queue() -> None:
+    notices = StubNotices(raises=TransportUnavailableError("smtp down"))
+
+    assert _worker(StubUseCase(), notices).handle(_pause_body()) is MessageOutcome.RETRY
+
+
+def test_a_suspension_never_reaches_the_movement_use_case() -> None:
+    use_case = StubUseCase()
+
+    _worker(use_case).handle(_pause_body())
+
     assert use_case.commands == []

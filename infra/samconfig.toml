@@ -72,6 +72,7 @@ parameter_overrides = [
     # La página del frontend que recibe el token del enlace.
     "PasswordResetUrl=https://finflow-dev-2tc.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/development/llm-api-key",
+    "LlmDailyCallsParameter=/finflow/development/llm-daily-calls-per-user",
     # Los avisos por Telegram. **Estas tres tienen que estar aquí**: el
     # template las declara con un default que apunta a `/finflow/production/`,
     # así que un override olvidado no falla — hace que este stack lea los
@@ -145,6 +146,7 @@ parameter_overrides = [
     # https: el token viaja en la query.
     "PasswordResetUrl=https://finflow-apk.pages.dev/restablecer",
     "LlmApiKeyParameter=/finflow/production/llm-api-key",
+    "LlmDailyCallsParameter=/finflow/production/llm-daily-calls-per-user",
     # Los avisos por Telegram. Un bot distinto al de desarrollo: son dos
     # stacks hablándole a personas reales, y un solo bot no podría decir de
     # cuál de los dos viene un aviso.

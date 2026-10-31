@@ -126,6 +126,7 @@ def main() -> None:
             settings.mail_host,
             settings.mail_port,
             timeout=DEFAULT_TIMEOUT_SECONDS,
+            context=ssl.create_default_context(),
         ) as server:
             server.login(
                 settings.mail_login,

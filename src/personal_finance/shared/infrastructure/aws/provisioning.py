@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from personal_finance.contexts.alerts.infrastructure.messaging.inbound import (
     FINANCIAL_SOURCE,
+    INGESTION_SOURCE as ALERTS_INGESTION_SOURCE,
+    MODEL_READING_SUSPENDED,
     MOVEMENT_RECORDED,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import (
@@ -32,7 +34,10 @@ from personal_finance.contexts.identity.infrastructure.persistence.credentials_d
     PARTITION_KEY as CHALLENGES_PARTITION_KEY,
 )
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
+    NAME_ATTRIBUTE as USER_NAME_ATTRIBUTE,
     PARTITION_KEY as USERS_PARTITION_KEY,
+    USER_ID_ATTRIBUTE as USERS_USER_ID_ATTRIBUTE,
+    USERS_BY_ID_INDEX,
 )
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     NOTIFICATIONS_BY_USER_INDEX,
@@ -879,6 +884,15 @@ def provision() -> ProvisionedResources:
         max_read_units=settings.dynamodb_max_read_units,
         max_write_units=settings.dynamodb_max_write_units,
         enable_ttl=False,
+        secondary_indexes=(
+            # Who to write to, from the id an event carries — Alerts emailing
+            # somebody about their account. The name only, never the hash.
+            SecondaryIndex(
+                name=USERS_BY_ID_INDEX,
+                partition_key=USERS_USER_ID_ATTRIBUTE,
+                projected_attributes=(USER_NAME_ATTRIBUTE,),
+            ),
+        ),
     )
     _done(started)
 
@@ -1035,9 +1049,14 @@ def provision() -> ProvisionedResources:
         event_pattern={
             # Only that money moved. `AccountBalanceChanged` is the same
             # movement seen from the balance's side, and announcing both
-            # would send two messages about one purchase.
-            "source": [FINANCIAL_SOURCE],
-            "detail-type": [MOVEMENT_RECORDED],
+            # would send two messages about one purchase. And that the model
+            # stopped reading somebody's mail, which they have to be told.
+            #
+            # Two lists rather than an `$or` of two pairs: the detail types
+            # belong to one source each, so the cross product adds nothing
+            # that can ever be published.
+            "source": [FINANCIAL_SOURCE, ALERTS_INGESTION_SOURCE],
+            "detail-type": [MOVEMENT_RECORDED, MODEL_READING_SUSPENDED],
         },
     )
     get_sqs_client().set_queue_attributes(

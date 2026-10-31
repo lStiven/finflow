@@ -48,6 +48,15 @@ Parameters:
     Default: /finflow/production/llm-api-key
     Description: SSM parameter holding the Gemini API key.
 
+  LlmDailyCallsParameter:
+    Type: String
+    Default: /finflow/production/llm-daily-calls-per-user
+    Description: >
+      SSM parameter (plain String) holding how many emails one person may have
+      the model read in a day. A parameter rather than a value here so that
+      changing it is `aws ssm put-parameter`, not a deploy: the parse function
+      reads it again every five minutes.
+
   MailFromAddress:
     Type: String
     Description: >
@@ -403,6 +412,8 @@ Resources:
         Variables:
           # The deterministic parser's fallback.
           LLM_API_KEY: !Sub "ssm:${LlmApiKeyParameter}"
+          # And what one person may spend of it in a day.
+          LLM_DAILY_CALLS_PER_USER: !Sub "ssm:${LlmDailyCallsParameter}"
       LoggingConfig:
         LogGroup: !Ref ParseLogGroup
       ImageConfig:
@@ -441,12 +452,13 @@ Resources:
         # mailbox password. The `dev-` prefix isolates tables, queues and the
         # bus; nothing was doing the same for secrets.
         #
-        # The parser's fallback is the model.
+        # The parser's fallback is the model, and its daily limit.
         - Statement:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource:
                 - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LlmApiKeyParameter}"
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${LlmDailyCallsParameter}"
             # SecureString decryption goes through the AWS-managed SSM key,
             # reachable only via SSM itself.
             - Effect: Allow
@@ -591,6 +603,11 @@ Resources:
       Environment:
         Variables:
           ALERTS_TELEGRAM_BOT_TOKEN: !Sub "ssm:${TelegramBotTokenParameter}"
+          # The mailbox Identity sends from, for the one notice that has to
+          # reach somebody without Telegram: the model stopped reading their
+          # mail. The worker refuses to start without it.
+          IDENTITY_MAIL_FROM_ADDRESS: !Ref MailFromAddress
+          IDENTITY_MAIL_APP_PASSWORD: !Sub "ssm:${MailAppPasswordParameter}"
       Events:
         Queue:
           Type: SQS
@@ -613,13 +630,20 @@ Resources:
         - DynamoDBReadPolicy:
             TableName: !Sub "${ResourcePrefix}merchants"
         # No EventBridgePutEventsPolicy: alerts is a leaf. It subscribes to
-        # finflow.financial and publishes nothing, so it has no translator and
-        # nothing to put on the bus.
+        # finflow.financial and finflow.ingestion and publishes nothing, so it
+        # has no translator and nothing to put on the bus.
         - Statement:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource:
                 - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TelegramBotTokenParameter}"
+                - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MailAppPasswordParameter}"
+            # Who to email: Identity's by-id index, which projects the name
+            # and nothing else. A query on it, and no read of the table —
+            # whose items carry every password hash.
+            - Effect: Allow
+              Action: dynamodb:Query
+              Resource: !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ResourcePrefix}users/index/by_user_id"
             - Effect: Allow
               Action: kms:Decrypt
               Resource: !Sub "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"

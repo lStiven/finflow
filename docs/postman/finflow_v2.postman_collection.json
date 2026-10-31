@@ -596,6 +596,30 @@
           "response": []
         },
         {
+          "name": "Model access",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/ingestion/model-access",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ingestion",
+                "model-access"
+              ]
+            },
+            "description": "Whether the model still reads the caller's unrecognised mail — what the suspension notice on screen is drawn from. `access` is `open`, `paused` (until `paused_until`, epoch seconds) or `revoked` (until support reinstates it); `strikes` counts those given in the last 90 days. Templates read in all three states: only the model is ever suspended.\n\nTen emails the model judges not to be from a bank, arriving within an hour, are a strike: a day's pause, then three days, then revoked. Reads the record the parse worker enforces, not the alert that announced it. `Cache-Control: no-store`."
+          },
+          "response": []
+        },
+        {
           "name": "Local testing",
           "item": [
             {

@@ -143,6 +143,126 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   (`NO_FALLBACK_CONFIGURED` / `FALLBACK_FOUND_NOTHING`). Without it, an email
   the LLM had already read and declined looked identical to one never
   attempted — the state name reads as "still queued" when it is final.
+- **The model reads `readable_text`, not `extract_text`** (2026-10-30). It
+  used to get the raw body, and an HTML-only alert is mostly inline CSS, paid
+  for on every call and eating the 40k-character budget before the sentence
+  that matters. `extract_text` was rejected for it: it flattens to the one
+  line the templates' regexes expect (a label and the next cell's value run
+  together), drops a plain-text forward's `<alertas@banco.com>` as a tag, and
+  quopri-decodes any `=XX` — `clave=AB12` included. `readable_text` keeps
+  lines and cells apart, keeps `img alt`, escapes bracketed addresses before
+  parsing, keeps plain text's line breaks, and only decodes quoted-printable
+  on `=3D` or two escapes in a row — a soft break alone was rejected because
+  a `==========` separator line is one. Templates stay on `extract_text`; changing it would
+  move every pattern written against it.
+
+### Limiting the model (agreed 2026-10-30; the daily cap built the same day, strikes 2026-10-31)
+
+- **Two mechanisms, kept apart.** A daily per-user cap on model calls is a
+  cost limit and punishes nobody: past it, the email waits as
+  `pending_fallback`. Strikes are the abuse rule: 10 emails in an hour
+  (counted by when they arrived, not when they were parsed — a backed-up queue
+  would otherwise strike a burst that never happened) that the model reads as
+  **not from a bank** suspend the model for that user — 1 day, then 3 days,
+  then for good — with a mail each time; a strike expires 90 days after its
+  incident. Only the model is suspended: templates cost nothing and keep
+  reading. What arrives during a suspension is discarded like an unapproved
+  sender's mail, and the activity says so.
+- **Why "not from a bank" and not "the model found nothing".** The prompt
+  tells the model to decline OTPs, login alerts, statements, marketing,
+  authorizations and own-account transfers, and sender approval admits whole
+  bank domains. Counting declines would strike somebody for an afternoon of
+  ordinary online banking. Our own failures (an unusable answer, an answer the
+  domain refuses) never count either.
+- **The daily cap, as built.** 20 model reads per person per Bogotá day,
+  counted on the day the model is called (a backlog cleared after an outage is
+  spent that day). The row holds the *set* of notification ids, not a
+  counter: a counter cannot tell a new email from an SQS redelivery. One
+  conditional `ADD` reserves before the call — a read already paid for cannot
+  be refused — and a call that raises hands its read back, or a Gemini outage
+  would spend everyone's day on emails nobody read. Declines are not handed
+  back: they were paid for. Rows live in the notifications table under
+  `MODEL_USAGE#`, since the parse worker already owns it and its TTL.
+- **The limit is an SSM parameter, not a Lambda environment value.** The owner
+  asked for an environment variable so changing it needs no deploy, but a
+  Lambda's environment *is* its deployed configuration. So the variable holds
+  `ssm:/finflow/<env>/llm-daily-calls-per-user`, read again every five
+  minutes, and `just llm-limit-put` is the whole change. A first read that
+  fails raises rather than defaulting — a typo must not become a limit nobody
+  chose — so the parameter has to exist before the deploy that reads it.
+- **Known gap: an email past the cap is never read again.** Nothing
+  re-enqueues `pending_fallback`; if a real user hits the cap, that is the
+  next piece. The connect screen at least says why now («Sin leer: tope del
+  día») instead of «Sin movimiento».
+- **"Not from a bank" is a field the model fills, defaulting to true.**
+  `from_a_bank` sits in the extraction schema; an answer that omits it, an
+  unusable answer and a refused domain value all count as *from a bank*, so a
+  failure of ours can never strike anybody. A movement that came out of the
+  email is not an offense either, whoever wrote it.
+- **The standing, as built.** One item per person in the notifications
+  table (`MODEL_STANDING#<user>`), no TTL — a revocation has to outlive any
+  sweep — and written whole behind a version check, because a strike is a
+  decision on everything the record holds and two parse workers can read one
+  person's mail at once. Offenses are keyed by notification id (a
+  redelivery is the same offense), remembered two days by arrival (long
+  enough for a backlog to assemble its burst), and ignored while suspended (an
+  email already in flight must not earn the next strike the same afternoon).
+  A burst is strictly under an hour between first and tenth. A strike is
+  dated when it is detected and the burst behind it is cleared.
+- **Reinstating starts over.** The operator recipe (`just model-access-prod
+  <user_id> --reinstate`) clears the strikes too: keeping them would end the
+  model again at the very next burst, even a year later, and "reactivar" is a
+  person deciding to give someone another chance.
+- **A suspended person's mail is `pending_fallback` + `model_suspended`, with
+  the body dropped** — not `ignored`. Ignoring is the sender filter's state,
+  the API exposes no reason for it, and the screen answers it with «Es de mi
+  banco», which is the wrong advice here. Dropping the body keeps the rule
+  that mail this system decided not to read is mail it does not keep.
+- **The notice is Alerts' job, the address Identity's.** Ingestion publishes
+  `ModelReadingSuspended` (who, which strike, until when, how many — never
+  which emails); Alerts records it in the bell, sends it to every verified
+  Telegram chat *whatever its preferences* (it is not an alert anybody opted
+  into) and emails it. The address comes from Identity's published
+  `GetAccountContactUseCase` over a new users index, `by_user_id`, that
+  projects the name and nothing else — never the password hash. The SMTP
+  adapter is Alerts' own, on Identity's mailbox settings: one deployment,
+  one sending account. The email is remembered in the delivery log under the
+  all-zero channel id, which no real channel can have.
+- **Risk accepted: a strike stored but not published is enforced silently.**
+  The standing is saved, then its event published; if the publish fails, the
+  redelivered email finds the model already suspended and takes that path, so
+  nothing ever publishes it again — no email, Telegram or bell. The
+  on-screen notice reads the standing, not the event, so the person still
+  sees it in the app. An outbox on the standing would close it; not worth it
+  for an EventBridge failure at the exact second of a strike.
+- **Risk accepted: anyone who can get mail past someone's sender filter can
+  strike them.** Intake checks the From header against the allow-list, not
+  DKIM/SPF. Spoofing a bank is mostly stopped by the banks' DMARC at Gmail,
+  but a person who approved their own personal address to forward by hand
+  can be impersonated by whoever knows that address *and* their alias (a
+  UUID). At this scale an operator reinstates; verifying senders at intake
+  is the real fix.
+- **A missing limit parameter fails the model path, not the worker's start.**
+  Reading it at startup would fail every invocation of the parse function —
+  template reads included — to protect the minority of mail that needs the
+  model; the deploy runbook creates the parameter first instead.
+- **The alerts function may `Query` the users' by-id index and nothing
+  else** — no read of the table, whose items carry every password hash.
+- **Mail connections verify the server.** `smtplib.SMTP_SSL` and
+  `imaplib.IMAP4_SSL` without a context check neither certificate nor host
+  name; both senders (Identity's and Alerts'), `just mail-check` and the IMAP
+  reader pass `ssl.create_default_context()`. It matters more than it looks:
+  in both stacks the sending App Password is the ingest mailbox's own, which
+  holds every user's forwarded bank mail — and the alerts function now holds
+  it too.
+- **The approved copy names a customer-service channel that does not exist
+  yet;** the email says only that one is coming. The banks the templates
+  read are written into the copy by hand; a test holds that list to
+  Ingestion's own so a new parser cannot be left out of the promise.
+- **No global cap at the provider — risk accepted.** Rejected by the owner:
+  a shared ceiling lets one heavy user spend everyone's capacity, and the rule
+  is the same capacity for all. What that leaves uncovered is a bug of ours
+  (a retry loop, say), which the per-user cap does not stop.
 
 ### Financial (v1 requirements, agreed 2026-08-23)
 

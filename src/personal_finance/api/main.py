@@ -23,6 +23,9 @@ from personal_finance.contexts.identity.presentation.http.router import (
     get_register_use_case,
     router as identity_router,
 )
+from personal_finance.contexts.ingestion.presentation.http.model_access import (
+    router as ingestion_model_access_router,
+)
 from personal_finance.contexts.ingestion.presentation.http.notifications import (
     router as ingestion_notifications_router,
 )
@@ -133,6 +136,7 @@ def create_app(
     # came of it.
     app.include_router(ingestion_notifications_router)
     app.include_router(ingestion_setup_router)
+    app.include_router(ingestion_model_access_router)
     app.include_router(alerts_router)
     app.include_router(alerts_inbox_router)
     # Mounted in every environment, unlike the webhook below: this is how

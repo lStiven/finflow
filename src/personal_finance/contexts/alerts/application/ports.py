@@ -7,6 +7,8 @@ import uuid
 
 from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
+    MailRecipient,
+    ModelPause,
     MovementAlert,
     WeeklySummary,
 )
@@ -243,6 +245,35 @@ class MessageSender(Protocol):
         "nothing to do" mail rather than staying silent.
         """
         ...
+
+
+class AccountNoticeSender(Protocol):
+    """Delivers a notice about the account itself, not about money.
+
+    Its own port, like the summary's, so a transport adds it on purpose
+    rather than inheriting a method it never meant to implement.
+    """
+
+    def send_model_pause(self, *, chat_id: ChatId, pause: ModelPause) -> None: ...
+
+
+class AccountContacts(Protocol):
+    """Where to email the owner of an account. Identity knows; this asks."""
+
+    def find(self, user_id: UserId) -> MailRecipient | None:
+        """None when there is no such account any more."""
+        ...
+
+
+class AccountMailer(Protocol):
+    """Emails one notice to one person.
+
+    Raises `TransportUnavailableError` when the mail server could not take
+    it — worth another try — and `DestinationRefusedError` for an address it
+    will never accept.
+    """
+
+    def send_model_pause(self, *, to: MailRecipient, pause: ModelPause) -> None: ...
 
 
 class SummarySender(Protocol):

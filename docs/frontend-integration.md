@@ -398,7 +398,9 @@ Lo que implica para la UI:
   remitente no aprobado se ignora, una plantilla desconocida sin modelo
   configurado se conserva sin extraer, una autorización (compra "aprobada",
   todavía no cobrada) se descarta a propósito para no contar el gasto dos
-  veces.
+  veces, y un correo que necesitaba el modelo después de que su dueño gastara
+  las lecturas del día se queda sin leer (ver
+  [overview.md → El tope del modelo](overview.md#el-tope-del-modelo)).
 - **El usuario sí puede ver qué llegó**, y esa es la pantalla que salva la
   situación cuando algo no funciona. Va justo abajo.
 
@@ -414,12 +416,26 @@ desde el cliente se ven idénticos —no aparece ningún movimiento nuevo—:
    remitente a la vista para poder aprobarlo con un `PATCH /identity/inbox`.
    Este es el caso más común y el más fácil de resolver desde la interfaz.
 3. **Llegó y no se pudo leer.** `status: "pending_fallback"`, y
-   `deferred_reason` dice cuál de las dos cosas pasó: `no_fallback_configured`
-   (no hay modelo puesto) o `fallback_found_nothing` (lo leyó y se negó).
+   `deferred_reason` dice por qué:
+   - `no_fallback_configured`: no hay modelo puesto.
+   - `fallback_found_nothing`: el modelo lo leyó y se negó.
+   - `daily_limit_reached`: ninguna plantilla lo reconoció y su dueño ya había
+     gastado las lecturas del modelo de ese día. No se reintenta al día
+     siguiente. La pantalla lo dice («Sin leer: tope del día»), no con un
+     «sin movimiento» que parece un fallo de la app.
+   - `model_suspended`: el modelo está suspendido para esa persona por
+     strikes, y el correo se descartó sin leer (el cuerpo no se guarda). La
+     pantalla dice «Sin leer: lectura pausada»; por qué, lo dice
+     `GET /ingestion/model-access`, justo abajo.
+
+   Los tres son definitivos para ese correo: ninguno significa «todavía
+   procesando». La lista completa, con etiquetas, sale de `GET /ingestion/catalog`
+   (`deferred_reasons`).
 
 ```http
 GET /ingestion/notifications?limit=50&offset=0
 GET /ingestion/notifications?status=ignored
+GET /ingestion/notifications?with_counts=true
 ```
 
 Los filtros van **omitidos o con un valor válido**: `status=` vacío es un
@@ -438,10 +454,11 @@ Los filtros van **omitidos o con un valor válido**: `status=` vacío es un
       "received_at": 1787403660
     }
   ],
-  "total": 7,
-  "counts": { "processed": 6, "ignored": 1 },
+  "has_more": false,
   "limit": 50,
-  "offset": 0
+  "offset": 0,
+  "counts": { "processed": 6, "ignored": 1 },
+  "total": 7
 }
 ```
 
@@ -450,6 +467,10 @@ Reglas:
 - **Nunca devuelve el cuerpo del correo.** Una lista no lo necesita, y dos de
   los estados ya lo descartaron a propósito. Si la interfaz quiere enseñar "de
   qué era", el asunto y el remitente es todo lo que hay.
+- **`counts` y `total` solo llegan con `with_counts=true`**; si no, son `null`.
+  Son lo único de esta respuesta que lee toda la historia de la cuenta, así que
+  una pantalla que refresca los pide una vez, no en cada vuelta. Para saber si
+  hay otra página está `has_more`, que llega siempre.
 - **`counts` cuenta todos los estados del usuario**, filtre o no filtre la
   lista. Es el resumen de la pantalla ("6 procesados, 1 ignorado") y no se
   mueve al estrechar la lista, igual que el badge de comercios.
@@ -462,6 +483,27 @@ Reglas:
 
 Con esto, la pantalla de "conecta tu banco" se puede cerrar entera: dirección
 para copiar, remitentes aprobados, y qué ha llegado de verdad.
+
+#### `GET /ingestion/model-access`: la lectura suspendida
+
+Diez correos que el modelo juzga «no es de un banco», llegados en menos de una
+hora, suspenden el modelo para esa persona: 1 día, luego 3, luego hasta que un
+operador lo reactive. Las plantillas siguen leyendo. Las reglas están en
+[overview.md → Los strikes](overview.md#los-strikes).
+
+```json
+{ "access": "paused", "paused_until": 1793541900, "strikes": 1 }
+```
+
+- `access`: `open`, `paused` o `revoked`. `paused_until` (epoch) solo llega
+  con `paused`; `strikes` cuenta los de los últimos 90 días.
+- **Es lo que dibuja el banner** que la app pone arriba de cada pantalla
+  mientras dura (`ModelPauseBanner`), con el texto aprobado. Se lee del
+  registro que el worker aplica, no del aviso que lo anunció: es correcto
+  aunque el aviso nunca haya llegado.
+- No hay forma de levantarlo desde la app: el banner no es un enlace.
+- La campana recibe además una entrada `kind: "model_paused"` con `pause:
+  { strike, paused_until, offenses }`, y Telegram y el correo el mismo aviso.
 
 ### 5. Movimientos
 
@@ -1130,6 +1172,270 @@ Reglas:
 - **Un rango de más de 372 buckets responde `400`** en vez de contestar una
   gráfica que nadie puede leer. Pide un intervalo más ancho.
 
+### 11. Facturas: lo que se va a cobrar
+
+Una factura es un cobro que el usuario sabe que viene: el gimnasio, el arriendo,
+el streaming, o la nómina si es un ingreso. **Declararla no mueve ningún saldo**:
+es una afirmación sobre el futuro. Lo único que mueve plata es *confirmar* un
+cobro (`/pay`), que pasa por el mismo camino que un movimiento escrito a mano:
+mueve la cuenta, cuenta como gasto, se le asigna comercio y avisa por Telegram.
+
+```http
+POST  /financial/bills                       # declarar
+GET   /financial/bills?timezone=America/Bogota            # el mes en curso
+GET   /financial/bills?since=2026-09-01&until=2026-09-30   # otra ventana
+PATCH /financial/bills/{id}                  # corregir
+POST  /financial/bills/{id}/pause | /resume  # dejar de esperarla, sin olvidarla
+DELETE /financial/bills/{id}                 # olvidarla del todo
+```
+
+```json
+{
+  "name": "Gimnasio",
+  "amount": "120000",
+  "currency": "COP",
+  "cadence": "monthly",
+  "starts_on": "2026-09-04",
+  "direction": "outgoing",
+  "account_id": null,
+  "category": "health",
+  "variable_amount": false,
+  "merchant_id": null
+}
+```
+
+- `cadence`: `weekly`, `biweekly`, `monthly`, `bimonthly`, `quarterly`,
+  `annual`. Todos los cobros se derivan de `starts_on`, así que una factura
+  anclada el 31 se queda en el 31 aunque febrero no lo tenga.
+- `variable_amount: true` es para la luz o el agua: `amount` es un promedio y un
+  pago del mismo comercio dentro de la mitad de esa cifra se reconoce como el
+  cobro sin preguntar.
+- `merchant_id` (de `GET /merchants`) sirve cuando el nombre es del usuario:
+  «Luz casa mamá» se reconoce en `COMP ELECTRICIDAD TU` porque las dos son
+  Celsia. `category` se valida contra el vocabulario del usuario.
+- `PATCH` cambia solo lo que mandas; `clear_account`, `clear_category` y
+  `clear_merchant` existen porque la ausencia ya significa «no lo toques».
+  Cambiar `amount` exige mandar también `currency`. Un body vacío es `422`.
+
+`GET /financial/bills` responde la ventana (por defecto, el mes en curso en
+`timezone`; `since` y `until` van los dos o ninguno), las facturas, **cada
+cobro que cae en la ventana** en orden de fecha, y los totales:
+
+```json
+{
+  "since": "2026-09-01", "until": "2026-09-30",
+  "bills": [ { "id": "…", "name": "Gimnasio", "status": "active", "autopay": false,
+               "reported_by_bank": false, "frozen": false,
+               "next_occurrence": { "due_on": "2026-10-04", "state": "expected", "…": "…" } } ],
+  "occurrences": [
+    { "bill_id": "…", "due_on": "2026-09-04", "amount": "120000", "currency": "COP",
+      "direction": "outgoing", "state": "paid", "movement_id": "…",
+      "settled_amount": "130000", "settled_at": 1788800000, "settled_by": "confirmed" }
+  ],
+  "totals": [ { "currency": "COP", "expected": "120000", "outstanding": "0" } ]
+}
+```
+
+- **`state` de un cobro**: `expected`, `overdue`, `paid` o `skipped`.
+- **`due_on` es la identidad del cobro**, no el día en que salió la plata: es lo
+  que va en el `{period}` de las rutas de abajo. El día real es `settled_at`,
+  y la cifra real `settled_amount` («120.000 esperado, 130.000 cobrado»).
+- **`totals` trae dos cifras por moneda, nunca sumadas entre monedas**:
+  `expected` es lo que cuesta la ventana (un cobro pagado se queda ahí) y
+  `outstanding` lo que falta por pagar. Un cobro saltado sale de las dos.
+- **`reported_by_bank: true`**: algún cobro de esta factura ya lo pagó un
+  movimiento que avisó el banco. La pantalla debería decir «se marca sola cuando
+  llega el correo» y advertir que marcarla a mano antes contaría la plata dos
+  veces.
+- **`frozen: true`**: su cuenta está cerrada. Se descongela sola si la cuenta
+  se reabre.
+
+#### Responder por un cobro
+
+```http
+POST   /financial/bills/{id}/occurrences/{period}/pay    # pasó: lo escribe en el ledger
+DELETE /financial/bills/{id}/occurrences/{period}/pay    # deshacer: borra ese movimiento
+POST   /financial/bills/{id}/occurrences/{period}/skip   # no va a pasar este periodo
+DELETE /financial/bills/{id}/occurrences/{period}/skip   # volver a esperarlo
+POST   /financial/bills/{id}/occurrences/{period}/link   # ya lo pagó este movimiento
+DELETE /financial/bills/{id}/occurrences/{period}/link   # deshacer el enlace (no borra nada)
+```
+
+Las seis responden `{ bill, occurrence }`: la factura también cambia (su
+«próximo cobro» avanza), y responder solo con el cobro dejaría la tarjeta
+diciendo que vence hoy.
+
+- **`/pay` acepta un body vacío**, que es el caso normal. `amount` +
+  `currency`, `occurred_at` (epoch) y `note` son para el mes que no fue como
+  siempre. **Pulsarlo dos veces es un solo cobro**: la identidad sale de la
+  factura y del periodo, y el segundo intento responde con la fila que ya
+  existe (`200`, nunca `201`). Para corregir la cifra después se edita ese
+  movimiento, como cualquier otro.
+- **`/link` es para cuando el banco sí avisó**: el movimiento ya está en el
+  ledger y solo faltaba decir qué cobro paga. **No escribe nada.** Se rechaza
+  (`400`) si el cobro ya está confirmado, si el movimiento lo escribió la app,
+  es un traslado, va en la dirección contraria, en otra moneda, o ya paga otro
+  cobro.
+- **Deshacer depende de `settled_by`**, y es la regla que más fácil se rompe en
+  pantalla: `confirmed` es la fila que escribió la factura, y se deshace con
+  `DELETE …/pay`, que la borra y le devuelve la plata a la cuenta. `matched` es
+  un movimiento que llegó solo, y se deshace con `DELETE …/link`, que olvida el
+  enlace y deja el movimiento donde está. Un solo botón para los dos borraría
+  la mitad de las veces un hecho del banco.
+- **Los `DELETE` son silenciosos** cuando no hay nada que deshacer: un `404` en
+  el segundo toque de un botón dudoso es peor respuesta que nada.
+- Un `{period}` que no es un día de cobro de esa factura es `400`, igual que
+  confirmar un cobro de una factura pausada; si su cuenta está cerrada, `409`.
+  Una factura o un movimiento que no existe o es de otro, `404`.
+
+#### Que se cobren solas, y lo que la app reconoce
+
+```http
+POST /financial/bills/{id}/autopay   { "enabled": true, "timezone": "America/Bogota" }
+POST /financial/bills/settle         { "timezone": "America/Bogota" }
+```
+
+- **`autopay` está apagado hasta que alguien lo enciende**, factura por
+  factura. Una factura armada **no cobra el día que vence**: espera a que se
+  cierre la ventana de conciliación, y si en el ledger aparece un movimiento que
+  cuadra, el cobro queda pagado por ese movimiento y no se escribe nada. Tampoco
+  cobra hacia atrás: se guarda el día en que se encendió (`autopay_from`), y
+  nada anterior a ese día se cobra solo.
+- **`/bills/settle` es lo que llama la pantalla de facturas al abrirse.** Nada
+  en el despliegue recorre usuarios todavía, así que el trabajo se hace cuando
+  el dueño está mirando. Responde `settled` —lo que resolvió, con `action:
+  "matched"` (reconoció un movimiento, no escribió nada) o `"charged"` (la
+  factura se cobró sola)— y `proposals`: los cobros con candidatos que la app no
+  se atreve a decidir, cada uno con `quality: "certain"` o `"likely"`. Enlazar
+  una propuesta es un `/link`; ignorarla, nada. Llamarlo dos veces no resuelve
+  nada dos veces.
+
+#### Las que el usuario no declaró
+
+```http
+GET /financial/recurring?timezone=America/Bogota
+```
+
+Lo que parece repetirse en los movimientos y todavía no es factura: cada serie
+trae `name`, `amount`, `cadence`, `next_due_on`, `confidence`, cuántas veces se
+vio (`sightings`) y cuántas faltó (`missed`), y `state` (`active`, `late`,
+`dormant`). **Es solo una propuesta**: aceptarla es un `POST /financial/bills`
+con esas cifras, para que lo que llegue a cobrar plata sea siempre algo que una
+persona declaró. Quedan fuera los cobros que escribió la propia app (intereses,
+facturas confirmadas) y los traslados.
+
+### 12. El plan del mes y lo que queda para gastar
+
+```http
+PUT    /financial/plan   { "expected_income": "4500000", "savings_target": "500000", "currency": "COP" }
+GET    /financial/plan
+DELETE /financial/plan
+GET    /financial/allowance?timezone=America/Bogota
+```
+
+El plan son dos cifras —cuánto espera que entre y cuánto quiere guardar—, en
+una sola moneda, y **no escribe nada en el ledger**. Es un `PUT`: se reemplaza
+entero, para que un ahorro nunca quede en pie contra un ingreso para el que no
+se fijó. `savings_target` es opcional y no puede pasar del ingreso.
+
+`GET /financial/allowance` es la tarjeta de arriba del Resumen:
+
+```json
+{
+  "currency": "COP",
+  "expected_income": "4500000",
+  "savings_target": "500000",
+  "spent": "1830000",
+  "committed": "420000",
+  "available": "1750000",
+  "since": "2026-10-01", "until": "2026-10-31",
+  "days_left": 1
+}
+```
+
+- **`available = expected_income − savings_target − spent − committed`**, y la
+  respuesta trae las cinco cifras a propósito: nadie cree un número que no
+  puede comprobar. Puede ser **negativo**, y llega negativo.
+- **`committed` es lo que todavía se debe de las facturas del mes**, no lo que
+  cuestan. Un cobro confirmado ya está en `spent`, y contarlo aquí también lo
+  descontaría dos veces.
+- **`days_left` incluye hoy.** Es lo que la pantalla usa para repartir lo que
+  queda entre los días que faltan.
+- **Sin plan, `GET /plan` y `GET /allowance` responden `404`**, y la tarjeta no
+  se muestra. Un cero diría «no te queda nada», que es otra cosa que «no me has
+  dicho cómo es tu mes». El `DELETE` es silencioso si no había plan.
+
+### 13. Presupuestos
+
+Un presupuesto es un techo sobre una parte del gasto. **No mueve ningún saldo
+ni bloquea nada**: informa.
+
+```http
+POST   /financial/budgets
+GET    /financial/budgets?timezone=America/Bogota            # el mes en curso
+GET    /financial/budgets?timezone=America/Bogota&month=2026-12
+PUT    /financial/budgets/{id}
+DELETE /financial/budgets/{id}
+```
+
+```json
+{
+  "name": "Salidas",
+  "limit": "600000",
+  "currency": "COP",
+  "categories": ["restaurants", "bars", "delivery"],
+  "accounts": [],
+  "icon": "",
+  "month": null,
+  "warn_at": 80
+}
+```
+
+- **Las listas vacías significan «todos»** en los dos ejes: `categories: []` es
+  «todo el mes», el presupuesto más fácil de empezar, y `accounts: []` vigila
+  todas las cuentas.
+- **`month: null` rige todos los meses**; `"2026-12"` rige solo ese mes, **al
+  lado** de los recurrentes y no en su lugar. Dos presupuestos pueden solaparse
+  a propósito: declarar el mismo alcance dos veces crea dos presupuestos (por eso
+  es `POST` y no `PUT`).
+- **`warn_at`** (1–99, 80 por defecto) es el porcentaje en el que la barra pasa
+  a ámbar.
+- **`PUT /budgets/{id}` reemplaza el presupuesto entero**, sin perder su id. Un
+  id que no es del usuario es `404`, igual que uno que no existe. El `DELETE`
+  es silencioso.
+
+`GET /financial/budgets` siempre responde `200`, con listas vacías si no hay
+ninguno:
+
+- **`budgets`**: cada uno con `spent` (lo que salió de ese alcance en el mes,
+  sin traslados), `remaining` (puede ser negativo), `state` (`ok`, `warning`,
+  `over`), y `scope.total` / `scope.every_account` ya calculados: la pantalla
+  no tiene que deducir «todo el mes» de una lista vacía.
+- **Un presupuesto cuyas categorías se borraron no rompe la pantalla**:
+  `retired: true` cuando ya no existe ninguna (ofrece quitarlo), y `missing`
+  con las que faltan cuando es solo alguna (marca esa categoría, no el
+  presupuesto).
+- **`totals`**: uno por moneda, con cuántos van en cada estado («2 de 4 en
+  verde»). **El techo sumado no es lo que el mes permite**: los presupuestos se
+  solapan y dos pueden contar el mismo peso.
+- **`suggestions`**: las categorías donde más se gasta sin techo. Solo se
+  ofrecen; la cifra va a un campo editable y nada se declara solo.
+
+### 14. Exportar
+
+```http
+GET /financial/export?format=csv&from=<epoch>&to=<epoch>&timezone=America/Bogota
+GET /financial/export?format=xlsx&direction=outgoing&category=groceries
+```
+
+- Acepta **los mismos filtros que `GET /financial/transactions`** y devuelve
+  **todos** los movimientos que casan, no una página, del más reciente al más
+  antiguo. `format` es `csv` (por defecto) o `xlsx`.
+- Las fechas se escriben en `timezone`, la que muestra la pantalla.
+- **Más de 10.000 movimientos responde `422`** y pide un rango más corto: un
+  archivo cortado en silencio sería la única respuesta equivocada.
+- Ninguna celda se vuelve fórmula aunque el banco escriba `=…`.
+
 ---
 
 ## Reglas de negocio que el frontend no puede romper
@@ -1163,6 +1469,15 @@ Resumen para revisar contra la interfaz cuando esté hecha:
 16. Nunca mandar una tasa como porcentaje (`19.56`). Va como fracción
     (`0.1956`) y con su base; el backend rechaza cualquier valor sobre 10
     justamente porque eso es lo que parece un porcentaje sin convertir.
+17. Nunca ofrecer un solo «deshacer» para un cobro de factura: `settled_by:
+    "confirmed"` se deshace con `DELETE …/pay` (borra el movimiento) y
+    `"matched"` con `DELETE …/link` (olvida el enlace y el movimiento se queda).
+18. Nunca mostrar el disponible del mes como `0` cuando no hay plan: sin plan
+    la tarjeta no existe (`404`).
+19. Nunca sumar los techos de los presupuestos como si fueran lo que el mes
+    permite: se solapan.
+20. Nunca ofrecer desde la app una forma de levantar la suspensión del modelo:
+    solo la reactiva un operador.
 
 ---
 
@@ -1309,13 +1624,17 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | POST | `/identity/password/forgot` | — | Mandar un enlace para elegir contraseña nueva. `202` siempre. |
 | POST | `/identity/password/reset` | — | Gastar ese enlace. `204`, y corta todas las sesiones. |
 | POST | `/identity/password/change` | ✔ | Cambiar la contraseña sabiendo la actual. Devuelve el token que reemplaza al vigente. |
-| GET | `/identity/me` | ✔ | El id del usuario del token. |
+| GET | `/identity/me` | ✔ | El usuario del token: id, correo y nombre. |
+| PATCH | `/identity/me` | ✔ | Cambiar el nombre. El token vigente conserva el viejo hasta el siguiente login. |
 | GET | `/identity/inbox` | ✔ | Dirección de reenvío + remitentes aprobados. |
 | PATCH | `/identity/inbox` | ✔ | Reemplazar los remitentes aprobados. |
 | GET | `/financial/catalog` | — | Vocabularios de Financial, para poblar formularios. |
 | GET | `/ingestion/catalog` | — | Estados de una notificación, sus razones y los pasos del alta. |
 | GET | `/merchants/catalog` | — | Vocabularios de Merchant. |
 | GET | `/merchants/categories` | — | Solo categorías. Lo cubre `/merchants/catalog`; se mantiene por compatibilidad. |
+| POST | `/merchants/categories` | ✔ | Crear una categoría propia. |
+| PATCH | `/merchants/categories/{key}` | ✔ | Renombrar una categoría propia. |
+| DELETE | `/merchants/categories/{key}` | ✔ | Borrar una categoría propia; responde qué comercios se movieron. |
 | GET | `/merchants` | ✔ | Listar/buscar/filtrar comercios. |
 | GET | `/merchants/{id}` | ✔ | Detalle con sus alias. |
 | PATCH | `/merchants/{id}` | ✔ | Renombrar y/o recategorizar (marca revisado). |
@@ -1329,7 +1648,10 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | PATCH | `/financial/accounts/{id}` | ✔ | Renombrar. |
 | PUT | `/financial/accounts/{id}/credit-limit` | ✔ | Fijar, cambiar o borrar el cupo. Solo pasivos. |
 | POST | `/financial/accounts/{id}/instruments` | ✔ | Enlazar otro instrumento (retroactivo). |
+| POST | `/financial/accounts/{id}/instruments/unlink` | ✔ | Que la cuenta deje de responder a una tarjeta; sus movimientos quedan sin asignar. |
+| PUT | `/financial/accounts/{id}/balance` | ✔ | Corregir el saldo sin tocar ningún movimiento. |
 | POST | `/financial/accounts/{id}/close` | ✔ | Cerrar (no borra). |
+| POST | `/financial/accounts/{id}/reopen` | ✔ | Reabrir una cuenta cerrada por error. |
 | PUT | `/financial/accounts/{id}/loan` | ✔ | Condiciones del crédito: tasa, plazo, corte, cuota y seguros. Solo préstamo e hipoteca. |
 | PUT | `/financial/accounts/{id}/investment` | ✔ | Condiciones de la inversión. Sin tasa = renta variable. Solo inversión. |
 | DELETE | `/financial/accounts/{id}/financing` | ✔ | Dejar de calcular. Los cortes ya registrados se quedan. |
@@ -1340,14 +1662,48 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | GET | `/financial/net-worth` | ✔ | Patrimonio por moneda. |
 | GET | `/financial/summary` | ✔ | Totales del periodo y desglose por día, semana, mes, día de la semana, categoría, comercio o cuenta. `top`, `order=amount` y `compare`. Excluye traslados salvo que pidas otra cosa. |
 | GET | `/financial/trends` | ✔ | Serie temporal apilable: una banda por categoría, comercio o cuenta, con buckets densos. La gráfica de la pantalla de reportes. |
+| GET | `/financial/history` | ✔ | Cómo se movió la plata mes a mes, y cómo va este mes contra los anteriores. Se reconstruye del ledger en cada llamada. |
+| GET | `/financial/export` | ✔ | Los movimientos que casan con los mismos filtros de `/financial/transactions`, como archivo: `format=csv` (por defecto) o `xlsx`. |
+| PUT | `/financial/plan` | ✔ | Declarar o reemplazar cómo debería verse el mes. |
+| GET | `/financial/plan` | ✔ | El plan declarado; `404` si no hay. |
+| DELETE | `/financial/plan` | ✔ | Quitar el plan. No toca nada más. |
+| GET | `/financial/allowance` | ✔ | Cuánto queda para gastar este mes, y las cuatro cifras de las que sale. |
+| GET | `/financial/budgets` | ✔ | Los presupuestos de un mes y lo que el ledger hizo con cada uno. |
+| POST | `/financial/budgets` | ✔ | Ponerle techo a una parte del gasto. |
+| PUT | `/financial/budgets/{id}` | ✔ | Reemplazar un presupuesto entero. |
+| DELETE | `/financial/budgets/{id}` | ✔ | Quitar un presupuesto. No toca nada más. |
+| GET | `/financial/bills` | ✔ | Los cobros declarados, los que caen en la ventana pedida y cuánto suman. |
+| POST | `/financial/bills` | ✔ | Declarar un cobro que va a pasar. |
+| PATCH | `/financial/bills/{id}` | ✔ | Corregir lo que dice un cobro. |
+| DELETE | `/financial/bills/{id}` | ✔ | Olvidar un cobro del todo. |
+| POST | `/financial/bills/{id}/pause` | ✔ | Dejar de esperarlo sin olvidar cuánto costaba. |
+| POST | `/financial/bills/{id}/resume` | ✔ | Volver a esperarlo. |
+| POST | `/financial/bills/{id}/autopay` | ✔ | Que se registre solo cuando toque, o dejar de hacerlo. |
+| POST | `/financial/bills/settle` | ✔ | Lo que llama la pantalla de cobros al abrirse: reconoce en el ledger los cobros que ya pasaron y registra los automáticos, hasta donde es seguro. |
+| POST | `/financial/bills/{id}/occurrences/{period}/pay` | ✔ | Decir que ese cobro pasó, y escribirlo en el ledger. `DELETE` lo deshace. |
+| POST | `/financial/bills/{id}/occurrences/{period}/skip` | ✔ | Decir que ese cobro no va a pasar. `DELETE` lo vuelve a esperar. |
+| POST | `/financial/bills/{id}/occurrences/{period}/link` | ✔ | Decir que un movimiento que ya está en el ledger es ese cobro. `DELETE` lo deshace. |
+| GET | `/financial/recurring` | ✔ | Lo que parece repetirse y todavía no está declarado como cobro. |
 | GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. Incluye las dos mitades de un traslado. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
 | GET | `/financial/transactions/{id}` | ✔ | Detalle. |
 | POST | `/financial/transactions/transfer` | ✔ | Registrar a mano la mitad de un traslado cuya otra mitad no está en la app. |
 | PATCH | `/financial/transactions/{id}` | ✔ | Corregir, mover de cuenta o desasignar. En una mitad de traslado, solo cuenta y nota. |
 | DELETE | `/financial/transactions/{id}` | ✔ | Borrarlo y devolverle al saldo lo que se llevó. Un traslado se borra entero. |
+| GET | `/financial/transactions/{id}/transfer-options` | ✔ | Qué podría ser la otra mitad de este movimiento, antes de cambiar nada. |
+| POST | `/financial/transactions/{id}/transfer` | ✔ | Declarar después que este movimiento fue plata entre dos saldos propios. |
+| DELETE | `/financial/transactions/{id}/transfer` | ✔ | Deshacer ese traslado, desde cualquiera de sus dos lados. |
 | GET | `/ingestion/setup` | ✔ | En qué paso va conectando su banco, y si ya recibe gastos solo. |
 | GET | `/ingestion/notifications` | ✔ | Qué llegó al alias del usuario y en qué estado quedó. |
+| GET | `/ingestion/model-access` | ✔ | Si el modelo sigue leyendo sus correos no reconocidos, o está pausado o desactivado por strikes. |
+| POST | `/alerts/channels` | ✔ | Abrir un canal de Telegram y devolver el enlace que lo vincula. Ver [alerts.md](alerts.md). |
+| GET | `/alerts/channels` | ✔ | Los canales del usuario, vinculados o esperando. |
+| PATCH | `/alerts/channels/{id}` | ✔ | Cuánto quiere ese canal de un tipo de aviso: encendido o apagado, y monto mínimo. |
+| DELETE | `/alerts/channels/{id}` | ✔ | Desvincular. No se le manda nada más. |
+| GET | `/alerts/inbox` | ✔ | La campana: los avisos de los últimos 30 días, del más reciente al más antiguo. `kind` es `movement`, `weekly_summary` o `model_paused`. |
+| DELETE | `/alerts/inbox/{id}` | ✔ | Ocultar un aviso de la app. Telegram no se toca. |
+| DELETE | `/alerts/inbox` | ✔ | Ocultarlos todos. |
+| POST | `/alerts/telegram/webhook` | — | **Solo Telegram**, con su cabecera secreta. No es una ruta del frontend. |
 | POST | `/ingestion/bank-notifications` | — | **Solo local.** Simular un correo. No es una ruta del producto. |
 
 ---

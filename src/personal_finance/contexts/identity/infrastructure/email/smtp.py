@@ -22,6 +22,7 @@ from email.message import EmailMessage
 from email.utils import formataddr
 import logging
 import smtplib
+import ssl
 
 from personal_finance.contexts.identity.domain.value_objects import Email
 from personal_finance.contexts.identity.infrastructure.email import messages
@@ -128,10 +129,14 @@ class SmtpCredentialNotifier:
         envelope.add_alternative(message.html, subtype="html")
 
         try:
+            # A verifying context, explicitly: without one `smtplib` checks
+            # neither the certificate nor the host name, and the App Password
+            # goes to whoever answered.
             with smtplib.SMTP_SSL(
                 self._host,
                 self._port,
                 timeout=self._timeout,
+                context=ssl.create_default_context(),
             ) as server:
                 server.login(self._username, self._password)
                 server.send_message(envelope)

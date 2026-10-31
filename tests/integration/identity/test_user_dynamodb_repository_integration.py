@@ -8,11 +8,17 @@ from personal_finance.contexts.identity.domain.value_objects import (
     PersonName,
 )
 from personal_finance.contexts.identity.infrastructure.persistence.dynamodb import (
+    NAME_ATTRIBUTE,
     PARTITION_KEY,
+    USER_ID_ATTRIBUTE,
+    USERS_BY_ID_INDEX,
     DynamoDBUserRepository,
 )
-from personal_finance.shared.domain.value_objects import PosixTime
-from personal_finance.shared.infrastructure.aws.provisioning import provision_table
+from personal_finance.shared.domain.value_objects import PosixTime, UserId
+from personal_finance.shared.infrastructure.aws.provisioning import (
+    SecondaryIndex,
+    provision_table,
+)
 
 
 TABLE_NAME = "users"
@@ -25,6 +31,13 @@ def repository(dynamodb_client: DynamoDBClient) -> DynamoDBUserRepository:
         table_name=TABLE_NAME,
         partition_key=PARTITION_KEY,
         enable_ttl=False,
+        secondary_indexes=(
+            SecondaryIndex(
+                name=USERS_BY_ID_INDEX,
+                partition_key=USER_ID_ATTRIBUTE,
+                projected_attributes=(NAME_ATTRIBUTE,),
+            ),
+        ),
     )
 
     return DynamoDBUserRepository(client=dynamodb_client, table_name=TABLE_NAME)
@@ -155,3 +168,40 @@ def test_a_password_change_refuses_to_land_on_a_different_account(
     assert unchanged is not None
     assert unchanged.id == stored.id
     assert unchanged.password_hash == stored.password_hash
+
+
+def test_an_account_is_found_by_its_id_for_another_context_to_write_to(
+    repository: DynamoDBUserRepository,
+) -> None:
+    user = _user()
+    user.rename(PersonName("Ana María"))
+    repository.add_if_new(user)
+
+    contact = repository.find_contact(user.id)
+
+    assert contact is not None
+    assert contact.email == "person@example.com"
+    assert contact.name == "Ana María"
+
+
+def test_an_account_without_a_name_is_found_with_none(
+    repository: DynamoDBUserRepository,
+) -> None:
+    user = _user()
+    repository.add_if_new(user)
+
+    contact = repository.find_contact(user.id)
+
+    assert contact is not None
+    assert contact.name is None
+
+
+def test_an_unknown_id_has_no_contact(repository: DynamoDBUserRepository) -> None:
+    repository.add_if_new(_user())
+
+    assert (
+        repository.find_contact(
+            UserId.from_string("22222222-2222-2222-2222-222222222222")
+        )
+        is None
+    )

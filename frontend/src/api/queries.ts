@@ -133,6 +133,7 @@ export const queryKeys = {
   inbox: ["inbox"] as const,
   profile: ["profile"] as const,
   setup: ["setup"] as const,
+  modelAccess: ["model-access"] as const,
   catalog: ["catalog"] as const,
   financing: ["financing"] as const,
   alertChannels: ["alert-channels"] as const,
@@ -480,6 +481,23 @@ export const setupQuery = queryOptions({
   queryFn: () => unwrap(api.GET("/ingestion/setup")),
   staleTime: 10_000,
   refetchInterval: (query) => (query.state.data?.ready ? false : 15_000),
+});
+
+export type ModelAccess = components["schemas"]["ModelAccessResponse"];
+
+/**
+ * Whether the model still reads this account's unrecognised mail.
+ *
+ * A suspension starts while nobody is looking — a worker decides it — so the
+ * notice asks again whenever the tab comes back, and otherwise every few
+ * minutes: it changes at most once a day.
+ */
+export const modelAccessQuery = queryOptions({
+  queryKey: queryKeys.modelAccess,
+  queryFn: () => unwrap(api.GET("/ingestion/model-access")),
+  staleTime: 60_000,
+  refetchInterval: 5 * 60_000,
+  refetchOnWindowFocus: true,
 });
 
 export const inboxQuery = queryOptions({
