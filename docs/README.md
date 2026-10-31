@@ -13,6 +13,7 @@ Cada guía tiene un trabajo. Busca aquí la tuya y no leas las otras.
 | Trabajar dentro del frontend (tipos, dev server, diagnóstico) | [../frontend/README.md](../frontend/README.md) |
 | Saber cómo un usuario conecta su banco | [email-forwarding.md](email-forwarding.md) |
 | **Configurar o arreglar los avisos** por Telegram | [alerts.md](alerts.md) |
+| Entender o **cambiar el tope diario del modelo**, o reactivar a alguien suspendido por strikes | [overview.md](overview.md#el-tope-del-modelo) · [deploy.md](deploy.md#el-tope-diario-del-modelo) |
 | Probar la API a mano | [postman/](postman/README.md) |
 | Por qué algo está hecho así, y qué se descartó | [decisions.md](decisions.md) |
 
@@ -34,6 +35,10 @@ es negociable:
 just provision-dev && just deploy-dev && just smoke <ApiUrl>     # development
 just provision-prod && just deploy-prod && just smoke-prod <ApiUrl>
 ```
+
+Una sola vez por entorno, antes del primer despliegue, el tope del modelo:
+`just llm-limit-put development 20` (o `production`). Sin él, el despliegue
+sale bien y los correos que necesitan el modelo terminan en la DLQ.
 
 **Publicar el frontend.** Construye contra la `ApiUrl` del stack y sube:
 

@@ -19,10 +19,18 @@ from mypy_boto3_events.client import EventBridgeClient
 from mypy_boto3_sqs.client import SQSClient
 import pytest
 
+from personal_finance.contexts.alerts.application.account_notices import (
+    NotifyModelPauseUseCase,
+)
 from personal_finance.contexts.alerts.application.handlers import (
     DeliverMovementAlertUseCase,
 )
-from personal_finance.contexts.alerts.application.messages import MovementAlert
+from personal_finance.contexts.alerts.application.inbox import InboxKind
+from personal_finance.contexts.alerts.application.messages import (
+    MailRecipient,
+    ModelPause,
+    MovementAlert,
+)
 from personal_finance.contexts.alerts.domain.entities import AlertChannel
 from personal_finance.contexts.alerts.domain.value_objects import (
     AlertPreference,
@@ -33,6 +41,8 @@ from personal_finance.contexts.alerts.domain.value_objects import (
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.inbound import (
     FINANCIAL_SOURCE,
+    INGESTION_SOURCE,
+    MODEL_READING_SUSPENDED,
     MOVEMENT_RECORDED,
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.sqs_worker import (
@@ -44,6 +54,9 @@ from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import
     DynamoDBAlertChannelRepository,
     DynamoDBDeliveryLog,
 )
+from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
+    DynamoDBInbox,
+)
 from personal_finance.contexts.financial.application.integration_events import (
     FinancialIntegrationEventTranslator,
 )
@@ -53,6 +66,10 @@ from personal_finance.contexts.financial.domain.value_objects import (
     MovementId,
     TransactionOrigin,
 )
+from personal_finance.contexts.ingestion.application.integration_events import (
+    IngestionIntegrationEventTranslator,
+)
+from personal_finance.contexts.ingestion.domain.events import ModelReadingSuspended
 from personal_finance.shared.domain.value_objects import (
     Currency,
     Money,
@@ -84,9 +101,13 @@ MOVED_AT = PosixTime.from_epoch_seconds(1_757_800_000)
 class RecordingSender:
     def __init__(self) -> None:
         self.alerts: list[tuple[ChatId, MovementAlert]] = []
+        self.pauses: list[tuple[ChatId, ModelPause]] = []
 
     def send_movement_alert(self, *, chat_id: ChatId, alert: MovementAlert) -> None:
         self.alerts.append((chat_id, alert))
+
+    def send_model_pause(self, *, chat_id: ChatId, pause: ModelPause) -> None:
+        self.pauses.append((chat_id, pause))
 
     def send_link_confirmation(self, *, chat_id: ChatId) -> None:
         del chat_id
@@ -111,8 +132,8 @@ def queue_url(
         # The same pattern `provision()` writes. If these ever disagree, this
         # test passes and the deployment delivers nothing.
         event_pattern={
-            "source": [FINANCIAL_SOURCE],
-            "detail-type": [MOVEMENT_RECORDED],
+            "source": [FINANCIAL_SOURCE, INGESTION_SOURCE],
+            "detail-type": [MOVEMENT_RECORDED, MODEL_READING_SUSPENDED],
         },
     )
 
@@ -141,6 +162,33 @@ def sender() -> RecordingSender:
     return RecordingSender()
 
 
+class RecordingMailer:
+    def __init__(self) -> None:
+        self.sent: list[tuple[MailRecipient, ModelPause]] = []
+
+    def send_model_pause(self, *, to: MailRecipient, pause: ModelPause) -> None:
+        self.sent.append((to, pause))
+
+
+class OneContact:
+    def find(self, user_id: UserId) -> MailRecipient | None:
+        return (
+            MailRecipient(address="ana@example.com", name="Ana")
+            if (user_id == USER_ID)
+            else None
+        )
+
+
+@pytest.fixture
+def mailer() -> RecordingMailer:
+    return RecordingMailer()
+
+
+@pytest.fixture
+def inbox(dynamodb_client: DynamoDBClient) -> DynamoDBInbox:
+    return DynamoDBInbox(client=dynamodb_client, table_name=TABLE_NAME)
+
+
 @pytest.fixture
 def worker(
     dynamodb_client: DynamoDBClient,
@@ -148,17 +196,26 @@ def worker(
     queue_url: str,
     channels: DynamoDBAlertChannelRepository,
     sender: RecordingSender,
+    mailer: RecordingMailer,
+    inbox: DynamoDBInbox,
 ) -> SQSAlertsWorker:
+    deliveries = DynamoDBDeliveryLog(client=dynamodb_client, table_name=TABLE_NAME)
+
     return SQSAlertsWorker(
         client=sqs_client,
         queue_url=queue_url,
         use_case=DeliverMovementAlertUseCase(
             channels=channels,
-            deliveries=DynamoDBDeliveryLog(
-                client=dynamodb_client,
-                table_name=TABLE_NAME,
-            ),
+            deliveries=deliveries,
             sender=sender,
+        ),
+        notices=NotifyModelPauseUseCase(
+            channels=channels,
+            deliveries=deliveries,
+            sender=sender,
+            inbox=inbox,
+            contacts=OneContact(),
+            mailer=mailer,
         ),
     )
 
@@ -313,3 +370,71 @@ def test_a_movement_with_no_linked_channel_is_done_with(
 
     assert result.handled == 1
     assert sender.alerts == []
+
+
+# ---------------------------------------------------- the model stopped reading
+
+
+def _suspension(*, paused_until: PosixTime | None) -> ModelReadingSuspended:
+    return ModelReadingSuspended(
+        user_id=USER_ID,
+        strike=1 if paused_until else 3,
+        paused_until=paused_until,
+        offenses=10,
+    )
+
+
+def test_a_suspension_published_by_ingestion_reaches_the_person_everywhere(
+    eventbridge_client: EventBridgeClient,
+    worker: SQSAlertsWorker,
+    channels: DynamoDBAlertChannelRepository,
+    sender: RecordingSender,
+    mailer: RecordingMailer,
+    inbox: DynamoDBInbox,
+) -> None:
+    _linked(channels)
+    until = PosixTime.from_epoch_seconds(1_757_886_400)
+
+    EventBridgeEventPublisher(
+        client=eventbridge_client,
+        event_bus_name=BUS,
+        translator=IngestionIntegrationEventTranslator(),
+    ).publish([_suspension(paused_until=until)])
+    result = worker.poll_once(wait_seconds=0)
+
+    assert result.handled == 1
+    [(chat_id, pause)] = sender.pauses
+    assert chat_id == CHAT
+    assert pause.strike == 1
+    assert pause.paused_until == until
+    [(recipient, _)] = mailer.sent
+    assert recipient.address == "ana@example.com"
+    [entry] = inbox.recent(user_id=USER_ID, limit=5)
+    assert entry.kind is InboxKind.MODEL_PAUSED
+    assert entry.pause == pause
+
+
+def test_a_suspension_delivered_twice_tells_the_person_once(
+    eventbridge_client: EventBridgeClient,
+    worker: SQSAlertsWorker,
+    channels: DynamoDBAlertChannelRepository,
+    sender: RecordingSender,
+    mailer: RecordingMailer,
+    inbox: DynamoDBInbox,
+) -> None:
+    _linked(channels)
+    publisher = EventBridgeEventPublisher(
+        client=eventbridge_client,
+        event_bus_name=BUS,
+        translator=IngestionIntegrationEventTranslator(),
+    )
+    event = _suspension(paused_until=None)
+
+    publisher.publish([event])
+    publisher.publish([event])
+    worker.poll_once(wait_seconds=0)
+    worker.poll_once(wait_seconds=0)
+
+    assert len(sender.pauses) == 1
+    assert len(mailer.sent) == 1
+    assert len(inbox.recent(user_id=USER_ID, limit=5)) == 1

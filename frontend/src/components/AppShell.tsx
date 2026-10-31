@@ -24,6 +24,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { AlertsBell } from "@/components/AlertsCenter";
 import { BetaMark } from "@/components/BetaMark";
 import { Logo } from "@/components/Logo";
+import { ModelPauseBanner } from "@/components/ModelPauseBanner";
 import { NeonBackdrop } from "@/components/NeonBackdrop";
 import { OnboardingNudge } from "@/components/OnboardingNudge";
 import { ReadyDialog } from "@/components/ReadyDialog";
@@ -42,6 +43,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Rail />
       <div className="min-w-0 flex-1">
         <main className="rise mx-auto w-full max-w-6xl px-4 pt-6 pb-32 sm:px-6 lg:px-10 lg:pt-10 lg:pb-16">
+          <ModelPauseBanner />
           <OnboardingNudge />
           {children}
         </main>

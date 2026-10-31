@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import datetime
 
 from personal_finance.contexts.ingestion.application.messages import (
     ParseNotificationMessage,
@@ -12,6 +13,7 @@ from personal_finance.contexts.ingestion.domain.events import (
     TransactionExtracted,
     TransferExtracted,
 )
+from personal_finance.contexts.ingestion.domain.model_standing import ModelStanding
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.transactions import (
     InstrumentKind,
@@ -23,6 +25,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailMessageId,
     IdempotencyKey,
     NotificationDeferredReason,
+    NotificationId,
     NotificationIgnoredReason,
     ProcessingStatus,
 )
@@ -40,6 +43,43 @@ CARD_PAYMENT = (
     "Bancolombia: Pagaste $3,540,258 en la tarjeta de credito *7653 desde la "
     "cuenta *5261, el 21/05/2026 16:30. Estamos cerca."
 )
+
+
+class CleanStandings:
+    """Nobody is suspended: strikes are pinned down in `test_parse_fallback.py`."""
+
+    def get(self, user_id: UserId) -> ModelStanding:
+        return ModelStanding.clean(user_id)
+
+    def save(self, standing: ModelStanding) -> bool:
+        del standing
+
+        return True
+
+
+class UnlimitedQuota:
+    """Every read granted: the day's limit is pinned down in
+    `test_parse_fallback.py`, not here."""
+
+    def reserve(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> bool:
+        del user_id, notification_id, day
+
+        return True
+
+    def release(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> None:
+        del user_id, notification_id, day
 
 
 class InMemoryRepository:
@@ -112,6 +152,8 @@ def _make(
         repository=repository,
         registry=ParserRegistry(),
         event_publisher=publisher,
+        model_quota=UnlimitedQuota(),
+        standings=CleanStandings(),
     )
 
     return use_case, repository, publisher

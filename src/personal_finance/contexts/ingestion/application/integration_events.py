@@ -9,6 +9,7 @@ contexts receive.
 from __future__ import annotations
 
 from personal_finance.contexts.ingestion.domain.events import (
+    ModelReadingSuspended,
     TransactionExtracted,
     TransferExtracted,
 )
@@ -36,6 +37,12 @@ TRANSACTION_EXTRACTED_VERSION = 1
 # type it does subscribe to would sit on its queue until the dead-letter.
 TRANSFER_EXTRACTED = "TransferExtracted"
 TRANSFER_EXTRACTED_VERSION = 1
+
+# Not about money at all: the model stopped reading somebody's unrecognised
+# mail, and the person has to be told — which is Alerts' job, not this
+# context's. Only Alerts subscribes.
+MODEL_READING_SUSPENDED = "ModelReadingSuspended"
+MODEL_READING_SUSPENDED_VERSION = 1
 
 
 def _transaction_payload(transaction: ExtractedTransaction) -> dict[str, JsonValue]:
@@ -78,7 +85,8 @@ def _transfer_payload(transfer: ExtractedTransfer) -> dict[str, JsonValue]:
 
 
 class IngestionIntegrationEventTranslator:
-    """Publishes the one event other contexts are waiting for.
+    """Publishes what other contexts are waiting for: a movement, a transfer,
+    and a suspension somebody has to be told about.
 
     Everything else ingestion records — received, queued, ignored, deferred,
     failed — is its own lifecycle. Those stay inside the context: publishing
@@ -89,6 +97,9 @@ class IngestionIntegrationEventTranslator:
     def translate(self, event: Event) -> IntegrationEvent | None:
         if isinstance(event, TransferExtracted):
             return self._transfer(event)
+
+        if isinstance(event, ModelReadingSuspended):
+            return self._suspension(event)
 
         if not isinstance(event, TransactionExtracted):
             return None
@@ -133,6 +144,31 @@ class IngestionIntegrationEventTranslator:
                 "notification_id": str(event.notification_id.value),
                 "user_id": str(event.user_id.value),
                 "transfer": _transfer_payload(event.transfer),
+            },
+            occurred_at=event.occurred_at,
+        )
+
+    def _suspension(self, event: ModelReadingSuspended) -> IntegrationEvent:
+        """Who, which strike, and until when — nothing about the emails.
+
+        Which emails made the burst stays here: their senders and subjects
+        are somebody's mailbox, and telling them off needs only the count.
+        """
+        paused_until = event.paused_until
+
+        return IntegrationEvent(
+            source=SOURCE,
+            detail_type=MODEL_READING_SUSPENDED,
+            version=MODEL_READING_SUSPENDED_VERSION,
+            event_id=event.event_id,
+            payload={
+                "user_id": str(event.user_id.value),
+                "strike": event.strike,
+                # Null when the suspension has no end.
+                "paused_until": (
+                    None if paused_until is None else paused_until.as_epoch_seconds()
+                ),
+                "offenses": event.offenses,
             },
             occurred_at=event.occurred_at,
         )

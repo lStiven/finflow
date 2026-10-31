@@ -103,6 +103,21 @@ register-inbox-prod *args: (_require-env ".env.production")
     {{prod_env}} uv run python -m \
         personal_finance.contexts.ingestion.presentation.cli.register_inbox {{args}}
 
+# One person's access to the model: how it stands, or `--reinstate` to lift a
+# pause or a revocation and clear the strikes. Reinstating sends nothing.
+# Usage: just model-access-prod <user_id> --reinstate
+model-access *args: (_require-env ".env")
+    {{local_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.model_access {{args}}
+
+model-access-dev *args: (_require-env ".env.development")
+    {{dev_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.model_access {{args}}
+
+model-access-prod *args: (_require-env ".env.production")
+    {{prod_env}} uv run python -m \
+        personal_finance.contexts.ingestion.presentation.cli.model_access {{args}}
+
 # Does this deployment's mailbox actually send? Walks the same four steps the
 # API does — configuration, connect, log in, send — and says which one failed.
 # Without an address it stops after the login, which proves the credential
@@ -265,6 +280,24 @@ secret-put name env_file=(if name =~ '^/finflow/development/' { ".env.developmen
         Overwrite=True); \
     print('stored', os.environ['FINFLOW_SECRET_NAME'])"
     @echo "put this in {{env_file}}:  ssm:{{name}}"
+
+# How many emails one person may have the model read in a day, per deployed
+# environment. A plain SSM parameter the parse function reads again every five
+# minutes, so this is the whole change: no deploy. It must exist before the
+# first deploy that reads it: without it every email headed for the model
+# fails, and lands in the parse dead-letter queue after its retries.
+# Usage: just llm-limit-put production 20
+llm-limit-put environment value env_file=(if environment == "development" { ".env.development" } else { ".env.production" }): (_require-env env_file)
+    @case '{{environment}}' in development|production) ;; \
+        *) echo "environment is development or production, not '{{environment}}'" >&2; exit 1 ;; \
+    esac
+    @case '{{value}}' in ''|*[!0-9]*) echo "the limit is a whole number, not '{{value}}'" >&2; exit 1 ;; esac
+    @ENV_FILE={{env_file}} PYTHONPATH=src uv run python -c "\
+    from personal_finance.shared.infrastructure.aws.session import get_ssm_client; \
+    name = '/finflow/{{environment}}/llm-daily-calls-per-user'; \
+    get_ssm_client().put_parameter(Name=name, Value='{{value}}', Type='String', \
+        Overwrite=True); \
+    print(name, '=', '{{value}}')"
 
 # `--host 0.0.0.0` matches `run-dev` and `run-prod`, which already bind it.
 # The default 127.0.0.1 is reachable through the editor's port tunnel but not

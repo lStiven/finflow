@@ -42,6 +42,61 @@ Cada canal se apaga por separado y admite un **monto mínimo**: por debajo no se
 manda nada. Es contra el ruido, no contra el dinero — un café de $3.000 no debe
 gastar la atención que necesita un cargo de $400.000.
 
+### La campana
+
+Todo aviso que se mandó, o que se habría mandado, a Telegram queda también
+en la app durante 30 días, **tenga o no el usuario un canal vinculado**
+(`GET /alerts/inbox`). La pantalla lo consulta cada pocos segundos mientras
+está visible y enseña lo nuevo como una notificación flotante: es lo más
+parecido a tiempo real que tiene un despliegue sin sockets. Ocultar un aviso
+(`DELETE /alerts/inbox/{id}`) es para siempre y no borra el mensaje de
+Telegram.
+
+### El resumen del lunes
+
+Los lunes a las 08:00 de Bogotá, `WeeklySummaryFunction` le manda a cada
+usuario lo que gastó la semana anterior, de lunes a domingo y por moneda,
+comparado con lo normal de sus propias semanas anteriores, y la categoría que
+más subió. La primera semana no hay con qué comparar, y el mensaje lo dice en
+vez de comparar contra cero. Va a la campana y a cada canal que no lo haya
+apagado: es el tipo `weekly_summary`, encendido por defecto, y se apaga con
+el mismo `PATCH /alerts/channels/{id}` que los movimientos.
+
+Correrlo dos veces la misma semana no manda nada dos veces, y un usuario con
+datos raros no detiene a los demás. Solo conoce a quien ya tuvo algún
+movimiento: Alerts arma su propia lista con lo que oye, sin preguntarle a otro
+contexto quién existe. A mano, para probarlo o para reenviar una semana:
+
+```bash
+just weekly-summary              # la semana anterior a hoy
+just weekly-summary 2026-09-21   # la semana que contiene ese día
+```
+
+Una semana que todavía no terminó se rechaza: su resumen ocuparía el lugar del
+de la semana completa.
+
+### Cuando el modelo deja de leer sus correos
+
+Si alguien acumula strikes (ver [overview.md → Los strikes](overview.md#los-strikes)),
+Ingestion publica `ModelReadingSuspended` y este contexto se lo dice por tres
+lados:
+
+- **La campana**, con una entrada `model_paused`.
+- **Cada Telegram vinculado, aunque haya apagado los avisos.** No es un aviso
+  que alguien pidió: es algo que le pasó a su cuenta.
+- **Su correo**, con el texto aprobado en
+  [model-strikes-copy.md](model-strikes-copy.md). Es el único mensaje de este
+  contexto que no va por Telegram: quien nunca lo vinculó también tiene que
+  enterarse. La dirección la da Identity a través de su caso de uso publicado,
+  y el correo sale de la misma casilla que manda los códigos de verificación
+  (`MailFromAddress` y `MailAppPasswordParameter`).
+
+Como con los movimientos, se pregunta antes de mandar y se anota después:
+recibir el mismo evento dos veces no avisa dos veces. Si el servidor de correo o
+Telegram están caídos, el mensaje vuelve a la cola y el reintento solo completa
+lo que faltó. En local no hay servidor de correo: el worker escribe el correo en
+el log.
+
 ---
 
 ## Cómo se vincula
@@ -224,9 +279,9 @@ volumen, serializar no cuesta nada: `ReservedConcurrentExecutions: 1`.
   en ninguna parte del proyecto; el `13/09 04:46 p. m.` se calcula con
   `ALERTS_DISPLAY_TIMEZONE`. Deja de servir el día que alguien lo use desde
   otro huso.
-- **Un solo tipo de aviso.** Solo «se movió plata». El aviso de cobro
-  recurrente (E2) y el de presupuesto (E4) se enchufan sin migrar nada: una
-  preferencia que nadie ha expresado se resuelve con el valor por defecto que
-  el propio tipo declara.
+- **Dos tipos de aviso.** «Se movió plata» y el resumen del lunes. El aviso de
+  cobro recurrente (E2) y el de presupuesto (E4) se enchufan sin migrar nada:
+  una preferencia que nadie ha expresado se resuelve con el valor por defecto
+  que el propio tipo declara.
 - **Un solo transporte.** El puerto `MessageSender` no sabe qué es Telegram,
   así que un segundo canal es un adaptador más y ningún cambio de dominio.

@@ -23,13 +23,21 @@ from personal_finance.contexts.ingestion.infrastructure.messaging.sqs_worker imp
 from personal_finance.contexts.ingestion.infrastructure.persistence.dynamodb import (
     DynamoDBBankNotificationRepository,
 )
+from personal_finance.contexts.ingestion.infrastructure.persistence.model_standing_dynamodb import (  # noqa: E501
+    DynamoDBModelStandings,
+)
+from personal_finance.contexts.ingestion.infrastructure.persistence.model_usage_dynamodb import (  # noqa: E501
+    DynamoDBModelUsageQuota,
+)
 from personal_finance.shared.infrastructure.aws.session import (
     get_dynamodb_client,
     get_sqs_client,
 )
 from personal_finance.shared.infrastructure.config.settings import (
     get_ingestion_settings,
+    get_llm_settings,
 )
+from personal_finance.shared.infrastructure.config.tunable import TunableNumber
 from personal_finance.shared.infrastructure.observability.logging_config import (
     configure_logging,
 )
@@ -67,6 +75,17 @@ def build_worker() -> SQSParseWorker:
             ),
             registry=ParserRegistry(),
             event_publisher=build_ingestion_event_publisher(),
+            model_quota=DynamoDBModelUsageQuota(
+                client=get_dynamodb_client(),
+                table_name=settings.notifications_table,
+                daily_limit=TunableNumber(
+                    get_llm_settings().daily_calls_per_user,
+                ).current,
+            ),
+            standings=DynamoDBModelStandings(
+                client=get_dynamodb_client(),
+                table_name=settings.notifications_table,
+            ),
             fallback_extractor=extractor,
         ),
     )

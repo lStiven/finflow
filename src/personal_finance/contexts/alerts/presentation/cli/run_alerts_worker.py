@@ -5,11 +5,17 @@ just alerts-worker
 
 from __future__ import annotations
 
+from personal_finance.contexts.alerts.application.account_notices import (
+    NotifyModelPauseUseCase,
+)
 from personal_finance.contexts.alerts.application.handlers import (
     DeliverMovementAlertUseCase,
 )
 from personal_finance.contexts.alerts.infrastructure.financial.adapters import (
     build_budget_standings,
+)
+from personal_finance.contexts.alerts.infrastructure.identity.account_contacts import (
+    build_account_contacts,
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.sqs_worker import (
     SQSAlertsWorker,
@@ -23,7 +29,9 @@ from personal_finance.contexts.alerts.infrastructure.persistence.inbox import (
     DynamoDBRecipients,
 )
 from personal_finance.contexts.alerts.presentation.http.dependencies import (
+    build_account_mailer,
     build_message_sender,
+    build_notice_sender,
 )
 from personal_finance.shared.infrastructure.aws.session import (
     get_dynamodb_client,
@@ -48,22 +56,30 @@ def build_worker() -> SQSAlertsWorker:
 
     dynamodb = get_dynamodb_client()
     table_name = settings.channels_table
+    channels = DynamoDBAlertChannelRepository(client=dynamodb, table_name=table_name)
+    deliveries = DynamoDBDeliveryLog(client=dynamodb, table_name=table_name)
+    inbox = DynamoDBInbox(client=dynamodb, table_name=table_name)
 
     return SQSAlertsWorker(
         client=get_sqs_client(),
         queue_url=settings.events_queue_url,
         use_case=DeliverMovementAlertUseCase(
-            channels=DynamoDBAlertChannelRepository(
-                client=dynamodb,
-                table_name=table_name,
-            ),
-            deliveries=DynamoDBDeliveryLog(client=dynamodb, table_name=table_name),
+            channels=channels,
+            deliveries=deliveries,
             # The same builder the webhook uses, so a message sent by the
             # worker and the hello sent at linking go out the same way.
             sender=build_message_sender(),
             budgets=build_budget_standings(timezone=settings.display_timezone),
-            inbox=DynamoDBInbox(client=dynamodb, table_name=table_name),
+            inbox=inbox,
             recipients=DynamoDBRecipients(client=dynamodb, table_name=table_name),
+        ),
+        notices=NotifyModelPauseUseCase(
+            channels=channels,
+            deliveries=deliveries,
+            sender=build_notice_sender(),
+            inbox=inbox,
+            contacts=build_account_contacts(),
+            mailer=build_account_mailer(),
         ),
     )
 

@@ -100,8 +100,9 @@ class NotificationResponse(BaseModel):
     # | `failed` | `ignored`.
     status: str
     # Only alongside `pending_fallback`: `no_fallback_configured` when no model
-    # is set up, `fallback_found_nothing` when one read the email and declined.
-    # Either way the state is final for that attempt, not "still going".
+    # is set up, `fallback_found_nothing` when one read the email and declined,
+    # `daily_limit_reached` when its owner had spent the day's model reads.
+    # Each is final for that attempt, not "still going".
     deferred_reason: str | None
     received_at: int
 

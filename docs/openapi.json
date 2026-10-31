@@ -2752,7 +2752,8 @@
           "kind": {
             "enum": [
               "movement",
-              "weekly_summary"
+              "weekly_summary",
+              "model_paused"
             ],
             "title": "Kind",
             "type": "string"
@@ -2761,6 +2762,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/InboxMovementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pause": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxPauseResponse"
               },
               {
                 "type": "null"
@@ -2864,6 +2875,37 @@
           "budgets"
         ],
         "title": "InboxMovementResponse",
+        "type": "object"
+      },
+      "InboxPauseResponse": {
+        "description": "The model stopped reading the owner's unrecognised mail.",
+        "properties": {
+          "offenses": {
+            "title": "Offenses",
+            "type": "integer"
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Until"
+          },
+          "strike": {
+            "title": "Strike",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strike",
+          "paused_until",
+          "offenses"
+        ],
+        "title": "InboxPauseResponse",
         "type": "object"
       },
       "InboxResponse": {
@@ -3791,6 +3833,41 @@
           "absorbed_merchant_id"
         ],
         "title": "MergeMerchantsPayload",
+        "type": "object"
+      },
+      "ModelAccessResponse": {
+        "properties": {
+          "access": {
+            "enum": [
+              "open",
+              "paused",
+              "revoked"
+            ],
+            "title": "Access",
+            "type": "string"
+          },
+          "paused_until": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Until"
+          },
+          "strikes": {
+            "title": "Strikes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access",
+          "paused_until",
+          "strikes"
+        ],
+        "title": "ModelAccessResponse",
         "type": "object"
       },
       "MonthlyPointResponse": {
@@ -10442,6 +10519,33 @@
           }
         },
         "summary": "Get Catalog",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/ingestion/model-access": {
+      "get": {
+        "description": "Whether the model reads the caller's unrecognised mail, and until when not.",
+        "operationId": "get_model_access_ingestion_model_access_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelAccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Model Access",
         "tags": [
           "ingestion"
         ]

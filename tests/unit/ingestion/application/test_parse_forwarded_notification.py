@@ -13,6 +13,7 @@ only a deterministic template may read those. Real emails, all three of them
 """
 
 from collections.abc import Sequence
+import datetime
 from decimal import Decimal
 
 from personal_finance.contexts.ingestion.application.messages import (
@@ -22,8 +23,10 @@ from personal_finance.contexts.ingestion.application.parsing_handlers import (
     ParseNotificationUseCase,
     ParseOutcome,
 )
+from personal_finance.contexts.ingestion.application.ports import FallbackReading
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
 from personal_finance.contexts.ingestion.domain.events import TransferExtracted
+from personal_finance.contexts.ingestion.domain.model_standing import ModelStanding
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
@@ -37,6 +40,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailMessageId,
     IdempotencyKey,
     NotificationDeferredReason,
+    NotificationId,
     ProcessingStatus,
 )
 from personal_finance.shared.domain.events import Event
@@ -91,6 +95,43 @@ FORWARDED_FROM_ANOTHER_BANK = (
 NOT_A_FORWARD = "Un correo cualquiera que nadie sabe leer."
 
 
+class CleanStandings:
+    """Nobody is suspended: strikes are pinned down in `test_parse_fallback.py`."""
+
+    def get(self, user_id: UserId) -> ModelStanding:
+        return ModelStanding.clean(user_id)
+
+    def save(self, standing: ModelStanding) -> bool:
+        del standing
+
+        return True
+
+
+class UnlimitedQuota:
+    """Every read granted: the day's limit is pinned down in
+    `test_parse_fallback.py`, not here."""
+
+    def reserve(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> bool:
+        del user_id, notification_id, day
+
+        return True
+
+    def release(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> None:
+        del user_id, notification_id, day
+
+
 class InMemoryRepository:
     def __init__(self, notification: BankNotification) -> None:
         self.saved = {notification.idempotency_key: notification}
@@ -126,17 +167,19 @@ class StubExtractor:
         subject: str,
         body: str,
         received_at: PosixTime,
-    ) -> ExtractedTransaction | None:
+    ) -> FallbackReading:
         del sender, subject, body, received_at
         self.calls += 1
 
-        return ExtractedTransaction(
-            kind=TransactionKind.CARD_PURCHASE,
-            direction=TransactionDirection.OUTGOING,
-            amount=Money(amount=Decimal("1"), currency=Currency.COP),
-            occurred_at=PosixTime.from_epoch_seconds(1_700_000_000),
-            counterparty="LO QUE SEA",
-            bank="otro banco",
+        return FallbackReading(
+            transaction=ExtractedTransaction(
+                kind=TransactionKind.CARD_PURCHASE,
+                direction=TransactionDirection.OUTGOING,
+                amount=Money(amount=Decimal("1"), currency=Currency.COP),
+                occurred_at=PosixTime.from_epoch_seconds(1_700_000_000),
+                counterparty="LO QUE SEA",
+                bank="otro banco",
+            ),
         )
 
 
@@ -174,6 +217,8 @@ def _make(
         repository=InMemoryRepository(notification),
         registry=ParserRegistry(),
         event_publisher=publisher,
+        model_quota=UnlimitedQuota(),
+        standings=CleanStandings(),
         fallback_extractor=extractor,
     )
 
@@ -308,6 +353,8 @@ def test_without_a_model_a_forward_nobody_parses_is_still_kept() -> None:
         repository=InMemoryRepository(notification),
         registry=ParserRegistry(),
         event_publisher=publisher,
+        model_quota=UnlimitedQuota(),
+        standings=CleanStandings(),
     )
 
     result = use_case.execute(_message(notification))

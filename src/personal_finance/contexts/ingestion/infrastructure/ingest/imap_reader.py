@@ -16,6 +16,7 @@ from email.message import EmailMessage
 from email.utils import getaddresses, parsedate_to_datetime
 import imaplib
 import logging
+import ssl
 
 from personal_finance.contexts.ingestion.application.ports import InboundEmail
 from personal_finance.contexts.ingestion.domain.value_objects import (
@@ -167,7 +168,14 @@ class ImapIngestMailboxReader:
 
     @contextlib.contextmanager
     def _connection(self) -> Generator[imaplib.IMAP4_SSL]:
-        connection = imaplib.IMAP4_SSL(self._host, self._port)
+        # A verifying context, explicitly: without one `imaplib` checks neither
+        # the certificate nor the host name, and the App Password goes to
+        # whoever answered.
+        connection = imaplib.IMAP4_SSL(
+            self._host,
+            self._port,
+            ssl_context=ssl.create_default_context(),
+        )
 
         try:
             connection.login(self._address, self._app_password)

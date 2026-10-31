@@ -354,3 +354,65 @@ def test_an_ignored_notification_rebuilds_without_a_body() -> None:
     )
 
     assert stored.raw_content == ""
+
+
+def _processing() -> BankNotification:
+    notification = BankNotification.receive(
+        user_id=USER_ID,
+        message_id=EmailMessageId("message-1"),
+        sender=EmailAddress("bank@example.com"),
+        subject="Purchase",
+        raw_content="Purchase information",
+        received_at=PosixTime.now(),
+    )
+    notification.mark_as_queued()
+    notification.start_processing()
+
+    return notification
+
+
+def test_a_suspended_model_drops_the_body_it_will_not_read() -> None:
+    notification = _processing()
+
+    notification.defer_to_fallback(reason=NotificationDeferredReason.MODEL_SUSPENDED)
+
+    assert notification.status is ProcessingStatus.PENDING_FALLBACK
+    assert notification.raw_content == ""
+
+
+def test_every_other_deferral_keeps_the_body() -> None:
+    for reason in NotificationDeferredReason:
+        if reason is NotificationDeferredReason.MODEL_SUSPENDED:
+            continue
+
+        notification = _processing()
+        notification.defer_to_fallback(reason=reason)
+
+        assert notification.raw_content == "Purchase information", reason
+
+
+def test_a_deferral_that_read_nothing_rebuilds_without_a_body() -> None:
+    def stored(reason: NotificationDeferredReason) -> BankNotification:
+        return BankNotification(
+            id=NotificationId.for_message(
+                user_id=USER_ID,
+                message_id=EmailMessageId("message-1"),
+            ),
+            user_id=USER_ID,
+            message_id=EmailMessageId("message-1"),
+            idempotency_key=IdempotencyKey.from_message(
+                user_id=USER_ID,
+                message_id=EmailMessageId("message-1"),
+            ),
+            sender=EmailAddress("stranger@example.com"),
+            subject="Purchase",
+            raw_content="",
+            received_at=PosixTime.now(),
+            status=ProcessingStatus.PENDING_FALLBACK,
+            deferred_reason=reason,
+        )
+
+    assert stored(NotificationDeferredReason.MODEL_SUSPENDED).raw_content == ""
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        stored(NotificationDeferredReason.DAILY_LIMIT_REACHED)

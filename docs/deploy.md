@@ -9,7 +9,7 @@ Un despliegue completo son **tres cosas**, y cada una tiene su herramienta:
 | Qué | Con qué | Por qué así |
 |---|---|---|
 | Tablas, colas, DLQ, bus y reglas | `just provision-dev` / `provision-prod` | Es el plano de datos, y **local también lo necesita**: moto lo emula con este mismo código |
-| Las seis funciones Lambda, sus disparadores, sus roles y la URL de la API | `just deploy-dev` / `deploy-prod` (AWS SAM) | moto no ejecuta tu código; esto solo existe en AWS de verdad |
+| Las siete funciones Lambda, sus disparadores, sus roles y la URL de la API | `just deploy-dev` / `deploy-prod` (AWS SAM) | moto no ejecuta tu código; esto solo existe en AWS de verdad |
 | El bundle del frontend | `just web-publish-dev` / `web-publish` | Es estático: no hay servidor que mantener |
 
 De ahí **el orden, que no es negociable**: aprovisionar, desplegar, publicar.
@@ -166,7 +166,7 @@ La receta es `secret-put` **seguida de la ruta**; `just /finflow/...` a secas
 no es un comando y `just` responde que no conoce esa receta.
 
 Los dos últimos son de los avisos y los explica
-[alerts.md](alerts.md#desplegarlo). El del webhook lo inventas tú:
+[alerts.md](alerts.md#4-desplegarlo). El del webhook lo inventas tú:
 
 ```bash
 uv run python -c "import secrets; print(secrets.token_hex(32))"
@@ -199,7 +199,8 @@ stack o reiniciar el proceso local.
 Qué ruta lee cada stack está en `infra/samconfig.toml`
 (`JwtSecretParameter`, `MailboxPasswordParameter`, `MailAppPasswordParameter`,
 `LlmApiKeyParameter`, `TelegramBotTokenParameter`,
-`TelegramWebhookSecretParameter`).
+`TelegramWebhookSecretParameter`, y `LlmDailyCallsParameter`, que no es un
+secreto: ver [El tope diario del modelo](#el-tope-diario-del-modelo)).
 
 > **Un override olvidado ahí no falla: cruza los entornos.** Cada uno de esos
 > parámetros se declara en `infra/template.yaml` con un *default* que apunta a
@@ -246,6 +247,43 @@ Un `535` ahí significa que la App Password y `MailFromAddress` son de cuentas
 distintas — el único error que la plantilla no puede detectar y que solo
 aparece cuando alguien intenta registrarse.
 
+#### El tope diario del modelo
+
+Cuántos correos puede leer el modelo por persona y por día. No es un secreto,
+pero vive en Parameter Store por otra razón: la función de parseo lo relee
+cada cinco minutos, así que **cambiarlo no exige desplegar**. Cómo cuenta está
+en [overview.md → El tope del modelo](overview.md#el-tope-del-modelo).
+
+**Créalo antes del primer despliegue que lo incluye**, una vez por entorno.
+Esto vale también para un stack que ya existía antes de que el tope llegara:
+
+```bash
+just llm-limit-put development 20
+just llm-limit-put production 20
+```
+
+Sin él el despliegue termina en verde y `smoke` pasa, porque ninguno de los
+dos llama al modelo. El fallo aparece con el primer correo que ninguna
+plantilla reconoce: la función no puede leer el límite, el mensaje se
+reintenta y acaba en `parse-notifications-dlq`, con
+`Could not read the parameter at '/finflow/<entorno>/llm-daily-calls-per-user'`
+en el log. Crear el parámetro arregla los correos que lleguen después. Los que
+ya están en la DLQ no vuelven solos.
+
+Cambiarlo es la misma orden con otro número, y se aplica en menos de cinco
+minutos. `0` apaga el modelo para todos sin tocar las plantillas. La receta
+solo acepta un número entero, y escribe un `String` estándar, cuyas lecturas no
+se cobran. Para comprobar qué valor tiene:
+
+```bash
+aws ssm get-parameter --name /finflow/production/llm-daily-calls-per-user \
+    --profile finflow-production --query Parameter.Value --output text
+```
+
+`LlmDailyCallsParameter` tiene la misma trampa que los secretos: su *default*
+en la plantilla apunta a `/finflow/production/`, así que va en los **dos**
+bloques de `parameter_overrides`, y ya está en los dos.
+
 ### 5. La cuenta de correo de ingesta
 
 Manual, y **una por entorno**: una cuenta de Gmail dedicada, verificación en
@@ -271,17 +309,30 @@ aws sso login --profile finflow-dev            # si usas SSO
 just provision-dev          # tablas, colas, DLQ, bus y reglas, todo `dev-`
 # pega en .env.development las cuatro URLs de cola que imprime
 
-just deploy-dev             # construye la imagen y despliega las seis funciones
+just deploy-dev             # construye la imagen y despliega las siete funciones
 just deploy-outputs-dev     # imprime la ApiUrl y lo demás que publica el stack
 just smoke <ApiUrl>         # comprueba que responde de verdad
 ```
 
-`provision-dev` solo hay que repetirlo cuando cambie una tabla o una cola. Lo
-hizo la última vez: la tabla `credential_challenges` (códigos de verificación,
-tickets de registro y enlaces de restablecimiento) es nueva, así que **hay que
-volver a aprovisionar los dos entornos antes de desplegar** — la API la escribe
-en la primera llamada a `/identity/verification/request`.
-`deploy-dev`, cada vez que cambie el código.
+`provision-dev` solo hace falta cuando cambia una tabla o una cola, y
+repetirlo no hace daño: crea o ajusta, nunca borra. El pipeline lo corre en
+cada despliegue. `deploy-dev`, cada vez que cambie el código.
+
+**Desde los strikes del modelo (2026-10-31) cambió el aprovisionamiento**, así
+que a mano hay que correrlo antes de desplegar:
+
+- La tabla `users` tiene un índice nuevo, `by_user_id`. Alerts lo usa para saber
+  a qué correo escribir.
+- La regla de `alerts-events` también deja pasar `ModelReadingSuspended`.
+
+Si se despliega sin aprovisionar, todo sigue funcionando hasta el primer
+strike: entonces el aviso no encuentra el índice, se reintenta y termina en
+`alerts-events-dlq`.
+
+**Antes del primer despliegue con el tope del modelo**, una sola vez:
+`just llm-limit-put development 20`. Sin ese parámetro el despliegue sale
+bien y los correos que necesitan el modelo terminan en la DLQ. Ver
+[El tope diario del modelo](#el-tope-diario-del-modelo).
 
 Las cuatro URLs de cola no se pueden escribir por adelantado: incluyen el id
 de cuenta, así que solo existen una vez creada la cola.
@@ -296,6 +347,7 @@ aws sso login --profile finflow-production
 
 just provision-prod
 # pega en .env.production las cuatro URLs de cola que imprime
+just llm-limit-put production 20   # solo la primera vez: ver "El tope diario del modelo"
 
 just deploy-prod
 just deploy-outputs-prod
@@ -403,7 +455,7 @@ los copia tal cual a la raíz de `dist/`:
 
 ## Comprobar que sirve
 
-Que el despliegue termine bien dice que CloudFormation creó seis funciones,
+Que el despliegue termine bien dice que CloudFormation creó siete funciones,
 no que la aplicación funcione. Eso lo responde `just smoke`, que habla **por
 HTTP contra la URL desplegada** — lo único que ejerce el arranque en frío, el
 adaptador, y que la API resolviera su secreto de firma en Parameter Store.
@@ -461,7 +513,7 @@ que renombrar una cola en `provisioning.py` deja aquí una alarma vigilando un
 nombre que ya no existe, en `INSUFFICIENT_DATA`, con aspecto de sana.
 
 **Cierra el grifo de ECR.** Cada despliegue sube la imagen una vez por
-función —seis copias de ~250 MB— a repositorios que SAM crea y nunca poda. Es
+función —siete copias de ~250 MB— a repositorios que SAM crea y nunca poda. Es
 la única línea de esta factura que crece sola:
 
 ```bash
@@ -488,10 +540,11 @@ just deploy-logs-dev FinancialFunction
 |---|---|---|
 | `ApiFunction` | Function URL (HTTPS) | El mismo `uvicorn` de `just run-prod`, detrás del Lambda Web Adapter. **Cero líneas de código propias.** |
 | `IngestFunction` | Un temporizador | Una pasada de IMAP por tick. Limitada a **una** ejecución simultánea: dos competirían por los mismos correos `UNSEEN`. |
-| `ParseFunction` | La cola `parse-notifications` | Lotes de 3 |
+| `ParseFunction` | La cola `parse-notifications` | Lotes de 3. Cada correo que va al modelo gasta del [tope diario](overview.md#el-tope-del-modelo) de su dueño |
 | `MerchantFunction` | La cola `merchant-events` | Lotes de 3, y **una** ejecución simultánea |
 | `FinancialFunction` | La cola `financial-events` | Lotes de 10, sin límite de concurrencia |
-| `AlertsFunction` | La cola `alerts-events` | Lotes de 5, y **una** ejecución simultánea. Ver [alerts.md](alerts.md#por-qué-una-sola-ejecución-a-la-vez) |
+| `AlertsFunction` | La cola `alerts-events` | Lotes de 5, y **una** ejecución simultánea. Ver [alerts.md](alerts.md#por-qué-una-sola-ejecución-a-la-vez). También avisa cuando el modelo se suspende para alguien, y para eso manda correo: usa `MailFromAddress` y `MailAppPasswordParameter`, y no arranca sin ellos |
+| `WeeklySummaryFunction` | Un temporizador: los lunes a las 08:00 de Bogotá | El resumen de la semana anterior, por Telegram y a la campana. **Una** ejecución simultánea; correrlo dos veces no manda nada dos veces. Ver [alerts.md](alerts.md#el-resumen-del-lunes) |
 
 **Por qué esos números.** El timeout de una función no puede pasar del
 `VisibilityTimeout` de su cola (120s): si lo pasara, AWS rechaza el enganche al
@@ -512,12 +565,37 @@ defecto** y solo se conserva lo que la respuesta nombra. Esa inversión vive en
 y depende de `FunctionResponseTypes: [ReportBatchItemFailures]` en la
 plantilla: sin esa línea la respuesta se ignora y se borra el lote entero.
 
+## Referencia: los parámetros del stack
+
+Los dieciocho de `infra/template.yaml`. Cada entorno los fija en su bloque
+`parameter_overrides` de `infra/samconfig.toml`, y cambiar cualquiera es un
+despliegue, salvo el *valor* del tope del modelo, que vive en SSM.
+
+| Parámetro | development / production | Qué es |
+|---|---|---|
+| `EnvironmentName` | `development` / `production` | Llega a la app como `ENVIRONMENT`. De ahí deriva la app los nombres de sus recursos, y es lo que `/health` responde y lo que impide a `smoke` escribir en producción. |
+| `ResourcePrefix` | `dev-` / `""` | Solo para los ARN de los permisos. Tiene que coincidir con el prefijo que la app deriva de `EnvironmentName`; si no, cada función pide permiso sobre tablas que no son las suyas. En producción va entre comillas: SAM rechaza un valor vacío sin ellas. |
+| `IngestMailboxAddress` | una cuenta de Gmail por entorno | El buzón de ingesta. Ver [Cada stack tiene su propio buzón](#cada-stack-tiene-su-propio-buzón). |
+| `IngestScheduleExpression` | `rate(5 minutes)` / `rate(1 minute)` | Cada cuánto se revisa el buzón. Es lo que más gasta del free tier de Lambda: casi todo son pasadas que no encuentran nada. |
+| `IngestScheduleState` | `ENABLED` / `ENABLED` | Apagar la ingesta sin desmontar nada. |
+| `JwtSecretParameter`, `MailboxPasswordParameter`, `MailAppPasswordParameter`, `LlmApiKeyParameter`, `TelegramBotTokenParameter`, `TelegramWebhookSecretParameter` | `/finflow/<entorno>/…` | Rutas de los secretos. Ver [Los secretos](#4-los-secretos-en-parameter-store). |
+| `LlmDailyCallsParameter` | `/finflow/<entorno>/llm-daily-calls-per-user` | Ruta del tope del modelo. Ver [El tope diario del modelo](#el-tope-diario-del-modelo). |
+| `MailFromAddress`, `PasswordResetUrl` | | El correo de Identity. Ver [Los secretos](#4-los-secretos-en-parameter-store). `MailFromAddress` y `MailAppPasswordParameter` también los usa `AlertsFunction`, para el aviso de suspensión del modelo. |
+| `CorsOrigins` | el origen de Pages de cada uno, y `localhost:5173` | Coincidencia exacta. Ver [Frontend → Cloudflare Pages](#frontend--cloudflare-pages). |
+| `TelegramBotUsername` | un bot por entorno | Ver [alerts.md](alerts.md#4-desplegarlo). |
+| `AlertEmail` | | A quién avisan las alarmas de las DLQ. Vacío despliega, pero nadie se entera. |
+| `LogRetentionDays` | `7` / `30` | Días de logs. Explícito porque el valor por defecto de AWS es no borrarlos nunca. |
+
+Los seis `…Parameter` de secretos y `LlmDailyCallsParameter` tienen un
+*default* que apunta a `/finflow/production/`: un override olvidado hace que
+development lea lo de producción, sin error.
+
 ## Lo que no se puede desplegar
 
-Dos cosas siguen siendo manuales, y ninguna es código: crear la cuenta de
-Gmail con su App Password, y poner los valores de los tres secretos en
-Parameter Store. La plantilla solo guarda sus **rutas**; los valores nunca
-pasan por git ni por la imagen.
+Tres cosas siguen siendo manuales, y ninguna es código: crear la cuenta de
+Gmail con su App Password, poner los valores de los seis secretos en
+Parameter Store, y crear allí el tope del modelo. La plantilla solo guarda sus
+**rutas**; los valores nunca pasan por git ni por la imagen.
 
 Los errores que aparecen al desplegar están en
 [running.md → Cuando algo falla](running.md#cuando-algo-falla).

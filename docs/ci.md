@@ -146,5 +146,13 @@ scripts/ci/local-stack.sh stop
 
 - Registrar el webhook de Telegram y poner sus secretos en SSM, una vez por
   entorno (ver [alerts.md](alerts.md)).
+- Crear el tope del modelo en SSM, una vez por entorno y **antes** del primer
+  push que lo incluye: `just llm-limit-put development 20` antes de empujar a
+  `dev`, y `just llm-limit-put production 20` antes de mezclar a `master`. El
+  pipeline no puede detectar que falta: el despliegue y el smoke salen en verde,
+  y el primer correo que necesite el modelo termina en la DLQ (ver
+  [deploy.md](deploy.md#el-tope-diario-del-modelo)).
+- Cualquier parámetro nuevo de SSM, en general: el pipeline despliega rutas,
+  nunca crea valores.
 - Borrar recursos que ya no se usan, como el índice viejo `by_user` de la tabla
   de notificaciones.

@@ -220,9 +220,16 @@ AWS (ver Trabas).
    tabla de notificaciones. Presupuestos, mesada y facturas propuestas siguen
    solo en `dev` hasta que se decida llevarlos.
 
-2. **Ponerle tope al gasto del modelo de lenguaje.** Cada correo que ninguna
-   plantilla reconoce llama a Gemini, y no hay ningún límite. Es lo único de esta
-   lista que cuesta plata mientras falta.
+2. **Desplegar el tope del modelo y los strikes.** Las tres entregas están
+   hechas y probadas, sin desplegar. El parámetro de development ya existe
+   (2026-10-31); falta `just llm-limit-put production 20` antes de publicar en
+   producción, o todo correo que vaya al modelo termina en la DLQ. El
+   aprovisionamiento cambió (índice `by_user_id` en `users`, regla de
+   `alerts-events`): el pipeline lo corre solo, a mano va antes de desplegar.
+   Quedan abiertos, a propósito: un correo que pasó el tope no se vuelve a leer,
+   y nadie verifica DKIM al recibir, así que quien suplante a un remitente
+   aprobado puede sumarle strikes a otro. Reglas y porqués en
+   [docs/decisions.md](docs/decisions.md), «Limiting the model».
 
 3. **Nada agenda el cobro mensual de los créditos.** Hoy los intereses se
    registran cuando alguien abre la pantalla del crédito y pulsa *Actualizar*.
@@ -332,26 +339,23 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-31 — **Strikes del modelo.** 10 correos que no son de un banco en
+  una hora pausan el modelo 1 día, 3, o para siempre; aviso por correo,
+  campana, Telegram y banner; `just model-access-prod <id> --reinstate`.
+  También: la guía del frontend cubre facturas, plan, presupuestos y
+  exportar. `just prepare` (2689) y `web-check` (592) en verde. Sin commit.
+- 2026-10-31 — **Documentación al día con lo desplegable.** El tope del modelo
+  explicado en `overview.md` y sus pasos en `deploy.md`, `ci.md` y
+  `running.md`. También: siete funciones (no seis), el resumen del lunes y la
+  campana en `alerts.md`, 43 endpoints que faltaban en la referencia del
+  frontend, y la tabla de los 18 parámetros del stack. Sin commit.
+- 2026-10-30 — **Tope de 20 lecturas del modelo por usuario al día.** Se
+  cambia con `just llm-limit-put`, sin desplegar. `just prepare` e
+  `infra-check` en verde. Sin commit.
+- 2026-10-30 — **El modelo lee el texto del correo, no su HTML.** Menos
+  tokens por llamada; conserva líneas, celdas y la dirección del banco en un
+  reenvío. `just prepare` en verde. Sin commit.
 - 2026-10-26 — **Reportes → Por categoría**, y fuera «Configuración» del menú.
   Una categoría y un mes: total, frente al mes anterior y al promedio, los
   últimos 6 meses, comercios, tope y movimientos; cambiar no recarga la
   pantalla. `e2e-views` (23 pantallas) y `just web-check` en verde. Sin commit.
-- 2026-10-26 — **Facturas: «Cobros de octubre» por lo que falta, y sin
-  propuestas de otro comercio.** Pendientes primero, cada uno dice cuándo
-  vence y qué va a pasar; lo pagado, plegado y diciendo cómo. «Ya lo pagué»
-  advierte del doble conteo si el banco avisa. Un pago de otra categoría ya no
-  se propone. `e2e-bills` en verde. Sin commit.
-- 2026-10-26 — **Un comercio en revisión se responde desde el movimiento.**
-  «Está bien», «Otra categoría» o «Revisar el comercio» en el detalle, sin ir
-  a Comercios. `e2e-transacciones` lo cubre sin gastar la cola del demo. Sin
-  commit.
-- 2026-10-23 — **Facturas por comercio, y varias del mismo comercio se
-  separan solas.** La factura nombra quién la cobra (aparte de su nombre) y
-  dos pagos del mismo comercio en la misma semana van cada uno a su factura
-  cuando los montos lo dejan claro. Pruebas, pyright, Ruff y `e2e-bills` en
-  verde. Sin commit.
-- 2026-10-22 — **Una factura se paga sola cuando llega su movimiento**, y
-  puede declararse de monto variable. El enlace se escribe solo y condicional,
-  y un pago que encaja en dos facturas se propone. Falta desplegar el permiso
-  del worker sobre `merchants` (sale solo con el pipeline). `e2e-bills`,
-  pruebas, pyright y Ruff en verde. Sin commit.

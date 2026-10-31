@@ -48,7 +48,7 @@ variable `ENV_FILE` lo decide, y cada recipe de `just` ya la fija por ti:
 | **production** | `.env.production` | cuenta real | desnudos | `just run-prod`, `just deploy-prod` |
 
 Los ficheros `.env` configuran lo que corre **desde tu máquina**. Lo que corre
-**desplegado** son seis funciones Lambda, y su configuración vive en
+**desplegado** son siete funciones Lambda, y su configuración vive en
 `infra/template.yaml` — ver [deploy.md](deploy.md).
 
 **El frontend no sigue esta tabla, y conviene saberlo antes de perder una
@@ -129,6 +129,10 @@ Opcionales:
   — sin ella no hay plan B: un correo que ninguna plantilla reconozca se
   conserva sin parsear, y los comercios se agrupan solo con reglas
   deterministas.
+- **`LLM_DAILY_CALLS_PER_USER`** — cuántos correos puede leer el modelo por
+  persona y por día de Bogotá; `20` si no está. En local es un número y no
+  toca AWS. Desplegado es una referencia `ssm:` que la función relee cada cinco
+  minutos. Ver [overview.md → El tope del modelo](overview.md#el-tope-del-modelo).
 - **`API_CORS_ORIGINS`** — ya trae los puertos de dev habituales
   (`http://localhost:5173,http://localhost:3000`). Si tu frontend escucha en
   otro puerto, añádelo. Vacío significa ninguno, que es lo correcto cuando el
@@ -307,6 +311,17 @@ just aws-status  # tablas, colas y buses que existen ahora mismo
 éxito** y no entrega nada, así que es la única forma de comprobar que un
 evento salió de verdad.
 
+Si alguien quedó suspendido por strikes (ver
+[overview.md → Los strikes](overview.md#los-strikes)):
+
+```bash
+just model-access <user_id>               # open, paused hasta…, o revoked
+just model-access <user_id> --reinstate   # reactivar, y borrar sus strikes
+```
+
+Con `-dev` o `-prod` al final, contra AWS. En local el aviso por correo no se
+manda: el `alerts-worker` lo escribe en su log.
+
 `just inspect` mira el despliegue entero, sin autenticación y desde la máquina
 que lo corre. La vista equivalente para un usuario —solo su propio correo— es
 `GET /ingestion/notifications`, y esa sí está montada en producción.
@@ -356,7 +371,7 @@ just up-dev                 # los seis procesos, en una terminal
 ```
 
 Eso corre los procesos **desde tu máquina** contra los recursos `dev-`. Para
-dejarlos corriendo en AWS como seis funciones Lambda, ver
+dejarlos corriendo en AWS como funciones Lambda, ver
 [deploy.md → Backend → development](deploy.md#backend--development).
 
 Aquí `ingest-worker` **sí** arranca: development es un entorno donde el correo
@@ -373,7 +388,7 @@ aviso en [Configurar `.env`](#1-configurar-env).
 Los secretos del stack `finflow-dev` son los suyos, bajo
 `/finflow/development/`: `just secret-put` deduce del prefijo de la ruta a qué
 entorno pertenece, así que no hay un argumento que equivocar — ver
-[deploy.md → Los tres secretos](deploy.md#4-los-tres-secretos-en-parameter-store).
+[deploy.md → Los secretos](deploy.md#4-los-secretos-en-parameter-store).
 
 Entre los dos stacks desplegados el problema ya no existe: cada uno tiene su
 propia cuenta de Gmail (`IngestMailboxAddress` en `infra/samconfig.toml`), y
@@ -407,9 +422,11 @@ aws configure --profile finflow-production
 de `~/.aws`, y desplegado del rol de la función (deja `AWS_PROFILE` sin valor
 en ese caso).
 
-Los tres secretos de la aplicación —`IDENTITY_JWT_SECRET`,
-`INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`— **no** van en el
-fichero: van en SSM Parameter Store y el fichero solo guarda la referencia.
+Los secretos de la aplicación —`IDENTITY_JWT_SECRET`,
+`IDENTITY_MAIL_APP_PASSWORD`, `INGESTION_INGEST_MAILBOX_APP_PASSWORD`,
+`LLM_API_KEY`, `ALERTS_TELEGRAM_BOT_TOKEN` y
+`ALERTS_TELEGRAM_WEBHOOK_SECRET`— **no** van en el fichero: van en SSM
+Parameter Store y el fichero solo guarda la referencia.
 
 ```
 IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret
@@ -422,7 +439,7 @@ están fuera del fichero. Se leen una vez por proceso, así que rotar uno exige
 reiniciar.
 
 Cómo se ponen ahí, y cómo se rotan, en
-[deploy.md → Los tres secretos](deploy.md#4-los-tres-secretos-en-parameter-store).
+[deploy.md → Los secretos](deploy.md#4-los-secretos-en-parameter-store).
 
 ### 2. Los recursos
 
@@ -436,7 +453,7 @@ Comprueba qué existe ahora mismo con `just aws-status .env.production`.
 
 ### 3. Correr producción desde tu máquina
 
-Lo normal es que producción corra desplegada, como seis funciones Lambda
+Lo normal es que producción corra desplegada, como siete funciones Lambda
 ([deploy.md](deploy.md)). Aun así los seis procesos de siempre siguen
 sirviendo para depurar contra datos reales, hacer una migración puntual o
 comprobar algo sin desplegar:
@@ -758,6 +775,9 @@ degradarse en silencio:
 | `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
 | `Missing .env… — copy it from ….example` | El recipe de `just` no encuentra su fichero de entorno. |
 | `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
+| `Could not read the parameter at '/finflow/<entorno>/llm-daily-calls-per-user'` (en la función de parseo) | El tope del modelo no existe en SSM, o no es un número. `just llm-limit-put <entorno> 20`. Los correos que fallaron mientras tanto están en `parse-notifications-dlq`. |
+| `Expected a whole number from the configured value` | `LLM_DAILY_CALLS_PER_USER` en `.env` no es un número entero. El parse worker no arranca. |
+| `could not refresh a tunable value; keeping the last one` (aviso) | SSM no respondió al releer el tope, o alguien lo cambió por algo que no es un número. Sigue con el último valor bueno. |
 | `InvalidParameterValueException: ... maximum visibility timeout` (al desplegar) | El timeout de una función supera el `VisibilityTimeout` de su cola. Bájalo a 120s o menos. |
 | `Resource of type 'AWS::Logs::LogGroup' ... already exists` | Un log group con ese nombre existe fuera del stack. Bórralo o cámbiale el nombre en la plantilla. |
 | `ExpiredTokenException` en una función con horas de vida | Credenciales congeladas. `build_session` ya lo evita en Lambda; si reaparece, comprueba que no haya un `AWS_PROFILE` puesto en la plantilla. |
@@ -768,8 +788,10 @@ trabajo lleva al lado una *dead-letter queue* con ese sufijo: un worker borra
 el mensaje al terminar bien, no al recogerlo, así que uno que falla siempre
 volvería para siempre tapando a los demás — tras cinco intentos SQS lo aparta
 ahí. Es lo que convierte "desapareció dinero" en "hay 40 mensajes en
-`parse-notifications-dlq`". `just inspect` muestra ese número; nadie lo vigila
-todavía, no hay alarma.
+`parse-notifications-dlq`". `just inspect` muestra ese número. Desplegado,
+cada DLQ tiene una alarma que avisa a `AlertEmail` (ver
+[deploy.md → Después del primer despliegue](deploy.md#después-del-primer-despliegue));
+en local nadie la vigila.
 
 Un mensaje que no cumple su esquema se borra: nunca va a cumplirlo. Uno que
 quizá entienda un despliegue más nuevo —una moneda, una versión desconocida—
