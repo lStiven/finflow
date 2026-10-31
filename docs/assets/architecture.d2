@@ -1,0 +1,308 @@
+# Arquitectura de Finflow, de arriba abajo: lo que entra, lo que corre en AWS
+# y lo que sale. Fuente de docs/assets/architecture.svg; se regenera con
+#
+#   d2 docs/assets/architecture.d2 docs/assets/architecture.svg
+#
+# El CLI mete los íconos dentro del SVG. El export de play.d2lang.com los deja
+# como URLs, y GitHub no carga nada externo dentro de un SVG: saldrían vacíos.
+#
+# Las flechas entre módulos van de contenedor a contenedor: ELK no ve las que
+# entran a una celda de grid y las traza en diagonal por encima de todo.
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+  lambda: https://icons.terrastruct.com/aws%2FCompute%2FAWS-Lambda.svg
+}
+
+direction: down
+style.fill: "#0B0A1A"
+
+classes: {
+  fn: {
+    width: 230
+    height: 150
+    icon.near: bottom-center
+    label.near: top-center
+    style: {
+      fill: "#1C1633"
+      stroke: "#FF9900"
+      stroke-width: 2
+      border-radius: 10
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  queue: {
+    shape: queue
+    width: 210
+    height: 64
+    style: {
+      fill: "#2E1065"
+      stroke: "#A78BFA"
+      font-color: "#EDE9FE"
+      font-size: 17
+    }
+  }
+  svc: {
+    width: 230
+    height: 150
+    icon.near: bottom-center
+    label.near: top-center
+    style: {
+      fill: "#141B2D"
+      stroke: "#64748B"
+      stroke-width: 2
+      border-radius: 10
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ext: {
+    width: 230
+    height: 150
+    icon.near: bottom-center
+    label.near: top-center
+    style: {
+      fill: "#0F172A"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 10
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  band: {
+    style: {
+      fill: "#0B0A1A"
+      stroke: "#334155"
+      stroke-dash: 4
+      border-radius: 16
+      font-color: "#94A3B8"
+      font-size: 20
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 16
+    }
+  }
+}
+
+heading: "Finflow · arquitectura" {
+  shape: text
+  near: top-center
+  style: {
+    font-size: 32
+    bold: true
+    font-color: "#F8FAFC"
+  }
+}
+
+entra: "Entra" {
+  class: band
+
+  gmail: "Buzón de ingesta\nGmail · IMAP" {
+    class: ext
+    icon: https://cdn.simpleicons.org/gmail/EA4335
+  }
+  web: "App web\nReact · Cloudflare Pages" {
+    class: ext
+    icon: https://cdn.simpleicons.org/cloudflarepages/F38020
+  }
+}
+
+aws: "AWS · serverless" {
+  icon: https://icons.terrastruct.com/aws%2F_Group%20Icons%2FAWS-Cloud-alt_light-bg.svg
+  style: {
+    fill: "#0F0D20"
+    stroke: "#FF9900"
+    stroke-dash: 3
+    border-radius: 24
+    font-color: "#FDBA74"
+    font-size: 24
+    bold: true
+  }
+
+  ingestion: "Ingestion · del correo a una transacción" {
+    class: ctx
+    style: {stroke: "#D946EF"; font-color: "#F0ABFC"}
+    grid-columns: 3
+    horizontal-gap: 48
+
+    ingest: "Ingest\ncada minuto" {class: fn; icon: ${lambda}}
+    queue: parse-notifications {class: queue}
+    parse: "Parse\nplantilla o Gemini" {class: fn; icon: ${lambda}}
+    ingest -> queue -> parse: {class: mail}
+  }
+
+  api: "API\nFastAPI · JWT" {class: fn; icon: ${lambda}}
+
+  bus: "EventBridge\nbus finflow" {
+    icon: https://icons.terrastruct.com/aws%2FApplication%20Integration%2FAmazon-EventBridge.svg
+    style: {
+      fill: "#2A0F2E"
+      stroke: "#E7157B"
+      stroke-width: 3
+      border-radius: 10
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+
+  shared: "Datos, secretos y vigilancia · de todas las funciones" {
+    class: ctx
+    style: {stroke: "#64748B"; font-color: "#CBD5E1"}
+    grid-columns: 3
+    grid-gap: 24
+
+    ddb: "DynamoDB\nuna tabla por contexto" {
+      class: svc
+      icon: https://icons.terrastruct.com/aws%2FDatabase%2FAmazon-DynamoDB.svg
+    }
+    ssm: "Parameter Store\nsecretos y tope" {
+      class: svc
+      icon: https://icons.terrastruct.com/aws%2FManagement%20%26%20Governance%2FAWS-Systems-Manager_Parameter-Store_light-bg.svg
+    }
+    alarms: "CloudWatch → SNS\nalarmas de las DLQ" {
+      class: svc
+      icon: https://icons.terrastruct.com/aws%2FManagement%20%26%20Governance%2FAmazon-CloudWatch.svg
+    }
+  }
+
+  merchant: "Merchant · comercios" {
+    class: ctx
+    style: {stroke: "#F59E0B"; font-color: "#FCD34D"}
+    grid-rows: 2
+    vertical-gap: 56
+
+    queue: merchant-events {class: queue}
+    worker: "Merchant\ncomercio canónico" {class: fn; icon: ${lambda}}
+    queue -> worker: {class: event}
+  }
+
+  financial: "Financial · cuentas y saldos" {
+    class: ctx
+    style: {stroke: "#10B981"; font-color: "#6EE7B7"}
+    grid-rows: 2
+    vertical-gap: 56
+
+    queue: financial-events {class: queue}
+    worker: "Financial\nledger y saldos" {class: fn; icon: ${lambda}}
+    queue -> worker: {class: event}
+  }
+
+  alerts: "Alerts · avisos" {
+    class: ctx
+    style: {stroke: "#60A5FA"; font-color: "#93C5FD"}
+    grid-rows: 2
+    grid-columns: 2
+    horizontal-gap: 40
+    vertical-gap: 56
+
+    queue: alerts-events {class: queue}
+    # Celda vacía: deja WeeklySummary en la fila de los demás workers.
+    spacer: "" {width: 210; height: 64; style.opacity: 0}
+    worker: "Alerts\nal instante" {class: fn; icon: ${lambda}}
+    weekly: "WeeklySummary\nlunes 8:00" {class: fn; icon: ${lambda}}
+    queue -> worker: {class: event}
+  }
+}
+
+sale: "Sale · servicios de terceros" {
+  class: band
+
+  gemini: "Gemini · plan B\nde Parse y Merchant" {
+    class: ext
+    icon: https://cdn.simpleicons.org/googlegemini/8E75B2
+  }
+  telegram: "Telegram\nbot de avisos" {
+    class: ext
+    icon: https://cdn.simpleicons.org/telegram/26A5E4
+  }
+  smtp: "Gmail · SMTP\navisos de cuenta" {
+    class: ext
+    icon: https://cdn.simpleicons.org/gmail/EA4335
+  }
+}
+
+key: "" {
+  near: bottom-center
+  grid-columns: 3
+  grid-gap: 40
+  style: {
+    fill: "#0B0A1A"
+    stroke: "#334155"
+    border-radius: 12
+  }
+
+  mail: "━━  el camino de un correo" {shape: text; style: {font-color: "#F0ABFC"; font-size: 20}}
+  event: "━━  eventos entre contextos, cada uno por su cola SQS con DLQ" {shape: text; style: {font-color: "#A5F3FC"; font-size: 20}}
+  quiet: "╍╍  lecturas y llamadas" {shape: text; style: {font-color: "#94A3B8"; font-size: 20}}
+}
+
+# El camino de un correo.
+entra.gmail -> aws.ingestion: {class: mail}
+aws.ingestion -> aws.bus: TransactionExtracted {class: mail}
+
+# Los eventos entre contextos.
+aws.bus -> aws.merchant: {class: event}
+aws.bus -> aws.financial: {class: event}
+# Financial publica en el bus. Con `<-` la flecha apunta al bus, pero ELK no
+# ve un ciclo y no sube Financial por encima de EventBridge.
+aws.bus <- aws.financial: {
+  class: event
+  style.animated: false
+  source-arrowhead.label: MovementRecorded
+}
+aws.bus -> aws.alerts: {class: event}
+aws.alerts -> sale.telegram: {class: event}
+
+# Lo demás.
+entra.web -> aws.api: {class: quiet}
+aws.alerts -> sale.smtp: {class: quiet}
+
+# Invisibles: solo bajan la plataforma compartida al pie de AWS, debajo de los
+# contextos que la usan, en vez de ensanchar el diagrama a la derecha.
+aws.merchant -> aws.shared: {style.opacity: 0}
+aws.financial -> aws.shared: {style.opacity: 0}
+aws.alerts -> aws.shared: {style.opacity: 0}

@@ -339,6 +339,14 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-10-31 — **Diagramas en D2 y guías de `docs/` más visuales.** 19 SVG en
+  `docs/assets/` (íconos embebidos, cada uno con su `.d2`); sin Mermaid en el
+  README. Guías verificadas contra el código y reescritas con tablas; la
+  referencia de endpoints cubre las 91 operaciones. Sin commit.
+- 2026-10-31 — **README en la raíz y guías al día.** Portada con problema,
+  flujo y arquitectura en diagramas, contextos, qué hace hoy, CI y cifras;
+  `docs/README.md` vuelve a ser el índice. Alerts en `overview.md`,
+  `frontend/README.md` en español y al día, variables de Postman. Sin commit.
 - 2026-10-31 — **Strikes del modelo.** 10 correos que no son de un banco en
   una hora pausan el modelo 1 día, 3, o para siempre; aviso por correo,
   campana, Telegram y banner; `just model-access-prod <id> --reinstate`.
@@ -352,10 +360,3 @@ AWS (ver Trabas).
 - 2026-10-30 — **Tope de 20 lecturas del modelo por usuario al día.** Se
   cambia con `just llm-limit-put`, sin desplegar. `just prepare` e
   `infra-check` en verde. Sin commit.
-- 2026-10-30 — **El modelo lee el texto del correo, no su HTML.** Menos
-  tokens por llamada; conserva líneas, celdas y la dirección del banco en un
-  reenvío. `just prepare` en verde. Sin commit.
-- 2026-10-26 — **Reportes → Por categoría**, y fuera «Configuración» del menú.
-  Una categoría y un mes: total, frente al mes anterior y al promedio, los
-  últimos 6 meses, comercios, tope y movimientos; cambiar no recarga la
-  pantalla. `e2e-views` (23 pantallas) y `just web-check` en verde. Sin commit.

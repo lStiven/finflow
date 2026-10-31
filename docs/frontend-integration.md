@@ -2,29 +2,33 @@
 
 Qué hay que integrar, en qué orden, y qué reglas de negocio no se pueden
 romper desde la interfaz. Cubre el recorrido completo —crear el usuario,
-conectar el banco, recibir correos, declarar cuentas, revisar comercios— y
-cómo probarlo simulando un ambiente real sin depender de que llegue un correo
-de verdad.
+conectar el banco, recibir correos, declarar cuentas, revisar comercios, ver
+reportes, declarar facturas, el plan del mes y los presupuestos— y cómo
+probarlo simulando un ambiente real sin depender de que llegue un correo de
+verdad. Los avisos (Telegram y la campana) tienen su propia guía:
+[alerts.md](alerts.md).
 
 Complementos, no sustitutos de esta guía:
 
 | | |
-|---|---|
+| --- | --- |
 | [overview.md](overview.md) | Qué hace el sistema y por qué está partido así. Léelo primero si nunca lo has visto. |
 | [running.md](running.md) | Cómo levantar el backend, los workers y el emulador. |
 | [deploy.md](deploy.md) | Cómo se despliega el backend y cómo se publica el frontend. |
 | [email-forwarding.md](email-forwarding.md) | El contrato de la bandeja de entrada, en detalle. |
-| [postman/](postman/README.md) | Los 61 requests listos para importar en Postman o Bruno. |
+| [postman/](postman/README.md) | Los requests listos para importar en Postman o Bruno, agrupados por contexto. |
 | `http://localhost:8000/docs` | OpenAPI en vivo. Es la fuente de verdad de esquemas y códigos. |
 | [openapi.json](openapi.json) | El mismo contrato, exportado y versionado (`just openapi`). De aquí salen los tipos TypeScript del frontend. |
 | [frontend/](../frontend/README.md) | La app que consume todo esto. Cómo levantarla y regenerar los tipos. |
+
+![La API: 91 operaciones en cinco contextos. /identity tiene 11, /ingestion 4, /merchants 12, /financial 55, /alerts 8 y /health 1.](assets/api-map.svg)
 
 ---
 
 ## Antes de escribir la primera llamada
 
 | | |
-|---|---|
+| --- | --- |
 | **Base URL** | `http://localhost:8000` en local; contra un entorno desplegado, la `ApiUrl` del stack (`just deploy-outputs-dev` / `-prod`). No hay prefijo `/api` ni versión en la ruta. En el frontend es la única variable que lo decide: `VITE_API_BASE_URL`. |
 | **Autenticación** | `Authorization: Bearer <token>`. JWT firmado (HS256), sin refresh y sin logout: cuando expira, se vuelve a hacer login. En local dura 24 h (`IDENTITY_ACCESS_TOKEN_TTL_MINUTES`). |
 | **Dinero** | Siempre **string decimal** (`"158800"`, `"45000.50"`). Nunca number. Parséalo a decimal, no a `float`: un float pierde centavos. |
@@ -81,10 +85,12 @@ Lo que hay que saber para escribir el cliente:
 El detalle está en [running.md](running.md); aquí va lo mínimo.
 
 ```bash
-just aws-init          # emulador AWS + tablas, colas y bus (una vez por sesión)
-just seed              # usuario demo, alertas, cuentas y comercios ya poblados
-just dev               # API en http://localhost:8000
+just up                # emulador, recursos, datos demo, la API y los workers
 ```
+
+Una terminal y nada más: la API queda en http://localhost:8000 y el pipeline
+entero corre detrás. Si solo quieres la API con recarga en caliente, sin
+workers, son tres pasos: `just aws-init`, `just seed` y `just dev`.
 
 > Esta guía describe **la API**, no el cliente. Ya existe un frontend en
 > `frontend/` que la consume: se levanta con `just web` y sus tipos se generan
@@ -98,16 +104,10 @@ ocho movimientos (uno **sin asignar** a propósito) y seis comercios pendientes
 de revisión. El token sale impreso al final. Es reproducible: se puede volver
 a correr las veces que haga falta y deja exactamente los mismos saldos.
 
-Para ver moverse el pipeline mientras integras, cada worker en su terminal:
-
-```bash
-just parse-worker      # cola -> parser -> evento
-just merchant-worker   # evento -> comercios
-just financial-worker  # evento -> ledger y saldos
-```
-
-`just ingest-worker` (el que lee el buzón por IMAP) solo hace falta cuando
-quieras probar con correos reales. Sin él, el webhook local
+`just up` ya corre los workers que mueven el pipeline: parseo, comercios,
+saldos y avisos. El que lee el buzón por IMAP queda **apagado en local**, porque
+el buzón lo comparten todos los entornos y leerlo aquí se comería el correo de
+development (`--with-ingest` lo enciende). En su lugar, el webhook local
 `POST /ingestion/bank-notifications` hace de banco: acepta un correo entero
 como si lo hubieran reenviado.
 
@@ -119,6 +119,8 @@ como si lo hubieran reenviado.
 ---
 
 ## El recorrido completo, pantalla por pantalla
+
+![El alta, llamada por llamada: pedir y canjear el código, registrarse, ver y aprobar la bandeja, consultar el estado del alta y leer lo que llegó.](assets/onboarding.svg)
 
 ### 0. Salud
 
@@ -156,48 +158,26 @@ POST /identity/register                 → 201 { user_id, access_token, ... }
 
 Reglas del paso del código:
 
-- **`request` responde `202` siempre**, exista o no una cuenta con ese correo,
-  y manda correo en los dos casos (uno con el código, otro diciendo "ya tienes
-  cuenta"). No intentes deducir de la respuesta si el correo está registrado:
-  el backend no lo dice a propósito, y la UI no debe inventarlo.
-- **`code` en la respuesta solo viene en local.** Es `null` en cualquier
-  despliegue real; ahí el código está únicamente en el buzón. Sirve para que
-  un script termine el flujo sin correo, no para la pantalla.
-- **El código son 6 dígitos y vive 15 minutos.** Cinco intentos: el sexto
-  responde `429` y hay que pedir otro. Espacios y guiones se limpian solos, así
-  que un pegado desde el correo funciona.
-- **`confirm` responde igual (`400`, "That code is not valid") para código
-  equivocado, correo sin desafío y correo mal formado.** Un código vencido es
-  `410` y quiere decir "pide otro"; agotar los intentos es `429`.
-- **`verification_token` vive 30 minutos y se gasta una sola vez.** Es lo que
-  reserva la dirección: verificar no es registrar, y sin el token alguien que
-  supiera que un correo acaba de verificarse podría ganarle la carrera a su
-  dueño.
-- **Límite por dirección: un mensaje por minuto, cinco por hora.** Pasado eso,
-  `429` con cabecera `Retry-After` en segundos — muéstrala, es el único dato
-  que da.
+| Regla | Detalle |
+| :--- | :--- |
+| **`request` responde `202` siempre** | Exista o no una cuenta con ese correo, y manda correo en los dos casos (el código, o «ya tienes cuenta»). La UI no debe deducir de la respuesta si el correo está registrado. |
+| **`code` en la respuesta solo viene en local** | Es `null` en cualquier despliegue real: el código está únicamente en el buzón. Es para que un script termine el flujo, no para la pantalla. |
+| **6 dígitos, 15 minutos, cinco intentos** | El sexto responde `429` y hay que pedir otro. Espacios y guiones se limpian solos: un pegado desde el correo funciona. |
+| **`confirm` responde igual a lo que no sirve** | `400` («That code is not valid») para código equivocado, correo sin desafío o mal formado. Vencido es `410` («pide otro»); agotar los intentos, `429`. |
+| **`verification_token`: 30 minutos, un solo uso** | Es lo que reserva la dirección: verificar no es registrar, y sin él alguien que supiera que un correo acaba de verificarse le ganaría la carrera a su dueño. |
+| **Un mensaje por minuto y cinco por hora por dirección** | Pasado eso, `429` con `Retry-After` en segundos: muéstralo, es el único dato que da. |
 
 Reglas del registro:
 
-- **La contraseña necesita 8 caracteres como mínimo.** No hay reglas de
-  composición (mayúsculas, símbolos): son conocidas por empujar a la gente
-  hacia patrones predecibles. Valida solo longitud, con el mismo mensaje que
-  devuelve el backend.
-- **Sin `verification_token` válido → `403`.** También si venció, si ya se
-  gastó, o si es de otra dirección.
-- **La contraseña se valida antes que el token**, así que un `422` por
-  contraseña corta no quema el token: se puede reintentar con el mismo.
-- **Email repetido → `409`.** Mensaje genérico a propósito — y para llegar
-  hasta ahí hay que haber leído el código enviado a esa dirección, que es lo
-  que evita que el `409` sirva para averiguar quién está registrado.
-- **`name` es opcional.** La cuenta se identifica por el correo, así que se
-  puede registrar sin nombre y ponerlo después con `PATCH /identity/me`.
-  Máximo 80 caracteres; solo espacios se rechaza con `422`.
-- **El registro ya asigna la dirección de reenvío.** No hay un segundo paso
-  para "crear la bandeja"; no la pidas, no la construyas, no la dejes elegir.
-- Los dos arrays de remitentes son **opcionales aquí**: se pueden mandar en el
-  registro para ahorrar una llamada, o dejarlos vacíos y aprobarlos después.
-  Vacíos significa *no acepta nada todavía*.
+| Regla | Detalle |
+| :--- | :--- |
+| **Contraseña de 8 caracteres como mínimo** | Sin reglas de composición (empujan a patrones predecibles). Valida solo longitud, con el mismo mensaje que el backend. |
+| **Sin `verification_token` válido, `403`** | También si venció, ya se gastó o es de otra dirección. |
+| **La contraseña se valida antes que el token** | Un `422` por contraseña corta no quema el token: se reintenta con el mismo. |
+| **Email repetido, `409`** | Mensaje genérico, y para llegar ahí hay que haber leído el código de esa dirección: el `409` no sirve para averiguar quién está registrado. |
+| **`name` es opcional** | Máximo 80 caracteres; solo espacios es `422`. Se puede poner después con `PATCH /identity/me`. |
+| **El registro ya asigna la dirección de reenvío** | No hay paso de «crear la bandeja»: no la pidas, no la construyas, no la dejes elegir. |
+| **Los remitentes son opcionales aquí** | Se pueden mandar para ahorrar una llamada, o aprobar después. Vacíos es *no acepta nada todavía*. |
 
 ### 2. Sesión
 
@@ -208,26 +188,14 @@ PATCH /identity/me       → 200 { user_id, email, name }
 { "name": "Tu Nombre" }
 ```
 
-- `POST /login` responde **`401` idéntico** para email desconocido, contraseña
-  equivocada y email mal formado. La UI no debe intentar distinguirlos ("ese
-  correo no existe" es justo lo que no se quiere filtrar).
-- `expires_at` es epoch en segundos: úsalo para renovar antes de que caduque,
-  no esperes al `401`.
-- Un `401` en cualquier endpoint significa token ausente, inválido o vencido →
-  volver al login. No hay refresh token ni endpoint de logout: cerrar sesión es
-  borrar el token del cliente.
-- **El token lleva `sub`, `email` y `name`** (los nombres estándar: se leen con
-  cualquier decoder). Sirven para pintar al usuario apenas entra, sin una
-  llamada extra — pero son una foto del momento en que se emitió: después de un
-  `PATCH /identity/me` el `name` del token sigue siendo el viejo hasta el
-  siguiente login. Para mostrar el actual, `GET /identity/me`.
-- **`PATCH /identity/me` solo cambia el nombre.** El correo es la identidad de
-  la cuenta y no hay forma de moverlo. A quién se edita sale del token: no
-  recibe id, así que no hay manera de pedir la cuenta de otro.
-- **Cambiar la contraseña invalida todos los tokens vigentes**, incluido el que
-  hizo la llamada. Cada request autenticado compara la generación de
-  credenciales que lleva el token contra la de la cuenta, así que una sesión
-  abierta en otro dispositivo deja de servir en el acto. Ver el paso 2.b.
+| Regla | Detalle |
+| :--- | :--- |
+| **`POST /login` responde `401` idéntico** | Para email desconocido, contraseña equivocada y email mal formado. La UI no debe distinguirlos: «ese correo no existe» es lo que no se quiere filtrar. |
+| **`expires_at` es epoch en segundos** | Úsalo para renovar antes de que caduque, no esperes al `401`. |
+| **Un `401` en cualquier endpoint** | Token ausente, inválido o vencido: volver al login. No hay refresh ni logout; cerrar sesión es borrar el token del cliente. |
+| **El token lleva `sub`, `email` y `name`** | Sirven para pintar al usuario sin una llamada extra, pero son una foto del momento: tras un `PATCH /identity/me` el `name` del token es el viejo hasta el siguiente login. El actual, con `GET /identity/me`. |
+| **`PATCH /identity/me` solo cambia el nombre** | El correo es la identidad y no se mueve. No recibe id: no hay manera de pedir la cuenta de otro. |
+| **Cambiar la contraseña invalida todos los tokens**, incluido el que llamó | Cada request compara la generación de credenciales del token con la de la cuenta: otra sesión abierta deja de servir en el acto (paso 2.b). |
 
 ### 2.b Contraseña olvidada, restablecida y cambiada
 
@@ -1487,7 +1455,7 @@ Resumen para revisar contra la interfaz cuando esté hecha:
 el mismo enum contra el que el endpoint valida, así que no pueden desfasarse:
 
 | Método | Ruta | Auth | Qué trae |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | GET | `/financial/catalog` | — | `account_kinds` (cada uno con su `category`), **`instrument_kinds`**, `currencies`, `movement_directions`, `transaction_origins`, `transaction_statuses`, `account_scopes`, `summary_groupings`, `transfer_views` |
 | GET | `/ingestion/catalog` | — | `processing_statuses`, `ignored_reasons`, `deferred_reasons`, `instrument_kinds` (el mismo vocabulario, visto desde quien lo recibe) |
 | GET | `/merchants/catalog` | — | `categories`, `sorts`, `statuses`, `alias_origins`, `counterparty_kinds` |
@@ -1520,7 +1488,7 @@ Llámalos una vez al arrancar la app y cachéalos. Son estáticos.
 Para leer sin levantar el backend. La API manda; esto es una copia.
 
 | Enum | Valores |
-|---|---|
+| --- | --- |
 | `direction` | `outgoing`, `incoming` |
 | `origin` (movimiento) | `bank_alert`, `manual` |
 | `status` (movimiento) | `assigned`, `unassigned` |
@@ -1586,7 +1554,7 @@ En una cuenta de pasivo el **saldo es la deuda**, no el disponible: gastar
 El cupo es un campo aparte, y son dos números distintos:
 
 | Campo | Qué es |
-|---|---|
+| --- | --- |
 | `opening_balance` | lo **gastado** a la fecha de declararla |
 | `credit_limit` | el **cupo** total |
 | `available` | derivado: `credit_limit − saldo` |
@@ -1615,7 +1583,7 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 ## Referencia de endpoints
 
 | Método | Ruta | Auth | Para qué |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | GET | `/health` | — | Vivo o no. |
 | POST | `/identity/verification/request` | — | Mandar un código de 6 dígitos al correo. `202` siempre. |
 | POST | `/identity/verification/confirm` | — | Canjear el código por el token que gasta el registro. |
@@ -1681,8 +1649,11 @@ que es otra cosa. Los activos siempre lo traen en `null`, y pedirles un
 | POST | `/financial/bills/{id}/autopay` | ✔ | Que se registre solo cuando toque, o dejar de hacerlo. |
 | POST | `/financial/bills/settle` | ✔ | Lo que llama la pantalla de cobros al abrirse: reconoce en el ledger los cobros que ya pasaron y registra los automáticos, hasta donde es seguro. |
 | POST | `/financial/bills/{id}/occurrences/{period}/pay` | ✔ | Decir que ese cobro pasó, y escribirlo en el ledger. `DELETE` lo deshace. |
+| DELETE | `/financial/bills/{id}/occurrences/{period}/pay` | ✔ | Deshacer la confirmación: borra el movimiento que escribió, y la cuenta recupera lo que el cobro le quitó. |
 | POST | `/financial/bills/{id}/occurrences/{period}/skip` | ✔ | Decir que ese cobro no va a pasar. `DELETE` lo vuelve a esperar. |
+| DELETE | `/financial/bills/{id}/occurrences/{period}/skip` | ✔ | Volver a esperar un cobro que se había saltado. |
 | POST | `/financial/bills/{id}/occurrences/{period}/link` | ✔ | Decir que un movimiento que ya está en el ledger es ese cobro. `DELETE` lo deshace. |
+| DELETE | `/financial/bills/{id}/occurrences/{period}/link` | ✔ | Quitar el enlace. **No borra nada**: el movimiento era del banco y sigue ahí. |
 | GET | `/financial/recurring` | ✔ | Lo que parece repetirse y todavía no está declarado como cobro. |
 | GET | `/financial/transactions` | ✔ | Movimientos con su comercio, con filtros y paginación. Incluye las dos mitades de un traslado. |
 | POST | `/financial/transactions` | ✔ | Registrar a mano. |
@@ -1721,7 +1692,7 @@ Hay **dos formas** de cuerpo de error, y el frontend tiene que manejar las dos:
 ```
 
 | Código | Cuándo | Qué hacer en pantalla |
-|---|---|---|
+| --- | --- | --- |
 | `400` | Moneda que la cuenta no tiene, valor imposible. Código de verificación inválido, enlace de restablecimiento inválido. | Mensaje del `detail`; es accionable. |
 | `401` | Sin token, token inválido, vencido, **o emitido antes de un cambio de contraseña**. Trae `WWW-Authenticate: Bearer`. | Ir al login. |
 | `403` | Registro sin `verification_token` usable (falta, venció, ya se gastó, o es de otra dirección), o la contraseña actual equivocada en `password/change`. | Volver al paso del código, o marcar el campo. **Nunca** cerrar la sesión: el token está bien. |
@@ -1745,7 +1716,7 @@ Importante para planear pantallas: esto **no se puede construir hoy** sin
 tocar el backend.
 
 | Falta | Consecuencia para el frontend |
-|---|---|
+| --- | --- |
 | **Tiempo real** | Sin websockets ni SSE. Polling o refresco manual. |
 | **Refresh token / logout** | Sesión = token guardado en el cliente; al vencer, login otra vez. |
 | **Borrado de cuentas** | No hay `DELETE` de cuentas: cerrar es lo que hay, y es deliberado — una cuenta cerrada sigue explicando su historia. Un **movimiento** suelto sí se borra (`DELETE /financial/transactions/{id}`). |

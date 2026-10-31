@@ -1,83 +1,86 @@
 # frontend
 
-The web app. A static SPA — Vite, React, TypeScript — served from a CDN and
-talking to the API over HTTPS with a bearer token.
+La app web. Una SPA estática —Vite, React, TypeScript— servida desde Cloudflare
+Pages y que habla con la API por HTTPS con un token bearer.
 
-Why it lives here and not in its own repository, and why it is not Next.js:
-see **Frontend** in [`docs/decisions.md`](../docs/decisions.md).
+Por qué vive en este repositorio y no en uno propio, y por qué no es Next.js:
+ver **Frontend** en [`docs/decisions.md`](../docs/decisions.md). Qué es Finflow
+y cómo funciona: el [README del proyecto](../README.md).
 
-## Running it
+## Levantarla
 
 ```bash
-just web-install                  # once
-cp .env.example .env.development  # points at http://localhost:8000
-just up                           # emulator, seed data, API and the four workers
-just web                          # this, on http://localhost:5173
+just web-install                  # una vez
+cp .env.example .env.development  # apunta a http://localhost:8000
+just up                           # emulador, datos demo, la API y los workers
+just web                          # esta app, en http://localhost:5173
 ```
 
-Both ports reach the host's browser because both processes bind every
-interface: inside a DevContainer a loopback bind is invisible to the published
-Docker port, so the page would load on 5173 and every call it makes would fail
-— the fetch happens in your browser, not in the container. `just up` used to
-need `--api-host 0.0.0.0` for that reason and now does it by itself; the flag
-still takes `127.0.0.1` if you want the API kept in. The full reason is in
+Los dos puertos llegan al navegador del host porque los dos procesos escuchan
+en todas las interfaces: dentro de un DevContainer, un bind a loopback es
+invisible para el puerto publicado de Docker, así que la página cargaría en el
+5173 y cada llamada que hace fallaría —el fetch ocurre en tu navegador, no en el
+contenedor—. `just up` antes necesitaba `--api-host 0.0.0.0` por eso y ahora lo
+hace solo; el flag sigue aceptando `127.0.0.1` si quieres la API encerrada. La
+razón completa está en
 [docs/running.md](../docs/running.md#4-los-seis-procesos).
 
-`just dev` alone is enough if you only need the API. Log in with the seeded
-account: `demo@finflow.local` / `una frase larga de verdad`.
+Entra con la cuenta sembrada: `demo@finflow.local` / `una frase larga de verdad`.
 
-### Which backend it talks to
+### Con qué backend habla
 
-`VITE_API_BASE_URL` in `.env.development`, and nothing else. It is the whole
-mechanism: the backend's three environments are three values of this one
-variable — `http://localhost:8000`, or the `ApiUrl` of `just
-deploy-outputs-dev` / `just deploy-outputs-prod`.
+Con `VITE_API_BASE_URL` en `.env.development`, y con nada más. Es todo el
+mecanismo: los tres entornos del backend son tres valores de esta variable —
+`http://localhost:8000`, o la `ApiUrl` de `just deploy-outputs-dev` /
+`just deploy-outputs-prod`.
 
-Two consequences worth knowing before they cost you an afternoon:
+Dos consecuencias que conviene saber antes de que cuesten una tarde:
 
-- **Nothing warns you when the two halves disagree.** `just dev` can be up on
-  8000 while this app talks to AWS. The file is gitignored, so a `git diff`
-  will not show it either. The browser's **Network** tab is the answer — read
-  the request domain, not the address bar.
-- **The seeded account exists only locally.** `just seed` fills the moto
-  emulator; there is nothing to seed in a deployed environment, so
-  `demo@finflow.local` gets a 401 there. Register once from the app instead.
+- **Nada avisa cuando las dos mitades no coinciden.** La API local puede estar
+  arriba en el 8000 mientras esta app le habla a AWS. El archivo está en
+  `.gitignore`, así que un `git diff` tampoco lo muestra. La respuesta está en
+  la pestaña **Network** del navegador: mira el dominio de la petición, no la
+  barra de direcciones.
+- **La cuenta sembrada solo existe en local.** `just seed` llena el emulador
+  moto; en un entorno desplegado no hay nada que sembrar, así que
+  `demo@finflow.local` recibe un 401. Regístrate una vez desde la app.
 
-Everything in these files ships inside the bundle — never put a secret there.
-Whatever origin serves this app must also be in the backend's
-`API_CORS_ORIGINS`, or every call dies in preflight.
+Todo lo que hay en estos archivos viaja dentro del bundle: nunca pongas un
+secreto ahí. El origen que sirva esta app tiene que estar también en
+`API_CORS_ORIGINS` del backend, o cada llamada muere en el preflight.
 
-The whole picture, for all three environments and both halves:
+El panorama completo, para los tres entornos y las dos mitades:
 [`docs/running.md`](../docs/running.md#el-frontend).
 
-### If the browser cannot reach it
+### Si el navegador no llega
 
-**Open `http://localhost:5173`, and only that.** Vite prints a second,
-"Network" URL — `http://172.17.x.x:5173` — which is the container's address
-on Docker's bridge. It exists only inside Docker's network and answers
-nothing from the host, so it fails with `ERR_CONNECTION_REFUSED` no matter
-what else is configured. It is the single most common cause of "the frontend
-does not come up", because it looks like the more specific of the two. The
-dev server prints a line under the URLs saying so.
+**Abre `http://localhost:5173`, y solo esa.** Vite imprime una segunda URL,
+«Network» —`http://172.17.x.x:5173`—, que es la dirección del contenedor en el
+puente de Docker. Solo existe dentro de la red de Docker y desde el host no
+contesta nada, así que falla con `ERR_CONNECTION_REFUSED` haya lo que haya
+configurado. Es la causa más común de «el frontend no levanta», porque parece
+la más específica de las dos. El servidor de desarrollo imprime una línea
+debajo de las URLs diciéndolo.
 
-Past that, two real faults look identical from the browser. Tell them apart
-before changing anything, because the fix for one does nothing for the other.
+Pasado eso, dos fallas reales se ven idénticas desde el navegador. Distínguelas
+antes de cambiar nada, porque el arreglo de una no hace nada por la otra.
 
-**If the page says *"Blocked request. This host is not allowed"***, the
-server is up and answering; it is refusing the **name** you used. Vite
-recognises `localhost` and bare IPs and nothing else, so the editor's tunnel
-(`*.devtunnels.ms`), `host.docker.internal` and a phone reaching the machine
-by hostname were all dead ends. `server.allowedHosts` in `vite.config.ts`
-turns that check off. No rebuild is involved — Vite reloads its own config.
+**Si la página dice *"Blocked request. This host is not allowed"***, el
+servidor está arriba y contestando; lo que rechaza es el **nombre** que usaste.
+Vite reconoce `localhost` y las IP sueltas y nada más, así que el túnel del
+editor (`*.devtunnels.ms`), `host.docker.internal` y un teléfono que llega a la
+máquina por nombre eran callejones sin salida. `server.allowedHosts` en
+`vite.config.ts` apaga esa comprobación. No hace falta reconstruir nada: Vite
+recarga su propia configuración.
 
-**If the connection is refused on `localhost` itself**, nothing is listening
-on the host. That one is the ports: a DevContainer publishes none at the
-Docker level on its own, so `appPort` in `.devcontainer/devcontainer.json`
-publishes 5173 and 8000 as real Docker ports rather than depending on the
-editor's tunnel. That takes effect only after **Dev Containers: Rebuild
-Container**, not a plain restart. Check it from inside the container, in this
-order — the last line is the one that proves the host can reach it, because
-`host.docker.internal` *is* the host:
+**Si la conexión se rechaza en `localhost` mismo**, no hay nada escuchando en
+el host. Eso son los puertos: un DevContainer no publica ninguno a nivel de
+Docker por sí solo, así que `appPort` en `.devcontainer/devcontainer.json`
+publica el 5173 y el 8000 como puertos reales de Docker en vez de depender del
+túnel del editor. Solo surte efecto después de **Dev Containers: Rebuild
+Container**, no de un reinicio. Compruébalo desde dentro del contenedor, en este
+orden —la última línea es la que prueba que el host llega, porque
+`host.docker.internal` *es* el host—:
 
 ```bash
 docker ps --format '{{.Ports}}'                 # 0.0.0.0:5173->5173, 0.0.0.0:8000->8000
@@ -85,102 +88,132 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5173/
 curl -s -o /dev/null -w '%{http_code}\n' http://host.docker.internal:5173/
 ```
 
-Both ports matter. With only 5173 published the page loads and every request
-fails, because the fetch runs in the host's browser, not in the container.
+Importan los dos puertos. Con solo el 5173 publicado la página carga y cada
+petición falla, porque el fetch corre en el navegador del host, no en el
+contenedor.
 
-### Opening it from a phone
+### Abrirla desde un teléfono
 
-The point of the product, so it is worth stating the whole chain. The phone
-needs a route to the container (the editor's forwarded-port tunnel is the
-easy one), and `allowedHosts` above is what stops Vite rejecting the
-hostname it arrives under. The API is the part people forget: the fetch runs
-on the phone, so `VITE_API_BASE_URL` must be an address the *phone* can
-resolve — `localhost:8000` is the phone itself — and that origin must be in
-the backend's `API_CORS_ORIGINS` or every call dies in preflight.
+Es el punto del producto, así que vale la pena decir la cadena entera. El
+teléfono necesita una ruta hasta el contenedor (el túnel de puertos del editor
+es la fácil), y `allowedHosts`, arriba, es lo que impide que Vite rechace el
+nombre con el que llega. La API es la parte que se olvida: el fetch corre en el
+teléfono, así que `VITE_API_BASE_URL` tiene que ser una dirección que el
+*teléfono* pueda resolver —`localhost:8000` es el propio teléfono— y ese origen
+tiene que estar en `API_CORS_ORIGINS` del backend, o cada llamada muere en el
+preflight.
 
-## The contract
+## El contrato
 
-`src/api/schema.d.ts` is **generated**. Do not edit it.
-
-```bash
-just web-types   # re-exports docs/openapi.json, then regenerates the types
-```
-
-Run that after touching any router or response model in Python. The point of
-the arrangement is that a path, a query parameter or a response field that
-changes on the backend stops this project from compiling, rather than failing
-in a browser for whoever opens that screen next. `just openapi-check` fails
-when the committed contract has drifted from the code.
-
-[`docs/frontend-integration.md`](../docs/frontend-integration.md) is the
-business contract the screens have to honour — what "unassigned" means, why
-liabilities are positive, why two currencies are never summed. Read it before
-building a screen, not after.
-
-## Checks
+`src/api/schema.d.ts` es **generado**. No lo edites.
 
 ```bash
-just web-check   # biome, tsc, the deprecation check, and the tests
-just web-fix     # apply what biome can fix
-just web-audit   # npm audit + the deprecation check, on their own
-just check-all   # both halves of the repo
+just web-types   # vuelve a exportar docs/openapi.json y regenera los tipos
 ```
 
-`scripts/check-deprecated.mjs` fails the build when this project imports a
-symbol its own dependencies mark `@deprecated`. It is import-aware — a symbol
-counts only when we import it from the package that deprecates it, and
-`@types/*` is resolved alongside the runtime package, which is where the
-deprecation that prompted the script (`FormEvent`) was hiding. Read the
-comment at the top of that file before extending it.
+Córrelo después de tocar cualquier router o modelo de respuesta en Python. El
+sentido del arreglo es que una ruta, un parámetro o un campo de respuesta que
+cambia en el backend haga que este proyecto deje de compilar, en vez de fallar
+en el navegador de quien abra esa pantalla después. `just openapi-check` falla
+cuando el contrato guardado se desvió del código.
 
-The tests cover the rules a screen cannot be trusted to get right on its own,
-not the screens themselves. `lib/money.ts` and `lib/dates.ts` are the core of
-it — that a liability's positive balance reads as money owed, that a paid-off
-card is not captioned "Debes", that no amount ever passes through a float, and
-that months are grouped in Bogota rather than in the browser's timezone — and
-the same applies to what an account's forms accept (`accounts/`), what a
-merchant correction may not take away (`merchants/`), what deleting a movement
-says will happen (`lib/deletion.ts`), and the two transfer roles
-(`lib/transfers.ts`). Add to them before changing any of those files.
+[`docs/frontend-integration.md`](../docs/frontend-integration.md) es el
+contrato de negocio que las pantallas tienen que respetar: qué significa «sin
+asignar», por qué los pasivos son positivos, por qué dos monedas nunca se suman,
+cómo se deshace un cobro de factura. Léelo antes de construir una pantalla, no
+después.
 
-A screen itself is checked by looking at it: `just shot` drives a headless
-Chromium over the running app (`just up` in one terminal,
-`just web` in another) and writes PNGs to `.screenshots/`, which git ignores.
+## Comprobaciones
 
-## Layout
-
+```bash
+just web-check   # biome, tsc, la comprobación de obsoletos y las pruebas
+just web-fix     # aplica lo que biome sabe arreglar
+just web-audit   # npm audit + la comprobación de obsoletos, por su cuenta
+just check-all   # las dos mitades del repositorio
 ```
+
+`scripts/check-deprecated.mjs` hace fallar el build cuando este proyecto importa
+un símbolo que sus propias dependencias marcan `@deprecated`. Entiende los
+imports: un símbolo cuenta solo cuando lo importamos del paquete que lo depreca,
+y `@types/*` se resuelve junto al paquete de runtime, que es donde se escondía
+la deprecación que motivó el script (`FormEvent`). Lee el comentario al inicio
+de ese archivo antes de extenderlo.
+
+Las pruebas cubren las reglas en las que una pantalla no es de fiar por su
+cuenta, no las pantallas. `lib/money.ts` y `lib/dates.ts` son el núcleo: que el
+saldo positivo de un pasivo se lea como plata que se debe, que una tarjeta
+saldada no diga «Debes», que ningún monto pase por un float, y que los meses se
+agrupen en Bogotá y no en la zona del navegador. Lo mismo vale para lo que
+aceptan los formularios de una cuenta (`accounts/`), lo que una corrección de
+comercio no puede quitar (`merchants/`), lo que borrar un movimiento dice que
+pasará (`lib/deletion.ts`), los dos roles de un traslado (`lib/transfers.ts`), y
+las cifras de facturas, presupuestos y el disponible (`bills/`, `budgets/`,
+`plan/`). Añade pruebas ahí antes de cambiar cualquiera de esos archivos.
+
+### En un navegador de verdad
+
+Una pantalla se comprueba mirándola. Con `just up` en una terminal y `just web`
+en otra:
+
+```bash
+just shot        # Chromium sin cabeza sobre la app, PNGs en .screenshots/ (ignorado por git)
+just e2e         # todas las suites, contra la pila real
+just e2e-views   # cada pantalla, en teléfono y escritorio
+```
+
+Cada suite (`e2e-bills`, `e2e-budgets`, `e2e-transacciones`, …) conduce una
+pantalla contra la pila real; las de dinero comprueban además que lo que la
+pantalla enseña cuadra con lo que el servidor guardó.
+`e2e-views` lee las pantallas de `src/routes`, así que una nueva queda cubierta
+el día que llega, y falla ante un error de JavaScript o de consola, una
+respuesta de la API de 400 o más (salvo los 404 que la app pide a propósito),
+scroll lateral, o una página sin exactamente un `h1`.
+
+## Mapa
+
+```text
 src/
-├── api/        client.ts (auth, error mapping), queries.ts (every call), schema.d.ts
-├── auth/       token.ts (session storage), AuthContext.tsx
-├── lib/        money.ts, dates.ts — the rules that must not be got wrong
-├── accounts/   the copy and the validation an account's forms need
-├── merchants/  the same for merchants: categories, alias origins, what a
-│               spelling may not be taken away from
-├── navigation/ the destinations, and which of them the phone's bar can fit —
-│               what falls out of the bar has to land in the sheet, and a
-│               test says so
-├── components/ primitives in ui/, plus Money
-└── routes/     file-based; routeTree.gen.ts is generated by the Vite plugin
+├── api/          client.ts (auth, mapeo de errores), queries.ts (cada llamada), schema.d.ts
+├── auth/         token.ts (sesión), AuthContext.tsx
+├── lib/          money.ts, dates.ts — las reglas que no se pueden equivocar — y
+│                 la corrección, el borrado, la exportación y los traslados
+├── accounts/     el texto y la validación que necesitan los formularios de una cuenta
+├── merchants/    lo mismo para comercios: categorías, origen de los alias, qué
+│                 grafía no se le puede quitar a un comercio
+├── transfers/    declarar después que un movimiento fue un traslado
+├── bills/        el calendario de cobros, cómo se ve cada uno y lo que el detector propone
+├── plan/         la tarjeta del disponible del mes
+├── budgets/      el progreso de cada presupuesto y su resumen
+├── reports/      la forma de las gráficas y el reporte por categoría
+├── alerts/       Telegram, la campana y el aviso de lectura pausada
+├── onboarding/   la guía para conectar el banco y el diagnóstico de la conexión
+├── guides/       las guías dentro de la app
+├── navigation/   los destinos, y cuáles caben en la barra del teléfono — lo que no
+│                 cabe tiene que caer en la hoja, y una prueba lo exige
+├── components/   primitivas en ui/, gráficas en charts/, el marco (AppShell) y Money
+└── routes/       por archivos; routeTree.gen.ts lo genera el plugin de Vite
 ```
 
-Two files carry most of the risk. `lib/money.ts` never converts a decimal
-string to a number, and `describeBalance` is the single place deciding that a
-credit card's positive balance means *you owe that much*. Changing either
-without reading the integration guide is how this app starts lying.
+Dos archivos cargan con casi todo el riesgo. `lib/money.ts` nunca convierte un
+decimal en string a número, y `describeBalance` es el único lugar que decide que
+el saldo positivo de una tarjeta de crédito significa *debes eso*. Cambiar
+cualquiera de los dos sin leer la guía de integración es como esta app empieza
+a mentir.
 
-## Sizes
+## Tamaños
 
-Finflow is opened from a phone, so a phone is not the degraded case — it is
-the case. Two rules hold the layout together, and both were broken before they
-were written down:
+Finflow se abre desde un teléfono, así que el teléfono no es el caso degradado:
+es el caso. Dos reglas sostienen el diseño, y las dos se rompieron antes de
+escribirse:
 
-- **Nothing scrolls sideways.** A grid track is at least its item's
-  min-content, and a `truncate` never wraps, so one list of movements held the
-  whole dashboard open at 440px. Grid children get `min-w-0`.
-- **Every destination is reachable at every width.** Below `lg` the bar shows
-  three and `MoreSheet` carries the rest; above it, the rail shows all.
+- **Nada se desplaza de lado.** Una pista de grid mide al menos el min-content
+  de su elemento, y un `truncate` nunca parte la línea, así que una lista de
+  movimientos mantuvo abierto todo el dashboard a 440px. Los hijos de un grid
+  llevan `min-w-0`.
+- **Cada destino se alcanza en cualquier ancho.** Por debajo de `lg` la barra
+  muestra tres y `MoreSheet` lleva el resto; por encima, el riel los muestra
+  todos.
 
-`scripts/shot.mjs` photographs a width; checking a change against several is
-the point. 320, 360, 390, 430, 768, 1024 and 1440 are the ones worth a look,
-plus a phone on its side.
+`scripts/shot.mjs` fotografía un ancho; comprobar un cambio contra varios es el
+punto. 320, 360, 390, 430, 768, 1024 y 1440 son los que vale la pena mirar, más
+un teléfono acostado.

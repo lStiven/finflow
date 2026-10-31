@@ -1,12 +1,12 @@
 # Levantar y operar Finflow
 
-Guía **operativa**: arrancar el sistema en los tres entornos, mirarlo y
-comprobar que cuadra. **Desplegarlo es otra guía**: [deploy.md](deploy.md).
-
-Lo demás vive en otro sitio, a propósito:
+Arrancar el sistema en los tres entornos, mirarlo y comprobar que cuadra.
+**Desplegarlo es otra guía**: [deploy.md](deploy.md). Todo se ejecuta dentro
+del DevContainer, en `/workspaces/finflow_v2`, y `just --list` es la fuente de
+verdad de las tareas.
 
 | Para | Ver |
-|---|---|
+| :--- | :--- |
 | Poner el sistema en AWS y publicar el frontend | [deploy.md](deploy.md) |
 | Qué hace el sistema y por qué | [overview.md](overview.md) |
 | Qué endpoints hay y en qué orden se llaman | [frontend-integration.md](frontend-integration.md) |
@@ -14,74 +14,41 @@ Lo demás vive en otro sitio, a propósito:
 | Cómo un usuario conecta su banco | [email-forwarding.md](email-forwarding.md) |
 | Trabajar dentro del frontend | [../frontend/README.md](../frontend/README.md) |
 
-Esta guía cubre **las dos mitades**: el backend y el frontend que lo consume
-— ver [El frontend](#el-frontend).
-
-Todo se ejecuta dentro del DevContainer, en `/workspaces/finflow_v2`.
-`just --list` es la fuente de verdad de las tareas disponibles.
-
----
-
 ## Empezar: dos comandos
 
 ```bash
-cp .env.example .env       # y edita dos valores — ver "Configurar .env"
+cp .env.example .env       # y edita dos valores: ver "Configurar .env"
 just up                    # emulador, recursos, datos demo y los procesos
 ```
 
-`just up` hace por sí solo lo que antes eran cuatro comandos y cinco
-terminales. La API queda en http://localhost:8000/docs, sin flags.
-
-El resto de esta guía explica cada paso y los otros dos entornos.
-
----
+La API queda en <http://localhost:8000/docs>. El resto de la guía explica cada
+paso y los otros dos entornos.
 
 ## Los tres entornos
 
-Un solo código; lo único que cambia es **qué fichero de entorno se lee**. La
-variable `ENV_FILE` lo decide, y cada recipe de `just` ya la fija por ti:
+![Tres entornos, un solo código: local con .env sobre moto, development con .env.development en AWS con prefijo dev-, y production con .env.production en AWS.](assets/environments.svg)
 
-| Entorno | Fichero | AWS | Nombres de recursos | Recipes |
-|---|---|---|---|---|
-| **local** | `.env` | moto, en proceso | desnudos | `just dev`, `just seed`, workers sin sufijo |
-| **development** | `.env.development` | cuenta real | prefijo `dev-` | `just run-dev`, `just deploy-dev` |
-| **production** | `.env.production` | cuenta real | desnudos | `just run-prod`, `just deploy-prod` |
-
-Los ficheros `.env` configuran lo que corre **desde tu máquina**. Lo que corre
-**desplegado** son siete funciones Lambda, y su configuración vive en
-`infra/template.yaml` — ver [deploy.md](deploy.md).
-
-**El frontend no sigue esta tabla, y conviene saberlo antes de perder una
-tarde.** No tiene tres entornos: tiene dos modos de Vite (`dev` y `build`), y
-a qué backend habla no lo decide `ENVIRONMENT` sino una sola variable,
-`VITE_API_BASE_URL`. Los dos lados se configuran por separado y **nada avisa
-si no coinciden**: `just dev` puede estar levantado en el 8000 mientras el
-frontend habla con AWS. Ver [El frontend](#el-frontend).
-
-**Por qué tres y no dos.** DynamoDB on-demand cobra por petición, así que
-probar contra producción para no pagar dos veces es exactamente lo que no hay
-que hacer. `development` existe para eso: una cuenta de AWS de verdad, pero
-con **todo prefijado `dev-`** para que no pueda tocar los datos de producción
-—ni escribir en su tabla, ni *consumir* mensajes de su cola, que es peor
-porque el mensaje se borra antes de que producción lo lea. El prefijo lo
-aplica el código (`ENVIRONMENT=development`), no nueve variables a mano.
-
-Tiene **su propio perfil** (`finflow-dev` frente a `finflow-production`), pero
-hoy los dos resuelven a la **misma cuenta de AWS**: la separación real es el
-prefijo `dev-`, no la cuenta. Compruébalo cuando importe:
-`aws sts get-caller-identity --profile finflow-dev --query '[Account,Arn]' --output text`.
-
-**Los ficheros `.example`.** Cada `.env*` tiene su `.env*.example` **sí**
-versionado en git; los `.env*` reales están ignorados. El `.example` es la
-plantilla comentada: cópiala y rellena lo tuyo. Si no sabes qué significa una
-variable, la respuesta está en el comentario de encima en el `.example`.
-
----
+- **Por qué tres y no dos.** DynamoDB on-demand cobra por petición, así que
+  probar contra producción para no pagar dos veces es justo lo que no hay que
+  hacer. `development` es una cuenta real con **todo prefijado `dev-`**: no
+  puede escribir en las tablas de producción ni *consumir* sus mensajes (peor:
+  el mensaje se borraría antes de que producción lo leyera). El prefijo lo
+  aplica el código a partir de `ENVIRONMENT=development`.
+- **Hoy los dos perfiles resuelven a la misma cuenta de AWS**: la separación
+  real es el prefijo, no la cuenta.
+  `aws sts get-caller-identity --profile finflow-dev --query '[Account,Arn]' --output text`
+- **Los `.env*.example` están en git**, los `.env*` reales no. El `.example`
+  es la plantilla comentada: si no sabes qué es una variable, lo dice el
+  comentario de encima.
+- **Lo desplegado no lee estos ficheros**: son siete Lambda configuradas en
+  `infra/template.yaml` ([deploy.md](deploy.md)).
 
 ## Local
 
-Local corre contra **moto**, un emulador de AWS en proceso. No hay Docker
-aparte, ni credenciales reales, ni cobros.
+Corre contra **moto**, un emulador de AWS en proceso: sin Docker aparte, sin
+credenciales reales y sin cobros.
+
+![Local, la misma cadena sin Gmail: Vite o curl llaman a la API, que monta el webhook local; la cola parse-notifications lleva al parse-worker, que publica en el bus; merchant y financial escuchan, y alerts-worker escribe el mensaje en el log.](assets/local-stack.svg)
 
 ### 1. Configurar `.env`
 
@@ -89,71 +56,53 @@ aparte, ni credenciales reales, ni cobros.
 cp .env.example .env
 ```
 
-Solo hay que tocar dos valores. El resto de la plantilla ya es correcto para
-local — incluidas las URLs de las colas, porque el id de cuenta de moto es
-siempre `123456789012` y por tanto son predecibles.
+Solo hay que tocar dos valores; el resto ya sirve para local, incluidas las
+URLs de cola (el id de cuenta de moto es siempre `123456789012`).
 
-**`IDENTITY_JWT_SECRET`** — sin él la API **se niega a arrancar**, a
-propósito: firmar tokens con un valor conocido es peor que no arrancar.
+| Variable | Por qué es obligatoria |
+| :--- | :--- |
+| `IDENTITY_JWT_SECRET` | Sin ella la API **no arranca**: firmar con un valor conocido es peor que no arrancar. `uv run python -c "import secrets; print(secrets.token_hex(32))"` |
+| `INGESTION_INGEST_MAILBOX_ADDRESS` | Cualquier dirección con forma de correo. Cada registro deriva de ella la dirección de reenvío, así que sin ella nadie podría crearse una cuenta. |
 
-```bash
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-```
-
-**`INGESTION_INGEST_MAILBOX_ADDRESS`** — cualquier dirección con forma de
-correo sirve para desarrollar. Es obligatoria porque cada registro deriva de
-ella la dirección de reenvío del usuario, así que sin ella nadie podría
-crearse una cuenta. Solo hace falta que sea una cuenta de Gmail real, con su
-App Password, cuando quieras correr `just ingest-worker` de verdad.
-
-> **El buzón es el único recurso que el prefijo `dev-` no separa.** El
-> `ingest worker` busca los correos `UNSEEN` y los marca `\Seen` al
-> procesarlos, así que un worker local o de dev apuntando al mismo buzón que
-> producción **se come su correo**: producción ya no lo verá. Si vas a correr
-> `just ingest-worker` fuera de producción, usa una cuenta de Gmail distinta.
-> Para todo lo demás, deja `INGESTION_INGEST_MAILBOX_APP_PASSWORD` vacío: la
-> API arranca igual y el worker se niega a arrancar, que es justo lo que
-> quieres.
+> [!WARNING]
+> **El buzón es lo único que el prefijo `dev-` no separa.** El
+> `ingest worker` marca `\Seen` lo que lee, así que uno local o de dev sobre el
+> buzón de producción **se come su correo**. Para correr `just ingest-worker`
+> fuera de producción, usa otra cuenta de Gmail. Si no, deja
+> `INGESTION_INGEST_MAILBOX_APP_PASSWORD` vacío: la API arranca igual y el
+> worker se niega a arrancar, que es lo que quieres.
 
 **El correo de Identity no hace falta en local.** Con
 `IDENTITY_MAIL_FROM_ADDRESS` vacío y `ENVIRONMENT=local`, el código de
-verificación y el enlace de restablecimiento se escriben en el log en vez de
-enviarse, y `POST /identity/verification/request` además devuelve el código en
-su propia respuesta para que un script pueda terminar el flujo sin buzón. Esa
-salida existe **solo** para local: en cualquier otro entorno un buzón sin
-configurar impide arrancar, en lugar de publicar códigos vivos en CloudWatch.
+verificación y el enlace de restablecimiento van al log, y
+`POST /identity/verification/request` además devuelve el código. Fuera de
+local, un buzón sin configurar impide arrancar, en vez de publicar códigos
+vivos en CloudWatch.
 
-Opcionales:
-
-- **`LLM_API_KEY`** ([aistudio.google.com/apikey](https://aistudio.google.com/apikey))
-  — sin ella no hay plan B: un correo que ninguna plantilla reconozca se
-  conserva sin parsear, y los comercios se agrupan solo con reglas
-  deterministas.
-- **`LLM_DAILY_CALLS_PER_USER`** — cuántos correos puede leer el modelo por
-  persona y por día de Bogotá; `20` si no está. En local es un número y no
-  toca AWS. Desplegado es una referencia `ssm:` que la función relee cada cinco
-  minutos. Ver [overview.md → El tope del modelo](overview.md#el-tope-del-modelo).
-- **`API_CORS_ORIGINS`** — ya trae los puertos de dev habituales
-  (`http://localhost:5173,http://localhost:3000`). Si tu frontend escucha en
-  otro puerto, añádelo. Vacío significa ninguno, que es lo correcto cuando el
-  frontend se sirve desde el mismo origen. Ver
-  [frontend-integration.md](frontend-integration.md#cors-qué-origen-puede-llamar).
+| Opcional | Qué hace |
+| :--- | :--- |
+| `LLM_API_KEY` | El plan B ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Sin ella, lo que ninguna plantilla reconoce se guarda sin leer, y los comercios se agrupan solo con reglas. |
+| `LLM_DAILY_CALLS_PER_USER` | El [tope del modelo](overview.md#el-tope-del-modelo), `20` si no está. En local es un número; desplegado, una referencia `ssm:`. |
+| `API_CORS_ORIGINS` | Ya trae `http://localhost:5173,http://localhost:3000`. Vacío es ninguno, lo correcto si el frontend se sirve desde el mismo origen ([CORS](frontend-integration.md#cors-qué-origen-puede-llamar)). |
 
 ### 2. Infraestructura
 
 ```bash
-just aws-init
+just aws-init     # arranca moto y crea todo; idempotente
+just aws-status   # qué existe ahora mismo
+just aws-down     # lo para
 ```
 
-Arranca moto y crea todo: cinco tablas de DynamoDB, las colas con sus DLQ, el
-bus de eventos y las reglas que lo conectan. Es idempotente, se puede repetir.
-
-`just aws-down` lo para. `just aws-status` muestra qué existe ahora mismo.
+Crea **ocho tablas** (`bank_notifications`, `user_inboxes`, `users`,
+`credential_challenges`, `throttle`, `merchants`, `financial`,
+`alert_channels`), **cuatro colas de trabajo con su DLQ** (`parse-notifications`,
+`merchant-events`, `financial-events`, `alerts-events`), la cola espía
+`integration-events`, el bus `finflow` y las reglas que lo conectan.
 
 ### 2.b Registrarse en local, con el código
 
-Registrarse son tres llamadas: pedir el código, canjearlo y crear la cuenta.
-En local no se manda correo, así que el código vuelve en la respuesta:
+Tres llamadas: pedir el código, canjearlo y crear la cuenta. En local el código
+vuelve en la respuesta:
 
 ```bash
 curl -s localhost:8000/identity/verification/request \
@@ -171,245 +120,163 @@ curl -s localhost:8000/identity/register \
        "verification_token":"…"}'
 ```
 
-`just seed` y `just verify` no pasan por ahí: escriben el ticket directamente
-en la tabla y lo gastan en el endpoint real
+`just seed` y `just verify` no pasan por ahí: escriben el ticket en la tabla y
+lo gastan en el endpoint real
 (`identity/presentation/cli/verification_tickets.py`). Es el camino del
-operador, no una puerta trasera — necesita permisos de escritura en DynamoDB y
-no está expuesto por HTTP.
+operador, no una puerta trasera: necesita escribir en DynamoDB y no está
+expuesto por HTTP.
 
 ### 3. Datos de prueba
 
-moto guarda todo **en memoria**: cuando el emulador se para —`just aws-down`,
-un reinicio del contenedor o de la máquina— desaparecen las tablas, las colas
-y todos los registros. Nada de lo que crees en local se conserva.
-
-En vez de hacer ese dato duradero, `just seed` lo hace barato de recrear:
+moto guarda todo **en memoria**: al pararse (`just aws-down`, un reinicio) se
+va todo. En vez de hacer duradero el dato, `just seed` lo hace barato de
+recrear: recorre la cadena entera dentro de su propio proceso (no necesita la
+API ni los workers levantados), y repetirlo deja los mismos saldos.
 
 ```bash
-just seed
+just seed                  # la cuenta demo
+just seed --with-llm       # deja el modelo conectado
+just seed --email otra@finflow.local --password '…'   # un segundo usuario, para probar aislamiento
 ```
 
-Recorre la cadena entera —registra al usuario demo, aprueba el dominio del
-banco, marca el reenvío que Google habría confirmado, reenvía siete alertas de
-Bancolombia (una de ellas el pago de una tarjeta, que son dos movimientos),
-drena los tres workers y declara las cuentas que las adoptan— y deja algo que
-mirar. No necesita `just dev` ni los workers levantados: monta la aplicación en su propio proceso. Repetirlo es
-seguro: dos ejecuciones seguidas dejan los mismos saldos. Lo que deja:
+| Deja | |
+| :--- | :--- |
+| **La cuenta** | `demo@finflow.local` / `una frase larga de verdad`. El token sale al final, listo para Postman. |
+| **Correo ya conectado** | Los cuatro pasos de `GET /ingestion/setup` en verde y `ready: true`, aprobados los dominios de **Bancolombia y Lulo**. |
+| **12 alertas** | De los dos bancos, todas de las que lee una plantilla: sembrar no gasta modelo ni necesita red (por eso los workers avisan `no model configured`). |
+| **4 cuentas** | Tarjeta Bancolombia, Ahorros Bancolombia, Ahorros Lulo y Efectivo, declaradas **después** de las alertas: la adopción retroactiva queda ejercitada. |
+| **31 movimientos** | Ninguno sin asignar: la nómina llega sin últimos cuatro y el seed la asigna a mano. Incluye compras, ingresos, efectivo, una transferencia a un tercero y **dos traslados** (el pago de la tarjeta desde ahorros llega en un solo correo y se guarda como dos mitades). |
+| **Facturas** | 6 declaradas, con una serie de cobros previos y uno del mes ya confirmado. |
+| **Comercios y presupuestos** | 15 comercios (4 en revisión) y 4 presupuestos sobre el mes en curso. |
 
-| | |
-|---|---|
-| `demo@finflow.local` / `una frase larga de verdad` | La cuenta. El token sale impreso al final, listo para pegar en Postman. |
-| Correo ya conectado | Los cuatro pasos de `GET /ingestion/setup` en verde, `ready: true`. La interfaz se ve como la de alguien que ya terminó de configurar su correo: sin el aviso de conexión pendiente, con `/conectar` en pasado y la dirección marcada como «recibiendo». |
-| 3 cuentas declaradas | Tarjeta de crédito, ahorros —con la débito enlazada como segundo instrumento— y efectivo. |
-| 10 movimientos | Ocho de alertas y dos a mano. Uno queda **sin asignar**: la nómina, porque esa alerta no nombra los últimos cuatro dígitos de ninguna cuenta. |
-| 1 traslado | El pago de la tarjeta desde la cuenta de ahorros llega como **un solo correo** y se guarda como dos mitades: baja el saldo de ahorros y baja la deuda de la tarjeta por el mismo monto. El patrimonio no cambia y ninguna de las dos mitades cuenta como gasto. |
-| 6 comercios | Todos en revisión, agrupados solo con reglas deterministas. |
-
-Las cuentas se declaran **después** de que llegan las alertas, a propósito: la
-adopción es retroactiva y así queda ejercitada.
-
-El paso `forwarding_confirmed` es el único que en local **no puede ocurrir
-solo**: lo marca el `ingest worker` cuando sigue el correo de confirmación de
-Google, y aquí ninguna cuenta de Gmail reenvía al emulador. El seed lo escribe
-directamente en el repositorio de bandejas —no hay endpoint para eso, ni debe
-haberlo: es un hecho verificado, no algo que un cliente pueda afirmar—, y
-`seed_local.py` se niega a correr fuera de `ENVIRONMENT=local`. `ready` nunca
-dependió de ese paso: son la primera alerta y un remitente aprobado.
-
-El modelo queda **sin conectar** a propósito: las seis alertas son de las que
-el parser determinista lee, así que sembrar no cuesta nada ni necesita red.
-Por eso los workers avisan `no model configured`; aquí es lo esperado.
-`--with-llm` lo deja puesto. `--email` / `--password` cambian la cuenta que
-crea, por si quieres sembrar dos usuarios y comprobar que cada uno solo ve lo
-suyo.
+El paso `forwarding_confirmed` es el único que en local **no puede pasar
+solo**: lo marca el `ingest worker` al seguir el correo de Google, y ninguna
+Gmail reenvía al emulador. El seed lo escribe en el repositorio de bandejas
+—no hay endpoint para eso, ni debe haberlo: es un hecho verificado, no algo que
+un cliente pueda afirmar— y se niega a correr fuera de `ENVIRONMENT=local`.
 
 ### 4. Los seis procesos
 
-Todos a la vez, en una sola terminal:
+La API y cinco workers. `just up` arranca todos menos uno, en una terminal:
 
 ```bash
-just up   # emulador + recursos + datos demo + los procesos
+just up                    # moto + recursos + seed + API + parse, merchant, financial y alerts
+just up --with-ingest      # también el ingest-worker
+just up --api-port 8001    # para tener local y development a la vez
 ```
 
-Cada línea va etiquetada con el servicio que la escribió, y un solo Ctrl+C
-los baja todos. Tarda hasta 25s en salir a propósito: los workers terminan el
-long poll que tengan en curso en vez de tirar el mensaje.
+Cada línea va etiquetada con su servicio, y un Ctrl+C los baja todos (hasta 25
+s: los workers terminan el long poll en vez de tirar el mensaje). O cada uno en
+su terminal:
 
-`just up` **no arranca `ingest-worker`**. El buzón de Gmail es el mismo en los
-tres entornos y el poller marca como leído lo que lee, así que un run local
-contra un emulador en memoria se comería el correo que development iba a
-procesar — sin que nada lo reporte. En local la entrada es el webhook que la
-API monta justo para eso. Si de verdad lo quieres: `just up --with-ingest`.
+| Proceso | Hace | Receta |
+| :--- | :--- | :--- |
+| API | <http://localhost:8000>, con recarga | `just dev` |
+| ingest | IMAP → filtro de remitentes → SQS | `just ingest-worker` |
+| parse | SQS → plantilla → modelo → EventBridge | `just parse-worker` |
+| merchant | EventBridge → comercios canónicos | `just merchant-worker` |
+| financial | EventBridge → ledger y saldos | `just financial-worker` |
+| alerts | EventBridge → Telegram, la campana y los avisos de cuenta | `just alerts-worker` |
 
-**La API escucha en todas las interfaces, en todos los entornos.** Tiene que
-hacerlo: dentro de un DevContainer, `127.0.0.1` es una interfaz distinta de
-aquella a la que Docker entrega el puerto publicado, así que un bind al
-loopback responde a `curl` desde dentro y no responde a
-http://localhost:8000/docs desde Windows o macOS. Se reconoce con `ss -ltn`:
-`127.0.0.1:8000` en vez de `0.0.0.0:8000` es exactamente eso.
+- **`just up` no arranca el `ingest-worker`**: el buzón es el mismo en todos lados
+  y un run local contra un emulador en memoria se comería el correo de
+  development sin que nada lo reporte. En local la entrada es el webhook.
+- **`merchant` y `financial` escuchan el mismo evento** en colas distintas:
+  puedes correr solo el que te interese. `alerts` escucha lo que publica
+  Financial y, de Ingestion, solo la suspensión del modelo.
+- **Sin `ALERTS_TELEGRAM_BOT_TOKEN`, `alerts` escribe el mensaje en vez de
+  mandarlo**: ves el texto exacto ([probarlo](alerts.md#probarlo-en-local)).
 
-Esto fue durante un tiempo un flag que había que acordarse de escribir
-(`--api-host 0.0.0.0`) y el flag se olvidaba, que es como acabó siendo el
-default. Quien quiera lo de antes: `just up --api-host 127.0.0.1`.
-
-Lo que decide quién llega desde fuera de la máquina no es este bind sino el
-*publish* de Docker, en `.devcontainer/devcontainer.json`. Si te preocupa la
-red local —`just up-dev` habla con los recursos `dev-` de verdad—, lo que se
-estrecha es el mapeo, a `127.0.0.1:8000:8000`.
-
-> `just dev` **sí** bindea `0.0.0.0` por su cuenta, igual que `run-dev` y
-> `run-prod`. La asimetría es la que confunde: la misma URL funciona con
-> `just dev` y no con `just up`.
-
-Dos stacks a la vez (local y development) necesitan puertos distintos:
-`just up --api-port 8001`.
-
-O cada uno en su terminal, si prefieres controlarlos por separado:
-
-```bash
-just dev               # API en http://localhost:8000, con recarga en caliente
-just ingest-worker     # IMAP -> filtrado por remitente -> SQS
-just parse-worker      # SQS -> parser determinista -> LLM -> EventBridge
-just merchant-worker   # EventBridge -> comercios canónicos
-just financial-worker  # EventBridge -> filas del ledger y saldos
-just alerts-worker     # EventBridge -> un mensaje de Telegram
-```
-
-`merchant-worker` y `financial-worker` escuchan el mismo evento en colas
-distintas y no dependen uno del otro: puedes correr solo el que te interese.
-`alerts-worker` va un paso más allá en la cadena — escucha lo que *financial*
-publica, no lo que publica ingestion. Cada worker avisa al arrancar si le
-falta configurar algo.
-
-En local, sin `ALERTS_TELEGRAM_BOT_TOKEN`, el worker **escribe el mensaje en
-vez de mandarlo**, así que ves el texto exacto que habría recibido una
-persona. Con el token puesto llega de verdad a un teléfono. Cómo probar la
-vinculación entera sin que Telegram pueda alcanzar tu máquina está en
-[alerts.md](alerts.md#probarlo-en-local).
-
-La API expone su documentación interactiva en `http://localhost:8000/docs`.
-
+> [!NOTE]
 > En local se monta además `POST /ingestion/bank-notifications`, un webhook sin
-> autenticar que acepta un correo entero directamente, sin pasar por ningún
-> buzón. Es una costura de pruebas y **no existe fuera de `ENVIRONMENT=local`**:
-> en producción nada lo llama por HTTP; el `ingest worker` lee el buzón
-> compartido directamente.
->
-> Es lo que permite probar la cadena completa sin una cuenta de Gmail. El
-> recorrido request a request está en
+> autenticar que acepta un correo entero sin pasar por ningún buzón. Es una
+> costura de pruebas y **no existe fuera de `ENVIRONMENT=local`**. El recorrido
+> request a request está en
 > [frontend-integration.md](frontend-integration.md#guion-de-prueba-de-punta-a-punta).
+
+<details>
+<summary><b>La API escucha en <code>0.0.0.0</code>, y por qué</b></summary>
+<br/>
+
+Dentro de un DevContainer, `127.0.0.1` es una interfaz distinta de aquella a la
+que Docker entrega el puerto publicado: un bind al loopback responde a `curl`
+desde dentro y no a <http://localhost:8000/docs> desde el host. Se reconoce con
+`ss -ltn` (`127.0.0.1:8000` en vez de `0.0.0.0:8000`). Fue un flag que se
+olvidaba, y por eso acabó siendo el default; `just up --api-host 127.0.0.1`
+vuelve a lo de antes. `just dev`, `run-dev` y `run-prod` también bindean
+`0.0.0.0`.
+
+Lo que decide quién llega desde fuera de la máquina es el *publish* de Docker
+en `.devcontainer/devcontainer.json`. Si te preocupa la red local —`just up-dev`
+habla con recursos reales—, estrecha ese mapeo a `127.0.0.1:8000:8000`.
+
+</details>
 
 ### 5. Mirar qué está pasando
 
 ```bash
-just inspect     # bandejas, notificaciones y profundidad de la cola
-just events      # eventos de integración que llegaron al bus (--follow para seguir)
-just aws-status  # tablas, colas y buses que existen ahora mismo
+just inspect     # bandejas, notificaciones y profundidad de las colas
+just events      # eventos que llegaron al bus (--follow para seguir)
+just aws-status  # tablas, colas y buses que existen
+
+just model-access <user_id>               # el modelo: open, paused hasta…, o revoked
+just model-access <user_id> --reinstate   # reactivar y borrar sus strikes (-dev / -prod contra AWS)
 ```
 
-`just events` es especialmente útil: publicar en un bus sin regla **tiene
-éxito** y no entrega nada, así que es la única forma de comprobar que un
-evento salió de verdad.
-
-Si alguien quedó suspendido por strikes (ver
-[overview.md → Los strikes](overview.md#los-strikes)):
-
-```bash
-just model-access <user_id>               # open, paused hasta…, o revoked
-just model-access <user_id> --reinstate   # reactivar, y borrar sus strikes
-```
-
-Con `-dev` o `-prod` al final, contra AWS. En local el aviso por correo no se
-manda: el `alerts-worker` lo escribe en su log.
-
-`just inspect` mira el despliegue entero, sin autenticación y desde la máquina
-que lo corre. La vista equivalente para un usuario —solo su propio correo— es
-`GET /ingestion/notifications`, y esa sí está montada en producción.
+`just events` es la única forma de comprobar que un evento salió: publicar en
+un bus sin regla **tiene éxito** y no entrega nada. `just inspect` mira todo el
+despliegue sin autenticación; la vista de un usuario es
+`GET /ingestion/notifications`.
 
 En el log del `financial-worker`, la línea que importa es `outcome`:
 
-| | |
-|---|---|
+| `outcome` | Qué pasó |
+| :--- | :--- |
 | `applied` | Cayó en una cuenta declarada y movió su saldo. |
-| `unassigned` | Nadie ha declarado una cuenta para ese instrumento. El movimiento se guarda igual y se adopta en cuanto exista la cuenta. Es lo esperado, no un fallo. |
-| `duplicate` | Ese movimiento ya estaba en el ledger: ni fila, ni saldo — por eso `account_id` viene vacío. |
+| `unassigned` | Nadie declaró una cuenta para ese instrumento. Se guarda y se adopta cuando exista. Es lo esperado, no un fallo. |
+| `duplicate` | Ya estaba en el ledger: ni fila ni saldo, por eso `account_id` viene vacío. |
 
-Los `domain_event` del log deliberadamente **no registran ni el monto, ni la
-contraparte, ni los dígitos**: juntos son una línea del historial de gastos de
-alguien, y un log no es sitio para eso.
+Los `domain_event` del log **no registran monto, contraparte ni dígitos**:
+juntos son una línea del historial de gastos de alguien.
 
 ### 6. Antes de dar por terminado un cambio
 
 ```bash
 just prepare   # formato + lint + tipos + tests
-just fix       # arregla formato y lint automáticamente
+just fix       # arregla formato y lint
 ```
-
----
 
 ## Development: AWS real, todo con prefijo `dev-`
 
-`ENVIRONMENT=development` es todo el mecanismo — el prefijo se aplica en
-código, no configurando nueve nombres a mano:
-
-| Recurso | local / producción | development |
-|---|---|---|
-| Tablas | `bank_notifications`, `user_inboxes`, `users`, `merchants`, `financial` | `dev-` + cada una |
-| Colas | `parse-notifications`, `merchant-events`, `financial-events`, `integration-events` | `dev-` + cada una |
-| Bus | `finflow` | `dev-finflow` |
-
-Las reglas de EventBridge no llevan prefijo: su nombre es único **por bus**, y
-el bus ya está separado.
+`ENVIRONMENT=development` es todo el mecanismo: el prefijo se aplica en código.
+Las ocho tablas, las colas y el bus llevan `dev-` delante (`dev-financial`,
+`dev-parse-notifications`, `dev-finflow`); las reglas no, porque su nombre es
+único por bus.
 
 ```bash
 cp .env.development.example .env.development
-aws configure --profile finflow-dev   # la cuenta de dev, no la de producción
+aws configure --profile finflow-dev   # la de dev, no la de producción
 # edita AWS_PROFILE, IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
 just provision-dev          # crea los recursos dev-*, una sola vez
-# pega en .env.development las cuatro URLs de cola que imprime
-just up-dev                 # los seis procesos, en una terminal
+# pega en .env.development las cinco URLs de cola que imprime
+just up-dev                 # los procesos desde tu máquina, en una terminal
 ```
 
-Eso corre los procesos **desde tu máquina** contra los recursos `dev-`. Para
-dejarlos corriendo en AWS como funciones Lambda, ver
-[deploy.md → Backend → development](deploy.md#backend--development).
+Uno por uno: `just run-dev` y los cinco `*-worker-dev`. Para dejarlos en AWS
+como Lambda: [deploy.md → Backend → development](deploy.md#backend--development).
 
-Aquí `ingest-worker` **sí** arranca: development es un entorno donde el correo
-entra por donde entra en producción. No corras a la vez el poller de dos
-entornos — se pelean por el mismo buzón.
-
-Uno por uno, si lo prefieres: `just run-dev` y los cuatro `*-worker-dev`.
-
-El prefijo separa tablas, colas y bus — **no el buzón**. Si vas a correr
-`just ingest-worker-dev`, que sea contra una cuenta de Gmail distinta de la de
-producción; si no, deja la App Password vacía y el worker no arrancará. Ver el
-aviso en [Configurar `.env`](#1-configurar-env).
-
-Los secretos del stack `finflow-dev` son los suyos, bajo
-`/finflow/development/`: `just secret-put` deduce del prefijo de la ruta a qué
-entorno pertenece, así que no hay un argumento que equivocar — ver
-[deploy.md → Los secretos](deploy.md#4-los-secretos-en-parameter-store).
-
-Entre los dos stacks desplegados el problema ya no existe: cada uno tiene su
-propia cuenta de Gmail (`IngestMailboxAddress` en `infra/samconfig.toml`), y
-por eso los dos pueden poll-ear a la vez — ver [deploy.md → Cada stack tiene
-su propio buzón](deploy.md#cada-stack-tiene-su-propio-buzón). Lo que sigue sin
-poder compartirse es **una misma cuenta entre dos pollers**.
-
-Development hereda **todas** las restricciones de producción menos una: puede
-usar `AWS_ENDPOINT_URL`, que es lo que permite ensayar esta configuración
-contra moto antes de que cueste nada. Lo demás sigue prohibido: `*` como
-origen CORS se rechaza, y el webhook local **no** se monta. En dev los correos
-entran por donde entran en producción — el `ingest-worker` leyendo el buzón
-por IMAP.
-
----
+| Regla | Por qué |
+| :--- | :--- |
+| **Aquí el `ingest-worker` sí arranca** | El correo entra por donde entra en producción. Pero no corras a la vez el lector local y el desplegado: se disputan el buzón. |
+| **Hereda todas las restricciones de producción menos una** | Puede usar `AWS_ENDPOINT_URL`, para ensayar contra moto. `*` como origen CORS se rechaza y el webhook local no se monta. |
+| **Sus secretos son suyos** | Bajo `/finflow/development/`; `just secret-put` deduce el entorno de la ruta ([deploy.md](deploy.md#4-los-secretos-en-parameter-store)). |
+| **Su buzón también** | Cada stack desplegado tiene su Gmail, y por eso los dos leen a la vez ([deploy.md](deploy.md#cada-stack-tiene-su-propio-buzón)). Lo que nunca se comparte es una cuenta entre dos lectores. |
 
 ## Producción
 
-Misma imagen, mismo código; cambian el fichero de entorno y las credenciales.
-`AWS_ENDPOINT_URL` está **prohibido** con `ENVIRONMENT=production`: un
-endpoint de emulador olvidado no puede desviar tráfico real.
+Misma imagen y mismo código; cambian el fichero y las credenciales.
+`AWS_ENDPOINT_URL` está **prohibido** con `ENVIRONMENT=production`: un endpoint
+de emulador olvidado no puede desviar tráfico real.
 
 ### 1. Credenciales y ficheros
 
@@ -418,45 +285,26 @@ cp .env.production.example .env.production
 aws configure --profile finflow-production
 ```
 
-**Ninguna clave de AWS se escribe en el fichero**: en local vienen del perfil
-de `~/.aws`, y desplegado del rol de la función (deja `AWS_PROFILE` sin valor
-en ese caso).
-
-Los secretos de la aplicación —`IDENTITY_JWT_SECRET`,
-`IDENTITY_MAIL_APP_PASSWORD`, `INGESTION_INGEST_MAILBOX_APP_PASSWORD`,
-`LLM_API_KEY`, `ALERTS_TELEGRAM_BOT_TOKEN` y
-`ALERTS_TELEGRAM_WEBHOOK_SECRET`— **no** van en el fichero: van en SSM
-Parameter Store y el fichero solo guarda la referencia.
-
-```
-IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret
-```
-
-Cualquier valor que **no** empiece por `ssm:` se toma como el secreto mismo,
-que es lo que mantiene el desarrollo local con valores planos. La conversión
-es por secreto, no global: `grep ssm: .env.production` responde cuáles ya
-están fuera del fichero. Se leen una vez por proceso, así que rotar uno exige
-reiniciar.
-
-Cómo se ponen ahí, y cómo se rotan, en
-[deploy.md → Los secretos](deploy.md#4-los-secretos-en-parameter-store).
+- **Ninguna clave de AWS va en el fichero**: en tu máquina salen del perfil, y
+  desplegado del rol de la función.
+- **Los secretos tampoco** (`IDENTITY_JWT_SECRET`, `IDENTITY_MAIL_APP_PASSWORD`,
+  `INGESTION_INGEST_MAILBOX_APP_PASSWORD`, `LLM_API_KEY`,
+  `ALERTS_TELEGRAM_BOT_TOKEN`, `ALERTS_TELEGRAM_WEBHOOK_SECRET`): van en SSM y
+  el fichero guarda la referencia, `IDENTITY_JWT_SECRET=ssm:/finflow/production/jwt-secret`.
+  Un valor que no empiece por `ssm:` es el secreto mismo; `grep ssm:
+  .env.production` dice cuáles ya salieron. Se leen una vez por proceso:
+  rotar exige reiniciar ([cómo](deploy.md#4-los-secretos-en-parameter-store)).
 
 ### 2. Los recursos
 
-Producción necesita sus tablas, colas y bus antes de que nada arranque:
-`just provision-prod`, y pegar en `.env.production` las cuatro URLs de cola
-que imprime — solo existen una vez creada la cola, porque la URL incluye el id
-de cuenta. Los pasos completos están en
-[deploy.md → Backend → producción](deploy.md#backend--producción).
-
-Comprueba qué existe ahora mismo con `just aws-status .env.production`.
+`just provision-prod` y las cinco URLs de cola que imprime en
+`.env.production` ([pasos completos](deploy.md#backend--producción)).
+`just aws-status .env.production` dice qué existe.
 
 ### 3. Correr producción desde tu máquina
 
-Lo normal es que producción corra desplegada, como siete funciones Lambda
-([deploy.md](deploy.md)). Aun así los seis procesos de siempre siguen
-sirviendo para depurar contra datos reales, hacer una migración puntual o
-comprobar algo sin desplegar:
+Lo normal es que corra desplegada. Los procesos de siempre siguen sirviendo para
+depurar contra datos reales o comprobar algo sin desplegar:
 
 ```bash
 just run-prod              # uvicorn, sin recarga, puerto 8000
@@ -464,253 +312,127 @@ just ingest-worker-prod
 just parse-worker-prod
 just merchant-worker-prod
 just financial-worker-prod
+just alerts-worker-prod
 ```
 
-**No los corras a la vez que el despliegue**: el `ingest-worker` local
-competiría con la función por el mismo buzón, y los de cola por los mismos
-mensajes.
+> [!CAUTION]
+> **No los corras a la vez que el despliegue**: el `ingest-worker` competiría
+> con la función por el buzón, y los de cola por los mismos mensajes.
 
 ### 4. Configurar la cuenta de ingesta
 
-Esto el código no puede hacerlo por ti — es un paso manual, una sola vez, y no
-depende de un usuario en particular:
+Manual, una sola vez, y no depende de ningún usuario:
 
-1. Crea una cuenta de Gmail dedicada a esto (no la tuya personal).
-2. Actívale verificación en dos pasos.
-3. Genera una **App Password** (Cuenta de Google → Seguridad → Verificación en dos pasos → Contraseñas de aplicaciones).
-4. Rellena en `.env.production`:
-   ```
+1. Una cuenta de Gmail dedicada (no la tuya).
+2. Verificación en dos pasos.
+3. Una **App Password** (Cuenta de Google → Seguridad → Verificación en dos
+   pasos → Contraseñas de aplicaciones).
+4. En `.env.production`:
+
+   ```dotenv
    INGESTION_INGEST_MAILBOX_ADDRESS=tu-cuenta-de-ingesta@gmail.com
    INGESTION_INGEST_MAILBOX_APP_PASSWORD=ssm:/finflow/production/mailbox-app-password
    ```
 
-Con la dirección vacía la API se niega a arrancar: cada registro nuevo deriva
-de ella su dirección de reenvío, así que no hay modo degradado posible. Con la
-App Password vacía la API arranca, pero el `ingest worker` se niega a arrancar
-él solo.
-
-Paso a paso de cómo cada usuario conecta su banco a esa cuenta, en
-[email-forwarding.md](email-forwarding.md).
-
----
+Sin dirección la API no arranca (no hay modo degradado: cada registro deriva
+de ella). Sin App Password la API arranca, pero el `ingest worker` no. Cómo
+cada usuario conecta su banco: [email-forwarding.md](email-forwarding.md).
 
 ## El frontend
 
-`frontend/` es una SPA estática: Vite, React y TypeScript. No tiene entornos
-propios ni lee `ENV_FILE`. Tiene **dos modos de Vite**, y cada uno lee su
-fichero:
+`frontend/` es una SPA estática (Vite, React y TypeScript). No lee `ENV_FILE`:
+tiene **dos modos de Vite**, y a qué backend habla lo decide una sola variable,
+**`VITE_API_BASE_URL`**.
 
-| Comando | Modo | Fichero que lee | Para qué |
-|---|---|---|---|
-| `just web` | development | `frontend/.env.development` | Servidor de desarrollo con recarga en caliente |
-| `just web-build` | production | `frontend/.env.production` | Construye `dist/` para publicar |
-| `just web-publish` | production | `frontend/.env.production`, generado | Construye y sube el bundle a Cloudflare Pages |
+| Comando | Modo | Lee | Para qué |
+| :--- | :--- | :--- | :--- |
+| `just web` | development | `frontend/.env.development` | Servidor con recarga en <http://localhost:5173> |
+| `just web-build` | production | `frontend/.env.production` | Construye `dist/` |
+| `just web-publish` | production | `frontend/.env.production`, **generado** | Construye y sube a Cloudflare Pages |
 
-Solo hay una variable que importe: **`VITE_API_BASE_URL`**, y es la que decide
-contra qué backend habla. Los tres entornos del backend no son tres
-configuraciones del frontend, son tres valores de esa variable:
-
-| Contra qué quieres integrar | `VITE_API_BASE_URL` |
-|---|---|
+| Contra qué integrar | `VITE_API_BASE_URL` |
+| :--- | :--- |
 | Local (`just up` / `just dev`) | `http://localhost:8000` |
-| Development desplegado | la `ApiUrl` de `just deploy-outputs-dev` |
+| Development desplegado | la `ApiUrl` de `just deploy-outputs-dev`, sin barra final |
 | Producción desplegada | la `ApiUrl` de `just deploy-outputs-prod` |
 
 ```bash
 cp frontend/.env.example frontend/.env.development   # trae localhost:8000
 just web-install                                     # una vez
-just web                                             # http://localhost:5173
+just web
 ```
 
-Para trabajar contra un backend **desplegado**, cambia esa única variable y
-vuelve a arrancar `just web`:
-
-```bash
-just deploy-outputs-dev     # copia el valor de ApiUrl
-# pégalo en frontend/.env.development como VITE_API_BASE_URL, sin barra final
-```
-
-`http://localhost:5173` está hoy en el `CorsOrigins` de los dos entornos, así
-que funciona contra cualquiera de los dos. Si sirves el frontend desde otro
-puerto o dominio, ese origen hay que añadirlo en `infra/samconfig.toml` y
-volver a desplegar el backend — comprueba la lista antes de suponerla:
-`grep -n CorsOrigins infra/samconfig.toml`.
-
-**Todo lo que pongas en esos ficheros viaja dentro del bundle.** No son
-secretos: cualquiera que abra la app puede leerlos. Nunca metas ahí una clave.
+`http://localhost:5173` está en el `CorsOrigins` de los dos entornos, así que
+funciona contra cualquiera; otro puerto o dominio hay que añadirlo en
+`infra/samconfig.toml` y volver a desplegar. **Todo lo que pongas en esos
+ficheros viaja en el bundle**: nunca una clave.
 
 ### Lo que se rompe y no lo parece
 
-**El frontend no sabe si el backend está levantado, y la interfaz pinta
-igual.** Es una SPA: el HTML y el JavaScript se sirven desde Vite, no desde la
-API. Si `VITE_API_BASE_URL` apunta a un sitio que no responde, verás la
-pantalla de login perfectamente dibujada y el fallo solo aparecerá al enviar
-el formulario. Una interfaz que pinta no dice nada sobre el backend.
-
-**Apuntar a un entorno y levantar otro no da ningún error.** `just dev` en el
-8000 y `frontend/.env.development` con la URL de AWS conviven sin quejarse: el
-frontend habla con AWS y tu API local no recibe una sola petición. Como
-`frontend/.env.development` está en `.gitignore`, tampoco lo ves en un `git
-diff`. Si dudas, la respuesta está en la pestaña **Network** del navegador —
-mira el dominio de las peticiones, no el de la pestaña.
-
-**La cuenta demo solo existe en local.** `just seed` siembra el emulador de
-moto. En development y en producción no hay nada que sembrar, así que
-`demo@finflow.local` **no existe ahí** y el login devuelve 401 *Invalid email
-or password*. Contra un entorno desplegado hay que **registrarse** desde la
-propia pantalla de registro, una vez.
-
-**El origen del frontend tiene que estar en `API_CORS_ORIGINS` del backend.**
-El puerto 5173 ya viene puesto en las plantillas, y por eso `vite.config.ts`
-lo fija con `strictPort`: un puerto que se mueva solo produce un error de CORS
-que parece un fallo del cliente. Si sirves el frontend desde otro origen —otro
-puerto, un túnel, un dominio— hay que añadirlo **y volver a desplegar** el
-backend. Un origen ausente falla en el *preflight*, antes de que tu código vea
-nada.
-
-**La URL que Vite imprime como `Network` (`172.17.x.x`) no funciona desde el
-navegador del host.** Es la dirección del contenedor en la red interna de
-Docker. Abre siempre `http://localhost:5173`. Está explicado, con el orden de
-diagnóstico, en [`frontend/README.md`](../frontend/README.md).
-
-**Y si la página carga pero todas sus llamadas fallan, mira si la API está
-arriba.** Vite escucha en todas las interfaces, así que 5173 responde aunque
-8000 no, y la pantalla se pinta mientras cada petición muere en la pestaña
-**Network**. Son dos puertos y hay que publicar los dos — ver
-[Los seis procesos](#4-los-seis-procesos).
+| Síntoma | Qué pasa |
+| :--- | :--- |
+| **La interfaz pinta, pero nada funciona** | El HTML lo sirve Vite, no la API: el login se dibuja perfecto aunque la API no responda. Mira si el 8000 está arriba; son dos puertos y hay que publicar los dos. |
+| **Levantaste un entorno y apuntas a otro** | `just dev` en el 8000 y `.env.development` con la URL de AWS conviven sin quejarse. El fichero está en `.gitignore`, así que no sale en un `git diff`: mira el dominio de las peticiones en la pestaña **Network**. |
+| **`401` con la cuenta demo en un entorno desplegado** | `demo@finflow.local` solo existe en el emulador. Allí hay que registrarse una vez. |
+| **Error de CORS que parece del cliente** | El origen no está en `API_CORS_ORIGINS`. Por eso `vite.config.ts` fija el 5173 con `strictPort`: un puerto que se mueve solo rompe CORS. |
+| **La URL `Network` de Vite (`172.17.x.x`) no abre** | Es la red interna de Docker. Abre siempre `http://localhost:5173` ([frontend/README.md](../frontend/README.md)). |
 
 ### Verlo de verdad: `just shot`
 
-En este DevContainer no hay navegador, así que una pantalla que solo compila
-**nunca se ha visto**. `just shot` arranca un Chromium sin cabeza sobre la app
-que ya está corriendo y escribe PNGs que sí se pueden abrir.
+En el DevContainer no hay navegador, así que una pantalla que solo compila
+**nunca se ha visto**. `just shot` abre un Chromium sin cabeza sobre la app que
+ya corre y escribe PNGs en `frontend/.screenshots/` (que git ignora).
 
 ```bash
-just up     # emulador, datos de prueba y la API
-just web    # el frontend, en otra terminal
-
+just up && just web           # en dos terminales
 just shot                     # las pantallas principales, tamaño teléfono
 just shot /reportes --full    # una sola, la página entera
 just shot /cuentas --desktop  # 1280x900 en vez de 390x844
 ```
 
-Cosas que conviene saber:
-
-- **No levanta nada.** Fotografía lo que ya está arriba, y si no hay nada
-  escuchando en `localhost:5173` te dice qué arrancar. Arrancar el stack desde
-  el script sería una segunda copia de `run_stack.py` y un proceso que se
-  podría quedar colgado si el script muere a mitad.
-- **Entra con la cuenta demo** (`demo@finflow.local`, la que siembra
-  `just seed`) por el formulario de verdad, no escribiendo la sesión en
-  `localStorage`: si el login se rompe, falla ahí en vez de darte seis
-  capturas de la pantalla de acceso.
-- **Silencia el onboarding.** En un perfil nuevo la bienvenida y el "ya quedó
-  conectado" son modales que tapan todo; el script los marca como vistos.
-  `--onboarding` los deja para quien quiera fotografiar la guía.
-- **Tamaño teléfono por defecto**, porque es lo que Finflow es.
-- Las capturas van a `frontend/.screenshots/`, que git ignora: son la foto de
-  un momento y envejecen en cuanto cambia una pantalla.
-
-El navegador se instala solo al crear el contenedor. Sus librerías están en la
-imagen (ver `.devcontainer/Dockerfile`) y el binario lo baja
-`postCreateCommand` después de `npm ci`, para que su versión case con el
-paquete `playwright` que lo maneja. Si Chromium se queja de una librería que
-falta:
-
-```bash
-sudo $(command -v node) frontend/node_modules/playwright/cli.js install-deps chromium
-```
-
-y añade a la lista del Dockerfile lo que ese comando instale.
+- **No levanta nada**: si no hay nada en `localhost:5173` te dice qué arrancar.
+- **Entra con la cuenta demo por el formulario de verdad**: si el login se
+  rompe, falla ahí y no te da seis capturas de la pantalla de acceso.
+- **Silencia el onboarding**; `--onboarding` lo deja para fotografiar la guía.
+- Si Chromium se queja de una librería:
+  `sudo $(command -v node) frontend/node_modules/playwright/cli.js install-deps chromium`,
+  y añade a `.devcontainer/Dockerfile` lo que instale.
 
 ### El contrato entre las dos mitades
 
 `docs/openapi.json` se genera desde los routers de Python, y de ahí salen los
-tipos TypeScript. Después de tocar cualquier router o modelo de respuesta:
+tipos TypeScript:
 
 ```bash
 just web-types    # regenera docs/openapi.json y src/api/schema.d.ts
-just check-all    # las dos mitades: prepare + openapi-check + web-check
+just check-all    # prepare + openapi-check + web-check
 ```
 
-Si no lo haces, `just openapi-check` falla porque el contrato versionado ya no
-es el que produce el código. Ese es el punto del montaje: un endpoint que
-cambia rompe la compilación del frontend en vez de romper una pantalla.
-
-### Publicarlo
-
-El bundle se publica en Cloudflare Pages con `just web-publish` (producción) o
-`just web-publish-dev`. El comando genera `frontend/.env.production` desde la
-`ApiUrl` del stack, construye y sube, para que las dos mitades no puedan
-discrepar sobre una dirección.
-
-Queda un paso que el comando no hace: el origen desde el que se sirve la app
-tiene que estar en `CorsOrigins` y el backend volver a desplegarse, o cada
-llamada muere en el preflight. Los pasos, en
+Si no lo haces, `just openapi-check` falla: un endpoint que cambia rompe la
+compilación del frontend en vez de una pantalla. Publicar está en
 [deploy.md → Frontend](deploy.md#frontend--cloudflare-pages).
-
----
-
-## Desplegar
-
-Está en su propia guía: [deploy.md](deploy.md) — qué crea cada herramienta,
-los permisos y secretos que hacen falta una vez, los pasos para development y
-para producción, cómo publicar el frontend y cómo comprobar que lo desplegado
-sirve.
-
----
 
 ## DynamoDB: on-demand, no aprovisionado
 
-Las cinco tablas corren en **`PAY_PER_REQUEST`** (on-demand) en los tres
-entornos. Es el valor por defecto en código y en las tres plantillas.
+Las ocho tablas corren en **`PAY_PER_REQUEST`** en los tres entornos.
 
-**Por qué no la capa gratuita.** `PROVISIONED` regala 25 unidades de lectura y
-25 de escritura, pero **compartidas en toda la cuenta**, y DynamoDB cobra un
-índice secundario como si fuera una tabla: cinco tablas y dos índices a tres
-unidades cada uno ya gastaban 21 de las 25. Cada índice nuevo obligaba a bajar
-la capacidad otra vez — el esquema moldeado por una asignación en vez de por
-los datos. Y tres unidades son unas tres lecturas de 4 KB por segundo, con
-varios endpoints leyendo una partición entera: el uso normal quedaba a un
-refresco de ser estrangulado.
-
-**Qué cuesta.** Medido sobre un `just seed` completo: 67 escrituras y 52
-lecturas. A diez correos reenviados al día, del orden de **un céntimo al mes**.
-El trato es una factura inmedible a cambio de un techo que ya no condiciona el
-diseño.
-
-**El techo.** `INGESTION_DYNAMODB_MAX_READ_UNITS` / `..._MAX_WRITE_UNITS` (25)
-limitan peticiones por segundo, por tabla y por índice, para que un bucle
-descontrolado se estrangule en vez de facturar. Es un radio de explosión, no
-un presupuesto: pegado al techo un mes entero costaría dinero de verdad. El
-control de gasto es una alarma de facturación en la cuenta, que nada en este
-repositorio puede crear.
-
-**Cambiar de modo funciona.** Poner `INGESTION_DYNAMODB_BILLING_MODE=PROVISIONED`
-en un fichero de entorno y volver a aprovisionar **mueve las tablas
-existentes** — el aprovisionamiento reconcilia el modo en cada pasada, no solo
-al crear. En ese caso mandan `INGESTION_DYNAMODB_READ_CAPACITY` /
-`..._WRITE_CAPACITY`. Funciona en ambos sentidos, así que también hay que
-cuidar el descuido: un fichero de entorno con el modo viejo devuelve tablas
-vivas al modo viejo sin avisar.
+| | |
+| :--- | :--- |
+| **Por qué no la capa gratuita** | `PROVISIONED` regala 25 unidades de lectura y 25 de escritura **compartidas en toda la cuenta**, y cada índice cuenta como una tabla: con cinco tablas y dos índices ya se gastaban 21. Cada índice nuevo obligaba a bajar capacidad, y tres unidades por tabla quedaban a un refresco de estrangularse. |
+| **Qué cuesta** | A diez correos reenviados al día, del orden de **un céntimo al mes**: una factura inmedible a cambio de un techo que ya no condiciona el diseño. |
+| **El techo** | `INGESTION_DYNAMODB_MAX_READ_UNITS` / `..._MAX_WRITE_UNITS` (25) estrangulan un bucle descontrolado en vez de facturarlo. Es un radio de explosión, no un presupuesto: el control de gasto es una alarma de facturación en la cuenta. |
+| **Cambiar de modo funciona** | `INGESTION_DYNAMODB_BILLING_MODE=PROVISIONED` y volver a aprovisionar **mueve las tablas existentes** (mandan `..._READ_CAPACITY` / `..._WRITE_CAPACITY`). En los dos sentidos: un fichero con el modo viejo devuelve tablas vivas al modo viejo sin avisar. |
 
 ### Copias de seguridad
 
-El aprovisionamiento deja las cinco tablas con **point-in-time recovery**
-(PITR): puedes devolver una tabla al estado exacto que tenía en cualquier
-segundo de los últimos 35 días. Se aplica en los tres entornos; en local no
-sirve de nada, pero el camino es el mismo que en producción.
+Las ocho tablas quedan con **point-in-time recovery**: cualquier segundo de los
+últimos 35 días, en los tres entornos. Protege contra la forma normal en que se
+pierden datos —borrar la tabla equivocada, un despliegue que corrompe saldos
+unas horas— y es lo único de esta guía que **no se puede añadir después**.
+Importa sobre todo por `financial`: el ledger del que se recalculan los saldos.
 
-Protege contra la forma normal en que se pierden datos —borrar la tabla
-equivocada, un despliegue que corrompe saldos durante unas horas— y no tanto
-contra un fallo de AWS, que es raro. Importa sobre todo por `financial`, que
-contiene el ledger completo: los saldos se recalculan a partir de ella, así
-que perderla es perder el historial, y los correos originales ya se
-procesaron. Es también lo único de esta guía que **no se puede añadir
-después**.
-
-**Restaurar** crea siempre una tabla *nueva* — nunca sobrescribe la original,
-que es lo que te deja comparar antes de decidir:
+**Restaurar crea una tabla nueva**, nunca sobrescribe, así que puedes comparar
+antes de decidir:
 
 ```bash
 aws dynamodb restore-table-to-point-in-time \
@@ -720,13 +442,9 @@ aws dynamodb restore-table-to-point-in-time \
   --restore-date-time 2026-09-03T14:32:00Z
 ```
 
-Tarda de minutos a horas según el tamaño. Cuando esté lista y hayas comprobado
-que trae lo que esperabas, apunta la app hacia ella con
-`FINANCIAL_ACCOUNTS_TABLE=financial-restaurada` y reinicia — o renómbrala tú.
-El coste es aproximadamente el de almacenar la tabla otra vez; a esta escala,
-céntimos.
-
----
+Tarda de minutos a horas. Comprobada, apunta la app con
+`FINANCIAL_ACCOUNTS_TABLE=financial-restaurada` y reinicia, o renómbrala. Cuesta
+más o menos almacenar la tabla otra vez: céntimos.
 
 ## Comprobar que los datos cuadran
 
@@ -735,64 +453,53 @@ just verify                    # contra el emulador
 just verify .env.development   # contra la cuenta dev
 ```
 
-Recorre el flujo entero con **dos usuarios** —registro, aprobación del
-remitente, alertas, los tres workers, cuentas declaradas a posteriori,
-movimientos manuales, renombrado de comercio— y después comprueba dos
-familias de propiedades:
+Recorre el flujo entero con **dos usuarios** —registro, remitentes, alertas,
+los workers, cuentas declaradas a posteriori, movimientos a mano, renombrar un
+comercio— y comprueba:
 
-- **Integridad**: cada saldo es igual a los movimientos que tiene detrás; el
-  patrimonio es activos menos pasivos; un movimiento asignado está en una
-  cuenta que responde a su instrumento; los buckets del resumen suman su
-  total.
-- **Aislamiento**: ninguno de los dos llega a lo del otro, ni leyendo ni
-  escribiendo — un id ajeno responde `404` y no `403`, porque un `403` ya
-  confirmaría que existe.
+| Familia | Qué |
+| :--- | :--- |
+| **Integridad** | Cada saldo es igual a sus movimientos; patrimonio = activos − pasivos; un movimiento asignado está en una cuenta que responde a su instrumento; los buckets del resumen suman su total. |
+| **Aislamiento** | Ninguno llega a lo del otro, ni leyendo ni escribiendo. Un id ajeno responde `404` y no `403`: un `403` ya confirmaría que existe. |
 
-Sale con código 1 si algo falla, así que sirve en CI. Se **niega a correr con
-`ENVIRONMENT=production`**: registra dos usuarios con una contraseña escrita
-en este repositorio. `--yes-really-production` lo fuerza; `--keep-llm` deja el
-modelo conectado.
-
----
+Sale con 1 si algo falla. Se **niega a correr con `ENVIRONMENT=production`**
+(registra dos usuarios con una contraseña escrita en el repositorio):
+`--yes-really-production` lo fuerza; `--keep-llm` deja el modelo conectado.
 
 ## Cuando algo falla
 
-El sistema está escrito para fallar ruidosamente en el arranque antes que
-degradarse en silencio:
+El sistema prefiere fallar ruidosamente al arrancar que degradarse en silencio:
 
 | Mensaje | Qué hacer |
-|---|---|
+| :--- | :--- |
 | `IDENTITY_JWT_SECRET is not set` | Genera y pega el secreto. Todo token sería falsificable. |
 | `IDENTITY_MAIL_FROM_ADDRESS and IDENTITY_MAIL_APP_PASSWORD are not set` | Fuera de local, sin buzón nadie puede registrarse ni recuperar su cuenta. En local, déjalos vacíos: el código va al log. |
-| `IDENTITY_PASSWORD_RESET_URL must be an absolute https:// URL` | Es la página del frontend a la que apunta el enlace del correo, no una ruta de la API. Sin `https` el token viajaría a la vista. |
-| `INGESTION_INGEST_MAILBOX_ADDRESS is not set` | Sin ella nadie puede registrarse: cada cuenta nueva deriva de ahí su dirección de reenvío. |
-| `INGESTION_INGEST_MAILBOX_ADDRESS / ..._APP_PASSWORD are not set` (solo el `ingest worker`) | El worker no tiene qué buzón revisar. Configura la cuenta dedicada. |
-| `INGESTION_PARSE_QUEUE_URL is not set` | Aprovisiona y pega la URL. Si no, se aceptarían notificaciones que nunca se parsearían. |
-| `MERCHANT_EVENTS_QUEUE_URL is not set` | Igual, para el worker de comercios. |
-| `FINANCIAL_EVENTS_QUEUE_URL is not set` | Igual, para el de saldos: sin él ningún movimiento tocaría una cuenta. |
-| `Could not read the secret at '/...' from Parameter Store` | La referencia `ssm:` apunta a un parámetro que no existe o al que el rol no tiene acceso. Nunca se degrada a vacío. |
-| `AccessDeniedException` al provisionar | Faltan permisos. Con PITR hacen falta `dynamodb:DescribeContinuousBackups` y `dynamodb:UpdateContinuousBackups` además de los de crear tablas. |
-| `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Estás usando el fichero de entorno equivocado. |
-| `Missing .env… — copy it from ….example` | El recipe de `just` no encuentra su fichero de entorno. |
-| `no model configured` (aviso, no error) | Falta `LLM_API_KEY`. Los workers siguen funcionando sin plan B. |
-| `Could not read the parameter at '/finflow/<entorno>/llm-daily-calls-per-user'` (en la función de parseo) | El tope del modelo no existe en SSM, o no es un número. `just llm-limit-put <entorno> 20`. Los correos que fallaron mientras tanto están en `parse-notifications-dlq`. |
-| `Expected a whole number from the configured value` | `LLM_DAILY_CALLS_PER_USER` en `.env` no es un número entero. El parse worker no arranca. |
-| `could not refresh a tunable value; keeping the last one` (aviso) | SSM no respondió al releer el tope, o alguien lo cambió por algo que no es un número. Sigue con el último valor bueno. |
-| `InvalidParameterValueException: ... maximum visibility timeout` (al desplegar) | El timeout de una función supera el `VisibilityTimeout` de su cola. Bájalo a 120s o menos. |
-| `Resource of type 'AWS::Logs::LogGroup' ... already exists` | Un log group con ese nombre existe fuera del stack. Bórralo o cámbiale el nombre en la plantilla. |
-| `ExpiredTokenException` en una función con horas de vida | Credenciales congeladas. `build_session` ya lo evita en Lambda; si reaparece, comprueba que no haya un `AWS_PROFILE` puesto en la plantilla. |
-| La respuesta reporta fallos pero los mensajes desaparecen igual | Falta `FunctionResponseTypes: [ReportBatchItemFailures]` en el enganche de esa cola. |
+| `IDENTITY_PASSWORD_RESET_URL must be an absolute https:// URL` | Es la página del frontend del enlace, no una ruta de la API. Sin `https` el token viajaría a la vista. |
+| `INGESTION_INGEST_MAILBOX_ADDRESS is not set` | Sin ella nadie puede registrarse. |
+| `INGESTION_INGEST_MAILBOX_ADDRESS / ..._APP_PASSWORD are not set` (solo el `ingest worker`) | Configura la cuenta dedicada. |
+| `INGESTION_PARSE_QUEUE_URL is not set` | Aprovisiona y pega la URL; si no, se aceptarían correos que nunca se leerían. |
+| `MERCHANT_EVENTS_QUEUE_URL`, `FINANCIAL_EVENTS_QUEUE_URL` o `ALERTS_EVENTS_QUEUE_URL is not set` | Igual, para su worker: sin cola no hay nada que drenar. |
+| `Could not read the secret at '/...' from Parameter Store` | La referencia `ssm:` apunta a algo que no existe o que el rol no puede leer. Nunca se degrada a vacío. |
+| `AccessDeniedException` al aprovisionar | Faltan permisos; con PITR, también `dynamodb:DescribeContinuousBackups` y `dynamodb:UpdateContinuousBackups`. |
+| `AWS_ENDPOINT_URL must be unset when ENVIRONMENT=production` | Fichero de entorno equivocado. |
+| `Missing .env… — copy it from ….example` | La receta no encuentra su fichero. |
+| `no model configured` (aviso) | Falta `LLM_API_KEY`. Todo sigue, sin plan B. |
+| `Could not read the parameter at '/finflow/<entorno>/llm-daily-calls-per-user'` | El tope no existe en SSM o no es un número: `just llm-limit-put <entorno> 20`. Lo que falló entretanto está en `parse-notifications-dlq`. |
+| `Expected a whole number from the configured value` | `LLM_DAILY_CALLS_PER_USER` no es un entero. El parse worker no arranca. |
+| `could not refresh a tunable value; keeping the last one` (aviso) | SSM no respondió al releer el tope, o lo cambiaron por algo que no es un número. Sigue con el último bueno. |
+| `InvalidParameterValueException: ... maximum visibility timeout` | El timeout de una función supera el de su cola. 120 s o menos. |
+| `Resource of type 'AWS::Logs::LogGroup' ... already exists` | Un log group con ese nombre existe fuera del stack. Bórralo o renómbralo en la plantilla. |
+| `ExpiredTokenException` en una función con horas de vida | Credenciales congeladas; comprueba que no haya un `AWS_PROFILE` en la plantilla. |
+| La respuesta reporta fallos y los mensajes desaparecen igual | Falta `FunctionResponseTypes: [ReportBatchItemFailures]` en el enganche de esa cola. |
 
-**Si algo desaparece sin explicación, mira las colas `*-dlq`.** Cada cola de
-trabajo lleva al lado una *dead-letter queue* con ese sufijo: un worker borra
-el mensaje al terminar bien, no al recogerlo, así que uno que falla siempre
-volvería para siempre tapando a los demás — tras cinco intentos SQS lo aparta
-ahí. Es lo que convierte "desapareció dinero" en "hay 40 mensajes en
-`parse-notifications-dlq`". `just inspect` muestra ese número. Desplegado,
-cada DLQ tiene una alarma que avisa a `AlertEmail` (ver
-[deploy.md → Después del primer despliegue](deploy.md#después-del-primer-despliegue));
-en local nadie la vigila.
+> [!TIP]
+> **Si algo desaparece sin explicación, mira las colas `*-dlq`.** Un worker
+> borra el mensaje al terminar bien, no al recogerlo; tras cinco intentos SQS
+> aparta el que siempre falla. Eso convierte «desapareció dinero» en «hay 40
+> mensajes en `parse-notifications-dlq`», y `just inspect` muestra ese número.
+> Desplegado, cada DLQ tiene una alarma a `AlertEmail`; en local nadie la
+> vigila.
 
 Un mensaje que no cumple su esquema se borra: nunca va a cumplirlo. Uno que
-quizá entienda un despliegue más nuevo —una moneda, una versión desconocida—
-se deja y acaba en la DLQ, porque borrarlo destruiría un movimiento real.
+quizá entienda un despliegue más nuevo (una moneda, una versión desconocida) se
+deja y acaba en la DLQ, porque borrarlo destruiría un movimiento real.

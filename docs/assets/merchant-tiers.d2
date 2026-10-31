@@ -1,0 +1,170 @@
+# Los cuatro niveles con que Merchant reconoce un comercio. Fuente de
+# docs/assets/merchant-tiers.svg; se regenera con
+#
+#   d2 docs/assets/merchant-tiers.d2 docs/assets/merchant-tiers.svg
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+grid-rows: 1
+grid-columns: 4
+horizontal-gap: 56
+
+heading: "Cómo Merchant reconoce un comercio" {class: heading}
+legend: "Cada nivel solo se intenta si el anterior no encontró nada · agrupar mal esconde dinero; no agrupar cuesta un clic\nverde: se aplica · ámbar: queda como sugerencia revisable · una corrección tuya le gana a cualquier nivel, para siempre" {
+  class: note
+  near: bottom-center
+}
+
+exact: "1 · Huella exacta\n\nla misma grafía\nya vista\n\nahí aterriza casi todo" {
+  class: good
+  width: 250
+  height: 200
+}
+root: "2 · Root key\n\nsin números de tienda,\ndirecciones ni\nformas jurídicas" {
+  class: good
+  width: 250
+  height: 200
+}
+sub: "3 · Submarca\n\nEXITO EXPRESS\nbajo EXITO\n\nsolo compras" {
+  class: hold
+  width: 250
+  height: 200
+}
+model: "4 · El modelo\n\nBANCOLOMBIA NEQUI\nes NEQUI" {
+  class: hold
+  width: 250
+  height: 200
+  icon: https://cdn.simpleicons.org/googlegemini/8E75B2
+  icon.near: bottom-center
+}
+
+exact -> root: {class: no}
+root -> sub: {class: no}
+sub -> model: {class: no}
