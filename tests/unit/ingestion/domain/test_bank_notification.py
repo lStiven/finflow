@@ -211,6 +211,38 @@ def test_queued_notification_cannot_be_ignored() -> None:
         notification.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
 
 
+def test_a_notification_not_yet_recorded_as_queued_can_start_processing() -> None:
+    # The parser can read the record between the intake's enqueue and its
+    # write of QUEUED; the message it holds proves it was sent.
+    notification = BankNotification.receive(
+        user_id=USER_ID,
+        message_id=EmailMessageId("message-1"),
+        sender=EmailAddress("bank@example.com"),
+        subject="Purchase",
+        raw_content="Purchase information",
+        received_at=PosixTime.now(),
+    )
+
+    notification.start_processing()
+
+    assert notification.status is ProcessingStatus.PROCESSING
+
+
+def test_an_ignored_notification_cannot_start_processing() -> None:
+    notification = BankNotification.receive(
+        user_id=USER_ID,
+        message_id=EmailMessageId("message-1"),
+        sender=EmailAddress("bank@example.com"),
+        subject="Purchase",
+        raw_content="Purchase information",
+        received_at=PosixTime.now(),
+    )
+    notification.ignore(reason=NotificationIgnoredReason.UNAUTHORIZED_SENDER)
+
+    with pytest.raises(InvalidNotificationStateError):
+        notification.start_processing()
+
+
 def test_identity_is_derived_from_the_message_id() -> None:
     def _receive(message_id: str) -> BankNotification:
         return BankNotification.receive(

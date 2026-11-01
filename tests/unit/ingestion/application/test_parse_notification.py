@@ -97,6 +97,11 @@ class InMemoryRepository:
     def save(self, notification: BankNotification) -> None:
         self.saved[notification.idempotency_key] = notification
 
+    def save_queued(self, notification: BankNotification) -> bool:
+        self.save(notification)
+
+        return True
+
 
 class RecordingEventPublisher:
     def __init__(self) -> None:
@@ -286,6 +291,18 @@ def test_a_message_for_a_vanished_notification_is_skipped() -> None:
     assert result.outcome is ParseOutcome.SKIPPED
     assert result.status is None
     assert publisher.published == []
+
+
+def test_a_message_that_beats_the_intake_is_still_parsed() -> None:
+    # The intake enqueues before it records doing so. Skipping a record still
+    # RECEIVED deleted the message and lost the email for good.
+    notification = _notification(queued=False)
+    use_case, _, publisher = _make(notification)
+
+    result = use_case.execute(_message(notification))
+
+    assert result.outcome is ParseOutcome.EXTRACTED
+    assert _published_types(publisher) == ["TransactionExtracted"]
 
 
 # --------------------------------------------------------------- traslados

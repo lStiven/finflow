@@ -81,6 +81,40 @@ def test_a_redelivery_never_overwrites_the_stored_record(
     assert stored.status is ProcessingStatus.QUEUED
 
 
+def test_recording_it_queued_lands_over_a_record_still_received(
+    repository: DynamoDBBankNotificationRepository,
+) -> None:
+    notification = _notification()
+    repository.add_if_new(notification)
+    notification.mark_as_queued()
+
+    assert repository.save_queued(notification) is True
+
+    stored = repository.get(notification.idempotency_key)
+    assert stored is not None
+    assert stored.status is ProcessingStatus.QUEUED
+
+
+def test_recording_it_queued_never_rolls_back_what_the_parser_wrote(
+    repository: DynamoDBBankNotificationRepository,
+) -> None:
+    intake = _notification()
+    repository.add_if_new(intake)
+    # The parser took the message before the intake recorded sending it.
+    parsed = repository.get(intake.idempotency_key)
+    assert parsed is not None
+    parsed.start_processing()
+    parsed.fail(reason="unreadable amount")
+    repository.save(parsed)
+    intake.mark_as_queued()
+
+    assert repository.save_queued(intake) is False
+
+    stored = repository.get(intake.idempotency_key)
+    assert stored is not None
+    assert stored.status is ProcessingStatus.FAILED
+
+
 def test_different_emails_do_not_collide(
     repository: DynamoDBBankNotificationRepository,
 ) -> None:
