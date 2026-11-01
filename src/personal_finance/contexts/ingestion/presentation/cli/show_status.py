@@ -13,6 +13,12 @@ import argparse
 from collections import Counter
 from typing import TYPE_CHECKING
 
+from personal_finance.contexts.ingestion.infrastructure.persistence.model_standing_dynamodb import (  # noqa: E501
+    KEY_PREFIX as MODEL_STANDING_KEY_PREFIX,
+)
+from personal_finance.contexts.ingestion.infrastructure.persistence.model_usage_dynamodb import (  # noqa: E501
+    KEY_PREFIX as MODEL_USAGE_KEY_PREFIX,
+)
 from personal_finance.contexts.ingestion.infrastructure.persistence.user_inbox_dynamodb import (  # noqa: E501
     ALLOWED_ADDRESSES,
     ALLOWED_DOMAINS,
@@ -77,7 +83,15 @@ def _print_inboxes(table_name: str) -> None:
 
 
 def _print_notifications(table_name: str, *, limit: int) -> None:
-    items = get_dynamodb_client().scan(TableName=table_name).get("Items", [])
+    items = [
+        item
+        for item in get_dynamodb_client().scan(TableName=table_name).get("Items", [])
+        # The day's model reads and each person's standing with the model
+        # share the table and are not notifications.
+        if not _text(item, "pk").startswith(
+            (MODEL_USAGE_KEY_PREFIX, MODEL_STANDING_KEY_PREFIX),
+        )
+    ]
     counts = Counter(_text(item, "status") for item in items)
 
     print(f"\nNotifications ({len(items)})")

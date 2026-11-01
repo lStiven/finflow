@@ -10,6 +10,7 @@ from typing import cast
 from pydantic import BaseModel, ValidationError
 import pytest
 
+from personal_finance.contexts.ingestion.application.ports import FallbackReading
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
     InstrumentKind,
@@ -88,11 +89,12 @@ def _answer(**overrides: object) -> ExtractedTransactionSchema:
     return ExtractedTransactionSchema.model_validate(values)
 
 
-def _extract(
+def _read(
     answer: ExtractedTransactionSchema | None = None,
     *,
     error: Exception | None = None,
-) -> tuple[ExtractedTransaction | None, StubModel]:
+    body: str = "Tu compra fue aprobada.",
+) -> tuple[FallbackReading, StubModel]:
     model = StubModel(answer=answer, error=error)
     extractor = GeminiTransactionExtractor(
         model=cast("StructuredModel", model),
@@ -103,11 +105,22 @@ def _extract(
         extractor.extract(
             sender=SENDER,
             subject="Notificación",
-            body="Tu compra fue aprobada.",
+            body=body,
             received_at=RECEIVED_AT,
         ),
         model,
     )
+
+
+def _extract(
+    answer: ExtractedTransactionSchema | None = None,
+    *,
+    error: Exception | None = None,
+    body: str = "Tu compra fue aprobada.",
+) -> tuple[ExtractedTransaction | None, StubModel]:
+    reading, model = _read(answer, error=error, body=body)
+
+    return reading.transaction, model
 
 
 def test_the_schema_offers_exactly_the_kinds_the_domain_has() -> None:
@@ -256,3 +269,82 @@ def test_the_prompt_carries_the_received_date_as_local_context() -> None:
 
     # An alert that writes a date with no year is resolved against this.
     assert "received_at: 2025-08-12" in model.prompts[0]
+
+
+def test_an_html_alert_reaches_the_model_as_text_not_markup() -> None:
+    body = (
+        "<html><head><style>td { font-family: Arial; }</style></head><body>"
+        "<table><tr><td style='font-size:14px;color:#333'>"
+        "Compraste $45.000 en TIENDAS ARA 123"
+        "</td></tr></table></body></html>"
+    )
+
+    _, model = _extract(_answer(), body=body)
+
+    prompt = model.prompts[0]
+    assert "Compraste $45.000 en TIENDAS ARA 123" in prompt
+    # Styles and tags are what an HTML alert is mostly made of, and every
+    # character of them is billed.
+    assert "font-size" not in prompt
+    assert "<td" not in prompt
+
+
+def test_a_plain_text_forward_keeps_the_banks_address_and_its_lines() -> None:
+    body = (
+        "---------- Forwarded message ---------\n"
+        "De: Bancolombia <alertasynotificaciones@bancolombia.com.co>\n"
+        "\n"
+        "Compraste $45.000 en TIENDAS ARA 123\n"
+    )
+
+    _, model = _extract(_answer(), body=body)
+
+    # The forwarded header is where a hand-forward still names the bank, and
+    # an address in angle brackets is not a tag.
+    assert body in model.prompts[0]
+
+
+def test_the_size_limit_is_spent_on_text_rather_than_styles() -> None:
+    styles = "<style>" + ".a { color: red; } " * 5_000 + "</style>"
+    body = f"<html><head>{styles}</head><body><p>Compraste $45.000</p></body></html>"
+    assert len(body) > LLMSettings().max_input_characters
+
+    _, model = _extract(_answer(), body=body)
+
+    # Cut as raw markup, this alert would have lost its only sentence.
+    assert "Compraste $45.000" in model.prompts[0]
+
+
+# ------------------------------------------------------- who wrote the email
+
+
+def test_a_decline_the_model_says_is_not_from_a_bank_is_an_offense() -> None:
+    reading, _ = _read(_answer(understood=False, from_a_bank=False))
+
+    assert reading.transaction is None
+    assert reading.not_bank_mail is True
+
+
+def test_a_decline_from_a_bank_is_not_an_offense() -> None:
+    reading, _ = _read(_answer(understood=False, from_a_bank=True))
+
+    assert reading.not_bank_mail is False
+
+
+def test_a_movement_that_came_out_is_never_an_offense() -> None:
+    reading, _ = _read(_answer(from_a_bank=False))
+
+    assert reading.transaction is not None
+    assert reading.not_bank_mail is False
+
+
+def test_an_answer_that_leaves_the_judgement_out_strikes_nobody() -> None:
+    reading, _ = _read(_answer(understood=False))
+
+    assert reading.not_bank_mail is False
+
+
+def test_an_unusable_answer_strikes_nobody() -> None:
+    reading, _ = _read(error=LLMUnusableResponseError("not the schema"))
+
+    assert reading == FallbackReading(transaction=None, not_bank_mail=False)

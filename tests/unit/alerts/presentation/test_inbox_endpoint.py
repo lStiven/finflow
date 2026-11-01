@@ -21,6 +21,7 @@ from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
     BudgetState,
     CategoryRise,
+    ModelPause,
     MovementAlert,
     MovementDirection,
     MovementOrigin,
@@ -224,3 +225,36 @@ def test_all_alerts_can_be_dismissed_and_only_the_owners(
     assert client.delete("/alerts/inbox").status_code == 204
     assert client.get("/alerts/inbox").json()["entries"] == []
     assert any(entry.user_id == OTHER for entry in inbox.entries)
+
+
+def test_a_suspension_of_the_model_comes_back_as_its_facts(inbox: Inbox) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user_id] = lambda: USER
+    app.dependency_overrides[get_list_inbox_use_case] = lambda: ListInboxUseCase(
+        inbox=inbox,
+    )
+    inbox.entries = [
+        InboxEntry(
+            user_id=USER,
+            entry_id=uuid.uuid4(),
+            created_at=PosixTime.from_epoch_seconds(1_790_200_000),
+            kind=InboxKind.MODEL_PAUSED,
+            pause=ModelPause(
+                strike=2,
+                paused_until=PosixTime.from_epoch_seconds(1_790_459_200),
+                offenses=11,
+            ),
+        ),
+    ]
+
+    [entry] = TestClient(app).get("/alerts/inbox").json()["entries"]
+
+    assert entry["kind"] == "model_paused"
+    assert entry["movement"] is None
+    assert entry["summary"] is None
+    assert entry["pause"] == {
+        "strike": 2,
+        "paused_until": 1_790_459_200,
+        "offenses": 11,
+    }

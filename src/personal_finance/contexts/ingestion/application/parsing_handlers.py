@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import enum
+import logging
 
 from personal_finance.contexts.ingestion.application.messages import (
     ParseNotificationMessage,
 )
 from personal_finance.contexts.ingestion.application.ports import (
     BankNotificationRepository,
+    ModelStandingRepository,
+    ModelUsageQuota,
     TransactionExtractor,
 )
 from personal_finance.contexts.ingestion.domain.entities import BankNotification
+from personal_finance.contexts.ingestion.domain.model_standing import (
+    ModelAccess,
+    OffenseOutcome,
+)
+from personal_finance.contexts.ingestion.domain.parsing.dates import BOGOTA
 from personal_finance.contexts.ingestion.domain.parsing.registry import ParserRegistry
 from personal_finance.contexts.ingestion.domain.parsing.text import extract_text
 from personal_finance.contexts.ingestion.domain.transactions import ExtractedTransfer
@@ -19,6 +28,18 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     ProcessingStatus,
 )
 from personal_finance.shared.application.ports import EventPublisher
+from personal_finance.shared.domain.value_objects import PosixTime
+
+
+_logger = logging.getLogger(__name__)
+
+#: How many times one offense is retried against a record another worker
+#: keeps changing. Past this the message goes back to the queue.
+_STANDING_ATTEMPTS = 5
+
+
+class StandingContentionError(Exception):
+    """The person's record kept changing under this worker; try again later."""
 
 
 class ParseOutcome(enum.Enum):
@@ -60,6 +81,11 @@ class ParseNotificationUseCase:
     wants none — an unrecognised alert is kept as `PENDING_FALLBACK` exactly
     as before, so turning the model off degrades coverage instead of losing
     email.
+
+    The quota is not optional: every wiring has to say how much of the model
+    one person may spend, because a forgotten limit is no limit at all. Nor
+    is the standing: a person the model is suspended for is never read, and
+    an email the model judges not to be from a bank counts towards a strike.
     """
 
     def __init__(
@@ -68,11 +94,15 @@ class ParseNotificationUseCase:
         repository: BankNotificationRepository,
         registry: ParserRegistry,
         event_publisher: EventPublisher,
+        model_quota: ModelUsageQuota,
+        standings: ModelStandingRepository,
         fallback_extractor: TransactionExtractor | None = None,
     ) -> None:
         self._repository = repository
         self._registry = registry
         self._event_publisher = event_publisher
+        self._model_quota = model_quota
+        self._standings = standings
         self._fallback_extractor = fallback_extractor
 
     def execute(self, message: ParseNotificationMessage) -> ParseNotificationResult:
@@ -148,23 +178,99 @@ class ParseNotificationUseCase:
 
             return self._finish(notification, ParseOutcome.DEFERRED)
 
-        transaction = self._fallback_extractor.extract(
-            sender=notification.sender,
-            subject=notification.subject,
-            body=notification.raw_content,
-            received_at=notification.received_at,
-        )
+        now = PosixTime.now()
 
-        if transaction is None:
+        # Before the quota: a suspended person spends none of it.
+        if self._standings.get(notification.user_id).access(now) is not (
+            ModelAccess.OPEN
+        ):
+            notification.defer_to_fallback(
+                reason=NotificationDeferredReason.MODEL_SUSPENDED,
+            )
+
+            return self._finish(notification, ParseOutcome.DEFERRED)
+
+        # Reserved before the call, never counted after it: a read the model
+        # has already been paid for cannot be refused.
+        day = _today()
+
+        if not self._model_quota.reserve(
+            user_id=notification.user_id,
+            notification_id=notification.id,
+            day=day,
+        ):
+            notification.defer_to_fallback(
+                reason=NotificationDeferredReason.DAILY_LIMIT_REACHED,
+            )
+
+            return self._finish(notification, ParseOutcome.DEFERRED)
+
+        try:
+            reading = self._fallback_extractor.extract(
+                sender=notification.sender,
+                subject=notification.subject,
+                body=notification.raw_content,
+                received_at=notification.received_at,
+            )
+        except Exception:
+            # Nothing was read, and the redelivered message reserves again. A
+            # failed release only costs one read, so it must not hide the
+            # error that decides whether the email is retried.
+            try:
+                self._model_quota.release(
+                    user_id=notification.user_id,
+                    notification_id=notification.id,
+                    day=day,
+                )
+            except Exception:
+                _logger.exception("could not hand back an unused model read")
+
+            raise
+
+        if reading.not_bank_mail:
+            self._record_offense(notification, now=now)
+
+        if reading.transaction is None:
             notification.defer_to_fallback(
                 reason=NotificationDeferredReason.FALLBACK_FOUND_NOTHING,
             )
 
             return self._finish(notification, ParseOutcome.DEFERRED)
 
-        notification.complete(transaction)
+        notification.complete(reading.transaction)
 
         return self._finish(notification, ParseOutcome.EXTRACTED_BY_FALLBACK)
+
+    def _record_offense(
+        self, notification: BankNotification, *, now: PosixTime
+    ) -> None:
+        """Count one email that was not from a bank against its owner.
+
+        Before the notification is saved, and idempotent by its id: if the
+        save below fails, the redelivered message reads the model again and
+        lands here on an offense already counted. A strike is published as
+        soon as it is stored, so a later failure cannot unsay it.
+        """
+        for _ in range(_STANDING_ATTEMPTS):
+            standing = self._standings.get(notification.user_id)
+            outcome = standing.record_offense(
+                notification_id=notification.id,
+                received_at=notification.received_at,
+                now=now,
+            )
+
+            if outcome is OffenseOutcome.IGNORED:
+                # Already counted, or suspended meanwhile: nothing to write.
+                return
+
+            if self._standings.save(standing):
+                self._event_publisher.publish(standing.pull_events())
+
+                return
+
+        raise StandingContentionError(
+            "Another worker kept changing this person's record with the model",
+        )
 
     def _finish(
         self,
@@ -177,3 +283,12 @@ class ParseNotificationUseCase:
         self._event_publisher.publish(notification.pull_events())
 
         return ParseNotificationResult(outcome=outcome, status=notification.status)
+
+
+def _today() -> datetime.date:
+    """The day a read is counted against, in Bogotá like every other day here.
+
+    When the model is called, not when the email arrived: the limit is on what
+    is spent today, and a backlog cleared after an outage is spent today.
+    """
+    return PosixTime.now().to_datetime().astimezone(BOGOTA).date()

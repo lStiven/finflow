@@ -1,0 +1,176 @@
+# Los cuatro pasos para conectar un banco y quién hace cada uno. Fuente de
+# docs/assets/connect-bank.svg; se regenera con
+#
+#   d2 docs/assets/connect-bank.d2 docs/assets/connect-bank.svg
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+grid-rows: 1
+grid-columns: 4
+horizontal-gap: 48
+
+heading: "Conectar un banco: cuatro pasos" {class: heading}
+legend: "violeta: lo hace la app · ámbar: lo haces tú · cian: lo hace el worker solo · abajo, la clave del paso en GET /ingestion/setup" {
+  class: note
+  near: bottom-center
+}
+
+s1: "1 · Te registras\n\nla dirección se asigna sola:\nfinflowingest+<id>@gmail.com\n\naddress_assigned" {
+  class: card
+  width: 330
+  height: 210
+  style.stroke: "#A78BFA"
+  style.stroke-width: 3
+}
+s2: "2 · Apruebas remitentes\n\nel dominio de tu banco;\nsin ninguno, no entra nada\n\nsenders_approved" {
+  class: card
+  width: 330
+  height: 210
+  style.stroke: "#F59E0B"
+  style.stroke-width: 3
+}
+s3: "3 · Gmail confirma el reenvío\n\npones la dirección en Gmail;\nel worker sigue el enlace solo\n\nforwarding_confirmed" {
+  class: card
+  width: 330
+  height: 210
+  style.stroke: "#22D3EE"
+  style.stroke-width: 3
+}
+s4: "4 · Llega la primera alerta\n\ntu filtro reenvía; el worker\nla acepta en su siguiente pasada\n\nfirst_alert" {
+  class: card
+  width: 330
+  height: 210
+  style.stroke: "#22D3EE"
+  style.stroke-width: 3
+}
+
+s1 -> s2: {class: event}
+s2 -> s3: {class: event}
+s3 -> s4: {class: event}

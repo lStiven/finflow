@@ -1,0 +1,162 @@
+# Los tres entornos: un solo código, tres ficheros de entorno. Fuente de
+# docs/assets/environments.svg; se regenera con
+#
+#   d2 docs/assets/environments.d2 docs/assets/environments.svg
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+grid-rows: 1
+grid-columns: 3
+horizontal-gap: 40
+
+heading: "Tres entornos, un solo código" {class: heading}
+legend: "Lo único que cambia es qué fichero se lee (ENV_FILE), y cada receta de just ya lo fija.\nEl frontend no sigue esta tabla: habla con el backend que diga VITE_API_BASE_URL, y nada avisa si no coincide." {
+  class: note
+  near: bottom-center
+}
+
+local: "local\n\n.env\nmoto, en proceso: sin cuenta ni cobros\nnombres desnudos\n\njust up · just dev · just seed\nentra por el webhook local\nlos datos mueren con el emulador" {
+  class: card
+  width: 440
+  height: 320
+  style: {stroke: "#22D3EE"; stroke-width: 3; font-size: 23}
+}
+dev: "development\n\n.env.development\nAWS real, todo con prefijo dev-\nsu propio buzón de Gmail\n\njust up-dev · just deploy-dev\nentra por IMAP, cada 5 minutos\nlo despliega un push a dev" {
+  class: card
+  width: 440
+  height: 320
+  style: {stroke: "#F59E0B"; stroke-width: 3; font-size: 23}
+}
+prod: "production\n\n.env.production\nAWS real, nombres desnudos\nsu propio buzón de Gmail\n\njust run-prod · just deploy-prod\nentra por IMAP, cada minuto\nlo despliega un merge a master" {
+  class: card
+  width: 440
+  height: 320
+  style: {stroke: "#F43F5E"; stroke-width: 3; font-size: 23}
+}

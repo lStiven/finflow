@@ -1,0 +1,189 @@
+# Lo que levanta `just up`: la cadena de producción, sin Gmail. Fuente de
+# docs/assets/local-stack.svg; se regenera con
+#
+#   d2 docs/assets/local-stack.d2 docs/assets/local-stack.svg
+#
+# Grilla en S: la segunda fila se declara al revés porque D2 llena por filas.
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+grid-rows: 2
+grid-columns: 4
+horizontal-gap: 64
+vertical-gap: 80
+
+heading: "Local: la misma cadena, sin Gmail" {class: heading}
+legend: "borde punteado: vive en moto, en memoria, y se borra al pararlo\njust up = moto + recursos + seed + la API y cuatro workers en una terminal · el ingest-worker solo con --with-ingest" {
+  class: note
+  near: bottom-center
+}
+
+classes: {
+  mem: {
+    width: 270
+    height: 130
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      stroke-dash: 5
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  proc: {
+    width: 270
+    height: 130
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+}
+
+you: "Vite :5173\no curl, Postman,\njust seed" {class: proc; style.stroke: "#A78BFA"}
+api: "API :8000\ny el webhook local\nbank-notifications" {class: proc; style.stroke: "#22D3EE"}
+queue: "cola\nparse-notifications" {class: mem; style.stroke: "#A78BFA"}
+parse: "parse-worker\nplantilla, o Gemini\nsi hay LLM_API_KEY" {class: proc; style.stroke: "#D946EF"}
+
+gap: "" {width: 270; height: 130; style.opacity: 0}
+alerts: "alerts-worker\nsin token de Telegram,\nescribe el mensaje\nen el log" {class: proc; style.stroke: "#60A5FA"}
+workers: "merchant-worker\nfinancial-worker" {class: proc; style.stroke: "#10B981"}
+bus: "bus finflow\ny sus colas" {class: mem; style.stroke: "#E7157B"}
+
+you -> api: {class: quiet}
+api -> queue: {class: mail}
+queue -> parse: {class: mail}
+parse -> bus: {class: event}
+bus -> workers: {class: event}
+workers -> alerts: {class: event}

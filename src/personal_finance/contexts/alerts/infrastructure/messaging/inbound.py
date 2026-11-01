@@ -28,8 +28,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from personal_finance.contexts.alerts.application.commands import (
     DeliverMovementAlertCommand,
+    NotifyModelPauseCommand,
 )
 from personal_finance.contexts.alerts.application.messages import (
+    ModelPause,
     MovementAlert,
     MovementDirection,
     MovementOrigin,
@@ -46,6 +48,12 @@ FINANCIAL_SOURCE = "finflow.financial"
 MOVEMENT_RECORDED = "MovementRecorded"
 SUPPORTED_VERSION = 1
 
+INGESTION_SOURCE = "finflow.ingestion"
+MODEL_READING_SUSPENDED = "ModelReadingSuspended"
+MODEL_READING_SUSPENDED_VERSION = 1
+#: Ingestion's last strike is the third; anything far past it is not one.
+MAX_STRIKE = 10
+
 # Plain decimal notation only. Rejects a sign, `NaN`, `Infinity` and — the one
 # that matters — exponent notation: `1E+1000000` is ten harmless-looking
 # characters that expand into a million-digit amount.
@@ -58,7 +66,7 @@ MAX_OCCURRED_AT = 253_402_300_799
 
 
 class UnsupportedPayloadVersionError(Exception):
-    """Raised for a `MovementRecorded` version this cannot read.
+    """Raised for a payload version this cannot read.
 
     Not a malformed payload: a newer deploy wrote it, and a newer worker may
     still be able to take it. The worker leaves such a message on the queue.
@@ -226,3 +234,40 @@ def _origin(value: str) -> MovementOrigin:
         return MovementOrigin(value.strip().lower())
     except ValueError as error:
         raise ValueError(f"Unknown origin: {value!r}") from error
+
+
+class ModelReadingSuspendedDetail(BaseModel):
+    """Ingestion's suspension notice, plus the envelope fields mixed in."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    version: int = Field(ge=1)
+    event_id: uuid.UUID
+    user_id: uuid.UUID
+    strike: int = Field(ge=1, le=MAX_STRIKE)
+    #: Null when the suspension has no end.
+    paused_until: int | None = Field(ge=MIN_OCCURRED_AT, le=MAX_OCCURRED_AT)
+    offenses: int = Field(ge=1, le=10_000)
+    #: When Ingestion decided it — the envelope's own time.
+    occurred_at: int = Field(ge=MIN_OCCURRED_AT, le=MAX_OCCURRED_AT)
+
+    def to_command(self) -> NotifyModelPauseCommand:
+        if self.version != MODEL_READING_SUSPENDED_VERSION:
+            raise UnsupportedPayloadVersionError(
+                f"Cannot read ModelReadingSuspended version {self.version}",
+            )
+
+        return NotifyModelPauseCommand(
+            user_id=UserId(value=self.user_id),
+            event_id=self.event_id,
+            recorded_at=PosixTime.from_epoch_seconds(self.occurred_at),
+            pause=ModelPause(
+                strike=self.strike,
+                paused_until=(
+                    None
+                    if self.paused_until is None
+                    else PosixTime.from_epoch_seconds(self.paused_until)
+                ),
+                offenses=self.offenses,
+            ),
+        )

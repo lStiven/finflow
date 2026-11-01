@@ -16,7 +16,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from personal_finance.contexts.ingestion.application.ports import FallbackReading
 from personal_finance.contexts.ingestion.domain.parsing.dates import BOGOTA
+from personal_finance.contexts.ingestion.domain.parsing.text import readable_text
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
     Instrument,
@@ -102,6 +104,10 @@ class ExtractedTransactionSchema(BaseModel):
     bank: str = Field(max_length=128)
     instrument_kind: ExtractedInstrument
     instrument_last_four: str = Field(default="", max_length=8)
+    # Whether a financial institution wrote this email, movement or not. The
+    # abuse rule counts the falses, so an answer that leaves it out must not
+    # count: the default is the side that strikes nobody.
+    from_a_bank: bool = True
 
 
 class GeminiTransactionExtractor:
@@ -123,12 +129,12 @@ class GeminiTransactionExtractor:
         subject: str,
         body: str,
         received_at: PosixTime,
-    ) -> ExtractedTransaction | None:
+    ) -> FallbackReading:
         prompt = build_prompt(
             sender=sender.value,
             subject=subject,
             body=truncate_for_prompt(
-                body,
+                readable_text(body),
                 limit=self._settings.max_input_characters,
             ),
             received_at=_local_time(received_at),
@@ -142,20 +148,24 @@ class GeminiTransactionExtractor:
             )
         except LLMUnusableResponseError:
             # The model answered something that is not the schema. Not worth a
-            # retry, and certainly not worth guessing at.
+            # retry, and certainly not worth guessing at — nor worth a strike.
             _logger.exception("fallback extraction returned an unusable answer")
 
-            return None
+            return FallbackReading(transaction=None)
+
+        transaction = _to_transaction(answer) if answer.understood else None
 
         if not answer.understood:
             _logger.info(
                 "fallback extraction declined the email",
-                extra={"sender": sender.value},
+                extra={"sender": sender.value, "from_a_bank": answer.from_a_bank},
             )
 
-            return None
-
-        return _to_transaction(answer)
+        return FallbackReading(
+            transaction=transaction,
+            # A movement that came out is worth having whoever wrote it.
+            not_bank_mail=transaction is None and not answer.from_a_bank,
+        )
 
 
 def _to_transaction(

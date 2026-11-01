@@ -24,7 +24,13 @@ import { Card } from "@/components/ui/Card";
 import { cn } from "@/lib/cn";
 import { formatDate, formatRelative } from "@/lib/dates";
 import { useNow } from "@/lib/useNow";
-import { type Health, healthOf, type Outcome, outcomeOf } from "@/onboarding/activity";
+import {
+  type Health,
+  healthOf,
+  type Outcome,
+  outcomeOf,
+  unreadReason,
+} from "@/onboarding/activity";
 import { DiscardedSenders } from "@/onboarding/BanksStep";
 import {
   approvedBanks,
@@ -454,7 +460,7 @@ function RecentMail({
                   className={cn("size-3.5", outcome === "reading" && "animate-spin")}
                   aria-hidden
                 />
-                {look.label}
+                {(outcome === "unreadable" && unreadReason(notification)) || look.label}
               </span>
               {turnedAway ? (
                 <Button

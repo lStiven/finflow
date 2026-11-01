@@ -5,6 +5,7 @@ import {
   healthOf,
   outcomeOf,
   STALE_AFTER_DAYS,
+  unreadReason,
 } from "@/onboarding/activity";
 import type { Senders } from "@/onboarding/banks";
 
@@ -201,5 +202,41 @@ describe("a finished connection's health", () => {
       healthOf([mail("pending_fallback", 10), mail("processed", 20)], SENDERS, NOW)
         .kind,
     ).toBe("ok");
+  });
+});
+
+describe("why an email was never read", () => {
+  it("names a limit, so it does not read as a fault of the app", () => {
+    const capped = {
+      ...mail("pending_fallback", HOUR),
+      deferred_reason: "daily_limit_reached",
+    };
+    const paused = {
+      ...mail("pending_fallback", HOUR),
+      deferred_reason: "model_suspended",
+    };
+
+    expect(unreadReason(capped)).toBe("Sin leer: tope del día");
+    expect(unreadReason(paused)).toBe("Sin leer: lectura pausada");
+  });
+
+  it("says nothing special when the model read it and found nothing", () => {
+    const declined = {
+      ...mail("pending_fallback", HOUR),
+      deferred_reason: "fallback_found_nothing",
+    };
+
+    expect(unreadReason(declined)).toBeNull();
+  });
+});
+
+describe("a run of mail left unread by a limit", () => {
+  it("is not diagnosed as a format Finflow does not know", () => {
+    const capped = [1, 2, 3].map((hours) => ({
+      ...mail("pending_fallback", hours * HOUR),
+      deferred_reason: "daily_limit_reached",
+    }));
+
+    expect(healthOf(capped, SENDERS, NOW).kind).toBe("ok");
   });
 });

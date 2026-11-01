@@ -451,6 +451,10 @@ class LLMSettings(BaseSettings):
     # Email bodies are untrusted and occasionally enormous. Past this they are
     # cut, with a warning, rather than sent whole.
     max_input_characters: int = 40_000
+    # How many emails one person may have the model read in a Bogotá day. A
+    # number, or an `ssm:` reference — which is what a deployed stack holds,
+    # so the number can change without a deploy. See `tunable.py`.
+    daily_calls_per_user: str = "20"
 
     @field_validator("api_key")
     @classmethod

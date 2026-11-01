@@ -11,8 +11,14 @@ from __future__ import annotations
 import functools
 
 from personal_finance.contexts.alerts.application.ports import (
+    AccountMailer,
+    AccountNoticeSender,
     MessageSender,
     SummarySender,
+)
+from personal_finance.contexts.alerts.infrastructure.email.smtp import (
+    LoggingAccountMailer,
+    SmtpAccountMailer,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import (
     DynamoDBAlertChannelRepository,
@@ -26,6 +32,7 @@ from personal_finance.shared.infrastructure.aws.session import get_dynamodb_clie
 from personal_finance.shared.infrastructure.config.settings import (
     get_alerts_settings,
     get_aws_settings,
+    get_identity_settings,
 )
 
 
@@ -69,6 +76,44 @@ def build_message_sender() -> MessageSender:
 def build_summary_sender() -> SummarySender:
     """The same transport, seen through the port Monday's job needs."""
     return _build_sender()
+
+
+@functools.lru_cache(maxsize=1)
+def build_notice_sender() -> AccountNoticeSender:
+    """The same transport again, for notices about the account."""
+    return _build_sender()
+
+
+def build_account_mailer() -> AccountMailer:
+    """Where account notices are emailed from, or a refusal to start.
+
+    The mailbox Identity sends its codes from — one deployment, one sending
+    account — read from Identity's settings rather than configured twice.
+    Outside a developer's machine a worker that could not email a suspension
+    notice refuses to start, the way the API refuses without its mailbox.
+    """
+    alerts = get_alerts_settings()
+    identity = get_identity_settings()
+
+    if identity.mail_configured:
+        return SmtpAccountMailer(
+            host=identity.mail_host,
+            port=identity.mail_port,
+            username=identity.mail_login,
+            password=identity.mail_app_password,
+            from_address=identity.mail_from_address,
+            from_name=identity.mail_from_name,
+            display_timezone=alerts.display_timezone,
+        )
+
+    if get_aws_settings().is_local:
+        return LoggingAccountMailer(display_timezone=alerts.display_timezone)
+
+    raise ValueError(
+        "IDENTITY_MAIL_FROM_ADDRESS and IDENTITY_MAIL_APP_PASSWORD are not set "
+        "for the alerts worker: a suspension of somebody's reading could not "
+        "be emailed to them. See docs/deploy.md.",
+    )
 
 
 def _build_sender() -> TelegramMessageSender | LoggingMessageSender:

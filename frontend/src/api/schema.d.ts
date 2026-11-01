@@ -1701,6 +1701,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ingestion/model-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Model Access
+         * @description Whether the model reads the caller's unrecognised mail, and until when not.
+         */
+        get: operations["get_model_access_ingestion_model_access_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/ingestion/notifications": {
         parameters: {
             query?: never;
@@ -3185,8 +3205,9 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "movement" | "weekly_summary";
+            kind: "movement" | "weekly_summary" | "model_paused";
             movement: components["schemas"]["InboxMovementResponse"] | null;
+            pause?: components["schemas"]["InboxPauseResponse"] | null;
             summary: components["schemas"]["InboxSummaryResponse"] | null;
         };
         /** InboxMovementResponse */
@@ -3217,6 +3238,18 @@ export interface components {
             origin: "bank_alert" | "manual" | "accrual" | "scheduled";
             /** Unassigned */
             unassigned: boolean;
+        };
+        /**
+         * InboxPauseResponse
+         * @description The model stopped reading the owner's unrecognised mail.
+         */
+        InboxPauseResponse: {
+            /** Offenses */
+            offenses: number;
+            /** Paused Until */
+            paused_until: number | null;
+            /** Strike */
+            strike: number;
         };
         /** InboxResponse */
         InboxResponse: {
@@ -3601,6 +3634,18 @@ export interface components {
         MergeMerchantsPayload: {
             /** Absorbed Merchant Id */
             absorbed_merchant_id: string;
+        };
+        /** ModelAccessResponse */
+        ModelAccessResponse: {
+            /**
+             * Access
+             * @enum {string}
+             */
+            access: "open" | "paused" | "revoked";
+            /** Paused Until */
+            paused_until: number | null;
+            /** Strikes */
+            strikes: number;
         };
         /** MonthlyPointResponse */
         MonthlyPointResponse: {
@@ -7000,6 +7045,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestionCatalogResponse"];
+                };
+            };
+        };
+    };
+    get_model_access_ingestion_model_access_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelAccessResponse"];
                 };
             };
         };

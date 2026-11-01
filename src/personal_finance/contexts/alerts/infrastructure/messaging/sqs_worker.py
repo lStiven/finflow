@@ -30,8 +30,11 @@ from personal_finance.contexts.alerts.application.ports import (
 )
 from personal_finance.contexts.alerts.infrastructure.messaging.inbound import (
     FINANCIAL_SOURCE,
+    INGESTION_SOURCE,
+    MODEL_READING_SUSPENDED,
     MOVEMENT_RECORDED,
     IntegrationEventEnvelope,
+    ModelReadingSuspendedDetail,
     MovementRecordedDetail,
     UnsupportedPayloadVersionError,
     refused_fields,
@@ -45,6 +48,9 @@ from personal_finance.shared.infrastructure.messaging.sqs_polling import (
 if TYPE_CHECKING:
     from mypy_boto3_sqs.client import SQSClient
 
+    from personal_finance.contexts.alerts.application.account_notices import (
+        NotifyModelPauseUseCase,
+    )
     from personal_finance.contexts.alerts.application.handlers import (
         DeliverMovementAlertUseCase,
     )
@@ -62,9 +68,11 @@ class SQSAlertsWorker(SQSPollingWorker):
         client: SQSClient,
         queue_url: str,
         use_case: DeliverMovementAlertUseCase,
+        notices: NotifyModelPauseUseCase,
     ) -> None:
         super().__init__(client=client, queue_url=queue_url)
         self._use_case = use_case
+        self._notices = notices
 
     def handle(self, body: str) -> MessageOutcome:
         try:
@@ -81,6 +89,12 @@ class SQSAlertsWorker(SQSPollingWorker):
             )
 
             return MessageOutcome.DISCARDED
+
+        if (
+            envelope.source == INGESTION_SOURCE
+            and envelope.detail_type == MODEL_READING_SUSPENDED
+        ):
+            return self._notify_model_pause(envelope)
 
         if (
             envelope.source != FINANCIAL_SOURCE
@@ -151,6 +165,45 @@ class SQSAlertsWorker(SQSPollingWorker):
             # A count, and nothing else. The payload is a line of somebody's
             # spending history — amount, counterparty and bank in one record
             # — and an audit trail needs none of it.
+            extra={"event_id": str(command.event_id), "delivered": delivered},
+        )
+
+        return MessageOutcome.HANDLED
+
+    def _notify_model_pause(self, envelope: IntegrationEventEnvelope) -> MessageOutcome:
+        try:
+            command = ModelReadingSuspendedDetail.model_validate(
+                envelope.detail,
+            ).to_command()
+        except ValidationError as error:
+            _logger.warning(
+                "discarding malformed ModelReadingSuspended payload",
+                extra={"refused": refused_fields(error)},
+            )
+
+            return MessageOutcome.DISCARDED
+        except UnsupportedPayloadVersionError:
+            _logger.warning("unsupported ModelReadingSuspended version")
+
+            return MessageOutcome.RETRY
+
+        try:
+            delivered = self._notices.execute(command)
+        except TransportUnavailableError:
+            # The mail server or Telegram is down. The person still has not
+            # been told their reading stopped, so this waits.
+            _logger.warning(
+                "a transport is unavailable; leaving the notice on the queue"
+            )
+
+            return MessageOutcome.RETRY
+        except Exception:
+            _logger.exception("leaving a notice that could not be sent on the queue")
+
+            return MessageOutcome.RETRY
+
+        _logger.info(
+            "model pause announced",
             extra={"event_id": str(command.event_id), "delivered": delivered},
         )
 

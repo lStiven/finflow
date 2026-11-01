@@ -73,10 +73,18 @@ class BankNotification(AggregateRoot[NotificationId]):
     deferred_reason: NotificationDeferredReason | None = None
 
     def __post_init__(self) -> None:
-        # `ignore` and `complete` drop the body on purpose, and a record read
-        # back from storage in either state must rebuild cleanly.
-        if self.status not in _BODYLESS_STATUSES and not self.raw_content.strip():
+        # `ignore` and `complete` drop the body on purpose, and so does a
+        # deferral that reads nothing; a record read back from storage in any
+        # of those states must rebuild cleanly.
+        if self._keeps_body and not self.raw_content.strip():
             raise ValueError("Raw email content cannot be empty")
+
+    @property
+    def _keeps_body(self) -> bool:
+        if self.status in _BODYLESS_STATUSES:
+            return False
+
+        return self.deferred_reason is None or self.deferred_reason.keeps_body
 
     @classmethod
     def receive(
@@ -184,7 +192,8 @@ class BankNotification(AggregateRoot[NotificationId]):
     def defer_to_fallback(self, *, reason: NotificationDeferredReason) -> None:
         """Nothing usable came out of parsing. Keep the body: whichever
         avenue produced `reason` may still be worth another look later, and a
-        dropped body cannot be re-read.
+        dropped body cannot be re-read — unless `reason` is a decision not to
+        read it at all, which drops it like `ignore` does.
         """
         if self.status is not ProcessingStatus.PROCESSING:
             raise InvalidNotificationStateError(
@@ -193,6 +202,9 @@ class BankNotification(AggregateRoot[NotificationId]):
 
         self.status = ProcessingStatus.PENDING_FALLBACK
         self.deferred_reason = reason
+
+        if not reason.keeps_body:
+            self.raw_content = ""
         self.record_event(
             TransactionExtractionDeferred(
                 notification_id=self.id,

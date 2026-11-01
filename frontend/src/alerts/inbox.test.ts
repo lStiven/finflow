@@ -318,3 +318,33 @@ describe("seen ids", () => {
     expect(readSeen("u1")).toBeNull();
   });
 });
+
+describe("describeEntry — the model stopped reading", () => {
+  it("says it is paused, until when, and that it is not about money", () => {
+    const described = describeEntry({
+      id: "p1",
+      kind: "model_paused",
+      created_at: 1_790_200_000,
+      movement: null,
+      summary: null,
+      pause: { strike: 1, paused_until: 1_793_541_900, offenses: 10 },
+    });
+
+    expect(described.title).toBe("Lectura pausada");
+    expect(described.lines[0]).toContain("1 de noviembre");
+    expect(described.movementId).toBeNull();
+  });
+
+  it("says it is over for good when it has no end", () => {
+    const described = describeEntry({
+      id: "p2",
+      kind: "model_paused",
+      created_at: 1_790_200_000,
+      movement: null,
+      summary: null,
+      pause: { strike: 3, paused_until: null, offenses: 10 },
+    });
+
+    expect(described.title).toBe("Lectura desactivada");
+  });
+});

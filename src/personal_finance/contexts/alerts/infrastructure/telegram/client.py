@@ -25,6 +25,9 @@ from personal_finance.contexts.alerts.application.ports import (
     DestinationRefusedError,
     TransportUnavailableError,
 )
+from personal_finance.contexts.alerts.infrastructure.notice_copy import (
+    compose_model_pause_chat,
+)
 from personal_finance.contexts.alerts.infrastructure.telegram.messages import (
     compose_chat_already_linked,
     compose_link_confirmation,
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from pydantic import SecretStr
 
     from personal_finance.contexts.alerts.application.messages import (
+        ModelPause,
         MovementAlert,
         WeeklySummary,
     )
@@ -80,6 +84,12 @@ class TelegramMessageSender:
 
     def send_weekly_summary(self, *, chat_id: ChatId, summary: WeeklySummary) -> None:
         self._send(chat_id, compose_weekly_summary(summary))
+
+    def send_model_pause(self, *, chat_id: ChatId, pause: ModelPause) -> None:
+        self._send(
+            chat_id,
+            compose_model_pause_chat(pause, timezone=self._display_timezone),
+        )
 
     def send_link_confirmation(self, *, chat_id: ChatId) -> None:
         self._send(chat_id, compose_link_confirmation())
@@ -157,6 +167,12 @@ class LoggingMessageSender:
 
     def send_weekly_summary(self, *, chat_id: ChatId, summary: WeeklySummary) -> None:
         self._log(chat_id, compose_weekly_summary(summary))
+
+    def send_model_pause(self, *, chat_id: ChatId, pause: ModelPause) -> None:
+        self._log(
+            chat_id,
+            compose_model_pause_chat(pause, timezone=self._display_timezone),
+        )
 
     def send_link_confirmation(self, *, chat_id: ChatId) -> None:
         self._log(chat_id, compose_link_confirmation())

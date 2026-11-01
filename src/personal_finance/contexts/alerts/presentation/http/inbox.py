@@ -28,6 +28,7 @@ from personal_finance.contexts.alerts.application.inbox import (
     ManageInboxUseCase,
 )
 from personal_finance.contexts.alerts.application.messages import (
+    ModelPause,
     MovementAlert,
     WeeklySummary,
 )
@@ -96,13 +97,26 @@ class InboxSummaryResponse(BaseModel):
     rise: InboxRiseResponse | None
 
 
+class InboxPauseResponse(BaseModel):
+    """The model stopped reading the owner's unrecognised mail."""
+
+    #: Which strike, from 1.
+    strike: int
+    #: Epoch seconds; null when the suspension has no end.
+    paused_until: int | None
+    #: How many emails that were not from a bank made the burst.
+    offenses: int
+
+
 class InboxEntryResponse(BaseModel):
     id: str
-    kind: Literal["movement", "weekly_summary"]
+    kind: Literal["movement", "weekly_summary", "model_paused"]
     #: When the alert was recorded, epoch seconds. What the list is ordered by.
     created_at: int
     movement: InboxMovementResponse | None
     summary: InboxSummaryResponse | None
+    #: Only on `model_paused`. Optional so a client written before it reads on.
+    pause: InboxPauseResponse | None = None
 
 
 class InboxResponse(BaseModel):
@@ -192,6 +206,19 @@ def _entry(entry: InboxEntry) -> InboxEntryResponse:
         created_at=entry.created_at.as_epoch_seconds(),
         movement=None if entry.movement is None else _movement(entry.movement),
         summary=None if entry.summary is None else _summary(entry.summary),
+        pause=None if entry.pause is None else _pause(entry.pause),
+    )
+
+
+def _pause(pause: ModelPause) -> InboxPauseResponse:
+    return InboxPauseResponse(
+        strike=pause.strike,
+        paused_until=(
+            None
+            if pause.paused_until is None
+            else pause.paused_until.as_epoch_seconds()
+        ),
+        offenses=pause.offenses,
     )
 
 

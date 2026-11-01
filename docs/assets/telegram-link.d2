@@ -1,0 +1,154 @@
+# Cómo se vincula un chat de Telegram, en un toque. Fuente de
+# docs/assets/telegram-link.svg; se regenera con
+#
+#   d2 docs/assets/telegram-link.d2 docs/assets/telegram-link.svg
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+heading: "Vincular Telegram: un toque" {class: heading}
+
+flow: "" {
+  shape: sequence_diagram
+  style: {fill: "#0B0A1A"; stroke-width: 0; font-size: 18}
+
+  you: Tú {style: {fill: "#14112B"; stroke: "#F59E0B"; font-color: "#F8FAFC"; font-size: 20}}
+  app: "App web" {style: {fill: "#14112B"; stroke: "#A78BFA"; font-color: "#F8FAFC"; font-size: 20}}
+  api: "API · Alerts" {style: {fill: "#14112B"; stroke: "#60A5FA"; font-color: "#F8FAFC"; font-size: 20}}
+  bot: "Telegram · el bot" {style: {fill: "#14112B"; stroke: "#26A5E4"; font-color: "#F8FAFC"; font-size: 20}}
+
+  you -> app: "Conectar Telegram" {style: {stroke: "#F59E0B"; font-color: "#FCD34D"; font-size: 17}}
+  app -> api: "POST /alerts/channels" {style: {stroke: "#A78BFA"; font-color: "#DDD6FE"; font-size: 17}}
+  api -> app: "link_url: t.me/<bot>?start=<token>\nuna sola vez, vence en 15 min" {style: {stroke: "#60A5FA"; font-color: "#BFDBFE"; font-size: 17}}
+  you -> bot: "abres el enlace y pulsas Empezar" {style: {stroke: "#F59E0B"; font-color: "#FCD34D"; font-size: 17}}
+  bot -> api: "/start <token> al webhook\ncon la cabecera secreta" {style: {stroke: "#26A5E4"; font-color: "#BAE6FD"; font-size: 17}}
+  api -> bot: "«listo, te aviso por aquí»" {style: {stroke: "#60A5FA"; font-color: "#BFDBFE"; font-size: 17}}
+  app -> api: "GET /alerts/channels" {style: {stroke: "#A78BFA"; font-color: "#DDD6FE"; font-size: 17}}
+  api -> app: "status: verified · chat_hint …4321" {style: {stroke: "#10B981"; font-color: "#6EE7B7"; font-size: 17}}
+}

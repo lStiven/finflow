@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import dataclasses
+import datetime
 from typing import Protocol
 
 from personal_finance.contexts.ingestion.application.messages import (
@@ -14,6 +15,7 @@ from personal_finance.contexts.ingestion.domain.entities import (
 from personal_finance.contexts.ingestion.domain.forwarding_confirmation import (
     ForwardingConfirmation,
 )
+from personal_finance.contexts.ingestion.domain.model_standing import ModelStanding
 from personal_finance.contexts.ingestion.domain.transactions import (
     ExtractedTransaction,
 )
@@ -246,6 +248,21 @@ class IngestMailboxReader(Protocol):
         ...
 
 
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class FallbackReading:
+    """What one read by the model came back with.
+
+    `transaction` is None whenever nothing usable came out. `not_bank_mail`
+    is the model's own judgement that the email did not come from a bank —
+    the only thing the abuse rule counts. It is False whenever a movement came
+    out of the email, and whenever the answer could not be trusted at all: a
+    failure of ours never strikes anybody.
+    """
+
+    transaction: ExtractedTransaction | None
+    not_bank_mail: bool = False
+
+
 class TransactionExtractor(Protocol):
     """Plan B: reads an alert no deterministic template understood.
 
@@ -266,7 +283,7 @@ class TransactionExtractor(Protocol):
         subject: str,
         body: str,
         received_at: PosixTime,
-    ) -> ExtractedTransaction | None:
+    ) -> FallbackReading:
         """Return what the alert says, or None if it cannot be read.
 
         `received_at` is context, not data: an alert that writes a date with
@@ -276,6 +293,60 @@ class TransactionExtractor(Protocol):
         or down, so the caller can leave the email for another attempt instead
         of recording a failure that was never the email's fault.
         """
+        ...
+
+
+class ModelUsageQuota(Protocol):
+    """How many emails one person may have the model read in a day.
+
+    A cost limit, not a penalty: an email past it is kept unread rather than
+    held against anybody. Templates never touch it — they cost nothing.
+    """
+
+    def reserve(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> bool:
+        """Take one of the day's reads for this notification, or refuse.
+
+        Idempotent per notification: SQS delivers at least once, and a model
+        that was down sends the same email round again, which must not spend
+        a second read. Answers True for a notification that already holds
+        one.
+        """
+        ...
+
+    def release(
+        self,
+        *,
+        user_id: UserId,
+        notification_id: NotificationId,
+        day: datetime.date,
+    ) -> None:
+        """Hand back a read the model never delivered — it was down, or
+        refused the request — so an outage does not spend the day's reads on
+        emails nobody read.
+        """
+        ...
+
+
+class ModelStandingRepository(Protocol):
+    """Persistence port for `ModelStanding`, one record per person.
+
+    `save` is an optimistic write: it succeeds only if the stored version is
+    still the one `get` returned, and bumps it. Two parse workers reading one
+    person's mail at once must not both turn the same burst into a strike.
+    """
+
+    def get(self, user_id: UserId) -> ModelStanding:
+        """The stored record, or a clean one at version 0 when there is none."""
+        ...
+
+    def save(self, standing: ModelStanding) -> bool:
+        """Write it, unless somebody else wrote first; False if they did."""
         ...
 
 

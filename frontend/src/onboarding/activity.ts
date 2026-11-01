@@ -32,6 +32,22 @@ export function outcomeOf(status: string): Outcome {
   }
 }
 
+/**
+ * Why an email nothing came out of was never read, when the reason is a limit
+ * rather than its content — the two cases a "Sin movimiento" would make look
+ * like a fault of the app.
+ */
+export function unreadReason(notification: Notification): string | null {
+  switch (notification.deferred_reason) {
+    case "daily_limit_reached":
+      return "Sin leer: tope del día";
+    case "model_suspended":
+      return "Sin leer: lectura pausada";
+    default:
+      return null;
+  }
+}
+
 export type Evidence =
   /** Nothing has got past the filter yet. */
   | { kind: "waiting" }
@@ -139,7 +155,16 @@ export function healthOf(
   if (!newest) return { kind: "quiet" };
 
   const run = accepted.slice(0, UNREADABLE_RUN);
-  if (run.every((notification) => outcomeOf(notification.status) === "unreadable")) {
+  // Only what the model could not read. Mail left unread by the day's cap or
+  // a suspension says nothing about the format, and calling it one sends
+  // somebody off to check a connection that works.
+  if (
+    run.every(
+      (notification) =>
+        outcomeOf(notification.status) === "unreadable" &&
+        unreadReason(notification) === null,
+    )
+  ) {
     return { kind: "unreadable", lastAt: newest.received_at, count: run.length };
   }
 

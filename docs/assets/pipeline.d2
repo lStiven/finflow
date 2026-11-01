@@ -1,0 +1,163 @@
+# Del push a producción: qué corre .github/workflows/pipeline.yml en cada caso.
+# Fuente de docs/assets/pipeline.svg; se regenera con
+#
+#   d2 docs/assets/pipeline.d2 docs/assets/pipeline.svg
+#
+# Una fila por disparador y una columna por trabajo. Las celdas vacías son
+# invisibles: guardan la columna para que cada trabajo quede alineado.
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+# grid-rows antes que grid-columns: así D2 llena la grilla por filas.
+grid-rows: 4
+grid-columns: 5
+horizontal-gap: 56
+vertical-gap: 36
+
+classes: {
+  head: {
+    shape: text
+    width: 260
+    style: {font-size: 21; bold: true; font-color: "#94A3B8"}
+  }
+  trigger: {
+    width: 260
+    height: 128
+    icon.near: center-left
+    label.near: center-right
+    style: {
+      fill: "#0F172A"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 23
+    }
+  }
+  job: {
+    width: 260
+    height: 128
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 21
+    }
+  }
+  blank: {
+    width: 260
+    height: 128
+    style.opacity: 0
+  }
+  outcome: {
+    width: 280
+    height: 58
+    style: {
+      border-radius: 10
+      stroke-width: 2
+      font-color: "#F8FAFC"
+      font-size: 18
+    }
+  }
+  results: {
+    style: {
+      fill: "#0B0A1A"
+      stroke-width: 0
+    }
+  }
+  run: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+    }
+  }
+}
+
+heading: "Del push a producción" {
+  shape: text
+  near: top-center
+  style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+}
+
+footnote: "Un push que solo toca texto (.md o docs/, salvo docs/openapi.json) no corre nada. Nunca corren dos a la vez en la misma rama." {
+  shape: text
+  near: bottom-center
+  style: {font-size: 20; font-color: "#94A3B8"}
+}
+
+h1: "Disparador" {class: head}
+h2: "Validaciones" {class: head}
+h3: "Flujos y pantallas" {class: head}
+h4: "Despliegue" {class: head}
+h5: "Resultado" {class: head}
+
+# Push a dev.
+dev: "push\na dev" {
+  class: trigger
+  icon: https://cdn.simpleicons.org/github/E2E8F0
+}
+dev_checks: "check-all\ninfra-check" {class: job; style.stroke: "#A78BFA"}
+dev_skip: "" {class: blank}
+dev_deploy: "Despliega development\nbackend y web juntos\nluego, smoke" {class: job; style.stroke: "#FF9900"}
+dev_out: "" {
+  class: results
+  grid-rows: 2
+  vertical-gap: 12
+  ok: "pasa → etiqueta\ndeployed/development" {class: outcome; style: {fill: "#052E1B"; stroke: "#10B981"}}
+  ko: "falla → vuelve sola\na la versión anterior" {class: outcome; style: {fill: "#3B0A12"; stroke: "#F43F5E"}}
+}
+
+# PR hacia master.
+pr: "PR hacia\nmaster" {
+  class: trigger
+  icon: https://cdn.simpleicons.org/github/E2E8F0
+}
+pr_checks: "check-all\ninfra-check" {class: job; style.stroke: "#A78BFA"}
+pr_skip1: "" {class: blank}
+pr_skip2: "" {class: blank}
+pr_out: "No despliega: es la\nvalidación que exige\nla protección de master" {
+  class: job
+  width: 280
+  style: {stroke: "#475569"; font-color: "#CBD5E1"}
+}
+
+# Merge a master.
+master: "merge\na master" {
+  class: trigger
+  icon: https://cdn.simpleicons.org/github/E2E8F0
+}
+master_checks: "check-all\ninfra-check" {class: job; style.stroke: "#A78BFA"}
+master_e2e: "pila local en el runner\njust verify · just e2e\n(logs como artefacto)" {class: job; style.stroke: "#22D3EE"}
+master_deploy: "Despliega producción\nbackend y web juntos\nluego, smoke-prod" {class: job; style.stroke: "#FF9900"}
+master_out: "" {
+  class: results
+  grid-rows: 2
+  vertical-gap: 12
+  ok: "pasa → etiqueta\ndeployed/production" {class: outcome; style: {fill: "#052E1B"; stroke: "#10B981"}}
+  ko: "falla → vuelve sola\na la versión anterior" {class: outcome; style: {fill: "#3B0A12"; stroke: "#F43F5E"}}
+}
+
+dev -> dev_checks: {class: run}
+dev_checks -> dev_deploy: {class: run}
+dev_deploy -> dev_out: {class: run}
+
+pr -> pr_checks: {class: run}
+pr_checks -> pr_out: {class: run; style.stroke: "#64748B"; style.animated: false; style.stroke-dash: 4}
+
+master -> master_checks: {class: run}
+master_checks -> master_e2e: {class: run}
+master_e2e -> master_deploy: {class: run}
+master_deploy -> master_out: {class: run}

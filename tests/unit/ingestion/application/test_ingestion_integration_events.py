@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from personal_finance.contexts.ingestion.application.integration_events import (
+    MODEL_READING_SUSPENDED,
     SOURCE,
     TRANSFER_EXTRACTED,
     IngestionIntegrationEventTranslator,
@@ -10,6 +11,7 @@ from personal_finance.contexts.ingestion.domain.events import (
     BankNotificationIgnored,
     BankNotificationQueued,
     BankNotificationReceived,
+    ModelReadingSuspended,
     TransactionExtracted,
     TransactionExtractionDeferred,
     TransferExtracted,
@@ -260,3 +262,40 @@ def test_a_transfer_keeps_the_email_out_of_the_payload() -> None:
     assert event is not None
     assert "message_id" not in event.payload
     assert "sender" not in event.payload
+
+
+def _suspension(*, paused_until: PosixTime | None) -> ModelReadingSuspended:
+    return ModelReadingSuspended(
+        user_id=USER_ID,
+        strike=1 if paused_until else 3,
+        paused_until=paused_until,
+        offenses=10,
+        occurred_at=OCCURRED_AT,
+    )
+
+
+def test_a_suspension_is_published_for_alerts_to_tell_the_person() -> None:
+    event = _suspension(paused_until=PosixTime.from_epoch_seconds(1_700_086_400))
+
+    published = IngestionIntegrationEventTranslator().translate(event)
+
+    assert published is not None
+    assert published.source == SOURCE
+    assert published.detail_type == MODEL_READING_SUSPENDED
+    assert published.version == 1
+    assert published.event_id == event.event_id
+    assert published.payload == {
+        "user_id": str(USER_ID.value),
+        "strike": 1,
+        "paused_until": 1_700_086_400,
+        "offenses": 10,
+    }
+
+
+def test_a_suspension_for_good_publishes_no_end() -> None:
+    published = IngestionIntegrationEventTranslator().translate(
+        _suspension(paused_until=None),
+    )
+
+    assert published is not None
+    assert published.payload["paused_until"] is None

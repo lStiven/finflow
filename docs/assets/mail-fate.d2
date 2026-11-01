@@ -1,0 +1,182 @@
+# Qué le pasa a un correo desde que llega al buzón de ingesta.
+# Fuente de docs/assets/mail-fate.svg; se regenera con
+#
+#   d2 docs/assets/mail-fate.d2 docs/assets/mail-fate.svg
+#
+# El CLI mete los íconos dentro del SVG; el export de play.d2lang.com no.
+# Las ramas van por color, sin etiqueta: en ELK cada etiqueta de flecha
+# cuesta una fila entera.
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+direction: down
+
+heading: "Qué le pasa a un correo" {class: heading}
+legend: "verde: sí · rojo: no · ámbar: se guarda el correo, sin leer · cada lectura del modelo gasta 1 de las 20 del día" {
+  class: note
+  near: bottom-center
+}
+
+arrive: "Llega al buzón de ingesta\nreenviado a finflowingest+<id>" {class: card}
+sender: "¿Remitente\naprobado?" {class: ask}
+seen: "¿Es nuevo?" {class: ask}
+ignored: "ignored\nunauthorized_sender\nla app te ofrece aprobarlo" {class: drop}
+dup: "Se descarta\nusuario + Message-ID,\nescritura condicional" {class: drop}
+queue: "Cola parse-notifications" {
+  shape: queue
+  style: {fill: "#2E1065"; stroke: "#A78BFA"; font-color: "#EDE9FE"; font-size: 18}
+}
+template: "¿Lo lee una\nplantilla?" {class: ask}
+extracted: "TransactionExtracted\no TransferExtracted\nno gasta lecturas" {class: good}
+suspended: "¿El modelo lee\nsus correos?" {class: ask}
+held_susp: "pending_fallback\nmodel_suspended\nse descarta sin leer" {class: drop}
+quota: "¿Quedan lecturas\nhoy?" {class: ask}
+held_quota: "pending_fallback\ndaily_limit_reached\nnadie lo reintenta" {class: hold}
+gemini: "Gemini lo lee\nsalida validada con Pydantic" {
+  class: card
+  icon: https://cdn.simpleicons.org/googlegemini/8E75B2
+}
+understood: "TransactionExtracted\nlo entendió" {class: good}
+nothing: "pending_fallback\nfallback_found_nothing\nautorización, clave, ilegible" {class: hold}
+
+arrive -> sender: {class: mail}
+sender -> seen: {class: yes}
+sender -> ignored: {class: no}
+seen -> dup: {class: no}
+seen -> queue: {class: yes}
+queue -> template: {class: mail}
+template -> extracted: {class: yes}
+template -> suspended: {class: no}
+suspended -> held_susp: {class: no}
+suspended -> quota: {class: yes}
+quota -> held_quota: {class: no}
+quota -> gemini: {class: yes}
+gemini -> understood: {class: yes}
+gemini -> nothing: {class: no}

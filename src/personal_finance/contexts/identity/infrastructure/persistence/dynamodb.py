@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import uuid
 
+from personal_finance.contexts.identity.application.contacts import AccountContact
 from personal_finance.contexts.identity.domain.entities import User
 from personal_finance.contexts.identity.domain.value_objects import (
     Email,
@@ -28,6 +29,10 @@ _NAME_PLACEHOLDER = "#name"
 # and every token cut before it lacks the claim entirely, so none of them
 # verify anyway.
 CREDENTIAL_VERSION_ATTRIBUTE = "credential_version"
+# The table is keyed by email; this finds an account from the id everything
+# outside Identity knows it by. It projects the name and nothing else — never
+# the password hash, which has no business in a second copy.
+USERS_BY_ID_INDEX = "by_user_id"
 
 
 class CorruptUserItemError(Exception):
@@ -176,6 +181,31 @@ class DynamoDBUserRepository:
             return False
 
         return True
+
+    def find_contact(self, user_id: UserId) -> AccountContact | None:
+        """`AccountContactDirectory`, from the by-id index.
+
+        Eventually consistent, as every index read is: an account renamed a
+        second ago may still answer to its old name.
+        """
+        items = self._client.query(
+            TableName=self._table_name,
+            IndexName=USERS_BY_ID_INDEX,
+            KeyConditionExpression=f"{USER_ID_ATTRIBUTE} = :user_id",
+            ExpressionAttributeValues={":user_id": {"S": str(user_id.value)}},
+            Limit=1,
+        ).get("Items", [])
+
+        if not items:
+            return None
+
+        name = items[0].get(NAME_ATTRIBUTE, {}).get("S")
+
+        return AccountContact(
+            user_id=user_id,
+            email=_read_string(items[0], PARTITION_KEY),
+            name=name or None,
+        )
 
     def find_by_email(self, email: Email) -> User | None:
         response = self._client.get_item(

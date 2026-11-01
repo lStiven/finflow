@@ -1,0 +1,171 @@
+# Las tres piezas de un despliegue, en su orden. Fuente de
+# docs/assets/deploy-order.svg; se regenera con
+#
+#   d2 docs/assets/deploy-order.d2 docs/assets/deploy-order.svg
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    # Texto claro y fondo oscuro fijos, con cualquier tema que se elija.
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+
+classes: {
+  heading: {
+    shape: text
+    near: top-center
+    style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+  }
+  note: {
+    shape: text
+    style: {font-size: 18; font-color: "#94A3B8"}
+  }
+  card: {
+    style: {
+      fill: "#14112B"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 20
+    }
+  }
+  ask: {
+    shape: diamond
+    style: {
+      fill: "#1E1B4B"
+      stroke: "#A78BFA"
+      stroke-width: 2
+      font-color: "#EDE9FE"
+      font-size: 18
+    }
+  }
+  good: {
+    style: {
+      fill: "#052E1B"
+      stroke: "#10B981"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  hold: {
+    style: {
+      fill: "#2A1A05"
+      stroke: "#F59E0B"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  drop: {
+    style: {
+      fill: "#3B0A12"
+      stroke: "#F43F5E"
+      stroke-width: 2
+      border-radius: 12
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  ctx: {
+    style: {
+      fill: "#120F24"
+      stroke-width: 3
+      border-radius: 16
+      font-size: 20
+      bold: true
+      shadow: true
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+  yes: {
+    style: {
+      stroke: "#10B981"
+      stroke-width: 2
+      font-color: "#6EE7B7"
+      font-size: 17
+    }
+  }
+  no: {
+    style: {
+      stroke: "#F43F5E"
+      stroke-width: 2
+      font-color: "#FDA4AF"
+      font-size: 17
+    }
+  }
+  quiet: {
+    style: {
+      stroke: "#64748B"
+      stroke-dash: 4
+      font-color: "#94A3B8"
+      font-size: 17
+    }
+  }
+}
+
+grid-rows: 2
+grid-columns: 3
+horizontal-gap: 64
+vertical-gap: 56
+
+heading: "Un despliegue: tres piezas, en este orden" {class: heading}
+legend: "Las funciones se enganchan a colas que ya existen, y el bundle se construye contra una API que ya responde.\nSin el paso de CORS la app carga entera y ninguna llamada pasa el preflight." {
+  class: note
+  near: bottom-center
+}
+
+provision: "1 · Aprovisionar\njust provision-dev / -prod\n\ntablas, colas, DLQ, bus y reglas\ncrea o ajusta, nunca borra" {
+  class: card
+  width: 360
+  height: 170
+  style: {stroke: "#A78BFA"; stroke-width: 3}
+}
+deploy: "2 · Desplegar\njust deploy-dev / -prod\n\nlas siete Lambda con SAM,\nsus disparadores y la URL de la API" {
+  class: card
+  width: 360
+  height: 170
+  style: {stroke: "#FF9900"; stroke-width: 3}
+}
+publish: "3 · Publicar\njust web-publish-dev / web-publish\n\nlee la ApiUrl, construye\ny sube a Cloudflare Pages" {
+  class: card
+  width: 360
+  height: 170
+  style: {stroke: "#F38020"; stroke-width: 3}
+}
+gap1: "" {width: 360; height: 120; style.opacity: 0}
+gap2: "" {width: 360; height: 120; style.opacity: 0}
+cors: "Solo la primera vez:\nel origen publicado va a CorsOrigins\ny se vuelve a desplegar el backend" {class: hold; width: 360; height: 120}
+
+provision -> deploy: {class: event}
+deploy -> publish: {class: event}
+publish -> cors: {class: quiet}
+cors -> deploy: {class: quiet}

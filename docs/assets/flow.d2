@@ -1,0 +1,150 @@
+# Un gasto, de punta a punta: del aviso del banco a tu teléfono.
+# Fuente de docs/assets/flow.svg; se regenera con
+#
+#   d2 docs/assets/flow.d2 docs/assets/flow.svg
+#
+# El CLI mete los íconos dentro del SVG; el export de play.d2lang.com los deja
+# como URLs, y GitHub no carga nada externo dentro de un SVG.
+#
+# Es una grilla en S (cuatro pasos por fila, la segunda de derecha a
+# izquierda): así cada paso queda al lado del siguiente y las flechas rectas de
+# la grilla son cortas.
+vars: {
+  d2-config: {
+    theme-id: 200
+    layout-engine: elk
+    pad: 32
+    theme-overrides: {
+      N1: "#E2E8F0"
+      N2: "#CBD5E1"
+      N7: "#0B0A1A"
+    }
+  }
+}
+
+style.fill: "#0B0A1A"
+grid-rows: 2
+grid-columns: 4
+horizontal-gap: 90
+vertical-gap: 110
+
+classes: {
+  step: {
+    width: 270
+    height: 180
+    icon.near: bottom-center
+    label.near: top-center
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      border-radius: 14
+      font-color: "#F8FAFC"
+      font-size: 19
+    }
+  }
+  group: {
+    style: {
+      fill: "#14112B"
+      stroke-width: 3
+      border-radius: 14
+      font-color: "#F8FAFC"
+      font-size: 19
+      bold: true
+    }
+  }
+  inner: {
+    width: 250
+    height: 76
+    style: {
+      fill: "#0F172A"
+      stroke: "#475569"
+      stroke-width: 2
+      border-radius: 10
+      font-color: "#E2E8F0"
+      font-size: 17
+    }
+  }
+  mail: {
+    style: {
+      stroke: "#D946EF"
+      stroke-width: 3
+      animated: true
+      font-color: "#F0ABFC"
+      font-size: 17
+    }
+  }
+  event: {
+    style: {
+      stroke: "#22D3EE"
+      stroke-width: 3
+      animated: true
+      font-color: "#A5F3FC"
+      font-size: 17
+    }
+  }
+}
+
+heading: "Un gasto, de punta a punta" {
+  shape: text
+  near: top-center
+  style: {font-size: 30; bold: true; font-color: "#F8FAFC"}
+}
+
+# Fila 1, de izquierda a derecha.
+bank: "1 · Tu banco\n«Compraste COP29.259,00\nen TIENDAS ARA»" {
+  class: step
+  style.stroke: "#475569"
+  icon: https://icons.terrastruct.com/essentials%2Fsalary.svg
+}
+gmail: "2 · Tu Gmail\nuna regla lo reenvía\na tu dirección de Finflow" {
+  class: step
+  style.stroke: "#475569"
+  icon: https://cdn.simpleicons.org/gmail/EA4335
+}
+ingest: "3 · Ingestion, cada minuto\n¿remitente aprobado por ti?\n¿no lo había visto ya?" {
+  class: step
+  style.stroke: "#D946EF"
+  icon: https://icons.terrastruct.com/aws%2FCompute%2FAWS-Lambda.svg
+}
+parse: "4 · Parseo" {
+  class: group
+  style.stroke: "#D946EF"
+  grid-rows: 2
+  vertical-gap: 16
+  tpl: "Plantilla del banco\nprimero, siempre" {class: inner}
+  llm: "Si ninguna lo lee: Gemini,\nvalidado con Pydantic" {class: inner}
+}
+
+# Fila 2, de derecha a izquierda: la grilla se llena por filas, así que el
+# orden de declaración es el inverso del recorrido.
+you: "8 · Tú\nTelegram y la campana,\nsegundos después" {
+  class: step
+  style.stroke: "#60A5FA"
+  icon: https://icons.terrastruct.com/essentials%2F365-user.svg
+}
+alerts: "7 · Alerts\nte avisa del movimiento" {
+  class: step
+  style.stroke: "#60A5FA"
+  icon: https://cdn.simpleicons.org/telegram/26A5E4
+}
+contexts: "6 · El mismo evento, dos contextos" {
+  class: group
+  style.stroke: "#22D3EE"
+  grid-rows: 2
+  vertical-gap: 16
+  merchant: "Merchant: «TIENDAS ARA»\n→ comercio y categoría" {class: inner; style.stroke: "#F59E0B"}
+  financial: "Financial: ledger y saldo\n→ publica MovementRecorded" {class: inner; style.stroke: "#10B981"}
+}
+bus: "5 · EventBridge\nTransactionExtracted" {
+  class: step
+  style.stroke: "#E7157B"
+  icon: https://icons.terrastruct.com/aws%2FApplication%20Integration%2FAmazon-EventBridge.svg
+}
+
+bank -> gmail: {class: mail}
+gmail -> ingest: {class: mail}
+ingest -> parse: SQS {class: mail}
+parse -> bus: {class: mail}
+bus -> contexts: {class: event}
+contexts -> alerts: {class: event}
+alerts -> you: {class: event}

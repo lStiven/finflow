@@ -3,7 +3,10 @@ from __future__ import annotations
 import dataclasses
 import uuid
 
-from personal_finance.contexts.alerts.application.messages import MovementAlert
+from personal_finance.contexts.alerts.application.messages import (
+    ModelPause,
+    MovementAlert,
+)
 from personal_finance.contexts.alerts.domain.value_objects import (
     AlertType,
     ChannelId,
@@ -64,3 +67,14 @@ class DeliverMovementAlertCommand:
     #: every redelivery, so the in-app entry lands in one place. None falls
     #: back to when this worker first sees it.
     recorded_at: PosixTime | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class NotifyModelPauseCommand:
+    """One suspension, to the person it applies to, everywhere they can be told."""
+
+    user_id: UserId
+    event_id: uuid.UUID
+    pause: ModelPause
+    #: When Ingestion decided it — the envelope's own time.
+    recorded_at: PosixTime

@@ -141,3 +141,33 @@ class WeeklySummary:
     movements: int
     typical: Decimal | None
     rise: CategoryRise | None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ModelPause:
+    """Ingestion stopped reading somebody's unrecognised mail with the model.
+
+    Not about money, and not a preference anybody can turn off: it is a
+    notice about their account, so it reaches every bound channel and their
+    email whatever they chose for alerts.
+    """
+
+    #: Which strike, from 1.
+    strike: int
+    #: None when the suspension has no end.
+    paused_until: PosixTime | None
+    #: How many emails that were not from a bank made the burst.
+    offenses: int
+
+    @property
+    def is_final(self) -> bool:
+        return self.paused_until is None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MailRecipient:
+    """Where to email the owner of an account, as Identity answered it."""
+
+    address: str
+    #: None for an account that never set one.
+    name: str | None

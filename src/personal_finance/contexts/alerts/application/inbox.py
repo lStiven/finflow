@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import uuid
 
 from personal_finance.contexts.alerts.application.messages import (
+    ModelPause,
     MovementAlert,
     WeeklySummary,
 )
@@ -44,6 +45,7 @@ MAX_CANDIDATES = 200
 class InboxKind(enum.Enum):
     MOVEMENT = "movement"
     WEEKLY_SUMMARY = "weekly_summary"
+    MODEL_PAUSED = "model_paused"
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
@@ -54,7 +56,8 @@ class InboxEntry:
     a derived one for a week — so writing the same fact twice lands on the
     same entry instead of beside it.
 
-    Exactly one of `movement` and `summary` is set, the one `kind` names.
+    Exactly one of `movement`, `summary` and `pause` is set, the one `kind`
+    names.
     """
 
     user_id: UserId
@@ -63,14 +66,21 @@ class InboxEntry:
     kind: InboxKind
     movement: MovementAlert | None = None
     summary: WeeklySummary | None = None
+    pause: ModelPause | None = None
 
     def __post_init__(self) -> None:
         expected = (
             self.kind is InboxKind.MOVEMENT,
             self.kind is InboxKind.WEEKLY_SUMMARY,
+            self.kind is InboxKind.MODEL_PAUSED,
+        )
+        present = (
+            self.movement is not None,
+            self.summary is not None,
+            self.pause is not None,
         )
 
-        if (self.movement is not None, self.summary is not None) != expected:
+        if present != expected:
             raise ValueError(
                 f"An inbox entry of kind {self.kind.value} needs its facts"
             )

@@ -86,3 +86,19 @@ class BankNotificationFailed(Event):
     user_id: UserId
     message_id: EmailMessageId
     reason: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class ModelReadingSuspended(Event):
+    """The model stopped reading one person's unrecognised mail.
+
+    `paused_until` is None when the suspension is for good. Templates are
+    never suspended, so this says nothing about mail a template reads.
+    """
+
+    user_id: UserId
+    #: Which strike this is, from 1; the last one is the one with no end.
+    strike: int
+    paused_until: PosixTime | None
+    #: How many emails that were not from a bank made up the burst.
+    offenses: int

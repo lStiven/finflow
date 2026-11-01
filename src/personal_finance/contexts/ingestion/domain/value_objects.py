@@ -103,8 +103,8 @@ class NotificationIgnoredReason(enum.Enum):
 
 
 class NotificationDeferredReason(enum.Enum):
-    """Why a notification sits in `PENDING_FALLBACK`. Both members are
-    final for this attempt — neither means "still in progress".
+    """Why a notification sits in `PENDING_FALLBACK`. Every member is final
+    for this attempt — none means "still in progress".
     """
 
     # No LLM configured for this deployment; the fallback never ran.
@@ -112,3 +112,19 @@ class NotificationDeferredReason(enum.Enum):
     # The fallback ran — declined the email, or produced something that
     # failed validation — and still came back with nothing.
     FALLBACK_FOUND_NOTHING = "fallback_found_nothing"
+    # The owner had already used up the day's model reads; the fallback never
+    # ran. Not a penalty, and nothing re-reads it on its own the next day.
+    DAILY_LIMIT_REACHED = "daily_limit_reached"
+    # The model is suspended for the owner — paused after a strike, or for
+    # good. The email is dropped unread, like an unapproved sender's.
+    MODEL_SUSPENDED = "model_suspended"
+
+    @property
+    def keeps_body(self) -> bool:
+        """Whether the email is kept for a later read.
+
+        A suspension is a decision not to read this person's unrecognised
+        mail, and an email this system has decided not to read is one it must
+        not keep either — the same rule `BankNotification.ignore` follows.
+        """
+        return self is not NotificationDeferredReason.MODEL_SUSPENDED
