@@ -2517,7 +2517,45 @@
                 "transfer"
               ]
             },
-            "description": "A payment between two of the owner's own balances whose other side this app does not hold: a credit card paid from another bank, from a wallet, or in cash.\n\nPaying a card from an account at the SAME bank needs nothing here — that alert names both instruments and the two linked rows are written from it. This is the other case, where no single alert can name both, and recording it as an ordinary movement would count the payment as income on the card or as an expense on the account it left.\n\nrole: source (money left the named account) | destination (it arrived; on a credit card that is its debt going down). There is no `direction` — role fixes it.\n\naccount_id is REQUIRED, unlike the plain manual entry: this asserts that a balance moved, and a leg names no instrument, so nothing could ever adopt it later. counterparty is free text for whatever the owner calls the other side (\"Nequi\", \"efectivo\", \"PSE\"). amount is a string, never a JSON number.\n\nThe answer carries transfer.external = true and every transfer.counterpart_* field null. The movement is listed by GET /financial/transactions and left out of /summary, /trends and /history — which is the whole point of entering it this way.\n\nIDEMPOTENT: the movement id is derived from user + account + role + amount + occurred_at + counterparty, and the ledger write is conditional on it. Sending this request twice answers 201 twice with the SAME movement and moves the balance once — send it again to see it. `bank` and `note` are not part of that identity; changing the amount, the instant, the role or the counterparty makes it a different payment."
+            "description": "A payment between two of the owner's own balances whose other side this app does not hold: a credit card paid from another bank, from a wallet, or in cash.\n\nPaying a card from an account at the SAME bank needs nothing here — that alert names both instruments and the two linked rows are written from it. This is the other case, where no single alert can name both, and recording it as an ordinary movement would count the payment as income on the card or as an expense on the account it left.\n\nrole: source (money left the named account) | destination (it arrived; on a credit card that is its debt going down). There is no `direction` — role fixes it.\n\naccount_id is REQUIRED, unlike the plain manual entry: this asserts that a balance moved, and a leg names no instrument, so nothing could ever adopt it later. The other side is named EXACTLY ONCE: counterparty (free text — \"Nequi\", \"efectivo\", \"PSE\") when it is outside this app, or counterpart_account_id when it is another of your accounts — see \"Enter transfer between own accounts\". Both or neither is a 422. amount is a string, never a JSON number.\n\nThe answer carries transfer.external = true and every transfer.counterpart_* field null. The movement is listed by GET /financial/transactions and left out of /summary, /trends and /history — which is the whole point of entering it this way.\n\nIDEMPOTENT: the movement id is derived from user + account + role + amount + occurred_at + counterparty, and the ledger write is conditional on it. Sending this request twice answers 201 twice with the SAME movement and moves the balance once — send it again to see it. `bank` and `note` are not part of that identity; changing the amount, the instant, the role or the counterparty makes it a different payment."
+          },
+          "response": []
+        },
+        {
+          "name": "Enter transfer between own accounts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "{{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"source\",\n  \"amount\": \"2000000\",\n  \"currency\": \"COP\",\n  \"occurred_at\": 1793556000,\n  \"account_id\": \"{{account_id}}\",\n  \"counterpart_account_id\": \"{{counterpart_account_id}}\",\n  \"note\": \"pago de la tarjeta desde ahorros\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/financial/transactions/transfer",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "financial",
+                "transactions",
+                "transfer"
+              ]
+            },
+            "description": "Money moved between TWO of your own accounts that no single alert names — the card paid from savings at another bank. Same endpoint as \"Enter transfer leg\", with counterpart_account_id instead of counterparty.\n\nBoth sides are written and BOTH balances move, in one DynamoDB transaction: the savings fall and the card's debt falls with them. Entered as a lone leg, only one of the two would move.\n\nrole says which side account_id is: source (the money left it) or destination (it arrived; on a credit card that is its debt going down). counterpart_account_id is the other side. The two must differ, be yours, be open and hold the request's currency — otherwise 422 / 404 / 409 / 400 and nothing is written. counterparty must be absent: each side is named after the other account.\n\nThe answer is the side on account_id, with transfer.external = false and transfer.counterpart_movement_id pointing at the other side (named by movement only — counterpart_instrument_kind and counterpart_last_four are null). Both sides are listed by GET /financial/transactions?transfers=only and left out of /summary, /trends and /history. DELETE on either side erases both and gives both accounts their money back.\n\nIDEMPOTENT: both ids are derived from user + both accounts + role + amount + occurred_at. Sending this twice answers 201 twice with the SAME movement and moves each balance once.\n\nA LOAN OR A MORTGAGE as the other side, when it is the one receiving: it is watched and never counted, so the cuota is counted where it leaves — the side on the paying account comes back as ordinary spending (transfer = null) and only the loan's side is a lone transfer leg lowering its debt. Both still land in one write.\n\nAny side answers with detachable = false where it is a transfer leg: PATCH {\"detach\": true} on it is a 409.\n\nDO NOT enter a payment between two accounts at the SAME bank if that bank emails it: the pair Finflow writes from the alert has its own identity, and the payment would be counted twice."
           },
           "response": []
         },

@@ -863,11 +863,28 @@ about twenty thousand tokens. Search it for the specific "why" in question.
   * **The written side's identity is the declared movement alone**, not the
     account. Two screens naming two accounts race for one key and one loses,
     instead of both winning and the payment lowering two debts.
-  * **Declared legs name the other side by movement only**, and only they may:
-    `TransferLeg`'s "fully or not at all" rule still holds for every stated leg,
-    which is also why stated rows serialise byte for byte as before (`basis`
-    is written only when declared). Neither alert named the other's card, so
-    there are no digits to carry.
+  * **Declared legs name the other side by movement only.** Neither alert
+    named the other's card, so there are no digits to carry. Stated rows
+    still serialise byte for byte as before (`basis` is written only when
+    declared). **Since 2026-11-01 a stated leg may too**: a pair entered by
+    hand between two accounts (`counterpart_account_id` on
+    `POST /financial/transactions/transfer`) has no instrument to name. The
+    rule that survives is the one that mattered — digits never without a
+    movement. Prompted by "pagué la tarjeta y la deuda no bajó": the old form
+    wrote one leg, so "Pagar desde una cuenta" lowered the savings and left
+    the card alone. Entered pairs carry their own fingerprint tag
+    (`entered-transfer`, keyed on both accounts, not on names), so a double
+    submit is one pair and A→B never collides with a lone leg or with B→A.
+    **Risk knowingly accepted:** two accounts at the same bank typed by hand
+    *and* announced by email are two pairs — the alert's ids come from
+    instruments, not accounts. The form warns instead of blocking, because
+    the alert may never arrive. **To a loan or a mortgage it is not a pair**:
+    the side leaving is ordinary spending and the loan gets a lone leg, both
+    in one write — the two entries the loans entry above asks for, so the
+    cuota is counted once, where it leaves. A pair there would drop it from
+    every total. The two rows stay independent, as those entries were.
+    `detachable` on every movement exists because the screens used to infer
+    it from `external`, which was already wrong for a declared counterpart.
   * **Undo is by basis**: `reclassified` goes back to spending or income,
     `counterpart` is erased with its balance. A stated transfer is refused —
     it has no earlier self — and `DELETE` stays the way to remove it.

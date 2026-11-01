@@ -463,14 +463,15 @@ def test_a_written_side_answering_no_movement_is_refused() -> None:
         )
 
 
-def test_a_stated_leg_naming_only_a_movement_is_still_refused() -> None:
-    """What a declared leg may be, a stated one still may not: the old rule
-    holds for every transfer that existed before this one."""
-    with pytest.raises(ValueError, match="fully or not at all"):
+def test_a_stated_leg_naming_digits_but_no_movement_is_still_refused() -> None:
+    """A stated leg may name its other side by movement alone, as a pair
+    entered between two accounts does; never by digits alone."""
+    with pytest.raises(ValueError, match="alongside its movement"):
         TransferLeg(
             transfer_id=TransferId(value="a-transfer"),
             role=TransferRole.SOURCE,
-            counterpart_id=MovementId.new(),
+            counterpart_instrument_kind="credit_card",
+            counterpart_last_four="7653",
         )
 
 

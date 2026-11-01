@@ -827,6 +827,42 @@ class MovementFingerprint(ValueObject):
 
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
+    @classmethod
+    def from_entered_transfer(
+        cls,
+        *,
+        user_id: UserId,
+        source_account_id: AccountId,
+        destination_account_id: AccountId,
+        role: TransferRole,
+        amount: Money,
+        occurred_at: PosixTime,
+    ) -> Self:
+        """What makes one side of a hand-entered transfer between two of the
+        owner's accounts the same side.
+
+        Derived for the reason `from_transfer_leg` gives — two identical
+        payments in one minute are a double submit — and keyed on **both**
+        accounts plus the role, so the two sides of one pair hash apart and
+        the same amount moved A→B and B→A stays two transfers. No counterparty
+        text: each side names the other account, and an account renamed
+        between two presses would otherwise make one payment two.
+        """
+        canonical = _canonical(
+            (
+                _ENTERED_TRANSFER_TAG,
+                str(user_id.value),
+                str(source_account_id.value),
+                str(destination_account_id.value),
+                role.value,
+                _canonical_amount(amount),
+                amount.currency.value,
+                str(occurred_at.as_epoch_seconds()),
+            ),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
     def to_dict(self) -> JsonValue:
         return self.value
 
@@ -839,6 +875,10 @@ _TRANSFER_LEG_TAG = "transfer-leg"
 # The same contract for the side a declared transfer writes: change it and a
 # transfer already declared could be declared again, writing a second side.
 _DECLARED_COUNTERPART_TAG = "declared-counterpart"
+
+# And for both sides of a transfer entered between two of the owner's
+# accounts: change it and the same payment could be entered a second time.
+_ENTERED_TRANSFER_TAG = "entered-transfer"
 
 # The same contract for a computed charge: changing this re-identifies every
 # accrual, and every period already posted would be posted a second time.
@@ -1009,6 +1049,18 @@ class TransferId(ValueObject):
         return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
 
     @classmethod
+    def entered(cls, *, source: MovementId, destination: MovementId) -> Self:
+        """Identity for a transfer its owner entered between two of their
+        accounts. From its two sides, whose ids already come from content, and
+        tagged apart from every other constructor here.
+        """
+        canonical = _canonical(
+            (_ENTERED_PAIR_TAG, source.value, destination.value),
+        )
+
+        return cls(value=hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    @classmethod
     def from_parts(
         cls,
         *,
@@ -1044,6 +1096,7 @@ class TransferId(ValueObject):
 # Same contract as `_TRANSFER_LEG_TAG`: changing it re-identifies transfers.
 _LONE_TRANSFER_TAG = "lone-transfer"
 _DECLARED_TRANSFER_TAG = "declared-transfer"
+_ENTERED_PAIR_TAG = "entered-pair"
 
 
 def transfer_counterparty(*, instrument_kind: str, last_four: str) -> str:
@@ -1071,19 +1124,16 @@ class TransferLeg(ValueObject):
     The other side is not always here. Paying a card from an account at the
     same bank produces both legs from one alert, but paying it from another
     bank, from a wallet or in cash produces a movement whose counterpart this
-    app never sees — and that movement is still not income. So the three
-    fields describing the other side are optional, and **optional together**:
-    a leg either names a movement in this ledger or names nothing at all.
-    Half a description is the state this class exists to make impossible,
-    because a leg holding an id nothing can resolve is worse than one that
-    says plainly that the other side is elsewhere.
+    app never sees — and that movement is still not income. So the fields
+    describing the other side are optional. The instrument is never named
+    without the movement: digits belonging to no row are the half description
+    this class exists to make impossible.
 
-    A **declared** leg (see `TransferBasis`) is the one exception, and a
-    narrow one: it names the other side by movement only, never by
-    instrument. Its two sides were two ordinary movements, or one movement and
-    a row written for it, and neither alert named the other's card — so there
-    are no digits to carry, and inventing some would be the half description
-    above in a different shape.
+    The movement may be named without the instrument. A **declared** leg (see
+    `TransferBasis`) always is: neither alert named the other's card. So is a
+    pair its owner entered between two of their accounts, which may hold no
+    instrument at all — there are no digits to carry, and inventing some
+    would be the half description above in a different shape.
     """
 
     transfer_id: TransferId
@@ -1103,17 +1153,15 @@ class TransferLeg(ValueObject):
 
             return
 
-        described = (
-            self.counterpart_id,
-            self.counterpart_instrument_kind,
-            self.counterpart_last_four,
-        )
+        kind = self.counterpart_instrument_kind
+        last_four = self.counterpart_last_four
 
-        if any(part is not None for part in described) and not all(
-            part is not None for part in described
+        if (kind is None) != (last_four is None) or (
+            kind is not None and self.counterpart_id is None
         ):
             raise ValueError(
-                "A transfer leg describes the other side fully or not at all",
+                "A transfer leg names the other side's instrument only "
+                "alongside its movement",
             )
 
         if (

@@ -74,6 +74,16 @@ describe("transferTitle", () => {
     );
   });
 
+  it("names the other account, on a pair entered between two of them", () => {
+    const entered = leg({
+      counterpart_instrument_kind: null,
+      counterpart_last_four: null,
+    });
+
+    expect(transferTitle(entered, "Tarjeta Nu")).toBe("Pago a Tarjeta Nu");
+    expect(transferBlurb(entered)).toContain("llegó a otra tuya");
+  });
+
   /* The bug this replaced: `···· null` on the dashboard, the list and the detail. */
   it("never renders a placeholder for digits it does not have", () => {
     expect(transferTitle(loneLeg(), "Nequi")).not.toContain("null");

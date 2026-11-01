@@ -57,6 +57,7 @@ function movement(overrides: Partial<Transaction> = {}): Transaction {
     stated: null,
     merchant: null,
     transfer: null,
+    detachable: true,
     ...overrides,
   };
 }
@@ -306,8 +307,23 @@ describe("what to do instead", () => {
 
   it("does not, on a leg paid from outside — the API refuses that with a 409", () => {
     const { instead } = describeDeletion(
-      movement({ transfer: loneLeg(), account_id: CARD.id }),
+      movement({ transfer: loneLeg(), account_id: CARD.id, detachable: false }),
       CARD,
+    );
+
+    expect(instead).not.toContain("sacarlo de la cuenta");
+  });
+
+  it("does not, on half of a pair entered between two accounts", () => {
+    // It names its other side by movement alone, so nothing would adopt it
+    // back: the API says `detachable: false`, and `external` is still false.
+    const entered = pairedLeg({
+      counterpart_instrument_kind: null,
+      counterpart_last_four: null,
+    });
+    const { instead } = describeDeletion(
+      movement({ transfer: entered, origin: "manual", detachable: false }),
+      SAVINGS,
     );
 
     expect(instead).not.toContain("sacarlo de la cuenta");

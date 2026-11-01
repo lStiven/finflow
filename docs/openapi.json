@@ -2341,7 +2341,7 @@
         "type": "object"
       },
       "EnterTransferLegPayload": {
-        "description": "The owner's side of a payment between two of their own balances.\n\nFor the card paid from another bank, from a wallet or in cash — the case\nwhere no single alert can name both instruments, so nothing can write the\npair. What this records is that the movement is *not* spending and *not*\nincome, which is the one thing a total has to know about it.\n\nNo `direction`: `role` fixes it. And `account_id` is required, unlike a\nplain manual entry — this asserts that a balance moved, and there is no\nbalance to move without it.",
+        "description": "The owner's side of a payment between two of their own balances.\n\nFor the card paid from another bank, from a wallet or in cash — the case\nwhere no single alert can name both instruments, so nothing can write the\npair. What this records is that the movement is *not* spending and *not*\nincome, which is the one thing a total has to know about it.\n\nNo `direction`: `role` fixes it. And `account_id` is required, unlike a\nplain manual entry — this asserts that a balance moved, and there is no\nbalance to move without it.\n\nThe other side is one of two things, and exactly one. Another of the\nowner's accounts, `counterpart_account_id`: both sides are written and\nboth balances move — the card paid from savings at another bank. Or\nsomething this app does not hold, named by `counterparty`.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -2367,11 +2367,29 @@
             "title": "Bank",
             "type": "string"
           },
+          "counterpart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterpart Account Id"
+          },
           "counterparty": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Counterparty",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counterparty"
           },
           "currency": {
             "$ref": "#/components/schemas/Currency",
@@ -2401,7 +2419,6 @@
           "role",
           "amount",
           "occurred_at",
-          "counterparty",
           "account_id"
         ],
         "title": "EnterTransferLegPayload",
@@ -5379,6 +5396,10 @@
             "title": "Currency",
             "type": "string"
           },
+          "detachable": {
+            "title": "Detachable",
+            "type": "boolean"
+          },
           "direction": {
             "title": "Direction",
             "type": "string"
@@ -5454,7 +5475,8 @@
           "account_id",
           "note",
           "stated",
-          "merchant"
+          "merchant",
+          "detachable"
         ],
         "title": "TransactionResponse",
         "type": "object"
@@ -5565,7 +5587,7 @@
         "type": "object"
       },
       "TransferResponse": {
-        "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.\n\nThe other side is not always here. A card paid from another bank, from a\nwallet or in cash has one knowable side, entered by hand through\n`POST /financial/transactions/transfer`: `external` is true there and\nevery `counterpart_*` field is null. Read `external` rather than\nnull-checking the three — it is the question a client is actually asking,\nand the movement's own `counterparty` already carries what the owner\ncalled the other side (\"Nequi\", \"efectivo\").",
+        "description": "The half of a movement that says it was not spending.\n\nPresent on both sides of a transfer between two of the owner's own\naccounts, and null on everything else. A client shows it instead of the\ncounterparty text — `role` says which way the money went and\n`counterpart_*` names the other side — and, more importantly, knows not to\nread the amount as an expense.\n\nThe other side is not always here. A card paid from another bank, from a\nwallet or in cash has one knowable side, entered by hand through\n`POST /financial/transactions/transfer`: `external` is true there and\nevery `counterpart_*` field is null. Read `external` rather than\nnull-checking the three — it is the question a client is actually asking,\nand the movement's own `counterparty` already carries what the owner\ncalled the other side (\"Nequi\", \"efectivo\").\n\nA pair can also name its other side by movement alone, with both\ninstrument fields null: one entered by hand between two accounts, or\ndeclared after the fact. There the movement's `counterparty` is the other\naccount's name.",
         "properties": {
           "basis": {
             "default": "stated",
@@ -9414,7 +9436,7 @@
     },
     "/financial/transactions/transfer": {
       "post": {
-        "description": "Record paying a card, or moving money, from outside this app.\n\nPaying a credit card from an account at the *same* bank needs nothing\nhere: that alert names both instruments and the pair is written from it.\nThis is for the other way round — paid from another bank, from a wallet,\nin cash — where only one side is ever knowable, and recording it as an\nordinary movement would count a payment as an expense or as income.\n\nThe movement lands on the account named, moving its balance like any\nother, and stays out of every total. On a credit card, `role=destination`\nis its debt going down.",
+        "description": "Record paying a card, or moving money, between the owner's balances.\n\nPaying a credit card from an account at the *same* bank needs nothing\nhere: that alert names both instruments and the pair is written from it.\nThis is for the other way round — paid from another bank, from a wallet,\nin cash — where no alert names both, and recording it as an ordinary\nmovement would count a payment as an expense or as income.\n\nWith `counterpart_account_id`, both ends are accounts here: both sides are\nwritten and both balances move, in one write. With `counterparty`, the\nother end is outside this app and only the account named moves. Either\nway it stays out of every total, and on a credit card the side arriving\n— `role=destination` — is its debt going down.\n\nOne exception: to a loan or a mortgage, which are watched and never\ncounted, the side leaving is ordinary spending — the cuota is counted\nwhere it leaves — and only the loan's side is a transfer.\n\nThe answer is the side on `account_id`.",
         "operationId": "enter_transfer_leg_financial_transactions_transfer_post",
         "requestBody": {
           "content": {

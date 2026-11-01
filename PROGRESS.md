@@ -284,6 +284,9 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
+- **Un traslado avisa dos veces**, como «Gasto» y como «Ingreso», en
+  Telegram y en la campana: el evento que recibe Alerts no dice que el
+  movimiento es un traslado. Pasa con los del correo y con los escritos a mano.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el
@@ -339,6 +342,10 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-01 — **Traslados «de dónde → a dónde».** Entre dos cuentas propias
+  se escriben los dos lados y bajan los dos saldos; «Otro» con nombre
+  opcional; a un crédito o hipoteca, gasto + abono. `detachable` en cada
+  movimiento. Puertas, `/code-review` y `/security-review` en verde.
 - 2026-10-31 — **Diagramas en D2 y guías de `docs/` más visuales.** 19 SVG en
   `docs/assets/` (íconos embebidos, cada uno con su `.d2`); sin Mermaid en el
   README. Guías verificadas contra el código y reescritas con tablas; la
@@ -357,6 +364,3 @@ AWS (ver Trabas).
   `running.md`. También: siete funciones (no seis), el resumen del lunes y la
   campana en `alerts.md`, 43 endpoints que faltaban en la referencia del
   frontend, y la tabla de los 18 parámetros del stack. Sin commit.
-- 2026-10-30 — **Tope de 20 lecturas del modelo por usuario al día.** Se
-  cambia con `just llm-limit-put`, sin desplegar. `just prepare` e
-  `infra-check` en verde. Sin commit.

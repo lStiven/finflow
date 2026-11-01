@@ -576,9 +576,9 @@ def _transfer_to_item(leg: TransferLeg) -> dict[str, AttributeValueTypeDef]:
     if leg.counterpart_id is not None:
         stored["counterpart_id"] = {"S": leg.counterpart_id.value}
 
-    # A stated leg carries all three counterpart fields or none, so this
-    # writes what it always wrote. A declared one names its other side by
-    # movement only, and stops at the id above.
+    # An alert's pair carries all three counterpart fields, so this writes
+    # what it always wrote. A declared leg, or a pair entered between two
+    # accounts, names its other side by movement only and stops at the id.
     if (
         leg.counterpart_instrument_kind is not None
         and leg.counterpart_last_four is not None
@@ -655,12 +655,13 @@ def _transfer_to_entity(
     without its transfer marker would be counted as spending, and a balance
     would still be right while every total around it was wrong.
 
-    The other side is optional but indivisible. All three `counterpart_*`
-    attributes absent is a leg whose counterpart is outside this app —
-    a card paid from another bank, a wallet or cash. *Some* of them absent is
-    a row nothing wrote, and it is refused for the same reason the missing
-    marker is: a movement pointing at a counterpart that cannot be resolved is
-    a link every reader follows into nothing.
+    All three `counterpart_*` attributes absent is a leg whose counterpart is
+    outside this app — a card paid from another bank, a wallet or cash. The
+    movement alone is a pair that names no instrument: declared after the
+    fact, or entered by hand between two accounts. Digits without a movement,
+    or half an instrument, is a row nothing wrote, and it is refused for the
+    same reason the missing marker is: a link every reader follows into
+    nothing.
     """
     if item is None:
         return None
@@ -707,15 +708,13 @@ def _transfer_to_entity(
             role=_enum(TransferRole, role, "transfer role"),
         )
 
-    if any(part is None for part in described):
+    # A pair entered between two accounts names the other side by movement
+    # alone; digits with no movement, or half of an instrument, are a row
+    # nothing here wrote.
+    if counterpart_id is None or (instrument_kind is None) != (last_four is None):
         raise CorruptFinancialItemError(
             "Stored transfer leg describes half a counterpart",
         )
-
-    # Narrowing for the type checker; the branch above already proved it.
-    assert counterpart_id is not None
-    assert instrument_kind is not None
-    assert last_four is not None
 
     return TransferLeg(
         transfer_id=TransferId(value=transfer_id),
@@ -1386,6 +1385,45 @@ class DynamoDBTransactionLedger:
                 )
 
         return self._transact(items, rows=rows)
+
+    def record_pair(
+        self,
+        *,
+        source: Transaction,
+        destination: Transaction,
+        source_delta: Decimal,
+        destination_delta: Decimal,
+    ) -> bool:
+        """Both sides of an entered transfer, each written the way `record`
+        writes a row, in one transaction: half a pair never lands."""
+        sides = ((source, source_delta), (destination, destination_delta))
+        rows: list[TransactWriteItemTypeDef] = []
+        balances: list[TransactWriteItemTypeDef] = []
+
+        for side, delta in sides:
+            if side.account_id is None:
+                raise ValueError("Both sides of an entered transfer are on an account")
+
+            rows.append(
+                {
+                    "Put": {
+                        "TableName": self._table_name,
+                        "Item": movement_to_item(side),
+                        "ConditionExpression": f"attribute_not_exists({SORT_KEY})",
+                    },
+                },
+            )
+            balances.append(
+                _balance_update(
+                    table_name=self._table_name,
+                    user_id=side.user_id,
+                    account_id=side.account_id,
+                    delta=delta,
+                    movements=1,
+                ),
+            )
+
+        return self._transact([*rows, *balances], rows=len(rows))
 
     def _transact(self, items: list[TransactWriteItemTypeDef], *, rows: int) -> bool:
         """Run one declaration's write; False when a row's condition lost.
