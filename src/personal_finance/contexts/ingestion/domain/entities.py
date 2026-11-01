@@ -38,6 +38,12 @@ _BODYLESS_STATUSES = frozenset(
     {ProcessingStatus.IGNORED, ProcessingStatus.PROCESSED},
 )
 
+# The intake stores the record, enqueues it, and only then records that it
+# did: the parser can read it in between, and RECEIVED then means "on its way".
+_AWAITING_PARSE_STATUSES = frozenset(
+    {ProcessingStatus.RECEIVED, ProcessingStatus.QUEUED},
+)
+
 
 @dataclass(frozen=True, slots=True)
 class UserInbox(ValueObject):
@@ -138,8 +144,12 @@ class BankNotification(AggregateRoot[NotificationId]):
             ),
         )
 
+    @property
+    def awaits_parsing(self) -> bool:
+        return self.status in _AWAITING_PARSE_STATUSES
+
     def start_processing(self) -> None:
-        if self.status is not ProcessingStatus.QUEUED:
+        if not self.awaits_parsing:
             raise InvalidNotificationStateError(
                 f"Cannot start processing a notification with status {self.status}",
             )

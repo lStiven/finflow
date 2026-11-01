@@ -53,6 +53,15 @@ class BankNotificationRepository(Protocol):
         """Overwrite the stored notification with its current state."""
         ...
 
+    def save_queued(self, notification: BankNotification) -> bool:
+        """Store `notification`, just queued, only over a record still RECEIVED.
+
+        An atomic conditional write: the parser may already have taken the
+        message and moved the record on, and that record must not be put back
+        to QUEUED — nor have a dropped body restored. False when it had.
+        """
+        ...
+
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class NotificationSummary:

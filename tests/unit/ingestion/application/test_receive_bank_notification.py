@@ -22,6 +22,7 @@ from personal_finance.contexts.ingestion.domain.value_objects import (
     EmailAddress,
     EmailMessageId,
     IdempotencyKey,
+    NotificationDeferredReason,
     ProcessingStatus,
 )
 from personal_finance.shared.domain.events import Event
@@ -83,6 +84,16 @@ class InMemoryBankNotificationRepository:
 
     def save(self, notification: BankNotification) -> None:
         self.saved[notification.idempotency_key] = _detached(notification)
+
+    def save_queued(self, notification: BankNotification) -> bool:
+        stored = self.saved.get(notification.idempotency_key)
+
+        if stored is not None and stored.status is not ProcessingStatus.RECEIVED:
+            return False
+
+        self.save(notification)
+
+        return True
 
 
 class InMemoryUserInboxRepository:
@@ -155,6 +166,26 @@ class RecordingQueuePublisher:
             raise RuntimeError("queue unavailable")
 
         self.enqueued.append(message)
+
+
+class ParserThatWinsTheRace:
+    """Takes the message and moves the record on before `enqueue` returns,
+    as a fast worker does to an intake that has not yet recorded sending it.
+    """
+
+    def __init__(self, repository: InMemoryBankNotificationRepository) -> None:
+        self.enqueued: list[ParseNotificationMessage] = []
+        self._repository = repository
+
+    def enqueue(self, message: ParseNotificationMessage) -> None:
+        self.enqueued.append(message)
+        stored = self._repository.get(message.idempotency_key)
+        assert stored is not None
+        stored.start_processing()
+        stored.defer_to_fallback(
+            reason=NotificationDeferredReason.NO_FALLBACK_CONFIGURED,
+        )
+        self._repository.save(stored)
 
 
 class RecordingEventPublisher:
@@ -349,3 +380,22 @@ def test_retry_queues_a_notification_left_unqueued_by_a_failed_attempt() -> None
     # The first attempt died before publishing, so only the resumed attempt's
     # queued event reaches the publisher.
     assert _published_types(event_publisher) == ["BankNotificationQueued"]
+
+
+def test_a_parser_that_wins_the_race_keeps_the_state_it_wrote() -> None:
+    repository = InMemoryBankNotificationRepository()
+    parser = ParserThatWinsTheRace(repository)
+    use_case = ReceiveBankNotificationUseCase(
+        repository=repository,
+        inbox_repository=InMemoryUserInboxRepository(_inbox()),
+        queue_publisher=parser,
+        event_publisher=RecordingEventPublisher(),
+    )
+
+    use_case.execute(_command())
+
+    # Recording "queued" over this would put a parsed email back in the queue
+    # state, where nothing ever reads it again.
+    stored = next(iter(repository.saved.values()))
+    assert stored.status is ProcessingStatus.PENDING_FALLBACK
+    assert len(parser.enqueued) == 1

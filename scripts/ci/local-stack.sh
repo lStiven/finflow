@@ -40,6 +40,8 @@ case "${1:-}" in
   stop)
     pkill -f "[r]un_stack.py" || true
     pkill -f "[v]ite" || true
+    # `just aws-up` writes the emulator's log outside $logs; keep it with them.
+    cp /tmp/moto_server.log "$logs"/ 2>/dev/null || true
     just aws-down || true
     ;;
   *)
