@@ -274,6 +274,12 @@ AWS (ver Trabas).
    —el config de SAM ya va con ruta absoluta—, ver por qué la e2e se pasó de
    tiempo en GitHub cuando corría en `dev` (en local pasa), y la regla de
    protección de `master`. Detalle en [docs/ci.md](docs/ci.md).
+   **El merge #9 (2026-11-01) cayó en `e2e-comercios`**: 1 de 2 comercios
+   durante 90 s. En local pasa siempre, también con el `.env` de CI y moto
+   nuevo. Sospecha: el worker de comercios reclama el evento antes de
+   trabajar, así que cualquier fallo pasajero pierde para siempre un comercio
+   nuevo. Hasta ahora el artefacto `logs-e2e` nunca se subía (directorio
+   oculto); corregido en el árbol, sin commit.
 
 ## Huecos conocidos, sin urgencia
 
