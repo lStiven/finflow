@@ -190,6 +190,22 @@ class DynamoDBBankNotificationRepository:
             Item=self._item(notification),
         )
 
+    def save_queued(self, notification: BankNotification) -> bool:
+        try:
+            self._client.put_item(
+                TableName=self._table_name,
+                Item=self._item(notification),
+                ConditionExpression="#status = :received",
+                ExpressionAttributeNames={"#status": STATUS_ATTRIBUTE},
+                ExpressionAttributeValues={
+                    ":received": {"S": ProcessingStatus.RECEIVED.value},
+                },
+            )
+        except self._client.exceptions.ConditionalCheckFailedException:
+            return False
+
+        return True
+
     def _item(
         self,
         notification: BankNotification,

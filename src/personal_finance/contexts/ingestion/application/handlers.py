@@ -150,6 +150,10 @@ class ReceiveBankNotificationUseCase:
     def _enqueue_if_pending(self, notification: BankNotification) -> None:
         """Queue the notification for parsing unless it was ignored or an
         earlier attempt already queued it.
+
+        Enqueued before it is recorded as queued, so a failure in between
+        leaves it RECEIVED and a retry queues it again. The parser can win
+        that gap and move the record on; then there is nothing to record.
         """
         if notification.status is not ProcessingStatus.RECEIVED:
             return
@@ -164,4 +168,4 @@ class ReceiveBankNotificationUseCase:
             ),
         )
         notification.mark_as_queued()
-        self._repository.save(notification)
+        self._repository.save_queued(notification)

@@ -91,6 +91,11 @@ class InMemoryRepository:
         self.saves += 1
         self.stored[notification.idempotency_key] = copy.deepcopy(notification)
 
+    def save_queued(self, notification: BankNotification) -> bool:
+        self.save(notification)
+
+        return True
+
 
 class RecordingEventPublisher:
     def __init__(self) -> None:

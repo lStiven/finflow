@@ -145,6 +145,11 @@ class InMemoryRepository:
     def save(self, notification: BankNotification) -> None:
         self.saved[notification.idempotency_key] = notification
 
+    def save_queued(self, notification: BankNotification) -> bool:
+        self.save(notification)
+
+        return True
+
 
 class RecordingEventPublisher:
     def __init__(self) -> None:

@@ -108,10 +108,11 @@ class ParseNotificationUseCase:
     def execute(self, message: ParseNotificationMessage) -> ParseNotificationResult:
         notification = self._repository.get(message.idempotency_key)
 
-        if notification is None or notification.status is not ProcessingStatus.QUEUED:
+        if notification is None or not notification.awaits_parsing:
             # SQS delivery is at-least-once, so the same message arrives again
-            # after a slow ack. Anything not sitting in QUEUED was already
-            # handled, and re-running it would republish its events.
+            # after a slow ack. Anything past QUEUED was already handled, and
+            # re-running it would republish its events. RECEIVED is not past
+            # it: this message can arrive before the intake records sending it.
             return ParseNotificationResult(
                 outcome=ParseOutcome.SKIPPED,
                 status=notification.status if notification else None,
@@ -166,8 +167,8 @@ class ParseNotificationUseCase:
         """Ask the model, if there is one, and keep the email either way.
 
         A model that is rate limited or down raises out of here on purpose:
-        nothing has been persisted yet, so the stored notification is still
-        `QUEUED` and the redelivered message tries again. Recording a
+        nothing has been persisted yet, so the stored notification still
+        awaits parsing and the redelivered message tries again. Recording a
         permanent outcome for a temporary outage would quietly drop a real
         transaction.
         """
