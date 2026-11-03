@@ -29,6 +29,7 @@ Mercado: te quedan $215.700 de $600.000
 | **Dice lo que dice el banco** | La contraparte es el texto crudo del correo (`COMPRA EN *PAYU*COL`, no `PayU`) y no hay total del mes: el nombre bonito es de Merchant y el acumulado de Financial ([decisions.md](decisions.md)). |
 | **Los presupuestos, solo si lo cubren** | Debajo va lo que queda de cada presupuesto que cubre la compra (hasta tres, y «y N más»), o cuánto lo pasaste. Si ninguno la cubre, no dice nada más. |
 | **Todo lo que el ledger registra** | Del banco o escrito a mano, gastos e ingresos. **No los devengos**: los intereses y seguros que la app calcula llegan de a cuatro mientras su dueño mira la pantalla del crédito. |
+| **Un traslado avisa una vez** | Son dos filas y una sola plata: avisadas por separado, pagar la tarjeta desde ahorros llegaba como «Gasto · Visa Platinum» y como «Ingreso · Cuenta de ahorros». Ahora llega «Traslado entre cuentas» con `De:` y `A:`; Financial marca el otro lado `quiet` y nunca se avisa. La cuota de un crédito sigue siendo «Gasto», pero también dice de dónde salió y a dónde fue. Marcar después un gasto como traslado no manda nada nuevo: ese gasto ya se avisó. |
 | **Cada canal se apaga aparte** | Y admite un **monto mínimo**: es contra el ruido, no contra el dinero. Un café no debe gastar la atención de un cargo de $400.000. |
 
 ### La campana

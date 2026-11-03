@@ -37,6 +37,10 @@ from personal_finance.contexts.financial.domain.events import (
     AccountBalanceChanged,
     TransactionRecorded,
 )
+from personal_finance.contexts.financial.domain.value_objects import (
+    MovementRoute,
+    RouteEnd,
+)
 from personal_finance.shared.application.integration import IntegrationEvent
 from personal_finance.shared.domain.events import Event
 from personal_finance.shared.domain.value_objects import JsonValue, PosixTime
@@ -91,6 +95,12 @@ class FinancialIntegrationEventTranslator:
                         # itself stays in: matching alerts to accounts is
                         # this context's business.
                         "unassigned": event.account_id is None,
+                        # A transfer is two rows and one movement of money:
+                        # the side that speaks carries both ends, and the
+                        # other is quiet so nobody hears about it twice.
+                        "transfer": event.transfer,
+                        "quiet": event.quiet,
+                        "route": _route(event.route),
                     },
                 )
             case AccountBalanceChanged():
@@ -121,6 +131,21 @@ class FinancialIntegrationEventTranslator:
                 )
             case _:
                 return None
+
+
+def _route(route: MovementRoute | None) -> JsonValue:
+    if route is None:
+        return None
+
+    return {"source": _end(route.source), "destination": _end(route.destination)}
+
+
+def _end(end: RouteEnd) -> dict[str, JsonValue]:
+    return {
+        "name": end.name,
+        "instrument_kind": end.instrument_kind,
+        "last_four": end.last_four,
+    }
 
 
 def _event(

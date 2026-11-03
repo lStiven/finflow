@@ -6,6 +6,7 @@ group chat must be refused, because linking one would broadcast a person's
 purchases to a room.
 """
 
+import dataclasses
 from decimal import Decimal
 
 import httpx
@@ -16,6 +17,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
 )
 from personal_finance.contexts.alerts.application.ports import (
     DestinationRefusedError,
@@ -243,6 +246,100 @@ def test_a_movement_with_no_account_says_so() -> None:
     text = compose_movement_alert(_alert(unassigned=True), timezone=TIMEZONE)
 
     assert "Sin cuenta asignada" in text
+
+
+def _transfer(source: RouteEnd, destination: RouteEnd) -> MovementAlert:
+    return dataclasses.replace(
+        _alert(counterparty="Visa Platinum"),
+        transfer=True,
+        route=MovementRoute(source=source, destination=destination),
+    )
+
+
+def test_a_transfer_says_so_and_names_both_ends() -> None:
+    """Announced as «Gasto · Visa Platinum», paying that card read as a
+    charge on it."""
+    text = compose_movement_alert(
+        _transfer(
+            RouteEnd(name="Cuenta de ahorros"),
+            RouteEnd(name="Visa Platinum"),
+        ),
+        timezone=TIMEZONE,
+    )
+
+    lines = text.splitlines()
+    assert lines[0] == "Traslado entre cuentas $84.300"
+    assert lines[1:3] == ["De: Cuenta de ahorros", "A: Visa Platinum"]
+    assert "Gasto" not in text
+    assert "Ingreso" not in text
+
+
+def test_an_end_with_no_name_reads_as_its_instrument() -> None:
+    text = compose_movement_alert(
+        _transfer(
+            RouteEnd(instrument_kind="account", last_four="5261"),
+            RouteEnd(instrument_kind="credit_card", last_four="7653"),
+        ),
+        timezone=TIMEZONE,
+    )
+
+    assert "De: Cuenta *5261" in text
+    assert "A: Tarjeta de crédito *7653" in text
+
+
+def test_an_end_cannot_forge_a_line_or_carry_a_link() -> None:
+    text = compose_movement_alert(
+        _transfer(
+            RouteEnd(name="Ahorros\nGasto $1"),
+            RouteEnd(instrument_kind="credit_card", last_four="12ab34://x"),
+        ),
+        timezone=TIMEZONE,
+    )
+
+    assert "De: Ahorros Gasto $1" in text
+    assert "A: Tarjeta de crédito *1234" in text
+
+
+def test_a_transfer_does_not_speak_for_one_unassigned_side() -> None:
+    alert = dataclasses.replace(
+        _transfer(
+            RouteEnd(instrument_kind="account", last_four="5261"),
+            RouteEnd(name="Visa Platinum"),
+        ),
+        unassigned=True,
+    )
+
+    text = compose_movement_alert(alert, timezone=TIMEZONE)
+
+    assert "Sin cuenta asignada" not in text
+    assert "De: Cuenta *5261" in text
+
+
+def test_a_name_that_cleans_to_nothing_reads_as_its_instrument() -> None:
+    text = compose_movement_alert(
+        _transfer(
+            RouteEnd(name=" \n\t ", instrument_kind="credit_card", last_four="7653"),
+            RouteEnd(name="Visa Platinum"),
+        ),
+        timezone=TIMEZONE,
+    )
+
+    assert "De: Tarjeta de crédito *7653" in text
+
+
+def test_a_cuota_is_spending_that_still_says_where_it_went() -> None:
+    alert = dataclasses.replace(
+        _alert(counterparty="Hipoteca"),
+        route=MovementRoute(
+            source=RouteEnd(name="Cuenta de ahorros"),
+            destination=RouteEnd(name="Hipoteca"),
+        ),
+    )
+
+    text = compose_movement_alert(alert, timezone=TIMEZONE)
+
+    assert text.startswith("Gasto $84.300")
+    assert "De: Cuenta de ahorros\nA: Hipoteca" in text
 
 
 # ----------------------------------------------------------------------

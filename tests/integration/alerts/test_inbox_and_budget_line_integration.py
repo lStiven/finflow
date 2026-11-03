@@ -9,6 +9,7 @@ budgets and Merchant's categories — is the one that reaches the message.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import dataclasses
 import datetime as dt
 from decimal import Decimal
 import uuid
@@ -29,6 +30,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.contexts.alerts.domain.value_objects import ChatId
@@ -261,6 +264,35 @@ def test_every_fact_survives_the_round_trip(tables: DynamoDBClient) -> None:
     [entry] = inbox.recent(user_id=USER, limit=5)
 
     assert entry.summary == summary
+
+
+def test_a_transfer_keeps_both_its_ends_through_the_round_trip(
+    tables: DynamoDBClient,
+) -> None:
+    inbox = DynamoDBInbox(client=tables, table_name=ALERTS_TABLE)
+    alert = dataclasses.replace(
+        _alert("4f2a9c"),
+        transfer=True,
+        route=MovementRoute(
+            source=RouteEnd(name="Cuenta de ahorros"),
+            destination=RouteEnd(instrument_kind="credit_card", last_four="7653"),
+        ),
+    )
+    inbox.record(
+        InboxEntry(
+            user_id=USER,
+            entry_id=uuid.uuid4(),
+            created_at=PosixTime.now(),
+            kind=InboxKind.MOVEMENT,
+            movement=alert,
+        ),
+    )
+
+    [entry] = inbox.recent(user_id=USER, limit=5)
+
+    assert entry.movement is not None
+    assert entry.movement.transfer is True
+    assert entry.movement.route == alert.route
 
 
 def test_recipients_are_remembered_once_each(tables: DynamoDBClient) -> None:

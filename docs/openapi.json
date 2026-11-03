@@ -2874,6 +2874,20 @@
             "title": "Origin",
             "type": "string"
           },
+          "route": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InboxRouteResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transfer": {
+            "title": "Transfer",
+            "type": "boolean"
+          },
           "unassigned": {
             "title": "Unassigned",
             "type": "boolean"
@@ -2889,7 +2903,9 @@
           "occurred_at",
           "origin",
           "unassigned",
-          "budgets"
+          "budgets",
+          "transfer",
+          "route"
         ],
         "title": "InboxMovementResponse",
         "type": "object"
@@ -2967,6 +2983,66 @@
           "typical"
         ],
         "title": "InboxRiseResponse",
+        "type": "object"
+      },
+      "InboxRouteEndResponse": {
+        "properties": {
+          "instrument_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instrument Kind"
+          },
+          "last_four": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Four"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "name",
+          "instrument_kind",
+          "last_four"
+        ],
+        "title": "InboxRouteEndResponse",
+        "type": "object"
+      },
+      "InboxRouteResponse": {
+        "properties": {
+          "destination": {
+            "$ref": "#/components/schemas/InboxRouteEndResponse"
+          },
+          "source": {
+            "$ref": "#/components/schemas/InboxRouteEndResponse"
+          }
+        },
+        "required": [
+          "source",
+          "destination"
+        ],
+        "title": "InboxRouteResponse",
         "type": "object"
       },
       "InboxSendersPayload": {

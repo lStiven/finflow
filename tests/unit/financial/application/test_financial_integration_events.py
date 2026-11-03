@@ -1,3 +1,4 @@
+import dataclasses
 from decimal import Decimal
 import json
 from typing import Any
@@ -29,6 +30,8 @@ from personal_finance.contexts.financial.domain.value_objects import (
     Balance,
     MovementDirection,
     MovementId,
+    MovementRoute,
+    RouteEnd,
     TransactionOrigin,
 )
 from personal_finance.shared.domain.value_objects import (
@@ -101,6 +104,39 @@ def test_a_recorded_movement_leaves_the_context() -> None:
         "bank": "bancolombia",
         "origin": "bank_alert",
         "unassigned": False,
+        "transfer": False,
+        "quiet": False,
+        "route": None,
+    }
+
+
+def test_a_transfer_side_carries_both_ends_and_whether_it_speaks() -> None:
+    recorded = dataclasses.replace(
+        _recorded(),
+        transfer=True,
+        quiet=True,
+        route=MovementRoute(
+            source=RouteEnd(name="Cuenta de ahorros"),
+            destination=RouteEnd(instrument_kind="credit_card", last_four="1234"),
+        ),
+    )
+
+    event = FinancialIntegrationEventTranslator().translate(recorded)
+
+    assert event is not None
+    assert event.payload["transfer"] is True
+    assert event.payload["quiet"] is True
+    assert event.payload["route"] == {
+        "source": {
+            "name": "Cuenta de ahorros",
+            "instrument_kind": None,
+            "last_four": None,
+        },
+        "destination": {
+            "name": None,
+            "instrument_kind": "credit_card",
+            "last_four": "1234",
+        },
     }
 
 

@@ -21,6 +21,7 @@ from personal_finance.contexts.alerts.application.messages import (
     BudgetStanding,
     MovementAlert,
     MovementDirection,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.shared.domain.value_objects import Currency, Money, PosixTime
@@ -36,6 +37,20 @@ MAX_BANK_LENGTH = 32
 
 # A budget's name is its owner's own words, kept to one short line.
 MAX_BUDGET_NAME_LENGTH = 40
+
+# An account's name, or the balance somebody typed for the other end of a
+# transfer: their own words, one short line.
+MAX_ROUTE_END_LENGTH = 40
+
+# How an end with no name reads: the instrument an alert named, the way the
+# frontend restates the same values in `@/alerts/inbox`.
+INSTRUMENT_COPY = {
+    "credit_card": "Tarjeta de crédito",
+    "debit_card": "Tarjeta débito",
+    "savings_account": "Cuenta de ahorros",
+    "checking_account": "Cuenta corriente",
+    "account": "Cuenta",
+}
 
 # More budget lines than this under one purchase stops being a message.
 MAX_BUDGET_LINES = 3
@@ -156,30 +171,67 @@ def format_moment(moment: PosixTime, *, timezone: str) -> str:
     return local.strftime("%d/%m %I:%M %p").lower()
 
 
+def describe_route_end(end: RouteEnd) -> str:
+    """One end of a transfer, as its owner would recognise it.
+
+    Their own name for it when there is one; otherwise the instrument an
+    alert named, digits only — `Tarjeta de crédito *7653`.
+    """
+    if name := clean_line(end.name or "", limit=MAX_ROUTE_END_LENGTH):
+        return name
+
+    kind = INSTRUMENT_COPY.get((end.instrument_kind or "").lower(), "Cuenta")
+    # ASCII digits only, like the fingerprint: `str.isdigit` also takes `²`.
+    digits = "".join(
+        character for character in end.last_four or "" if character in "0123456789"
+    )
+
+    if not digits and end.instrument_kind is None:
+        return "Otra cuenta"
+
+    return f"{kind} *{digits[-4:]}" if digits else kind
+
+
 def compose_movement_alert(
     alert: MovementAlert,
     *,
     timezone: str,
 ) -> str:
-    """One movement, as four short lines at most.
+    """One movement, as four short lines at most — five for a transfer.
 
     Says what the payload says and nothing else. There is no month-to-date
     total here and no canonical merchant name: both belong to other contexts,
     and reading them would make an alert depend on two more things being up.
     The counterparty is the bank's own text — `COMPRA EN *PAYU*COL`, not
     `PayU` — which is what the owner would have seen in the bank's own alert.
-    """
-    heading = "Gasto" if alert.direction is MovementDirection.OUTGOING else "Ingreso"
-    moment = format_moment(alert.occurred_at, timezone=timezone)
-    lines = [
-        f"{heading} {format_money(alert.amount)}",
-        clean_counterparty(alert.counterparty),
-        f"{clean_bank(alert.bank)} · {moment}",
-    ]
 
-    if alert.unassigned:
+    With a route the two ends replace it: on a transfer the counterparty is
+    the other account, and «Gasto · Visa Platinum» about paying that card
+    read as a charge on it.
+    """
+    if alert.transfer:
+        heading = "Traslado entre cuentas"
+    elif alert.direction is MovementDirection.OUTGOING:
+        heading = "Gasto"
+    else:
+        heading = "Ingreso"
+
+    moment = format_moment(alert.occurred_at, timezone=timezone)
+    lines = [f"{heading} {format_money(alert.amount)}"]
+
+    if alert.route is None:
+        lines.append(clean_counterparty(alert.counterparty))
+    else:
+        lines.append(f"De: {describe_route_end(alert.route.source)}")
+        lines.append(f"A: {describe_route_end(alert.route.destination)}")
+
+    lines.append(f"{clean_bank(alert.bank)} · {moment}")
+
+    if alert.unassigned and not alert.transfer:
         # Worth saying: the movement is real and counted nowhere, which is
-        # the one thing the owner can act on from here.
+        # the one thing the owner can act on from here. Not on a transfer:
+        # it would speak for one side only, and an end with no account
+        # already reads as its instrument instead of a name.
         lines.append("Sin cuenta asignada")
 
     lines.extend(compose_budget_lines(alert.budgets))

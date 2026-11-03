@@ -12,6 +12,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     Balance,
     MovementDirection,
     MovementId,
+    MovementRoute,
     TransactionOrigin,
 )
 from personal_finance.shared.domain.events import Event
@@ -200,6 +201,11 @@ class TransactionRecorded(TransactionEvent):
     and an alert whose card nobody declared has a fingerprint and no account.
     The movement is placed *after* this is raised, so `Transaction.assign_to`
     restates it while it is still pending.
+
+    A transfer is one movement of money written as two rows, and announcing
+    each would tell its owner about a purchase and an income that never
+    happened. So one side speaks for both and the other is `quiet`; the
+    speaker carries the `route`, both ends, so it can say the whole of it.
     """
 
     direction: MovementDirection
@@ -210,6 +216,14 @@ class TransactionRecorded(TransactionEvent):
     origin: TransactionOrigin
     account_fingerprint: AccountFingerprint | None
     account_id: AccountId | None = None
+    #: A side of a transfer: neither spending nor income.
+    transfer: bool = False
+    #: Another movement written in the same breath already announces this
+    #: money; this one is the same fact seen from its other end.
+    quiet: bool = False
+    #: Where the money left and where it arrived, when this movement speaks
+    #: for a pair — or for a payment whose other end it wrote.
+    route: MovementRoute | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

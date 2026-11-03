@@ -30,6 +30,7 @@ from personal_finance.contexts.alerts.application.inbox import (
 from personal_finance.contexts.alerts.application.messages import (
     ModelPause,
     MovementAlert,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.contexts.alerts.infrastructure.financial.adapters import (
@@ -59,6 +60,20 @@ class InboxBudgetResponse(BaseModel):
     state: Literal["ok", "warning", "over"]
 
 
+class InboxRouteEndResponse(BaseModel):
+    #: The owner's name for this end — an account, or the balance they typed.
+    #: Untrusted: draw it as text.
+    name: str | None
+    #: Without a name, the instrument an alert named, and its last digits.
+    instrument_kind: str | None
+    last_four: str | None
+
+
+class InboxRouteResponse(BaseModel):
+    source: InboxRouteEndResponse
+    destination: InboxRouteEndResponse
+
+
 class InboxMovementResponse(BaseModel):
     #: Null only for an alert published before movements carried their id.
     movement_id: str | None
@@ -74,6 +89,12 @@ class InboxMovementResponse(BaseModel):
     unassigned: bool
     #: The budgets this purchase counts against, worst first. Empty for most.
     budgets: list[InboxBudgetResponse]
+    #: Money moved between the owner's own balances: one alert for both
+    #: sides, neither spent nor earned.
+    transfer: bool
+    #: Where the money left and where it arrived. Null unless Financial knew
+    #: both ends — a transfer, or a cuota paid to a credit.
+    route: InboxRouteResponse | None
 
 
 class InboxRiseResponse(BaseModel):
@@ -244,6 +265,23 @@ def _movement(alert: MovementAlert) -> InboxMovementResponse:
             )
             for budget in alert.budgets
         ],
+        transfer=alert.transfer,
+        route=(
+            None
+            if alert.route is None
+            else InboxRouteResponse(
+                source=_route_end(alert.route.source),
+                destination=_route_end(alert.route.destination),
+            )
+        ),
+    )
+
+
+def _route_end(end: RouteEnd) -> InboxRouteEndResponse:
+    return InboxRouteEndResponse(
+        name=end.name,
+        instrument_kind=end.instrument_kind,
+        last_four=end.last_four,
     )
 
 

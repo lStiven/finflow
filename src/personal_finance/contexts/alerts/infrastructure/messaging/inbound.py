@@ -22,6 +22,7 @@ purchase from three days ago, because a bank alert can arrive that late.
 from __future__ import annotations
 
 from decimal import Decimal
+import logging
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -35,6 +36,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
 )
 from personal_finance.shared.domain.value_objects import (
     Currency,
@@ -43,6 +46,8 @@ from personal_finance.shared.domain.value_objects import (
     UserId,
 )
 
+
+_logger = logging.getLogger(__name__)
 
 FINANCIAL_SOURCE = "finflow.financial"
 MOVEMENT_RECORDED = "MovementRecorded"
@@ -121,6 +126,42 @@ class IntegrationEventEnvelope(BaseModel):
     detail: dict[str, object] = Field(default_factory=lambda: dict[str, object]())
 
 
+class RouteEndDetail(BaseModel):
+    """One end of a route: an account's name, or the instrument an alert named.
+
+    Generous limits, and read apart from the movement: a refused route is
+    dropped, never the movement it belongs to.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str | None = Field(default=None, max_length=512)
+    instrument_kind: str | None = Field(default=None, max_length=64)
+    last_four: str | None = Field(default=None, max_length=16)
+
+    @field_validator("name", "instrument_kind", "last_four")
+    @classmethod
+    def _blank_is_absent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        return value.strip() or None
+
+    def to_end(self) -> RouteEnd:
+        return RouteEnd(
+            name=self.name,
+            instrument_kind=self.instrument_kind,
+            last_four=self.last_four,
+        )
+
+
+class RouteDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source: RouteEndDetail
+    destination: RouteEndDetail
+
+
 class MovementRecordedDetail(BaseModel):
     """Financial's flat payload, plus the envelope fields mixed in with it."""
 
@@ -161,6 +202,16 @@ class MovementRecordedDetail(BaseModel):
         ge=MIN_OCCURRED_AT,
         le=MAX_OCCURRED_AT,
     )
+    # A transfer is two movements and one announcement: Financial marks the
+    # side that stays silent `quiet`, and the other carries the route. All
+    # three default to "an ordinary movement", which is what a payload
+    # published before Financial carried them was.
+    transfer: bool = False
+    quiet: bool = False
+    # Read leniently, in `to_command`: the route only words the message, and
+    # a route this cannot read costs the message its two lines, never the
+    # message — a transfer nobody was told about is the worse failure.
+    route: object = None
 
     @field_validator("counterparty")
     @classmethod
@@ -211,8 +262,31 @@ class MovementRecordedDetail(BaseModel):
                 origin=_origin(self.origin),
                 unassigned=self.unassigned,
                 movement_id=self.movement_id,
+                transfer=self.transfer,
+                quiet=self.quiet,
+                route=_route(self.route),
             ),
         )
+
+
+def _route(raw: object) -> MovementRoute | None:
+    if raw is None:
+        return None
+
+    try:
+        route = RouteDetail.model_validate(raw)
+    except ValidationError as error:
+        _logger.warning(
+            "dropping a route that could not be read",
+            extra={"refused": refused_fields(error)},
+        )
+
+        return None
+
+    return MovementRoute(
+        source=route.source.to_end(),
+        destination=route.destination.to_end(),
+    )
 
 
 def _currency(value: str) -> Currency:
