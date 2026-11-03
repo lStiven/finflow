@@ -40,15 +40,19 @@ const HOUR = 3600;
 const DAY = 86_400;
 
 /**
- * Now, rounded down to the hour.
+ * The end of the hour that is running — the exclusive end of a running range.
  *
- * Taken to the second this lands in a react-query key, so every render would
- * be a different query: the loader's prefetch would never be the component's
- * cache hit, and the cache would grow an entry per second the tab stayed
- * open. The dashboard rounds for the same reason.
+ * Rounded because, taken to the second, this lands in a react-query key, so
+ * every render would be a different query: the loader's prefetch would never
+ * be the component's cache hit, and the cache would grow an entry per second
+ * the tab stayed open. The dashboard rounds for the same reason.
+ *
+ * Up, not down: the end is exclusive, and rounded down it hid everything
+ * written in the hour so far — a purchase entered at 12:30 was missing from
+ * «Este mes» until 13:00.
  */
 export function reportingNow(): number {
-  return Math.floor(nowInSeconds() / HOUR) * HOUR;
+  return (Math.floor(nowInSeconds() / HOUR) + 1) * HOUR;
 }
 
 /**

@@ -15,6 +15,8 @@
  *    link's filter sum to the column's own incoming and outgoing, to the peso.
  * 3. **Balance opens both directions** of the period, and nothing else.
  * 4. Nothing scrolls sideways at 390 or 320 px, and nothing logs an error.
+ * 5. **Another month stays that month** through «Por categoría» and on to
+ *    Transacciones.
  *
  * Read-only: it signs in as the seeded person and changes nothing.
  */
@@ -96,6 +98,31 @@ async function signIn(page) {
 }
 
 const BOGOTA_OFFSET_SECONDS = 5 * 60 * 60;
+
+/** `YYYY-MM` in Bogotá, `offset` months from this one. */
+function bogotaMonthKey(offset) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const total = year * 12 + (month - 1) + offset;
+
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+}
+
+/** The last day of a `YYYY-MM` month, two digits. */
+function lastDayOf(key) {
+  const [year, month] = key.split("-").map(Number);
+  return String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, "0");
+}
+
+/** A search value, with the quotes the router adds to one that reads as JSON. */
+function unquoted(value) {
+  return (value ?? "").replace(/^"|"$/g, "");
+}
 
 /** A calendar day, as the epoch second it starts in Bogotá. */
 function dayStart(day) {
@@ -246,6 +273,29 @@ async function main() {
     check("a 390 px Reportes no se va de lado", await sideways(page), false);
     await page.setViewportSize({ width: 320, height: 640 });
     check("ni a 320 px", await sideways(page), false);
+
+    // --------------------- another month, through «Por categoría», to the list
+    // Both links used to open the running month whatever Reportes showed, so
+    // somebody reading last month landed on this month's movements.
+    await page.setViewportSize({ width: 390, height: 844 });
+    const lastMonth = bogotaMonthKey(-1);
+    await page.goto(`${WEB}/reportes?periodo=mes-pasado`, { waitUntil: "networkidle" });
+    await page.getByRole("link", { name: "Por categoría", exact: true }).click();
+    await page.waitForURL((url) => url.pathname === "/reportes/categoria");
+    check(
+      "«Por categoría» abre el mes que Reportes estaba mostrando",
+      unquoted(new URL(page.url()).searchParams.get("mes")),
+      lastMonth,
+    );
+
+    await page.getByRole("link", { name: "Ver en Transacciones" }).click();
+    await page.waitForURL((url) => url.pathname === "/transacciones");
+    const listed = new URL(page.url()).searchParams;
+    check(
+      "y «Ver en Transacciones» lista ese mes, no el actual",
+      [unquoted(listed.get("from")), unquoted(listed.get("to"))],
+      [`${lastMonth}-01`, `${lastMonth}-${lastDayOf(lastMonth)}`],
+    );
 
     check("la pantalla no registró errores", problems, []);
   } catch (error) {
