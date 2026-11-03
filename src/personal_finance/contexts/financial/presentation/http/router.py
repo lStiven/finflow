@@ -75,6 +75,7 @@ from personal_finance.contexts.financial.application.commands import (
     DeleteTransactionCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
+    EnterTransferBetweenCommand,
     EnterTransferLegCommand,
     LinkInstrumentCommand,
     OpenAccountCommand,
@@ -109,6 +110,7 @@ from personal_finance.contexts.financial.application.financing import (
 from personal_finance.contexts.financial.application.handlers import (
     AccountAlreadyExistsError,
     AccountNotFoundError,
+    EnterTransferBetweenUseCase,
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
     TransactionNotFoundError,
@@ -568,14 +570,20 @@ class TransferResponse(BaseModel):
     null-checking the three — it is the question a client is actually asking,
     and the movement's own `counterparty` already carries what the owner
     called the other side ("Nequi", "efectivo").
+
+    A pair can also name its other side by movement alone, with both
+    instrument fields null: one entered by hand between two accounts, or
+    declared after the fact. There the movement's `counterparty` is the other
+    account's name.
     """
 
     id: str
     # `source` (money left this account) | `destination` (it arrived here; on
     # a credit card that is its debt going down).
     role: str
-    # True when the other side is outside this app, which is exactly when the
-    # three fields below are null.
+    # True when the other side is outside this app, which is exactly when
+    # `counterpart_movement_id` is null. The instrument fields can be null on
+    # a pair too.
     external: bool
     counterpart_movement_id: str | None
     counterpart_instrument_kind: str | None
@@ -612,6 +620,10 @@ class TransactionResponse(BaseModel):
     # Set on both rows of a transfer between the owner's own accounts. Null
     # on ordinary spending, which is nearly everything.
     transfer: TransferResponse | None = None
+    # Whether `PATCH` with `detach` would take it off its account. False on a
+    # transfer leg entered by hand: it names no instrument, so nothing would
+    # ever adopt it back, and the request is refused with 409.
+    detachable: bool
 
 
 class TransferAccountOptionResponse(BaseModel):
@@ -1163,6 +1175,11 @@ class EnterTransferLegPayload(BaseModel):
     No `direction`: `role` fixes it. And `account_id` is required, unlike a
     plain manual entry — this asserts that a balance moved, and there is no
     balance to move without it.
+
+    The other side is one of two things, and exactly one. Another of the
+    owner's accounts, `counterpart_account_id`: both sides are written and
+    both balances move — the card paid from savings at another bank. Or
+    something this app does not hold, named by `counterparty`.
     """
 
     role: TransferRole
@@ -1172,10 +1189,28 @@ class EnterTransferLegPayload(BaseModel):
     # What the owner calls the other side: "Nequi", "efectivo", "PSE". Free
     # text on purpose — it names something this app does not hold, so there is
     # no vocabulary it could be checked against.
-    counterparty: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+    counterparty: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_TEXT_LENGTH,
+    )
     account_id: str
+    counterpart_account_id: str | None = None
     bank: str = Field(default="", max_length=MAX_TEXT_LENGTH)
     note: str | None = Field(default=None, max_length=MAX_TEXT_LENGTH)
+
+    @model_validator(mode="after")
+    def _one_other_side(self) -> EnterTransferLegPayload:
+        if (self.counterparty is None) == (self.counterpart_account_id is None):
+            raise ValueError(
+                "Name the other side once: counterpart_account_id when it is "
+                "one of your accounts, counterparty when it is not",
+            )
+
+        if self.counterpart_account_id == self.account_id:
+            raise ValueError("A transfer moves money between two different accounts")
+
+        return self
 
 
 class DeclareTransferPayload(BaseModel):
@@ -1290,6 +1325,18 @@ def _build_manage_transactions() -> ManageTransactionsUseCase:
 
 
 @functools.lru_cache(maxsize=1)
+def _build_enter_transfer_between() -> EnterTransferBetweenUseCase:
+    ledger = build_ledger()
+
+    return EnterTransferBetweenUseCase(
+        accounts=build_accounts(),
+        ledger=ledger,
+        pairs=ledger,
+        event_publisher=build_financial_event_publisher(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
 def _build_declare_transfer() -> DeclareTransferUseCase:
     ledger = build_ledger()
 
@@ -1395,6 +1442,10 @@ def get_manage_accounts_use_case() -> ManageAccountsUseCase:
 
 def get_manage_transactions_use_case() -> ManageTransactionsUseCase:
     return _build_manage_transactions()
+
+
+def get_enter_transfer_between_use_case() -> EnterTransferBetweenUseCase:
+    return _build_enter_transfer_between()
 
 
 def get_declare_transfer_use_case() -> DeclareTransferUseCase:
@@ -2486,33 +2537,68 @@ def enter_transfer_leg(
         ManageTransactionsUseCase,
         Depends(get_manage_transactions_use_case),
     ],
+    between: Annotated[
+        EnterTransferBetweenUseCase,
+        Depends(get_enter_transfer_between_use_case),
+    ],
     merchants: Annotated[MerchantDirectory, Depends(get_merchant_directory)],
 ) -> TransactionResponse:
-    """Record paying a card, or moving money, from outside this app.
+    """Record paying a card, or moving money, between the owner's balances.
 
     Paying a credit card from an account at the *same* bank needs nothing
     here: that alert names both instruments and the pair is written from it.
     This is for the other way round — paid from another bank, from a wallet,
-    in cash — where only one side is ever knowable, and recording it as an
-    ordinary movement would count a payment as an expense or as income.
+    in cash — where no alert names both, and recording it as an ordinary
+    movement would count a payment as an expense or as income.
 
-    The movement lands on the account named, moving its balance like any
-    other, and stays out of every total. On a credit card, `role=destination`
-    is its debt going down.
+    With `counterpart_account_id`, both ends are accounts here: both sides are
+    written and both balances move, in one write. With `counterparty`, the
+    other end is outside this app and only the account named moves. Either
+    way it stays out of every total, and on a credit card the side arriving
+    — `role=destination` — is its debt going down.
+
+    One exception: to a loan or a mortgage, which are watched and never
+    counted, the side leaving is ordinary spending — the cuota is counted
+    where it leaves — and only the loan's side is a transfer.
+
+    The answer is the side on `account_id`.
     """
     with _domain_errors():
-        transaction = use_case.enter_transfer_leg(
-            EnterTransferLegCommand(
-                user_id=user_id,
-                role=payload.role,
-                amount=Money(amount=payload.amount, currency=payload.currency),
-                occurred_at=PosixTime.from_epoch_seconds(payload.occurred_at),
-                counterparty=payload.counterparty,
-                account_id=_account_id(payload.account_id),
-                bank=payload.bank,
-                note=payload.note,
-            ),
-        )
+        # Inside, not above: an instant past the year 9999 is a `ValueError`
+        # here, and that is a 400, not a 500.
+        amount = Money(amount=payload.amount, currency=payload.currency)
+        occurred_at = PosixTime.from_epoch_seconds(payload.occurred_at)
+
+        if payload.counterpart_account_id is not None:
+            ours = _account_id(payload.account_id)
+            theirs = _account_id(payload.counterpart_account_id)
+            leaving_from_ours = payload.role is TransferRole.SOURCE
+            leaving, arriving = between.execute(
+                EnterTransferBetweenCommand(
+                    user_id=user_id,
+                    source_account_id=ours if leaving_from_ours else theirs,
+                    destination_account_id=theirs if leaving_from_ours else ours,
+                    amount=amount,
+                    occurred_at=occurred_at,
+                    note=payload.note,
+                ),
+            )
+            transaction = leaving if leaving_from_ours else arriving
+        else:
+            # Narrowing for the type checker; the payload's validator proved it.
+            assert payload.counterparty is not None
+            transaction = use_case.enter_transfer_leg(
+                EnterTransferLegCommand(
+                    user_id=user_id,
+                    role=payload.role,
+                    amount=amount,
+                    occurred_at=occurred_at,
+                    counterparty=payload.counterparty,
+                    account_id=_account_id(payload.account_id),
+                    bank=payload.bank,
+                    note=payload.note,
+                ),
+            )
 
     return _transaction_response(_attributed(transaction, merchants))
 
@@ -3130,6 +3216,7 @@ def _transaction_response(entry: AttributedTransaction) -> TransactionResponse:
                 needs_review=merchant.needs_review,
             )
         ),
+        detachable=transaction.detachable,
         transfer=(
             None
             if (leg := transaction.transfer) is None

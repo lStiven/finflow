@@ -8,12 +8,13 @@
  * ones.
  *
  * Two shapes arrive, and `external` is the one field that tells them apart —
- * read it rather than null-checking the three `counterpart_*` fields, which
- * are null exactly when it is true:
+ * read it rather than null-checking the `counterpart_*` fields:
  *
- * - **A pair.** Both sides are movements here, because one alert named both
- *   instruments. The other side is named by its instrument, and there is a row
- *   to send the reader to.
+ * - **A pair.** Both sides are movements here, and there is a row to send the
+ *   reader to. When one alert named both instruments, the other side is named
+ *   by its instrument. Entered by hand between two accounts, or declared
+ *   afterwards, it names none, and the movement's `counterparty` — the other
+ *   account's name — is what reads.
  * - **A lone leg.** The card was paid from another bank, a wallet or cash, so
  *   only this side exists. Nothing names the other one except what its owner
  *   typed, which is the movement's own `counterparty` — and unlike a pair's,

@@ -12,6 +12,7 @@ from personal_finance.contexts.financial.application.commands import (
     DeleteTransactionCommand,
     EditTransactionCommand,
     EnterTransactionCommand,
+    EnterTransferBetweenCommand,
     EnterTransferLegCommand,
     LinkInstrumentCommand,
     OpenAccountCommand,
@@ -27,6 +28,7 @@ from personal_finance.contexts.financial.application.ports import (
     AccountRepository,
     BalanceReversal,
     TransactionLedger,
+    TransferPairs,
 )
 from personal_finance.contexts.financial.domain.entities import (
     Account,
@@ -39,6 +41,7 @@ from personal_finance.contexts.financial.domain.exceptions import (
     CurrencyMismatchError,
     FinancialDomainError,
     InstrumentNotLinkedError,
+    TransferLegError,
 )
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
@@ -1082,6 +1085,116 @@ class ManageTransactionsUseCase:
             return None
 
         return self._load_account(command.user_id, account_id)
+
+    def _load_account(self, user_id: UserId, account_id: AccountId) -> Account:
+        account = self._accounts.find(user_id=user_id, account_id=account_id)
+
+        if account is None:
+            raise AccountNotFoundError(f"No account {account_id.value} for this user")
+
+        return account
+
+
+class EnterTransferBetweenUseCase:
+    """Record money its owner moved between two of their own accounts.
+
+    `enter_transfer_leg` is for a side whose other end this app does not hold.
+    When both ends are accounts here, entering one leg moves one balance: the
+    savings fall and the card's debt stays put, which is what made somebody
+    report that paying their card did nothing. This writes both sides, and
+    both balances, in one write.
+    """
+
+    def __init__(
+        self,
+        *,
+        accounts: AccountRepository,
+        ledger: TransactionLedger,
+        pairs: TransferPairs,
+        event_publisher: EventPublisher,
+    ) -> None:
+        self._accounts = accounts
+        self._ledger = ledger
+        self._pairs = pairs
+        self._events = event_publisher
+
+    def execute(
+        self,
+        command: EnterTransferBetweenCommand,
+    ) -> tuple[Transaction, Transaction]:
+        """The two sides, source first — the ones already stored on a repeat."""
+        source = self._load_account(command.user_id, command.source_account_id)
+        destination = self._load_account(
+            command.user_id,
+            command.destination_account_id,
+        )
+        leaving, arriving = Transaction.enter_transfer_between(
+            user_id=command.user_id,
+            source=source,
+            destination=destination,
+            amount=command.amount,
+            occurred_at=command.occurred_at,
+            note=command.note,
+        )
+
+        # The ordinary double submit answers with the pair already made; the
+        # conditional write below is what covers two requests at once.
+        if (stored := self._stored(leaving, arriving)) is not None:
+            return stored
+
+        source_before = source.balance.signed_amount
+        destination_before = destination.balance.signed_amount
+        # Each raises on a closed account or a currency it does not hold,
+        # before anything is written.
+        source.apply(leaving.as_movement())
+        destination.apply(arriving.as_movement())
+
+        written = self._pairs.record_pair(
+            source=leaving,
+            destination=arriving,
+            source_delta=source.balance.signed_amount - source_before,
+            destination_delta=destination.balance.signed_amount - destination_before,
+        )
+
+        if not written:
+            # Lost the race to an identical request; see `_record_on` for why
+            # these events are dropped rather than published.
+            for aggregate in (leaving, arriving, source, destination):
+                aggregate.pull_events()
+
+            if (stored := self._stored(leaving, arriving)) is not None:
+                return stored
+
+            # One side is stored and the other is not — a cuota half erased
+            # and entered again. Answering with the two in memory would claim
+            # a payment no row records.
+            raise TransferLegError(
+                "Part of this payment is already recorded; delete what is left "
+                "of it and enter it again",
+            )
+
+        for aggregate in (leaving, arriving, source, destination):
+            self._events.publish(aggregate.pull_events())
+
+        return leaving, arriving
+
+    def _stored(
+        self,
+        leaving: Transaction,
+        arriving: Transaction,
+    ) -> tuple[Transaction, Transaction] | None:
+        found = [
+            self._ledger.find(user_id=side.user_id, transaction_id=side.id.value)
+            for side in (leaving, arriving)
+        ]
+
+        if found[0] is None or found[1] is None:
+            return None
+
+        leaving.pull_events()
+        arriving.pull_events()
+
+        return found[0], found[1]
 
     def _load_account(self, user_id: UserId, account_id: AccountId) -> Account:
         account = self._accounts.find(user_id=user_id, account_id=account_id)

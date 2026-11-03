@@ -1154,6 +1154,123 @@ class Transaction(AggregateRoot[MovementId]):
         return transaction
 
     @classmethod
+    def enter_transfer_between(
+        cls,
+        *,
+        user_id: UserId,
+        source: Account,
+        destination: Account,
+        amount: Money,
+        occurred_at: PosixTime,
+        note: str | None = None,
+    ) -> tuple[Self, Self]:
+        """Both sides of money its owner moved between two of their accounts.
+
+        The hand-entered twin of `as_transfer`: paying the card from savings
+        at another bank, where no single alert names both. Entered as one leg,
+        only one of the two balances would move — the savings fall and the
+        card's debt stays put. So both sides are built here, together, for
+        the reasons `as_transfer` gives.
+
+        Each side names the other account by name, which is what a reader
+        sees, and by movement, never by instrument: an account may hold none.
+        Identity comes from content (see
+        `MovementFingerprint.from_entered_transfer`), so a double submit
+        writes the same two keys and the ledger keeps one pair.
+
+        **A loan or a mortgage as the destination is not a pair.** It is
+        watched, never counted, so the cuota is counted where it leaves: the
+        source side is ordinary spending, and the loan gets a lone leg that
+        lowers its debt — the two entries the guide used to ask for by hand.
+        Marked a transfer, the savings side would drop out of every total and
+        the cuota would be counted nowhere. The two rows are independent, as
+        those two entries were: erasing one leaves the other.
+        """
+        if source.id == destination.id:
+            raise ValueError("A transfer moves money between two different accounts")
+
+        # What `Account.apply` would refuse, refused here for both sides
+        # before either is applied: half a pair applied in memory is one step
+        # from half a pair written.
+        for account in (source, destination):
+            if account.is_closed:
+                raise AccountClosedError(
+                    f"Account {account.id.value} is closed and takes no movements",
+                )
+
+            if account.currency is not amount.currency:
+                raise CurrencyMismatchError(
+                    f"Cannot move {amount.currency.value} on a "
+                    f"{account.currency.value} balance",
+                )
+
+        def fingerprint(role: TransferRole) -> MovementFingerprint:
+            return MovementFingerprint.from_entered_transfer(
+                user_id=user_id,
+                source_account_id=source.id,
+                destination_account_id=destination.id,
+                role=role,
+                amount=amount,
+                occurred_at=occurred_at,
+            )
+
+        in_print = fingerprint(TransferRole.DESTINATION)
+        out_id = MovementId.from_fingerprint(fingerprint(TransferRole.SOURCE))
+        in_id = MovementId.from_fingerprint(in_print)
+        leaving_leg: TransferLeg | None
+        arriving_leg: TransferLeg
+
+        if destination.informational and not source.informational:
+            leaving_leg = None
+            arriving_leg = TransferLeg(
+                transfer_id=TransferId.from_lone_leg(in_print),
+                role=TransferRole.DESTINATION,
+            )
+        else:
+            transfer_id = TransferId.entered(source=out_id, destination=in_id)
+            leaving_leg = TransferLeg(
+                transfer_id=transfer_id,
+                role=TransferRole.SOURCE,
+                counterpart_id=in_id,
+            )
+            arriving_leg = TransferLeg(
+                transfer_id=transfer_id,
+                role=TransferRole.DESTINATION,
+                counterpart_id=out_id,
+            )
+
+        leaving = cls(
+            id=out_id,
+            user_id=user_id,
+            direction=MovementDirection.OUTGOING,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(destination.name),
+            bank=(source.bank or "").strip().lower(),
+            origin=TransactionOrigin.MANUAL,
+            account_id=source.id,
+            note=note,
+            transfer=leaving_leg,
+        )
+        arriving = cls(
+            id=in_id,
+            user_id=user_id,
+            direction=MovementDirection.INCOMING,
+            amount=amount,
+            occurred_at=occurred_at,
+            counterparty=_valid_counterparty(source.name),
+            bank=(destination.bank or "").strip().lower(),
+            origin=TransactionOrigin.MANUAL,
+            account_id=destination.id,
+            note=note,
+            transfer=arriving_leg,
+        )
+        leaving._announce()
+        arriving._announce()
+
+        return leaving, arriving
+
+    @classmethod
     def accrue(
         cls,
         *,
@@ -1440,13 +1557,23 @@ class Transaction(AggregateRoot[MovementId]):
         happened while no balance shows it. Moving it to another account is
         still allowed, and is what a leg on the wrong one actually needs.
         """
-        if self.is_transfer and not self.is_routable:
+        if not self.detachable:
             raise TransferLegError(
                 "A transfer leg cannot be left without an account: it states "
                 "that a balance moved, and no account would ever adopt it",
             )
 
         self.unassign()
+
+    @property
+    def detachable(self) -> bool:
+        """Whether `detach` would take this movement off its account.
+
+        Exposed so a screen offers the control only where it works: a leg
+        entered by hand — alone, or as half of a pair between two accounts —
+        names no instrument, and is refused.
+        """
+        return not (self.is_transfer and not self.is_routable)
 
     def unassign(self) -> None:
         """Take this movement off the account holding it.

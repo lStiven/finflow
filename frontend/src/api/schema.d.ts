@@ -1225,17 +1225,25 @@ export interface paths {
         put?: never;
         /**
          * Enter Transfer Leg
-         * @description Record paying a card, or moving money, from outside this app.
+         * @description Record paying a card, or moving money, between the owner's balances.
          *
          *     Paying a credit card from an account at the *same* bank needs nothing
          *     here: that alert names both instruments and the pair is written from it.
          *     This is for the other way round — paid from another bank, from a wallet,
-         *     in cash — where only one side is ever knowable, and recording it as an
-         *     ordinary movement would count a payment as an expense or as income.
+         *     in cash — where no alert names both, and recording it as an ordinary
+         *     movement would count a payment as an expense or as income.
          *
-         *     The movement lands on the account named, moving its balance like any
-         *     other, and stays out of every total. On a credit card, `role=destination`
-         *     is its debt going down.
+         *     With `counterpart_account_id`, both ends are accounts here: both sides are
+         *     written and both balances move, in one write. With `counterparty`, the
+         *     other end is outside this app and only the account named moves. Either
+         *     way it stays out of every total, and on a credit card the side arriving
+         *     — `role=destination` — is its debt going down.
+         *
+         *     One exception: to a loan or a mortgage, which are watched and never
+         *     counted, the side leaving is ordinary spending — the cuota is counted
+         *     where it leaves — and only the loan's side is a transfer.
+         *
+         *     The answer is the side on `account_id`.
          */
         post: operations["enter_transfer_leg_financial_transactions_transfer_post"];
         delete?: never;
@@ -3065,6 +3073,11 @@ export interface components {
          *     No `direction`: `role` fixes it. And `account_id` is required, unlike a
          *     plain manual entry — this asserts that a balance moved, and there is no
          *     balance to move without it.
+         *
+         *     The other side is one of two things, and exactly one. Another of the
+         *     owner's accounts, `counterpart_account_id`: both sides are written and
+         *     both balances move — the card paid from savings at another bank. Or
+         *     something this app does not hold, named by `counterparty`.
          */
         EnterTransferLegPayload: {
             /** Account Id */
@@ -3076,8 +3089,10 @@ export interface components {
              * @default
              */
             bank: string;
+            /** Counterpart Account Id */
+            counterpart_account_id?: string | null;
             /** Counterparty */
-            counterparty: string;
+            counterparty?: string | null;
             /** @default COP */
             currency: components["schemas"]["Currency"];
             /** Note */
@@ -4301,6 +4316,8 @@ export interface components {
             counterparty: string;
             /** Currency */
             currency: string;
+            /** Detachable */
+            detachable: boolean;
             /** Direction */
             direction: string;
             /** Id */
@@ -4397,6 +4414,11 @@ export interface components {
          *     null-checking the three — it is the question a client is actually asking,
          *     and the movement's own `counterparty` already carries what the owner
          *     called the other side ("Nequi", "efectivo").
+         *
+         *     A pair can also name its other side by movement alone, with both
+         *     instrument fields null: one entered by hand between two accounts, or
+         *     declared after the fact. There the movement's `counterparty` is the other
+         *     account's name.
          */
         TransferResponse: {
             /**

@@ -17,7 +17,11 @@ from decimal import Decimal
 import pytest
 
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
-from personal_finance.contexts.financial.domain.exceptions import TransferLegError
+from personal_finance.contexts.financial.domain.exceptions import (
+    AccountClosedError,
+    CurrencyMismatchError,
+    TransferLegError,
+)
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountId,
     AccountKind,
@@ -524,24 +528,37 @@ def test_correcting_a_lone_leg_keeps_no_stated_movement() -> None:
 # ------------------------------------------------- the shape of a leg itself
 
 
-def test_a_leg_describing_half_its_counterpart_is_refused() -> None:
-    """The state this class exists to make impossible: an id nothing can
-    resolve, or digits belonging to no movement."""
-    with pytest.raises(ValueError, match="fully or not at all"):
-        TransferLeg(
-            transfer_id=TransferId(value="a-transfer"),
-            role=TransferRole.SOURCE,
-            counterpart_id=MovementId.new(),
-        )
+def test_a_leg_naming_its_counterpart_by_movement_alone_is_a_pair() -> None:
+    """What a pair entered between two accounts is: they may hold no
+    instrument, so there are no digits to carry."""
+    leg = TransferLeg(
+        transfer_id=TransferId(value="a-transfer"),
+        role=TransferRole.SOURCE,
+        counterpart_id=MovementId.new(),
+    )
+
+    assert leg.counterpart_is_external is False
 
 
-def test_a_leg_naming_digits_but_no_movement_is_refused_too() -> None:
-    with pytest.raises(ValueError, match="fully or not at all"):
+def test_a_leg_naming_digits_but_no_movement_is_refused() -> None:
+    """The state this class exists to make impossible: digits belonging to no
+    movement."""
+    with pytest.raises(ValueError, match="alongside its movement"):
         TransferLeg(
             transfer_id=TransferId(value="a-transfer"),
             role=TransferRole.SOURCE,
             counterpart_instrument_kind="credit_card",
             counterpart_last_four="7653",
+        )
+
+
+def test_a_leg_naming_half_an_instrument_is_refused() -> None:
+    with pytest.raises(ValueError, match="alongside its movement"):
+        TransferLeg(
+            transfer_id=TransferId(value="a-transfer"),
+            role=TransferRole.SOURCE,
+            counterpart_id=MovementId.new(),
+            counterpart_instrument_kind="credit_card",
         )
 
 
@@ -616,3 +633,224 @@ def test_a_paired_leg_can_still_be_detached() -> None:
     source.detach()
 
     assert source.account_id is None
+
+
+# ------------------------------ a pair entered between two of the owner's own
+
+
+def _between(**overrides: object) -> tuple[Transaction, Transaction]:
+    parts: dict[str, object] = {
+        "user_id": USER,
+        "source": _account(AccountKind.SAVINGS, "5261", holds="5000000"),
+        "destination": _account(AccountKind.CREDIT_CARD, "7653", holds="3540258"),
+        "amount": _cop("2000000"),
+        "occurred_at": PAID_AT,
+    }
+    parts.update(overrides)
+
+    return Transaction.enter_transfer_between(**parts)  # pyright: ignore[reportArgumentType]
+
+
+def test_paying_a_card_from_savings_moves_both_balances() -> None:
+    """The complaint that prompted it: entered as one leg, the savings fell
+    and the card's debt stayed where it was."""
+    savings = _account(AccountKind.SAVINGS, "5261", holds="5000000")
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="3540258")
+
+    leaving, arriving = _between(source=savings, destination=card)
+    savings.apply(leaving.as_movement())
+    card.apply(arriving.as_movement())
+
+    assert savings.balance.signed_amount == Decimal("3000000")
+    assert card.balance.signed_amount == Decimal("1540258")
+
+
+def test_an_entered_pair_is_two_opposite_sides_on_their_own_accounts() -> None:
+    savings = _account(AccountKind.SAVINGS, "5261", holds="5000000")
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="0")
+
+    leaving, arriving = _between(source=savings, destination=card)
+
+    assert leaving.direction is MovementDirection.OUTGOING
+    assert arriving.direction is MovementDirection.INCOMING
+    assert leaving.account_id == savings.id
+    assert arriving.account_id == card.id
+
+
+def test_an_entered_pair_names_each_other_by_movement() -> None:
+    leaving, arriving = _between()
+
+    assert leaving.transfer is not None
+    assert arriving.transfer is not None
+    assert leaving.transfer.transfer_id == arriving.transfer.transfer_id
+    assert leaving.transfer.counterpart_id == arriving.id
+    assert arriving.transfer.counterpart_id == leaving.id
+    assert leaving.transfer.role is TransferRole.SOURCE
+    assert arriving.transfer.role is TransferRole.DESTINATION
+
+
+def test_each_side_reads_as_the_other_account() -> None:
+    """There is no instrument to name, so the row's text is what a reader
+    sees: "Pago a Tarjeta", "Pago desde Ahorros"."""
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="0")
+
+    leaving, arriving = _between(source=savings, destination=card)
+
+    assert leaving.counterparty == card.name
+    assert arriving.counterparty == savings.name
+
+
+def test_an_entered_pair_is_neither_spending_nor_income() -> None:
+    leaving, arriving = _between()
+
+    assert leaving.is_transfer
+    assert arriving.is_transfer
+    assert leaving.origin is TransactionOrigin.MANUAL
+
+
+def test_the_same_pair_entered_twice_is_the_same_two_rows() -> None:
+    """A double submit. Counted twice, the debt would fall twice."""
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="0")
+
+    first = _between(source=savings, destination=card)
+    second = _between(source=savings, destination=card, note="otra vez")
+
+    assert [side.id for side in first] == [side.id for side in second]
+
+
+def test_the_same_amount_moved_back_is_another_transfer() -> None:
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="0")
+
+    there = _between(source=savings, destination=card)
+    back = _between(source=card, destination=savings)
+
+    assert {side.id for side in there}.isdisjoint(side.id for side in back)
+
+
+def test_an_entered_pair_never_shares_a_row_with_a_lone_leg() -> None:
+    """Same account, role, amount and instant as a leg entered alone."""
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+    leaving, _ = _between(source=savings)
+    alone = Transaction.enter_transfer_leg(
+        user_id=USER,
+        role=TransferRole.SOURCE,
+        amount=_cop("2000000"),
+        occurred_at=PAID_AT,
+        counterparty=leaving.counterparty,
+        account_id=savings.id,
+    )
+
+    assert alone.id != leaving.id
+
+
+def test_an_account_paying_itself_is_refused() -> None:
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+
+    with pytest.raises(ValueError, match="two different accounts"):
+        _between(source=savings, destination=savings)
+
+
+def test_a_closed_account_on_either_side_is_refused_before_anything_is_built() -> None:
+    card = _account(AccountKind.CREDIT_CARD, "7653", holds="0")
+    card.close(closed_at=PAID_AT)
+
+    with pytest.raises(AccountClosedError):
+        _between(destination=card)
+
+    with pytest.raises(AccountClosedError):
+        _between(source=card)
+
+
+def test_an_amount_in_another_currency_is_refused() -> None:
+    with pytest.raises(CurrencyMismatchError):
+        _between(amount=Money(amount=Decimal("100"), currency=Currency.USD))
+
+
+def test_a_side_of_an_entered_pair_cannot_be_detached() -> None:
+    """It names no instrument, so no account would ever adopt it back."""
+    leaving, _ = _between()
+
+    with pytest.raises(TransferLegError):
+        leaving.detach()
+
+
+def test_an_entered_pair_says_it_cannot_be_detached() -> None:
+    """What a screen reads before offering the control `detach` refuses."""
+    leaving, arriving = _between()
+    alert_side, _ = _pair()
+
+    assert leaving.detachable is False
+    assert arriving.detachable is False
+    assert alert_side.detachable is True
+
+
+# ------------------------------------------- a cuota paid to a watched credit
+
+
+def _loan(holds: str = "60000000") -> Account:
+    loan = Account.open(
+        user_id=USER,
+        name="Hipoteca",
+        kind=AccountKind.MORTGAGE,
+        currency=Currency.COP,
+        opening_balance=_cop(holds),
+        opened_at=PAID_AT,
+    )
+    loan.pull_events()
+
+    return loan
+
+
+def test_paying_a_mortgage_from_savings_counts_where_the_money_leaves() -> None:
+    """A mortgage is watched, never counted, so the cuota is spending on the
+    savings side — marked a transfer, it would be counted nowhere."""
+    leaving, arriving = _between(destination=_loan())
+
+    assert leaving.is_transfer is False
+    assert leaving.direction is MovementDirection.OUTGOING
+    assert arriving.is_transfer is True
+    assert arriving.transfer is not None
+    assert arriving.transfer.role is TransferRole.DESTINATION
+    assert arriving.transfer.counterpart_is_external is True
+
+
+def test_paying_a_mortgage_from_savings_still_lowers_both_balances() -> None:
+    savings = _account(AccountKind.SAVINGS, "5261", holds="5000000")
+    mortgage = _loan()
+
+    leaving, arriving = _between(source=savings, destination=mortgage)
+    savings.apply(leaving.as_movement())
+    mortgage.apply(arriving.as_movement())
+
+    assert savings.balance.signed_amount == Decimal("3000000")
+    assert mortgage.balance.signed_amount == Decimal("58000000")
+
+
+def test_the_same_cuota_entered_twice_is_the_same_two_rows() -> None:
+    savings = _account(AccountKind.SAVINGS, "5261", holds="0")
+    mortgage = _loan()
+
+    first = _between(source=savings, destination=mortgage)
+    second = _between(source=savings, destination=mortgage)
+
+    assert [side.id for side in first] == [side.id for side in second]
+
+
+def test_money_arriving_from_a_loan_is_still_a_pair() -> None:
+    """A disbursement is not income: both sides stay transfers."""
+    leaving, arriving = _between(
+        source=_loan(),
+        destination=_account(
+            AccountKind.SAVINGS,
+            "5261",
+            holds="0",
+        ),
+    )
+
+    assert leaving.is_transfer is True
+    assert arriving.is_transfer is True
+    assert arriving.transfer is not None
+    assert arriving.transfer.counterpart_is_external is False

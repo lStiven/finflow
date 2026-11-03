@@ -223,16 +223,30 @@ def test_a_leg_stored_without_its_role_is_refused() -> None:
         movement_to_entity(_stored_with(transfer_id="abc"))  # pyright: ignore[reportArgumentType]
 
 
-def test_a_leg_stored_with_half_a_counterpart_is_refused() -> None:
-    """An id with nothing describing it. Refused rather than read as external:
-    read that way it would claim there is no other side while a row pointing
-    at one sits in the same table."""
+def test_a_leg_stored_with_a_movement_and_no_digits_reads_back_as_a_pair() -> None:
+    """What a pair entered between two accounts stores. Read as external, it
+    would claim there is no other side while a row pointing at one sits in
+    the same table."""
+    leg = movement_to_entity(
+        _stored_with(  # pyright: ignore[reportArgumentType]
+            transfer_id="abc",
+            role="destination",
+            counterpart_id="def",
+        ),
+    ).transfer
+
+    assert leg is not None
+    assert leg.counterpart_is_external is False
+
+
+def test_a_leg_stored_with_half_an_instrument_is_refused() -> None:
     with pytest.raises(CorruptFinancialItemError, match="half a counterpart"):
         movement_to_entity(
             _stored_with(  # pyright: ignore[reportArgumentType]
                 transfer_id="abc",
                 role="destination",
                 counterpart_id="def",
+                counterpart_instrument_kind="credit_card",
             ),
         )
 

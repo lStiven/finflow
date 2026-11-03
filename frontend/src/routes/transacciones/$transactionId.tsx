@@ -607,12 +607,14 @@ function EditForm({ movement, onDone }: { movement: Transaction; onDone: () => v
   const pairedTransfer = leg !== null && !leg.external;
 
   /*
-   * Detaching a lone leg is refused with a 409: it states that a balance
-   * moved, and it names no instrument, so nothing would ever adopt it back.
-   * Moving it to another account stays allowed, which is what a leg entered
-   * against the wrong card actually needs.
+   * Detaching a leg entered by hand — alone, or half of a pair between two
+   * accounts — is refused with a 409: it states that a balance moved, and it
+   * names no instrument, so nothing would ever adopt it back. The API says
+   * which movements those are rather than this screen guessing from
+   * `external`. Moving it to another account stays allowed, which is what a
+   * leg entered against the wrong card actually needs.
    */
-  const canDetach = Boolean(movement.account_id) && leg?.external !== true;
+  const canDetach = Boolean(movement.account_id) && movement.detachable;
 
   return (
     <Card lift={false}>

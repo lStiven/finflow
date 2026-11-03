@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx2 import Response
 import pytest
 
 from personal_finance.contexts.financial.application.financing import (
@@ -16,6 +17,7 @@ from personal_finance.contexts.financial.application.financing import (
     RevalueAccountUseCase,
 )
 from personal_finance.contexts.financial.application.handlers import (
+    EnterTransferBetweenUseCase,
     ManageAccountsUseCase,
     ManageTransactionsUseCase,
 )
@@ -41,6 +43,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
 from personal_finance.contexts.financial.presentation.http.router import (
     get_account_use_case,
     get_accrue_financing_use_case,
+    get_enter_transfer_between_use_case,
     get_list_accounts_use_case,
     get_list_transactions_use_case,
     get_manage_accounts_use_case,
@@ -144,6 +147,24 @@ class InMemoryLedger:
             return False
 
         self.rows[transaction.id.value] = transaction
+
+        return True
+
+    def record_pair(
+        self,
+        *,
+        source: Transaction,
+        destination: Transaction,
+        source_delta: Decimal,
+        destination_delta: Decimal,
+    ) -> bool:
+        del source_delta, destination_delta
+
+        if source.id.value in self.rows or destination.id.value in self.rows:
+            return False
+
+        self.rows[source.id.value] = source
+        self.rows[destination.id.value] = destination
 
         return True
 
@@ -322,6 +343,14 @@ def _build() -> tuple[TestClient, InMemoryLedger, FakeDirectory]:
         ManageTransactionsUseCase(
             accounts=accounts,
             ledger=ledger,
+            event_publisher=publisher,
+        )
+    )
+    app.dependency_overrides[get_enter_transfer_between_use_case] = lambda: (
+        EnterTransferBetweenUseCase(
+            accounts=accounts,
+            ledger=ledger,
+            pairs=ledger,
             event_publisher=publisher,
         )
     )
@@ -2287,6 +2316,252 @@ def test_a_transfer_leg_can_still_be_moved_to_the_right_account(
 
     assert response.status_code == 200, response.text
     assert response.json()["account_id"] == account["id"]
+
+
+# ------------------------------------ un traslado entre dos cuentas propias
+
+
+def _savings_and_card(client: TestClient) -> tuple[dict[str, Any], dict[str, Any]]:
+    savings = _declare(
+        client,
+        name="Ahorros Lulo",
+        kind="savings",
+        bank="Lulo",
+        instrument_kind="account",
+        last_four="7111",
+        opening_balance="5000000",
+    )
+    card = _declare(client, name="Tarjeta Nu", opening_balance="3540258")
+
+    return savings, card
+
+
+def _balances(client: TestClient) -> dict[str, str]:
+    return {
+        account["name"]: account["balance"]
+        for account in client.get("/financial/accounts").json()["accounts"]
+    }
+
+
+def _move(client: TestClient, **overrides: object) -> Response:
+    payload: dict[str, object] = {
+        "role": "source",
+        "amount": "2000000",
+        "currency": "COP",
+        "occurred_at": WHEN,
+    }
+    payload.update(overrides)
+
+    return client.post("/financial/transactions/transfer", json=payload)
+
+
+def test_paying_the_card_from_savings_moves_both_balances(
+    client: TestClient,
+) -> None:
+    """What somebody reported as "paying my card did nothing": entered as
+    one leg, only the savings moved."""
+    savings, card = _savings_and_card(client)
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=card["id"],
+    )
+
+    assert response.status_code == 201, response.text
+    assert _balances(client) == {"Ahorros Lulo": "3000000", "Tarjeta Nu": "1540258"}
+
+
+def test_the_answer_is_the_side_on_the_account_named(client: TestClient) -> None:
+    savings, card = _savings_and_card(client)
+
+    leaving = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=card["id"],
+    ).json()
+    arriving = _move(
+        client,
+        role="destination",
+        account_id=card["id"],
+        counterpart_account_id=savings["id"],
+        amount="100000",
+    ).json()
+
+    assert leaving["account_id"] == savings["id"]
+    assert leaving["direction"] == "outgoing"
+    assert leaving["counterparty"] == "Tarjeta Nu"
+    assert arriving["account_id"] == card["id"]
+    assert arriving["direction"] == "incoming"
+    assert arriving["counterparty"] == "Ahorros Lulo"
+
+
+def test_both_sides_are_listed_and_point_at_each_other(client: TestClient) -> None:
+    savings, card = _savings_and_card(client)
+
+    leaving = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=card["id"],
+    ).json()
+    rows = client.get(
+        "/financial/transactions",
+        params={"transfers": "only"},
+    ).json()["transactions"]
+
+    assert len(rows) == 2
+    assert leaving["transfer"]["external"] is False
+    assert leaving["transfer"]["counterpart_movement_id"] in {row["id"] for row in rows}
+
+
+def test_neither_side_counts_in_the_summary(client: TestClient) -> None:
+    savings, card = _savings_and_card(client)
+    _move(client, account_id=savings["id"], counterpart_account_id=card["id"])
+
+    totals = client.get("/financial/summary").json()["totals"]
+
+    assert totals == []
+
+
+def test_the_same_pair_sent_twice_moves_the_money_once(client: TestClient) -> None:
+    savings, card = _savings_and_card(client)
+
+    first = _move(client, account_id=savings["id"], counterpart_account_id=card["id"])
+    second = _move(client, account_id=savings["id"], counterpart_account_id=card["id"])
+
+    assert second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+    assert _balances(client) == {"Ahorros Lulo": "3000000", "Tarjeta Nu": "1540258"}
+
+
+@pytest.mark.parametrize(
+    "other_side",
+    [
+        {},
+        {"counterparty": "Nequi", "counterpart_account_id": "same-as-card"},
+    ],
+    ids=["neither", "both"],
+)
+def test_the_other_side_is_named_exactly_once(
+    client: TestClient,
+    other_side: dict[str, str],
+) -> None:
+    savings, card = _savings_and_card(client)
+    if "counterpart_account_id" in other_side:
+        other_side = {**other_side, "counterpart_account_id": card["id"]}
+
+    response = _move(client, account_id=savings["id"], **other_side)
+
+    assert response.status_code == 422
+    assert _balances(client)["Ahorros Lulo"] == "5000000"
+
+
+def test_an_account_paying_itself_is_refused(client: TestClient) -> None:
+    savings, _ = _savings_and_card(client)
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=savings["id"],
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_counterpart_account_that_does_not_exist_is_refused(
+    client: TestClient,
+) -> None:
+    savings, _ = _savings_and_card(client)
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id="8f14e45f-ceea-467a-9c2b-6a2c0a1b1111",
+    )
+
+    assert response.status_code == 404
+    assert _balances(client)["Ahorros Lulo"] == "5000000"
+
+
+def test_two_currencies_are_refused_rather_than_converted(client: TestClient) -> None:
+    savings, _ = _savings_and_card(client)
+    dollars = _declare(
+        client,
+        name="Tarjeta USD",
+        currency="USD",
+        last_four="1234",
+    )
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=dollars["id"],
+    )
+
+    assert response.status_code == 400
+    assert client.get("/financial/transactions").json()["transactions"] == []
+
+
+def test_a_side_of_an_entered_pair_says_it_cannot_be_detached(
+    client: TestClient,
+) -> None:
+    """The screen reads this before offering «Quitar de la cuenta»: the PATCH
+    behind it is refused with 409 on a side that names no instrument."""
+    savings, card = _savings_and_card(client)
+    leaving = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=card["id"],
+    ).json()
+    ordinary = _enter(client, account_id=savings["id"])
+
+    refused = client.patch(
+        f"/financial/transactions/{leaving['id']}",
+        json={"detach": True},
+    )
+
+    assert leaving["detachable"] is False
+    assert ordinary["detachable"] is True
+    assert refused.status_code == 409
+
+
+def test_a_cuota_to_a_mortgage_answers_with_the_spending_it_is(
+    client: TestClient,
+) -> None:
+    savings, _ = _savings_and_card(client)
+    mortgage = _declare(
+        client,
+        name="Hipoteca",
+        kind="mortgage",
+        bank="",
+        instrument_kind=None,
+        last_four=None,
+        opening_balance="60000000",
+    )
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=mortgage["id"],
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["transfer"] is None
+    assert _balances(client)["Hipoteca"] == "58000000"
+    assert _balances(client)["Ahorros Lulo"] == "3000000"
+
+
+def test_an_impossible_instant_is_a_400_not_a_500(client: TestClient) -> None:
+    savings, card = _savings_and_card(client)
+
+    response = _move(
+        client,
+        account_id=savings["id"],
+        counterpart_account_id=card["id"],
+        occurred_at=1_000_000_000_000,
+    )
+
+    assert response.status_code == 400
 
 
 # ------------------------------------------------------------- reporting

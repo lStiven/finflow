@@ -407,6 +407,30 @@ class TransferDeclarations(Protocol):
         ...
 
 
+class TransferPairs(Protocol):
+    """The write behind a transfer entered between two of the owner's accounts.
+
+    Apart from `TransactionLedger` for the reason `TransferDeclarations` is.
+    One write for both sides: the savings falling while the card's debt does
+    not is the exact state this exists to stop producing.
+    """
+
+    def record_pair(
+        self,
+        *,
+        source: Transaction,
+        destination: Transaction,
+        source_delta: Decimal,
+        destination_delta: Decimal,
+    ) -> bool:
+        """Write both rows and move both balances, atomically.
+
+        False when either row already existed — a double submit, since both
+        ids come from content. Nothing is applied on that path.
+        """
+        ...
+
+
 class ScheduledBillRepository(Protocol):
     """Persistence port for `ScheduledBill`.
 

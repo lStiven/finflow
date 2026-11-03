@@ -264,6 +264,19 @@ class EnterTransferLegCommand:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class EnterTransferBetweenCommand:
+    """Money its owner moved between two of their own accounts, both sides
+    known — paying the card from savings at another bank."""
+
+    user_id: UserId
+    source_account_id: AccountId
+    destination_account_id: AccountId
+    amount: Money
+    occurred_at: PosixTime
+    note: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class EditTransactionCommand:
     """A correction. Every field left None is left alone.
 

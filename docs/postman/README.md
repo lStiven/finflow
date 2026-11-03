@@ -41,6 +41,7 @@ también se llenan solas; las demás se copian de la respuesta que las trae:
 | `verification_token` | Identity → Verification → Confirm verification code | — |
 | `password_reset_token` | — | El enlace del correo de restablecimiento (`?token=…`) |
 | `account_id` | Financial → Open account | `GET /financial/accounts` |
+| `counterpart_account_id` | — | `GET /financial/accounts` (otra cuenta tuya, en la misma moneda) |
 | `movement_id` | — | `GET /financial/transactions` |
 | `bill_id`, `bill_period` | — | `GET /financial/bills` (`id` y el `due_on` de un cobro) |
 | `budget_id` | — | `POST` o `GET /financial/budgets` |

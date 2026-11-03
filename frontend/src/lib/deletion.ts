@@ -73,10 +73,12 @@ export function describeDeletion(
  * The alternative to offer, which is not the same for every movement.
  *
  * Correcting is always available. *Taking it off its account* is not: a
- * movement on no account has none to leave, and a leg paid from outside this
- * app is refused with a 409 — it states that a balance moved and names no
- * instrument, so nothing could ever adopt it back. Offering it there would
- * send somebody to a control the edit form does not even show.
+ * movement on no account has none to leave, and a leg entered by hand — paid
+ * from outside this app, or half of a pair between two accounts — is refused
+ * with a 409: it states that a balance moved and names no instrument, so
+ * nothing could ever adopt it back. The API says which ones (`detachable`);
+ * offering it there would send somebody to a control the edit form does not
+ * even show.
  */
 function instead(movement: Transaction, leg: TransferLeg | null): string {
   // A transfer declared after the fact has a lighter way back than erasing
@@ -88,7 +90,7 @@ function instead(movement: Transaction, leg: TransferLeg | null): string {
   const base =
     "Esto no se puede deshacer. Si el movimiento sí ocurrió y solo está mal, usa Corregir";
 
-  return movement.account_id !== null && leg?.external !== true
+  return movement.account_id !== null && movement.detachable
     ? `${base}, que también permite sacarlo de la cuenta sin borrarlo.`
     : `${base}.`;
 }
