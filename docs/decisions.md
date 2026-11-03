@@ -1477,6 +1477,25 @@ way out, and still stores nothing.
   bank name is made of, which has no `:` and no `/`. And no `parse_mode` at
   all, anywhere: plain text makes the escaping problem not exist rather than
   solving it.
+- **A transfer is announced once, and Financial picks which side speaks**
+  (2026-11-01). A transfer is two rows and one movement of money. Announced
+  row by row, paying a card from savings reached its owner as «Gasto · Visa
+  Platinum» and «Ingreso · Cuenta de ahorros», a charge and an income that
+  never happened. Now `MovementRecorded` carries `transfer`, `quiet` and a
+  `route` (both ends: an account's name, or the instrument an alert named).
+  The side that speaks carries the route; the other is `quiet`, and Alerts
+  neither sends it nor keeps it in the inbox. Financial decides because it is
+  the only one that knows which rows were born together: an alert-derived
+  pair, an entered pair, a cuota (spending that speaks with a route, plus a
+  lone abono that stays quiet), and the counterpart a declaration writes,
+  which is quiet because its movement was already announced when it arrived.
+  Rejected: Alerts deduplicating on a transfer id. That needs a claim table,
+  and either leg would have to carry both ends anyway. Still announced
+  twice, on purpose: two movements paired *after* both alerts went out —
+  nothing can take back a sent message. The fields are optional and the
+  version stayed 1: an older Alerts ignores them and keeps announcing twice,
+  and a newer one reads an older payload as an ordinary movement, so the
+  deploy order does not matter.
 
 ### Declared bills, and confirming one (2026-09-14)
 

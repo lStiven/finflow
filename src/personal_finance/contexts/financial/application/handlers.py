@@ -228,6 +228,7 @@ class RecordTransferUseCase:
         ledger: TransactionLedger,
         event_publisher: EventPublisher,
     ) -> None:
+        self._accounts = accounts
         self._placer = MovementPlacer(
             accounts=accounts,
             ledger=ledger,
@@ -245,11 +246,49 @@ class RecordTransferUseCase:
             destination_instrument_kind=command.destination_instrument_kind,
             destination_last_four=command.destination_last_four,
         )
+        # Before either side is placed and published: the side that speaks
+        # for the pair goes first, and it names both ends.
+        names = (self._account_name(source), self._account_name(destination))
+
+        for side in (source, destination):
+            side.name_route(source=names[0], destination=names[1])
+
+        placed_source = self._placer.place(source)
+
+        if placed_source.outcome is Outcome.DUPLICATE:
+            # A redelivery after a partial failure: the side that speaks was
+            # written, and whether its announcement went out is unknowable.
+            # The destination says it instead — twice beats never.
+            destination.speak()
 
         return RecordTransferResult(
-            source=self._placer.place(source),
+            source=placed_source,
             destination=self._placer.place(destination),
         )
+
+    def _account_name(self, side: Transaction) -> str | None:
+        """The declared account this side will land on, by name.
+
+        None for an account the placer will not apply it to — closed, or in
+        another currency — so the message never names an account the money
+        did not reach.
+        """
+        if side.account_fingerprint is None:
+            return None
+
+        account = self._accounts.find_by_fingerprint(
+            user_id=side.user_id,
+            fingerprint=side.account_fingerprint,
+        )
+
+        if (
+            account is None
+            or account.is_closed
+            or account.currency is not side.amount.currency
+        ):
+            return None
+
+        return account.name
 
 
 class MovementPlacer:
@@ -803,6 +842,7 @@ class ManageTransactionsUseCase:
             account_id=account.id,
             bank=command.bank,
             note=command.note,
+            account_name=account.name,
         )
         # Asked before the balance is touched, not only after the write. The
         # conditional write below is what makes this safe under two requests

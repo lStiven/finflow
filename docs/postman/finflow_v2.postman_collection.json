@@ -3503,7 +3503,7 @@
                 }
               ]
             },
-            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification. An alert about a movement that has since been deleted is left out."
+            "description": "The alerts the app shows, for everybody whether or not Telegram is linked: every movement (with the budgets it counts against, worst first) and Monday's weekly summary, kept 30 days. Facts, never sentences — the counterparty is what the bank wrote and is drawn as text. The web app polls this while it is visible and shows what is new as a floating notification. An alert about a movement that has since been deleted is left out. A transfer between the owner's own accounts is one entry, not two: `transfer: true`, and `route` names where the money left and where it arrived (an account's name, or the instrument an alert named). A cuota paid to a credit carries a `route` too, as spending."
           },
           "event": [
             {

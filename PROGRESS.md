@@ -290,9 +290,6 @@ AWS (ver Trabas).
 
 ## Huecos conocidos, sin urgencia
 
-- **Un traslado avisa dos veces**, como «Gasto» y como «Ingreso», en
-  Telegram y en la campana: el evento que recibe Alerts no dice que el
-  movimiento es un traslado. Pasa con los del correo y con los escritos a mano.
 - **La hora de los avisos es la misma para todo el mundo.** No existe zona
   horaria por usuario en ninguna parte del proyecto, así que el «13/09 04:46
   pm» de un aviso se calcula con una sola (`America/Bogota`). Deja de servir el

@@ -86,12 +86,32 @@ class BudgetStanding:
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class RouteEnd:
+    """One end of where the money went: the owner's name for it, or else the
+    instrument an alert named. Untrusted text, worded by the transport."""
+
+    name: str | None = None
+    instrument_kind: str | None = None
+    last_four: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
+class MovementRoute:
+    source: RouteEnd
+    destination: RouteEnd
+
+
+@dataclasses.dataclass(frozen=True, slots=True, kw_only=True)
 class MovementAlert:
     """Money moved, and everything an alert may say about it.
 
     `occurred_at` is when the money moved, not when the fact was recorded.
     The two differ by days when a bank alert arrives late, and a message
     saying "acabas de gastar" about a three-day-old purchase is wrong.
+
+    A transfer reaches this context as two movements, and Financial marks
+    the one that is not to be announced `quiet`: the other speaks for both,
+    with the `route` that says where the money left and where it arrived.
     """
 
     amount: Money
@@ -107,10 +127,16 @@ class MovementAlert:
     #: The budgets this movement counts against — empty for most movements,
     #: and filled by the use case, never by the payload.
     budgets: tuple[BudgetStanding, ...] = ()
+    #: Money moved between the owner's own balances: neither spent nor earned.
+    transfer: bool = False
+    #: Another movement of the same transfer already announces this money.
+    quiet: bool = False
+    #: Where the money left and where it arrived, when Financial knows both.
+    route: MovementRoute | None = None
 
     @property
     def is_worth_announcing(self) -> bool:
-        return self.origin.is_news_to_the_owner
+        return self.origin.is_news_to_the_owner and not self.quiet
 
 
 @dataclasses.dataclass(frozen=True, slots=True, kw_only=True)

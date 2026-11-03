@@ -5,6 +5,7 @@ import {
   MAX_SEEN,
   oneLine,
   readSeen,
+  routeEnd,
   seenKey,
   unreadCount,
   weekLabel,
@@ -32,6 +33,8 @@ function movement(
       origin: "bank_alert",
       unassigned: false,
       budgets: [],
+      transfer: false,
+      route: null,
       ...overrides,
     },
     ...entry,
@@ -346,5 +349,85 @@ describe("describeEntry — the model stopped reading", () => {
     });
 
     expect(described.title).toBe("Lectura desactivada");
+  });
+});
+
+describe("a transfer between the owner's own accounts", () => {
+  const route = {
+    source: { name: "Cuenta de ahorros", instrument_kind: null, last_four: null },
+    destination: { name: "Visa Platinum", instrument_kind: null, last_four: null },
+  };
+
+  it("is one alert that says so and names where the money left and arrived", () => {
+    const described = describeEntry(
+      movement({ amount: "2926752", transfer: true, route }),
+    );
+
+    // `formatMoney` puts a non-breaking space after the sign.
+    expect(described.title.replace(/\s/g, " ")).toBe(
+      "Traslado entre cuentas $ 2.926.752",
+    );
+    expect(described.lines).toEqual(["De: Cuenta de ahorros", "A: Visa Platinum"]);
+    expect(described.tone).toBe("transfer");
+  });
+
+  it("does not speak for one unassigned side", () => {
+    const described = describeEntry(
+      movement({ transfer: true, route, unassigned: true }),
+    );
+
+    expect(described.lines).not.toContain("Sin cuenta asignada");
+  });
+
+  it("never reads as a purchase or an income", () => {
+    const described = describeEntry(movement({ transfer: true, route }));
+
+    expect(described.title).not.toMatch(/Gasto|Ingreso/);
+  });
+
+  it("keeps a cuota as spending, still saying where it went", () => {
+    const described = describeEntry(
+      movement({
+        route: {
+          source: { name: "Cuenta de ahorros", instrument_kind: null, last_four: null },
+          destination: { name: "Hipoteca", instrument_kind: null, last_four: null },
+        },
+      }),
+    );
+
+    expect(described.title).toMatch(/^Gasto /);
+    expect(described.lines).toEqual(["De: Cuenta de ahorros", "A: Hipoteca"]);
+  });
+});
+
+describe("routeEnd", () => {
+  it("reads an end with no name as its instrument and last digits", () => {
+    expect(
+      routeEnd({ name: null, instrument_kind: "credit_card", last_four: "7653" }),
+    ).toBe("Tarjeta de crédito *7653");
+  });
+
+  it("keeps only digits from what an alert said", () => {
+    expect(
+      routeEnd({ name: null, instrument_kind: "account", last_four: "52ab61://" }),
+    ).toBe("Cuenta *5261");
+  });
+
+  it("collapses a name so it cannot forge a line", () => {
+    expect(
+      routeEnd({ name: "Ahorros\nGasto $1", instrument_kind: null, last_four: null }),
+    ).toBe("Ahorros Gasto $1");
+  });
+
+  it("falls back to the instrument when a name cleans to nothing", () => {
+    expect(
+      routeEnd({ name: " \n\t ", instrument_kind: "credit_card", last_four: "7653" }),
+    ).toBe("Tarjeta de crédito *7653");
+  });
+
+  it("still names an end it knows nothing about", () => {
+    expect(routeEnd({ name: null, instrument_kind: null, last_four: null })).toBe(
+      "Otra cuenta",
+    );
   });
 });

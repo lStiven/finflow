@@ -28,6 +28,10 @@ from personal_finance.contexts.alerts.application.commands import (
 from personal_finance.contexts.alerts.application.handlers import (
     DeliverMovementAlertUseCase,
 )
+from personal_finance.contexts.alerts.application.messages import (
+    MovementRoute,
+    RouteEnd,
+)
 from personal_finance.contexts.alerts.application.ports import (
     TransportUnavailableError,
 )
@@ -334,6 +338,64 @@ def test_a_payload_from_before_movements_carried_their_id_is_still_announced() -
 
     [command] = use_case.commands
     assert command.alert.movement_id is None
+
+
+def test_a_transfer_side_carries_its_route_and_whether_it_speaks() -> None:
+    use_case = StubUseCase()
+
+    _worker(use_case).handle(
+        _body(
+            transfer=True,
+            quiet=False,
+            route={
+                "source": {
+                    "name": "Cuenta de ahorros",
+                    "instrument_kind": None,
+                    "last_four": None,
+                },
+                "destination": {
+                    "name": "  ",
+                    "instrument_kind": "credit_card",
+                    "last_four": "7653",
+                },
+            },
+        ),
+    )
+
+    [command] = use_case.commands
+    assert command.alert.transfer is True
+    assert command.alert.quiet is False
+    assert command.alert.route == MovementRoute(
+        source=RouteEnd(name="Cuenta de ahorros"),
+        # A blank name is no name: the instrument says it instead.
+        destination=RouteEnd(instrument_kind="credit_card", last_four="7653"),
+    )
+
+
+def test_a_route_that_cannot_be_read_costs_its_lines_never_the_alert() -> None:
+    use_case = StubUseCase()
+
+    outcome = _worker(use_case).handle(
+        _body(transfer=True, route={"source": "not an end", "destination": None}),
+    )
+
+    assert outcome is MessageOutcome.HANDLED
+    [command] = use_case.commands
+    assert command.alert.transfer is True
+    assert command.alert.route is None
+
+
+def test_a_payload_from_before_transfers_were_told_apart_is_an_ordinary_one() -> None:
+    use_case = StubUseCase()
+
+    _worker(use_case).handle(_body())
+
+    [command] = use_case.commands
+    assert (command.alert.transfer, command.alert.quiet, command.alert.route) == (
+        False,
+        False,
+        None,
+    )
 
 
 @pytest.mark.parametrize(

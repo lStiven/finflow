@@ -17,6 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowDownLeft,
+  ArrowLeftRight,
   ArrowUpRight,
   Bell,
   CalendarDays,
@@ -376,9 +377,11 @@ function ToneIcon({ tone }: { tone: Described["tone"] }) {
   const Icon =
     tone === "summary"
       ? CalendarDays
-      : tone === "incoming"
-        ? ArrowDownLeft
-        : ArrowUpRight;
+      : tone === "transfer"
+        ? ArrowLeftRight
+        : tone === "incoming"
+          ? ArrowDownLeft
+          : ArrowUpRight;
 
   return (
     <span
@@ -387,6 +390,7 @@ function ToneIcon({ tone }: { tone: Described["tone"] }) {
         "grid size-8 shrink-0 place-items-center rounded-xl border",
         tone === "outgoing" && "border-outgoing/30 bg-outgoing/10 text-outgoing",
         tone === "incoming" && "border-incoming/30 bg-incoming/10 text-incoming",
+        tone === "transfer" && "border-accent/30 bg-accent/10 text-accent",
         tone === "summary" && "border-violet/30 bg-violet/10 text-violet",
       )}
     >

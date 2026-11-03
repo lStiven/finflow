@@ -3251,6 +3251,9 @@ export interface components {
              * @enum {string}
              */
             origin: "bank_alert" | "manual" | "accrual" | "scheduled";
+            route: components["schemas"]["InboxRouteResponse"] | null;
+            /** Transfer */
+            transfer: boolean;
             /** Unassigned */
             unassigned: boolean;
         };
@@ -3281,6 +3284,20 @@ export interface components {
             spent: string;
             /** Typical */
             typical: string;
+        };
+        /** InboxRouteEndResponse */
+        InboxRouteEndResponse: {
+            /** Instrument Kind */
+            instrument_kind: string | null;
+            /** Last Four */
+            last_four: string | null;
+            /** Name */
+            name: string | null;
+        };
+        /** InboxRouteResponse */
+        InboxRouteResponse: {
+            destination: components["schemas"]["InboxRouteEndResponse"];
+            source: components["schemas"]["InboxRouteEndResponse"];
         };
         /**
          * InboxSendersPayload

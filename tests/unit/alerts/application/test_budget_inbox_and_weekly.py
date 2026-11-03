@@ -9,6 +9,7 @@ data must not stop anybody else's.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import dataclasses
 import datetime as dt
 from decimal import Decimal
 import uuid
@@ -38,6 +39,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.contexts.alerts.application.ports import (
@@ -409,6 +412,53 @@ def test_an_accrual_is_neither_announced_nor_kept() -> None:
 
     assert inbox.entries == {}
     assert recipients.users == []
+
+
+# --------------------------------------------------------------- transfers
+
+
+def test_the_quiet_side_of_a_transfer_is_neither_announced_nor_kept() -> None:
+    """Its other side speaks for both: told twice, its owner read a purchase
+    and an income that never happened."""
+    inbox = Inbox()
+    sender = Sender()
+
+    delivered = _deliverer(
+        channels=Channels(_channel()),
+        sender=sender,
+        inbox=inbox,
+    ).execute(
+        _command(
+            dataclasses.replace(
+                _alert(direction=MovementDirection.INCOMING),
+                transfer=True,
+                quiet=True,
+            ),
+        ),
+    )
+
+    assert delivered == 0
+    assert sender.alerts == []
+    assert inbox.entries == {}
+
+
+def test_the_speaking_side_of_a_transfer_is_told_once_with_its_route() -> None:
+    sender = Sender()
+    budgets = Budgets(SALIDAS)
+    route = MovementRoute(
+        source=RouteEnd(name="Cuenta de ahorros"),
+        destination=RouteEnd(name="Visa Platinum"),
+    )
+
+    _deliverer(channels=Channels(_channel()), sender=sender, budgets=budgets).execute(
+        _command(dataclasses.replace(_alert(), transfer=True, route=route)),
+    )
+
+    [sent] = sender.alerts
+    assert sent.route == route
+    # Not spending, so counted in no budget, and nobody is asked.
+    assert sent.budgets == ()
+    assert budgets.asked == []
 
 
 def test_somebody_alerted_becomes_a_recipient_of_the_weekly_summary() -> None:

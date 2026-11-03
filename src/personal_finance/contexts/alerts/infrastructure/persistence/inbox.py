@@ -38,6 +38,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.contexts.alerts.infrastructure.persistence.dynamodb import (
@@ -327,6 +329,23 @@ def _movement_facts(alert: MovementAlert) -> JsonObject:
             }
             for budget in alert.budgets
         ],
+        "transfer": alert.transfer,
+        "route": (
+            None
+            if alert.route is None
+            else {
+                "source": _end_facts(alert.route.source),
+                "destination": _end_facts(alert.route.destination),
+            }
+        ),
+    }
+
+
+def _end_facts(end: RouteEnd) -> JsonObject:
+    return {
+        "name": end.name,
+        "instrument_kind": end.instrument_kind,
+        "last_four": end.last_four,
     }
 
 
@@ -434,6 +453,42 @@ def _movement_from(facts: JsonObject) -> MovementAlert:
             )
             for budget in budgets
         ),
+        # Both absent on an entry written before transfers were told apart:
+        # it reads as the ordinary movement it was announced as.
+        transfer=bool(facts.get("transfer")),
+        route=_route_from(facts.get("route")),
+    )
+
+
+def _route_from(raw: object) -> MovementRoute | None:
+    if raw is None:
+        return None
+
+    if not isinstance(raw, dict):
+        raise TypeError("route")
+
+    route = cast("JsonObject", raw)
+
+    return MovementRoute(
+        source=_end_from(route["source"]),
+        destination=_end_from(route["destination"]),
+    )
+
+
+def _end_from(raw: object) -> RouteEnd:
+    if not isinstance(raw, dict):
+        raise TypeError("route end")
+
+    end = cast("JsonObject", raw)
+
+    def optional(key: str) -> str | None:
+        value = end.get(key)
+        return value if isinstance(value, str) else None
+
+    return RouteEnd(
+        name=optional("name"),
+        instrument_kind=optional("instrument_kind"),
+        last_four=optional("last_four"),
     )
 
 

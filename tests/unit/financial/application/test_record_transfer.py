@@ -23,6 +23,7 @@ from personal_finance.contexts.financial.application.handlers import (
 )
 from personal_finance.contexts.financial.application.ports import BalanceReversal
 from personal_finance.contexts.financial.domain.entities import Account, Transaction
+from personal_finance.contexts.financial.domain.events import TransactionRecorded
 from personal_finance.contexts.financial.domain.value_objects import (
     AccountFingerprint,
     AccountId,
@@ -260,6 +261,82 @@ def _declare_card(accounts: FakeAccounts, owes: str = "3540258") -> Account:
     accounts.add(account)
 
     return account
+
+
+# -------------------------------------------------- how the pair is announced
+
+
+def _announcements(publisher: RecordingPublisher) -> list[TransactionRecorded]:
+    return [
+        event for event in publisher.published if isinstance(event, TransactionRecorded)
+    ]
+
+
+def test_a_card_payment_is_announced_once_by_the_names_its_owner_gave() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare_savings(accounts)
+    _declare_card(accounts)
+
+    _use_case(accounts, ledger, publisher).execute(_command())
+
+    speaking = [event for event in _announcements(publisher) if not event.quiet]
+    assert len(speaking) == 1
+    route = speaking[0].route
+    assert route is not None
+    assert (route.source.name, route.destination.name) == ("Ahorros", "Tarjeta")
+
+
+def test_an_end_nobody_declared_is_left_to_its_instrument() -> None:
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare_card(accounts)
+
+    _use_case(accounts, ledger, publisher).execute(_command())
+
+    [speaking] = [event for event in _announcements(publisher) if not event.quiet]
+    assert speaking.route is not None
+    assert speaking.route.source.name is None
+    assert speaking.route.source.last_four == "5261"
+    assert speaking.route.destination.name == "Tarjeta"
+
+
+def test_a_closed_card_is_not_named_as_where_the_money_went() -> None:
+    """The placer leaves that side unassigned, so naming the card would say
+    the money reached an account it never touched."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare_savings(accounts)
+    card = _declare_card(accounts, owes="0")
+    card.close(PAID_AT)
+
+    _use_case(accounts, ledger, publisher).execute(_command())
+
+    [speaking] = [event for event in _announcements(publisher) if not event.quiet]
+    assert speaking.route is not None
+    assert speaking.route.destination.name is None
+    assert speaking.route.destination.last_four == "7653"
+
+
+def test_a_retry_whose_speaking_side_was_written_lets_the_other_speak() -> None:
+    """A partial failure may have lost the first side's announcement with it.
+    Told twice beats told never."""
+    accounts, ledger, publisher = FakeAccounts(), FakeLedger(), RecordingPublisher()
+    _declare_savings(accounts)
+    card = _declare_card(accounts)
+    use_case = _use_case(accounts, ledger, publisher)
+    first = use_case.execute(_command())
+    del ledger.rows[first.destination.transaction.id.value]
+    card.balance = card.balance.plus(PAID)
+    publisher.published.clear()
+
+    use_case.execute(_command())
+
+    [speaking] = _announcements(publisher)
+    assert speaking.quiet is False
+    assert speaking.direction is MovementDirection.INCOMING
+    assert speaking.route is not None
+    assert (speaking.route.source.name, speaking.route.destination.name) == (
+        "Ahorros",
+        "Tarjeta",
+    )
 
 
 # ------------------------------------------------------- both sides declared

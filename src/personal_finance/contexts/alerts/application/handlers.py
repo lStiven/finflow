@@ -388,6 +388,8 @@ class DeliverMovementAlertUseCase:
             self._budgets is None
             or alert.movement_id is None
             or alert.direction is not MovementDirection.OUTGOING
+            # Counted in no budget, because it is not spending.
+            or alert.transfer
         ):
             return alert
 

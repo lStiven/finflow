@@ -1114,6 +1114,29 @@ def transfer_counterparty(*, instrument_kind: str, last_four: str) -> str:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class RouteEnd(ValueObject):
+    """One end of where money went, as much of it as is known.
+
+    `name` is what the owner calls that end: an account's name, or what they
+    typed for a balance this app does not hold. Without one, the instrument
+    an alert named is all there is. No words here — whoever announces the
+    movement decides how an end reads.
+    """
+
+    name: str | None = None
+    instrument_kind: str | None = None
+    last_four: str | None = None
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class MovementRoute(ValueObject):
+    """Where money left and where it arrived, both ends of one movement."""
+
+    source: RouteEnd
+    destination: RouteEnd
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class TransferLeg(ValueObject):
     """What one movement knows about being half of a transfer.
 

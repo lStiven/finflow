@@ -58,6 +58,8 @@ from personal_finance.contexts.financial.domain.value_objects import (
     MovementDirection,
     MovementFingerprint,
     MovementId,
+    MovementRoute,
+    RouteEnd,
     StatedMovement,
     TransactionOrigin,
     TransactionStatus,
@@ -65,6 +67,7 @@ from personal_finance.contexts.financial.domain.value_objects import (
     TransferId,
     TransferLeg,
     TransferRole,
+    normalize_last_four,
     transfer_counterparty,
 )
 from personal_finance.shared.domain.entities import AggregateRoot
@@ -1031,8 +1034,17 @@ class Transaction(AggregateRoot[MovementId]):
                 counterpart_last_four=source_last_four,
             ),
         )
-        source._announce()
-        destination._announce()
+        # One movement of money, so one announcement; the caller names the
+        # ends once it knows which declared accounts hold them.
+        route = MovementRoute(
+            source=_instrument_end(source_instrument_kind, source_last_four),
+            destination=_instrument_end(
+                destination_instrument_kind,
+                destination_last_four,
+            ),
+        )
+        source._announce(route=route)
+        destination._announce(quiet=True, route=route)
 
         return source, destination
 
@@ -1084,6 +1096,7 @@ class Transaction(AggregateRoot[MovementId]):
         account_id: AccountId,
         bank: str = "",
         note: str | None = None,
+        account_name: str | None = None,
     ) -> Self:
         """The owner's side of money they moved between their own balances.
 
@@ -1149,7 +1162,16 @@ class Transaction(AggregateRoot[MovementId]):
                 role=role,
             ),
         )
-        transaction._announce()
+        # The owner's account at one end, and what they called the balance
+        # this app does not hold at the other.
+        own = RouteEnd(name=account_name)
+        other = RouteEnd(name=transaction.counterparty)
+        transaction._announce(
+            route=MovementRoute(
+                source=own if role is TransferRole.SOURCE else other,
+                destination=other if role is TransferRole.SOURCE else own,
+            ),
+        )
 
         return transaction
 
@@ -1265,8 +1287,14 @@ class Transaction(AggregateRoot[MovementId]):
             note=note,
             transfer=arriving_leg,
         )
-        leaving._announce()
-        arriving._announce()
+        # One payment, one announcement — a cuota too, whose leaving side is
+        # spending: it speaks, and says where the money went.
+        route = MovementRoute(
+            source=RouteEnd(name=source.name),
+            destination=RouteEnd(name=destination.name),
+        )
+        leaving._announce(route=route)
+        arriving._announce(quiet=True, route=route)
 
         return leaving, arriving
 
@@ -1780,7 +1808,9 @@ class Transaction(AggregateRoot[MovementId]):
                 basis=TransferBasis.RECLASSIFIED,
             ),
         )
-        written._announce()
+        # Quiet: this movement was announced when it arrived, and the side
+        # written here is the owner's own correction of it, made on screen.
+        written._announce(quiet=True)
 
         return written
 
@@ -1865,7 +1895,52 @@ class Transaction(AggregateRoot[MovementId]):
             occurred_at=self.occurred_at,
         )
 
-    def _announce(self) -> None:
+    def speak(self) -> None:
+        """Announce this quiet side after all.
+
+        For when the side meant to speak for the pair turned out to be
+        written already: whether its announcement went out is unknowable,
+        and a transfer told twice beats one nobody heard about.
+        """
+        self._pending_events[:] = [
+            replace(event, quiet=False)
+            if isinstance(event, TransactionRecorded) and event.movement_id == self.id
+            else event
+            for event in self._pending_events
+        ]
+
+    def name_route(self, *, source: str | None, destination: str | None) -> None:
+        """Put account names on the ends of a still-unpublished announcement.
+
+        An alert-derived pair is built from instruments, before anything
+        knows which declared accounts they belong to; the caller that finds
+        out names them here. An end given None keeps what it had.
+        """
+
+        def named(end: RouteEnd, name: str | None) -> RouteEnd:
+            return end if name is None else replace(end, name=name)
+
+        self._pending_events[:] = [
+            replace(
+                event,
+                route=MovementRoute(
+                    source=named(event.route.source, source),
+                    destination=named(event.route.destination, destination),
+                ),
+            )
+            if isinstance(event, TransactionRecorded)
+            and event.movement_id == self.id
+            and event.route is not None
+            else event
+            for event in self._pending_events
+        ]
+
+    def _announce(
+        self,
+        *,
+        quiet: bool = False,
+        route: MovementRoute | None = None,
+    ) -> None:
         self.record_event(
             TransactionRecorded(
                 movement_id=self.id,
@@ -1878,6 +1953,9 @@ class Transaction(AggregateRoot[MovementId]):
                 origin=self.origin,
                 account_fingerprint=self.account_fingerprint,
                 account_id=self.account_id,
+                transfer=self.transfer is not None,
+                quiet=quiet,
+                route=route,
             ),
         )
 
@@ -1896,6 +1974,21 @@ class Transaction(AggregateRoot[MovementId]):
             else event
             for event in self._pending_events
         ]
+
+
+def _instrument_end(instrument_kind: str, last_four: str) -> RouteEnd:
+    """An end known only by the instrument an alert named.
+
+    Trailing digits only, as the fingerprint keeps them: an email that printed
+    the whole account number must not have it travel the bus and sit in
+    somebody's inbox for a month.
+    """
+    try:
+        digits: str | None = normalize_last_four(last_four)
+    except ValueError:
+        digits = None
+
+    return RouteEnd(instrument_kind=instrument_kind.strip().lower(), last_four=digits)
 
 
 def account_kind_named(instrument_kind: str | None) -> AccountKind | None:

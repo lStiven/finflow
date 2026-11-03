@@ -23,6 +23,36 @@ const MAX_BUDGET_LINES = 3;
 
 const MAX_COUNTERPARTY = 64;
 
+/** An account's name, or the balance somebody typed: one short line. */
+const MAX_ROUTE_END = 40;
+
+/** How an end with no name reads — the table Telegram's message keeps. */
+const INSTRUMENTS: Record<string, string> = {
+  credit_card: "Tarjeta de crédito",
+  debit_card: "Tarjeta débito",
+  savings_account: "Cuenta de ahorros",
+  checking_account: "Cuenta corriente",
+  account: "Cuenta",
+};
+
+type RouteEnd = {
+  name: string | null;
+  instrument_kind: string | null;
+  last_four: string | null;
+};
+
+/** The owner's name for one end, or else the instrument an alert named. */
+export function routeEnd(end: RouteEnd): string {
+  const name = oneLine(end.name ?? "", MAX_ROUTE_END);
+  if (name) return name;
+
+  const digits = (end.last_four ?? "").replace(/\D/g, "").slice(-4);
+  if (!digits && end.instrument_kind === null) return "Otra cuenta";
+
+  const kind = INSTRUMENTS[(end.instrument_kind ?? "").toLowerCase()] ?? "Cuenta";
+  return digits ? `${kind} *${digits}` : kind;
+}
+
 const MONTHS = [
   "ene",
   "feb",
@@ -41,7 +71,7 @@ const MONTHS = [
 export type Described = {
   title: string;
   lines: string[];
-  tone: "outgoing" | "incoming" | "summary";
+  tone: "outgoing" | "incoming" | "transfer" | "summary";
   /** The movement to open, when the alert is about one. */
   movementId: string | null;
 };
@@ -99,9 +129,19 @@ export function describeEntry(entry: AlertsInboxEntry): Described {
   if (entry.kind === "movement" && entry.movement) {
     const movement = entry.movement;
     const outgoing = movement.direction === "outgoing";
-    const lines = [oneLine(movement.counterparty) || "Sin descripción"];
+    // On a transfer the counterparty is the other account, and «Gasto ·
+    // Visa Platinum» about paying that card read as a charge on it: the two
+    // ends say it instead.
+    const lines = movement.route
+      ? [
+          `De: ${routeEnd(movement.route.source)}`,
+          `A: ${routeEnd(movement.route.destination)}`,
+        ]
+      : [oneLine(movement.counterparty) || "Sin descripción"];
 
-    if (movement.unassigned) lines.push("Sin cuenta asignada");
+    // Not on a transfer: it would speak for one side only, and an end with
+    // no account already reads as its instrument.
+    if (movement.unassigned && !movement.transfer) lines.push("Sin cuenta asignada");
 
     for (const budget of movement.budgets.slice(0, MAX_BUDGET_LINES)) {
       lines.push(budgetLine(budget));
@@ -112,8 +152,19 @@ export function describeEntry(entry: AlertsInboxEntry): Described {
       lines.push(`y ${extra} ${extra === 1 ? "presupuesto" : "presupuestos"} más`);
     }
 
+    const amount = formatMoney(movement.amount, movement.currency);
+
+    if (movement.transfer) {
+      return {
+        title: `Traslado entre cuentas ${amount}`,
+        lines,
+        tone: "transfer",
+        movementId: movement.movement_id,
+      };
+    }
+
     return {
-      title: `${outgoing ? "Gasto" : "Ingreso"} ${formatMoney(movement.amount, movement.currency)}`,
+      title: `${outgoing ? "Gasto" : "Ingreso"} ${amount}`,
       lines,
       tone: outgoing ? "outgoing" : "incoming",
       movementId: movement.movement_id,

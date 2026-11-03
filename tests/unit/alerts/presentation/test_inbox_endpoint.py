@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import dataclasses
 import datetime as dt
 from decimal import Decimal
 import uuid
@@ -25,6 +26,8 @@ from personal_finance.contexts.alerts.application.messages import (
     MovementAlert,
     MovementDirection,
     MovementOrigin,
+    MovementRoute,
+    RouteEnd,
     WeeklySummary,
 )
 from personal_finance.contexts.alerts.presentation.http.inbox import (
@@ -177,6 +180,46 @@ def test_the_owners_alerts_come_back_newest_first_as_facts(client: TestClient) -
             "state": "over",
         },
     ]
+
+
+def test_a_transfer_comes_back_with_both_its_ends(
+    client: TestClient,
+    inbox: Inbox,
+) -> None:
+    entry = _movement(at=1_790_200_000)
+    assert entry.movement is not None
+    inbox.record(
+        dataclasses.replace(
+            entry,
+            movement=dataclasses.replace(
+                entry.movement,
+                transfer=True,
+                route=MovementRoute(
+                    source=RouteEnd(name="Cuenta de ahorros"),
+                    destination=RouteEnd(
+                        instrument_kind="credit_card",
+                        last_four="7653",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    newest = client.get("/alerts/inbox").json()["entries"][0]["movement"]
+
+    assert newest["transfer"] is True
+    assert newest["route"] == {
+        "source": {
+            "name": "Cuenta de ahorros",
+            "instrument_kind": None,
+            "last_four": None,
+        },
+        "destination": {
+            "name": None,
+            "instrument_kind": "credit_card",
+            "last_four": "7653",
+        },
+    }
 
 
 def test_nobody_elses_alerts_are_listed(client: TestClient, inbox: Inbox) -> None:
