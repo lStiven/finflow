@@ -14,6 +14,7 @@ import {
   bucketDrilldown,
   bucketsOf,
   cashflowSeries,
+  categoryMonthOf,
   describePrevious,
   drilldown,
   perDay,
@@ -435,5 +436,30 @@ describe("describePrevious", () => {
 
     expect(text).toContain("jul");
     expect(text).not.toContain("ago");
+  });
+});
+
+describe("categoryMonthOf", () => {
+  /** 2026-09-01 00:00 and 2026-10-01 00:00 in Bogotá. */
+  const SEPTEMBER = 1_788_238_800;
+  const OCTOBER = 1_790_830_800;
+
+  it("opens the month a finished range ends in", () => {
+    expect(categoryMonthOf({ from: SEPTEMBER, to: OCTOBER }, "2026-11")).toBe(
+      "2026-09",
+    );
+  });
+
+  it("opens a custom range on its last month, not its first", () => {
+    const midAugust = SEPTEMBER - 15 * 86_400;
+    expect(categoryMonthOf({ from: midAugust, to: OCTOBER }, "2026-11")).toBe(
+      "2026-09",
+    );
+  });
+
+  it("leaves the running month to that screen's own default", () => {
+    expect(
+      categoryMonthOf({ from: SEPTEMBER, to: OCTOBER }, "2026-09"),
+    ).toBeUndefined();
   });
 });

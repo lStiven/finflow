@@ -345,6 +345,14 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-03 — **Reportes cuenta la hora en curso, y la e2e ya no depende de
+  ella.** «Este mes» terminaba en la hora en punto hacia abajo y la semilla
+  ponía las compras a mediodía: del 1 al 3, antes de la 1 p. m., el mes salía
+  vacío. Y «Por categoría» abre el mes que Reportes mostraba (antes, el
+  actual, y su «Ver en Transacciones» también). Rama `fix/reportes-e2e`,
+  `just e2e` en verde. Sin commit.
+- 2026-11-01 — **Un traslado avisa una vez**, «Traslado entre cuentas» con
+  `De:`/`A:`, en Telegram y la campana.
 - 2026-11-01 — **Traslados «de dónde → a dónde».** Entre dos cuentas propias
   se escriben los dos lados y bajan los dos saldos; «Otro» con nombre
   opcional; a un crédito o hipoteca, gasto + abono. `detachable` en cada
@@ -357,13 +365,3 @@ AWS (ver Trabas).
   flujo y arquitectura en diagramas, contextos, qué hace hoy, CI y cifras;
   `docs/README.md` vuelve a ser el índice. Alerts en `overview.md`,
   `frontend/README.md` en español y al día, variables de Postman. Sin commit.
-- 2026-10-31 — **Strikes del modelo.** 10 correos que no son de un banco en
-  una hora pausan el modelo 1 día, 3, o para siempre; aviso por correo,
-  campana, Telegram y banner; `just model-access-prod <id> --reinstate`.
-  También: la guía del frontend cubre facturas, plan, presupuestos y
-  exportar. `just prepare` (2689) y `web-check` (592) en verde. Sin commit.
-- 2026-10-31 — **Documentación al día con lo desplegable.** El tope del modelo
-  explicado en `overview.md` y sus pasos en `deploy.md`, `ci.md` y
-  `running.md`. También: siete funciones (no seis), el resumen del lunes y la
-  campana en `alerts.md`, 43 endpoints que faltaban en la referencia del
-  frontend, y la tabla de los 18 parámetros del stack. Sin commit.

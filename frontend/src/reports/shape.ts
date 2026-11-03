@@ -19,7 +19,14 @@ import type {
 } from "@/api/queries";
 import type { ColumnBucket, ColumnSeries } from "@/components/charts/Columns";
 import { REMAINDER_FILL } from "@/components/charts/palette";
-import { DISPLAY_TIMEZONE, dayStringOf, formatDate, formatMonthKey } from "@/lib/dates";
+import {
+  currentMonthKey,
+  DISPLAY_TIMEZONE,
+  dayStringOf,
+  formatDate,
+  formatMonthKey,
+  monthKeyOf,
+} from "@/lib/dates";
 import { toChartValue } from "@/lib/money";
 import type { Range } from "@/lib/periods";
 
@@ -56,6 +63,23 @@ export function netOf(totals: SpendingTotals): number {
 
 export function elapsedDays({ from, to }: Range): number {
   return Math.max(1, Math.round((to - from) / DAY));
+}
+
+/**
+ * The month «Por categoría» opens on, for the range this screen is showing:
+ * the one its last instant falls in. Undefined for the running month, which
+ * is that screen's own default — so its address stays the plain one.
+ *
+ * Without it the link always opened the running month, and so did that
+ * screen's own link to Transacciones: somebody reading September landed on a
+ * list of November.
+ */
+export function categoryMonthOf(
+  range: Range,
+  thisMonth: string = currentMonthKey(),
+): string | undefined {
+  const month = monthKeyOf(range.to - 1);
+  return month === thisMonth ? undefined : month;
 }
 
 /**

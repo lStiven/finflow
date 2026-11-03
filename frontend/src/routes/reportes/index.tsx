@@ -60,6 +60,7 @@ import {
   bucketDrilldown,
   bucketsOf,
   cashflowSeries,
+  categoryMonthOf,
   describePrevious,
   drilldown,
   elapsedDays,
@@ -261,6 +262,7 @@ function ReportsScreen() {
           actions={
             <Link
               to="/reportes/categoria"
+              search={{ mes: categoryMonthOf(range) }}
               className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3.5 text-sm transition-colors hover:border-cyan/40 hover:text-text sm:min-h-9"
             >
               <Tags className="size-4 text-cyan" aria-hidden />
@@ -406,6 +408,7 @@ function ReportsScreen() {
               >
                 <Link
                   to="/reportes/categoria"
+                  search={{ mes: categoryMonthOf(range) }}
                   className="-my-2 inline-flex min-h-11 items-center gap-1.5 self-start text-cyan text-xs hover:underline"
                 >
                   Ver una categoría en detalle

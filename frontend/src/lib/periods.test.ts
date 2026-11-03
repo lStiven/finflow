@@ -7,6 +7,7 @@ const AUGUST_START = 1_785_560_400;
 const SEPTEMBER_START = 1_788_238_800;
 const JULY_START = 1_782_882_000;
 const DAY = 86_400;
+const HOUR = 3_600;
 
 function at<T>(millis: number, run: () => T): T {
   vi.useFakeTimers();
@@ -28,8 +29,21 @@ describe("resolveRange", () => {
     const range = at(NOW_MS, () => resolveRange("mes"));
 
     expect(range?.from).toBe(SEPTEMBER_START);
-    expect(range?.to).toBe(NOW_MS / 1000);
+    // The end of the running hour: stable for a query key, never past it.
+    expect(range?.to).toBe(NOW_MS / 1000 + HOUR);
     expect(range?.to).toBeLessThan(SEPTEMBER_START + 31 * DAY);
+  });
+
+  it("counts what was written earlier in the hour that is running", () => {
+    /*
+     * The end is exclusive. Rounded down to the hour, a purchase at 12:00 was
+     * outside «Este mes» until 13:00 — which is how a run at 12:57 found the
+     * month empty.
+     */
+    const writtenAt = NOW_MS / 1000;
+    const range = at(NOW_MS + 57 * 60 * 1000, () => resolveRange("mes"));
+
+    expect(range?.to).toBeGreaterThan(writtenAt);
   });
 
   it("compares a running month against the same stretch of the one before", () => {

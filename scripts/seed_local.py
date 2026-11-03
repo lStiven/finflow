@@ -1240,11 +1240,20 @@ def _spend_this_month(
 
     # Never past today: seeded on the 2nd, a purchase pinned to the 17th would
     # be money spent in the future — which the ledger accepts and no screen
-    # should ever have to explain.
+    # should ever have to explain. Nor past now: one that lands on today opens
+    # the day rather than taking its midday — seeded at 10:00 on the 3rd,
+    # every purchase of the month sat two hours ahead and Reportes read the
+    # month as empty. Midnight whatever the hour, so a second seed the same
+    # day finds the rows the first one wrote.
     today = datetime.now(tz=BOGOTA).day
 
     for spend in SPENDS_THIS_MONTH:
-        occurred_at = int(_months_back(min(spend.day, today), months=0).timestamp())
+        moment = _months_back(min(spend.day, today), months=0)
+
+        if spend.day >= today:
+            moment = moment.replace(hour=0, minute=0)
+
+        occurred_at = int(moment.timestamp())
 
         if (spend.counterparty, occurred_at) in already_there:
             continue
