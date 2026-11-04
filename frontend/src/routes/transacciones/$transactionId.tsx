@@ -133,7 +133,18 @@ function TransactionScreen() {
           )}
           {movement.merchant ? (
             <Row label="Comercio">
-              {movement.merchant.display_name}
+              {/* The merchant's own page, one tap away: its spending, its
+                  other names, its movements. Without this a confirmed one
+                  had to be looked up again from Comercios. */}
+              <Link
+                to="/comercios/$merchantId"
+                params={{ merchantId: movement.merchant.id }}
+                search={{ movement: movement.id }}
+                className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-right text-cyan transition-colors hover:text-text"
+              >
+                {movement.merchant.display_name}
+                <ArrowRight className="size-3.5" aria-hidden />
+              </Link>
               {movement.merchant.needs_review ? (
                 <span className="ml-2 rounded-full bg-warn/15 px-2 py-0.5 text-[0.625rem] text-warn">
                   En revisión
@@ -302,6 +313,7 @@ function ReviewMerchant({
         <Link
           to="/comercios/$merchantId"
           params={{ merchantId: merchant.id }}
+          search={{ movement: movementId }}
           className="-my-2 inline-flex min-h-11 items-center gap-1.5 text-cyan text-xs hover:underline"
         >
           Revisar el comercio
@@ -462,6 +474,7 @@ function CategoryChange({
           <Link
             to="/comercios/$merchantId"
             params={{ merchantId: merchant.id }}
+            search={{ movement: movementId }}
             className="text-cyan hover:underline"
           >
             Ver el comercio

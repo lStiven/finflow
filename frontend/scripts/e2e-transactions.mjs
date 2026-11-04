@@ -354,12 +354,14 @@ async function main() {
       await page.getByText("¿Está bien?", { exact: false }).isVisible(),
       true,
     );
+    // The merchant's page is told which movement it came from, so its way
+    // back returns here.
     check(
       "y lleva a su comercio para lo demás",
       await page
         .getByRole("link", { name: "Revisar el comercio" })
         .getAttribute("href"),
-      `/comercios/${merchantId}`,
+      `/comercios/${merchantId}?movement=${movementId}`,
     );
     await page.getByRole("button", { name: "Está bien", exact: true }).click();
     await page

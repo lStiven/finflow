@@ -55,10 +55,24 @@ import {
   newMerchantNameIssue,
 } from "@/merchants/edits";
 
+/**
+ * `movement` is the movement this merchant was opened from, so the way back
+ * leads to it rather than to the list it was never picked from.
+ */
+export type MerchantDetailSearch = {
+  movement?: string;
+};
+
 export const Route = createFileRoute("/comercios/$merchantId")({
   beforeLoad: ({ context }) => {
     if (!context.session) throw redirect({ to: "/login" });
   },
+  validateSearch: (raw: Record<string, unknown>): MerchantDetailSearch => ({
+    movement:
+      typeof raw.movement === "string" && raw.movement.trim() !== ""
+        ? raw.movement
+        : undefined,
+  }),
   loader: ({ context, params }) =>
     Promise.all([
       context.queryClient.query({
@@ -80,6 +94,7 @@ export const Route = createFileRoute("/comercios/$merchantId")({
 
 function MerchantScreen() {
   const { merchantId } = Route.useParams();
+  const { movement } = Route.useSearch();
   const navigate = useNavigate();
   const { data: merchant } = useSuspenseQuery(merchantQuery(merchantId));
   // The chip below holds a value and nothing else, so a category this person
@@ -101,10 +116,17 @@ function MerchantScreen() {
         <Button
           variant="quiet"
           className="self-start px-0 py-0 text-xs"
-          onClick={() => void navigate({ to: "/comercios" })}
+          onClick={() =>
+            void (movement
+              ? navigate({
+                  to: "/transacciones/$transactionId",
+                  params: { transactionId: movement },
+                })
+              : navigate({ to: "/comercios" }))
+          }
         >
           <ArrowLeft className="size-3.5" />
-          Comercios
+          {movement ? "Volver al movimiento" : "Comercios"}
         </Button>
 
         <header className="flex items-start gap-4">
