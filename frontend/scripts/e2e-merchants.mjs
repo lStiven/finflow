@@ -14,7 +14,9 @@
  * 3. **Choosing a category is the answer**: it saves at once, the API has
  *    the one chosen, correcting it also counts as reviewing it, and the
  *    screen says so above the list.
- * 4. Nothing scrolls sideways at 390 or 320 px, and nothing logs an error.
+ * 4. **A movement leads to its merchant**: its name on the movement opens the
+ *    merchant's page, and that page's way back returns to the movement.
+ * 5. Nothing scrolls sideways at 390 or 320 px, and nothing logs an error.
  *
  * Reviewing cannot be undone, so the seeded queue is left alone: this
  * registers its own person, approves their bank, and delivers two alerts
@@ -284,6 +286,32 @@ async function main() {
     check("«Está bien» lo confirma en la API", confirmed.needs_review, false);
     await okFirst.waitFor({ state: "detached", timeout: 10_000 }).catch(() => {});
     check("y sale de la cola en pantalla", await okFirst.count(), 0);
+
+    // ------------------------------- a movement leads to its merchant
+    const {
+      transactions: [bought],
+    } = await call(`/financial/transactions?merchant_id=${first.id}&limit=1`);
+    if (!bought) throw new Error(`«${first.display_name}» no tiene movimientos`);
+    await page.goto(`${WEB}/transacciones/${bought.id}`, { waitUntil: "networkidle" });
+    await page.getByRole("link", { name: first.display_name, exact: true }).click();
+    await page.waitForURL((url) => url.pathname === `/comercios/${first.id}`, {
+      timeout: 10_000,
+    });
+    check(
+      "el comercio del movimiento abre su pantalla",
+      new URL(page.url()).searchParams.get("movement"),
+      bought.id,
+    );
+    await page.getByRole("button", { name: "Volver al movimiento" }).click();
+    await page.waitForURL((url) => url.pathname.startsWith("/transacciones/"), {
+      timeout: 10_000,
+    });
+    check(
+      "y de ahí se vuelve al movimiento, no a la lista",
+      new URL(page.url()).pathname,
+      `/transacciones/${bought.id}`,
+    );
+    await page.goto(`${WEB}/comercios?review=true`, { waitUntil: "networkidle" });
 
     // ------------------------------- choosing the category is the answer
     const before = (await call(`/merchants/${second.id}`)).category;

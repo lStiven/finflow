@@ -345,12 +345,14 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
+  comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
+  al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.
 - 2026-11-03 — **Reportes cuenta la hora en curso, y la e2e ya no depende de
   ella.** «Este mes» terminaba en la hora en punto hacia abajo y la semilla
   ponía las compras a mediodía: del 1 al 3, antes de la 1 p. m., el mes salía
   vacío. Y «Por categoría» abre el mes que Reportes mostraba (antes, el
-  actual, y su «Ver en Transacciones» también). Rama `fix/reportes-e2e`,
-  `just e2e` en verde. Sin commit.
+  actual, y su «Ver en Transacciones» también). En `dev` (3e021a3).
 - 2026-11-01 — **Un traslado avisa una vez**, «Traslado entre cuentas» con
   `De:`/`A:`, en Telegram y la campana.
 - 2026-11-01 — **Traslados «de dónde → a dónde».** Entre dos cuentas propias
@@ -361,7 +363,3 @@ AWS (ver Trabas).
   `docs/assets/` (íconos embebidos, cada uno con su `.d2`); sin Mermaid en el
   README. Guías verificadas contra el código y reescritas con tablas; la
   referencia de endpoints cubre las 91 operaciones. Sin commit.
-- 2026-10-31 — **README en la raíz y guías al día.** Portada con problema,
-  flujo y arquitectura en diagramas, contextos, qué hace hoy, CI y cifras;
-  `docs/README.md` vuelve a ser el índice. Alerts en `overview.md`,
-  `frontend/README.md` en español y al día, variables de Postman. Sin commit.
