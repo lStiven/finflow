@@ -59,7 +59,7 @@ export function ErrorScreen({
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-ink text-sm transition-all hover:brightness-108"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent-solid px-5 py-3 font-semibold text-accent-ink text-sm transition-all hover:brightness-108"
             >
               <RotateCw className="size-4" aria-hidden />
               Intentar de nuevo
@@ -68,7 +68,7 @@ export function ErrorScreen({
             <button
               type="button"
               onClick={() => window.history.back()}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-5 py-3 font-semibold text-accent-ink text-sm transition-all hover:brightness-108"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-accent-solid px-5 py-3 font-semibold text-accent-ink text-sm transition-all hover:brightness-108"
             >
               <ArrowLeft className="size-4" aria-hidden />
               Volver

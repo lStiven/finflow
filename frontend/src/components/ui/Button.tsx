@@ -10,7 +10,7 @@ type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const variants = {
   primary:
-    "bg-accent text-accent-ink hover:brightness-108 active:brightness-95 font-semibold",
+    "bg-accent-solid text-accent-ink hover:brightness-108 active:brightness-95 font-semibold",
   ghost:
     "border border-line bg-surface text-text hover:bg-surface-raised active:bg-surface",
   quiet: "text-muted hover:text-text",

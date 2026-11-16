@@ -345,6 +345,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-16 — **Contraste de texto y cuenta demo para QA.** `faint` y `muted`
+  más claros, textos sueltos sobre el plasma en `text-text/85`, y un token
+  `accent-solid` para botones magenta (antes 3,7:1). Cuenta `qa.demo@finflow.local`
+  en producción (1 ahorros, 2 tarjetas, 27 movimientos, 4 facturas, 2 topes, mesada).
+  Frontend sin commit; la web de producción sigue sin republicar.
 - 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
   comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
   al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.

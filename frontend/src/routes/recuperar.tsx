@@ -114,8 +114,11 @@ function RecoverScreen() {
             )}
           </div>
 
-          <p className="mt-5 text-center text-faint text-xs">
-            <Link to="/login" className="hover:text-text">
+          <p className="mt-5 text-center text-text/85 text-xs">
+            <Link
+              to="/login"
+              className="underline-offset-4 hover:text-text hover:underline"
+            >
               Volver a iniciar sesión
             </Link>
           </p>

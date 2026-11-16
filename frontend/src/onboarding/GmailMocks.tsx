@@ -181,7 +181,7 @@ export function ResultsMock({ banks }: { banks: string[] }) {
       <div className="flex items-center justify-end gap-4 rounded-lg border border-line bg-surface-raised px-3 py-2">
         <span className="text-muted">Crear filtro</span>
         <Spot on>
-          <span className="rounded-md bg-accent px-3 py-1 font-semibold text-accent-ink">
+          <span className="rounded-md bg-accent-solid px-3 py-1 font-semibold text-accent-ink">
             Buscar
           </span>
         </Spot>
@@ -235,7 +235,7 @@ export function FilterActionsMock({
         ))}
         <Spot on={highlight === "forward"} className="w-full">
           <span className="flex w-full min-w-0 items-center gap-2 py-0.5">
-            <span className="grid size-3 shrink-0 place-items-center rounded-sm bg-accent text-accent-ink">
+            <span className="grid size-3 shrink-0 place-items-center rounded-sm bg-accent-solid text-accent-ink">
               <Check className="size-2.5" strokeWidth={3.5} />
             </span>
             <span className="shrink-0 text-text">Reenviarlo a:</span>
@@ -253,7 +253,7 @@ export function FilterActionsMock({
         ))}
         <div className="mt-1 flex justify-end">
           <Spot on={highlight === "create"}>
-            <span className="rounded-md bg-accent px-3 py-1 font-semibold text-accent-ink">
+            <span className="rounded-md bg-accent-solid px-3 py-1 font-semibold text-accent-ink">
               Crear filtro
             </span>
           </Spot>
@@ -312,7 +312,7 @@ export function AddAddressMock({ address }: { address: string }) {
         <div className="mt-3 flex items-center justify-end gap-3">
           <Bar width="18%" />
           <Spot on>
-            <span className="rounded-md bg-accent px-3 py-1 font-semibold text-accent-ink">
+            <span className="rounded-md bg-accent-solid px-3 py-1 font-semibold text-accent-ink">
               Siguiente
             </span>
           </Spot>

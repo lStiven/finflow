@@ -312,7 +312,7 @@ function TransactionsScreen() {
             <SlidersHorizontal className="size-3.5" />
             Filtros
             {active > 0 ? (
-              <span className="rounded-full bg-accent px-1.5 text-[0.625rem] text-accent-ink">
+              <span className="rounded-full bg-accent-solid px-1.5 text-[0.625rem] text-accent-ink">
                 {active}
               </span>
             ) : null}

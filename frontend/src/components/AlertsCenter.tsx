@@ -104,7 +104,7 @@ function AlertToast({
               toast.dismiss(toastId);
               onOpen();
             }}
-            className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-accent-ink text-xs transition-all hover:brightness-110"
+            className="rounded-lg bg-accent-solid px-3 py-1.5 font-semibold text-accent-ink text-xs transition-all hover:brightness-110"
           >
             Ver
           </button>
@@ -212,7 +212,7 @@ export function AlertsBell({ placement }: { placement: "rail" | "floating" }) {
       >
         <Bell className="size-[18px]" aria-hidden />
         {unread > 0 ? (
-          <span className="-top-0.5 -right-0.5 absolute grid h-[18px] min-w-[18px] place-items-center rounded-full bg-accent px-1 font-semibold text-[10px] text-accent-ink">
+          <span className="-top-0.5 -right-0.5 absolute grid h-[18px] min-w-[18px] place-items-center rounded-full bg-accent-solid px-1 font-semibold text-[10px] text-accent-ink">
             {unread > 9 ? "9+" : unread}
           </span>
         ) : null}

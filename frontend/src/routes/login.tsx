@@ -381,13 +381,16 @@ function LoginScreen() {
 
           {isRegister ? null : (
             <p className="mt-5 text-center text-xs">
-              <Link to="/recuperar" className="text-muted hover:text-text">
+              <Link
+                to="/recuperar"
+                className="text-text/85 underline-offset-4 hover:text-text hover:underline"
+              >
                 ¿Olvidaste tu contraseña?
               </Link>
             </p>
           )}
 
-          <p className="mt-5 text-center text-faint text-xs">
+          <p className="mt-5 text-center text-text/80 text-xs">
             Al continuar aceptas que Finflow lea los correos que le reenvíes, y solo
             esos.
           </p>
@@ -439,7 +442,7 @@ function MobileSteps({ mode }: { mode: Mode }) {
             </span>
             <span className="min-w-0">
               <span className="block font-medium text-sm">{title}</span>
-              <span className="mt-0.5 block text-muted text-sm leading-relaxed">
+              <span className="mt-0.5 block text-sm text-text/85 leading-relaxed">
                 {body}
               </span>
             </span>
@@ -489,7 +492,7 @@ function Panel({ mode }: { mode: Mode }) {
             </span>
             <span>
               <span className="block font-medium text-sm">{title}</span>
-              <span className="mt-0.5 block text-muted text-sm">{body}</span>
+              <span className="mt-0.5 block text-sm text-text/85">{body}</span>
             </span>
           </li>
         ))}
