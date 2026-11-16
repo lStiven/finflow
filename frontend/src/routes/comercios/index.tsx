@@ -758,7 +758,7 @@ function FirstRun() {
         </div>
         <Link
           to="/conectar"
-          className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-accent px-5 py-3.5 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
+          className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-accent-solid px-5 py-3.5 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
         >
           Conectar mi banco
         </Link>

@@ -798,7 +798,7 @@ function Done({ account, onAgain }: { account: Account; onAgain: () => void }) {
         <div className="mt-2 flex w-full flex-col gap-2.5">
           <Link
             to="/cuentas"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3.5 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-accent-solid px-4 py-3.5 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
           >
             Ver mis cuentas
           </Link>

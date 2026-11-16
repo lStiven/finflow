@@ -237,7 +237,7 @@ function Bar() {
         <div className="relative w-16 shrink-0">
           <Link
             to="/transacciones/nueva"
-            className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent text-accent-ink"
+            className="-translate-x-1/2 -top-5 absolute left-1/2 grid size-14 place-items-center rounded-full border-4 border-ink bg-accent-solid text-accent-ink"
           >
             <Plus className="size-6" />
             <span className="sr-only">Registrar un movimiento</span>

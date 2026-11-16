@@ -335,7 +335,7 @@ function FinancingGuide() {
           </div>
           <Link
             to="/cuentas/nueva"
-            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-accent-solid px-4 py-3 font-semibold text-accent-ink text-sm transition-all duration-150 hover:brightness-108"
           >
             <Plus className="size-4" />
             Crear una cuenta
