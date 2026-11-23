@@ -349,7 +349,8 @@ AWS (ver Trabas).
   más claros, textos sueltos sobre el plasma en `text-text/85`, y un token
   `accent-solid` para botones magenta (antes 3,7:1). Cuenta `qa.demo@finflow.local`
   en producción (1 ahorros, 2 tarjetas, 27 movimientos, 4 facturas, 2 topes, mesada).
-  Frontend sin commit; la web de producción sigue sin republicar.
+  Frontend en `5fbde41`; la web de producción sigue sin republicar. Nueva
+  `docs/requisitos.md` (dependencias, local y servidor), revisada con el revisor.
 - 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
   comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
   al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.

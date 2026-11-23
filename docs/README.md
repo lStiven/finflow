@@ -10,6 +10,7 @@ Aquí está cada guía con su trabajo. Busca la tuya y no leas las otras.
 | Documento | Para qué |
 | --- | --- |
 | [overview.md](overview.md) | Qué hace el sistema, cómo entra un correo, los cinco contextos y el tope del modelo. Léelo primero. |
+| [requisitos.md](requisitos.md) | Todo lo que hay que instalar y configurar, con versiones: herramientas, librerías, servicios externos y variables. Local y servidor. Léelo antes de arrancar. |
 | [running.md](running.md) | Levantar y operar: local con moto, y desde tu máquina contra development o producción. Qué hacer cuando algo falla. |
 | [deploy.md](deploy.md) | Dejarlo en AWS y publicar el frontend: permisos, secretos, aprovisionar, desplegar, comprobar. Los 18 parámetros del stack. |
 | [ci.md](ci.md) | El pipeline: qué corre en cada push, cómo vuelve solo a la versión anterior y lo que se crea una vez. |
@@ -26,6 +27,7 @@ Aquí está cada guía con su trabajo. Busca la tuya y no leas las otras.
 
 | Quiero… | Guía |
 | --- | --- |
+| **Saber qué instalar** y qué configurar | [requisitos.md](requisitos.md) |
 | **Levantar la app en local** (backend, workers y frontend) | [running.md](running.md#local) |
 | **Correrla contra AWS** desde mi máquina | [running.md](running.md) |
 | **Desplegar el backend** | [deploy.md](deploy.md#backend--development) |
@@ -40,7 +42,8 @@ Aquí está cada guía con su trabajo. Busca la tuya y no leas las otras.
 API y los workers (el lector del buzón queda apagado en local):
 
 ```bash
-cp .env.example .env       # y edita dos valores
+cp .env.example .env       # y rellena IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
+cp frontend/.env.example frontend/.env.development
 just up                    # API en http://localhost:8000
 just web                   # frontend en http://localhost:5173
 ```
