@@ -31,9 +31,12 @@ import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
   ArrowRight,
   CalendarClock,
+  CalendarOff,
   Check,
   ChevronDown,
+  CircleCheck,
   CircleSlash,
+  Clock,
   Ellipsis,
   Link2,
   Loader2,
@@ -52,7 +55,7 @@ import {
   Zap,
   ZapOff,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   accountsQuery,
   type Bill,
@@ -85,7 +88,6 @@ import {
 } from "@/bills/detected";
 import { lookOf } from "@/bills/look";
 import {
-  type BillState,
   billState,
   CADENCES,
   cadenceLabel,
@@ -96,6 +98,9 @@ import {
   formatAmountInput,
   isMatched,
   isSettled,
+  MONTH_ORDER,
+  type MonthStatus,
+  monthReading,
   parseAmount,
   paymentMode,
   pendingHint,
@@ -113,6 +118,7 @@ import { Select } from "@/components/ui/Select";
 import { storyOf } from "@/guides/stories";
 import { cn } from "@/lib/cn";
 import { formatIsoDayMonth, formatMonthKey, todayIso } from "@/lib/dates";
+import { differenceOf } from "@/lib/money";
 import { categoryLabel, UNCATEGORIZED } from "@/merchants/categories";
 
 /** The select hands back a string; this is where it becomes a cadence. */
@@ -157,39 +163,27 @@ function BillsScreen() {
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-7">
+      <div className="flex flex-col gap-10">
         <PageHeader
           title="Facturas"
           lead="Lo que se cobra solo y tu banco no avisa por correo."
           help={HELP}
+          actions={
+            declaring ? null : (
+              <Button onClick={() => setDeclaring(true)}>
+                <Plus className="size-4" />
+                Declarar una factura
+              </Button>
+            )
+          }
         />
+
+        {declaring ? <BillForm onClose={() => setDeclaring(false)} /> : null}
 
         <Forecast totals={view.totals} />
 
         {settlement.data ? <Settled view={settlement.data} /> : null}
         {settlement.data ? <Proposals view={settlement.data} /> : null}
-
-        {declaring ? (
-          <BillForm onClose={() => setDeclaring(false)} />
-        ) : (
-          <Button onClick={() => setDeclaring(true)} full>
-            <Plus className="size-4" />
-            Declarar una factura
-          </Button>
-        )}
-
-        {view.bills.length === 0 ? (
-          <Empty />
-        ) : (
-          <section className="flex flex-col gap-3">
-            <SectionTitle count={view.bills.length}>Declaradas</SectionTitle>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {view.bills.map((bill) => (
-                <BillCard key={bill.id} bill={bill} today={today} />
-              ))}
-            </div>
-          </section>
-        )}
 
         {view.occurrences.length > 0 ? (
           <MonthCharges
@@ -198,6 +192,28 @@ function BillsScreen() {
             today={today}
           />
         ) : null}
+
+        {view.bills.length === 0 ? (
+          <Empty />
+        ) : (
+          <Section
+            title="Declaradas"
+            count={view.bills.length}
+            lead="Todo lo que declaraste, y cómo va cada una este mes."
+          >
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {byMonth(view.bills, view.occurrences).map(({ bill, reading }) => (
+                <BillCard
+                  key={bill.id}
+                  bill={bill}
+                  today={today}
+                  status={reading.status}
+                  statusLabel={reading.label}
+                />
+              ))}
+            </div>
+          </Section>
+        )}
 
         <Detected today={today} />
       </div>
@@ -233,16 +249,89 @@ const HELP: PageHelp = {
   ],
 };
 
+/** Each card with what its month says, the ones that need somebody first. */
+function byMonth(bills: readonly Bill[], occurrences: readonly BillOccurrence[]) {
+  return bills
+    .map((bill) => ({ bill, reading: monthReading(bill, occurrences) }))
+    .sort((a, b) => MONTH_ORDER[a.reading.status] - MONTH_ORDER[b.reading.status]);
+}
+
 function SectionTitle({ children, count }: { children: string; count?: number }) {
   return (
-    <h2 className="flex items-center gap-2 font-medium text-sm">
+    <h2 className="flex items-center gap-2 font-semibold text-base">
       {children}
       {count === undefined ? null : (
-        <span className="rounded-full bg-surface-raised px-2 py-0.5 text-faint text-xs tabular-nums">
+        <span className="rounded-full bg-surface-raised px-2 py-0.5 font-normal text-faint text-xs tabular-nums">
           {count}
         </span>
       )}
     </h2>
+  );
+}
+
+/**
+ * One part of the screen: a name, one line saying what it holds, its content.
+ *
+ * The line is what the old screen was missing. «Declaradas» and «Cobros de
+ * noviembre» listed the same bills twice with nothing saying why, and the
+ * reader had to work out that one is the bills and the other is this month's
+ * charges of them.
+ */
+function Section({
+  title,
+  count,
+  lead,
+  aside,
+  children,
+}: {
+  title: string;
+  count?: number;
+  lead: ReactNode;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+        <div className="flex min-w-0 flex-col gap-1">
+          <SectionTitle count={count}>{title}</SectionTitle>
+          <p className="text-muted text-sm">{lead}</p>
+        </div>
+        {aside}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * The one vocabulary for "how is this going", shared by the cards and the
+ * rows: the same word, icon and colour mean the same thing everywhere on the
+ * screen, which is most of what makes it readable at a glance.
+ */
+const STATUS: Record<MonthStatus, { icon: typeof Check; tone: string }> = {
+  late: { icon: TriangleAlert, tone: "bg-outgoing/12 text-outgoing" },
+  pending: { icon: Clock, tone: "bg-warn/10 text-warn" },
+  done: { icon: CircleCheck, tone: "bg-incoming/12 text-incoming" },
+  skipped: { icon: CircleSlash, tone: "bg-surface-raised text-muted" },
+  none: { icon: CalendarOff, tone: "bg-surface-raised text-faint" },
+  frozen: { icon: Snowflake, tone: "bg-violet/12 text-violet" },
+  paused: { icon: Pause, tone: "bg-surface-raised text-faint" },
+};
+
+function StatusChip({ status, label }: { status: MonthStatus; label: string }) {
+  const { icon: Icon, tone } = STATUS[status];
+
+  return (
+    <span
+      className={cn(
+        "inline-flex w-fit shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 font-medium text-xs",
+        tone,
+      )}
+    >
+      <Icon className="size-3.5" aria-hidden />
+      {label}
+    </span>
   );
 }
 
@@ -273,10 +362,10 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
         >
           <div className="flex items-baseline justify-between gap-3">
             <figure className="flex min-w-0 flex-col gap-1">
-              <figcaption className="text-faint text-xs uppercase tracking-wider">
-                Este mes
+              <figcaption className="text-muted text-sm">
+                Lo que cuesta este mes
               </figcaption>
-              <Money amount={total.expected} currency={total.currency} size="md" />
+              <Money amount={total.expected} currency={total.currency} size="lg" />
             </figure>
             {totals.length > 1 ? (
               <span className="shrink-0 rounded-full bg-surface-raised px-2.5 py-1 text-faint text-xs">
@@ -287,10 +376,10 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
 
           <div
             role="presentation"
-            className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised"
+            className="h-2.5 w-full overflow-hidden rounded-full bg-surface-raised"
           >
             <div
-              className="h-full rounded-full bg-accent/70"
+              className="h-full rounded-full bg-incoming"
               style={{
                 width: `${Math.round(
                   settledShare(total.expected, total.outstanding) * 100,
@@ -299,17 +388,21 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
             />
           </div>
 
-          <figure className="flex items-baseline justify-between gap-3">
-            <figcaption className="text-faint text-xs uppercase tracking-wider">
-              Falta por pagar
-            </figcaption>
-            <Money
-              amount={total.outstanding}
-              currency={total.currency}
-              size="sm"
-              tone={total.outstanding === "0" ? "neutral" : "plain"}
-            />
-          </figure>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <PaidFigure total={total} />
+            <figure className="flex flex-col gap-1 sm:items-end sm:text-right">
+              <figcaption className="flex items-center gap-1.5 text-muted text-sm">
+                <Clock className="size-3.5 text-warn" aria-hidden />
+                Falta por pagar
+              </figcaption>
+              <Money
+                amount={total.outstanding}
+                currency={total.currency}
+                size="md"
+                tone={total.outstanding === "0" ? "neutral" : "plain"}
+              />
+            </figure>
+          </div>
         </div>
       ))}
 
@@ -317,6 +410,29 @@ function Forecast({ totals }: { totals: readonly BillTotal[] }) {
         La barra es lo ya pagado; el resto es previsión hasta que lo marques.
       </p>
     </Card>
+  );
+}
+
+/**
+ * The other half of the bar, said as a figure.
+ *
+ * The month showed what it costs and what is left, and asked the reader to
+ * subtract for the one thing they wanted to know. Exact, through `differenceOf`;
+ * not drawn at all if either figure cannot be read, rather than a wrong one.
+ */
+function PaidFigure({ total }: { total: BillTotal }) {
+  const paid = differenceOf(total.expected, total.outstanding);
+
+  if (paid === null) return <span />;
+
+  return (
+    <figure className="flex flex-col gap-1">
+      <figcaption className="flex items-center gap-1.5 text-muted text-sm">
+        <CircleCheck className="size-3.5 text-incoming" aria-hidden />
+        Ya pagado
+      </figcaption>
+      <Money amount={paid} currency={total.currency} size="md" tone="neutral" />
+    </figure>
   );
 }
 
@@ -328,7 +444,7 @@ function Empty() {
       </span>
       <p className="max-w-xs text-muted text-sm leading-relaxed">
         Todavía no has declarado ninguna. El gimnasio, el arriendo, el streaming: lo que
-        se cobra solo y no llega por correo.
+        se cobra solo y no llega por correo. Empieza con «Declarar una factura», arriba.
       </p>
     </Card>
   );
@@ -362,10 +478,9 @@ function Settled({ view }: { view: BillsSettlement }) {
             className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"
           >
             <span className="flex min-w-0 flex-col">
-              <span className="truncate text-sm">
-                {each.bill.name}
-                <span className="text-faint"> · </span>
-                <span className="text-muted">
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate text-sm">{each.bill.name}</span>
+                <span className="shrink-0 text-muted text-xs">
                   {formatIsoDayMonth(each.occurrence.due_on)}
                 </span>
               </span>
@@ -417,13 +532,17 @@ function Proposals({ view }: { view: BillsSettlement }) {
   if (view.proposals.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-3">
-      <SectionTitle count={view.proposals.length}>¿Es este el cobro?</SectionTitle>
-      <p className="text-muted text-xs">
-        Ya están en tu historial. Enlazar uno{" "}
-        <strong className="text-text">no escribe nada</strong>: dice que ese dinero es
-        el de la factura.
-      </p>
+    <Section
+      title="¿Es este el cobro?"
+      count={view.proposals.length}
+      lead={
+        <>
+          Ya están en tu historial. Enlazar uno{" "}
+          <strong className="text-text">no escribe nada</strong>: dice que ese dinero es
+          el de la factura.
+        </>
+      }
+    >
       <div className="flex flex-col gap-3">
         {view.proposals.map((proposal) => (
           <Proposal
@@ -432,7 +551,7 @@ function Proposals({ view }: { view: BillsSettlement }) {
           />
         ))}
       </div>
-    </section>
+    </Section>
   );
 }
 
@@ -450,10 +569,9 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
 
     return (
       <Card lift={false} className="flex flex-col gap-1">
-        <span className="text-sm">
-          {proposal.bill_name}
-          <span className="text-faint"> · </span>
-          <span className="text-muted">
+        <span className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-sm">{proposal.bill_name}</span>
+          <span className="text-muted text-xs">
             {formatIsoDayMonth(proposal.occurrence.due_on)}
           </span>
         </span>
@@ -466,14 +584,12 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
 
   return (
     <Card lift={false} className="flex flex-col gap-2">
-      <span className="text-sm">
-        {proposal.bill_name}
-        <span className="text-faint"> · </span>
-        <span className="text-muted">
-          {formatIsoDayMonth(proposal.occurrence.due_on)}
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <span className="text-sm">{proposal.bill_name}</span>
+        <span className="text-muted text-xs">
+          {formatIsoDayMonth(proposal.occurrence.due_on)},{" "}
+          {dueLabel(proposal.occurrence, today)}
         </span>
-        <span className="text-faint"> · </span>
-        <span className="text-muted">{dueLabel(proposal.occurrence, today)}</span>
       </span>
 
       <ul className="flex flex-col gap-1.5">
@@ -487,8 +603,8 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
                 {candidate.counterparty}
               </span>
               <span className="text-faint text-xs">
-                {formatIsoDayMonth(candidate.occurred_on)}
-                {candidate.quality === "certain" ? " · cuadra" : " · se parece"}
+                {formatIsoDayMonth(candidate.occurred_on)},{" "}
+                {candidate.quality === "certain" ? "cuadra" : "se parece"}
               </span>
             </span>
             <span className="flex items-center gap-2">
@@ -525,14 +641,6 @@ function Proposal({ proposal }: { proposal: ChargeProposal }) {
   );
 }
 
-/** What each state adds on top of the category's own look. */
-const STATE: Record<BillState, { label: string | null; chip: string }> = {
-  active: { label: null, chip: "text-faint" },
-  paused: { label: "En pausa", chip: "text-faint" },
-  frozen: { label: "Cuenta cerrada", chip: "text-violet" },
-  overdue: { label: "Ya pasó", chip: "text-outgoing" },
-};
-
 /**
  * One bill, as a tile.
  *
@@ -553,7 +661,18 @@ const STATE: Record<BillState, { label: string | null; chip: string }> = {
  * automatic charge sat one slip away from a bin. Every action and every
  * failure is said in the tile it happened in.
  */
-function BillCard({ bill, today }: { bill: Bill; today: string }) {
+function BillCard({
+  bill,
+  today,
+  status,
+  statusLabel,
+}: {
+  bill: Bill;
+  today: string;
+  /** How this month stands for it (`monthReading`), said before anything else. */
+  status: MonthStatus;
+  statusLabel: string;
+}) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [arming, setArming] = useState(false);
@@ -562,7 +681,6 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
   const forget = useForgetBill();
   const autopay = useSetBillAutopay();
   const state = billState(bill);
-  const note = STATE[state];
   const paused = bill.status === "paused";
   const look = lookOf({ category: bill.category, direction: bill.direction });
   const Icon = state === "frozen" ? Snowflake : look.icon;
@@ -581,9 +699,9 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
     <Card
       glow={paused ? "none" : look.glow}
       className={cn(
-        "group flex min-h-48 flex-col gap-3 p-4",
+        "group flex min-h-52 flex-col gap-3 p-4",
         paused && "opacity-70",
-        state === "overdue" && "border-outgoing/25",
+        status === "late" && "border-outgoing/40",
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -591,34 +709,22 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
           aria-hidden
           className={cn(
             "grid size-10 shrink-0 place-items-center rounded-xl",
-            "transition-transform duration-200 group-hover:scale-110",
+            "transition-transform duration-200 motion-safe:group-hover:scale-110",
             paused ? "bg-surface-raised text-faint" : look.badge,
           )}
         >
           <Icon className="size-[1.125rem]" />
         </span>
 
-        <span className="flex shrink-0 flex-col items-end gap-1">
-          {note.label ? (
-            <span
-              className={cn(
-                "rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem]",
-                note.chip,
-              )}
-            >
-              {note.label}
-            </span>
-          ) : null}
-          {bill.autopay ? (
-            <span
-              className="flex items-center gap-1 rounded-full bg-surface-raised px-2 py-0.5 text-[0.6875rem] text-accent"
-              title="Se cobra sola unos días después de cada fecha, si ningún movimiento tuyo cuadra con el cobro."
-            >
-              <Zap className="size-3" />
-              Se cobra sola
-            </span>
-          ) : null}
-        </span>
+        {bill.autopay ? (
+          <span
+            className="flex shrink-0 items-center gap-1 rounded-full bg-surface-raised px-2 py-0.5 text-accent text-xs"
+            title="Se cobra sola unos días después de cada fecha, si ningún movimiento tuyo cuadra con el cobro."
+          >
+            <Zap className="size-3" aria-hidden />
+            Se cobra sola
+          </span>
+        ) : null}
       </div>
 
       {menu ? (
@@ -749,7 +855,7 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
       ) : (
         <>
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="truncate font-medium text-sm" title={bill.name}>
+            <span className="truncate font-medium text-base" title={bill.name}>
               {bill.name}
             </span>
             <Money
@@ -761,14 +867,18 @@ function BillCard({ bill, today }: { bill: Bill; today: string }) {
             <span className="truncate text-faint text-xs">
               {cadenceLabel(bill.cadence)}
             </span>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <StatusChip status={status} label={statusLabel} />
             {bill.next_occurrence ? (
               <span
                 className={cn(
-                  "truncate text-xs",
+                  "text-xs",
                   state === "overdue" ? "text-outgoing" : "text-muted",
                 )}
               >
-                {formatIsoDayMonth(bill.next_occurrence.due_on)},{" "}
+                Próximo: {formatIsoDayMonth(bill.next_occurrence.due_on)},{" "}
                 {whenLabel(bill.next_occurrence.due_on, today)}
               </span>
             ) : (
@@ -1089,18 +1199,17 @@ function MonthCharges({
   const month = formatMonthKey(today.slice(0, 7)).split(" ")[0] ?? "este mes";
 
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <SectionTitle>{`Cobros de ${month}`}</SectionTitle>
-        <span className="text-faint text-xs">
-          {pending.length === 0
-            ? "Nada pendiente"
-            : `${pending.length} ${onlyOutgoing ? "por pagar" : "pendientes"}`}
-          {" · "}
+    <Section
+      title={onlyOutgoing ? `Por pagar en ${month}` : `Pendientes de ${month}`}
+      count={pending.length}
+      lead="Los cobros de este mes que nadie ha marcado todavía, por fecha."
+      aside={
+        <span className="flex items-center gap-1.5 text-muted text-sm">
+          <CircleCheck className="size-3.5 text-incoming" aria-hidden />
           {done.length} {onlyOutgoing ? "pagados" : "listos"}
         </span>
-      </div>
-
+      }
+    >
       {pending.length > 0 ? (
         <Card lift={false} className="flex flex-col gap-0 p-0">
           {pending.map((occurrence, index) => (
@@ -1115,7 +1224,8 @@ function MonthCharges({
           ))}
         </Card>
       ) : (
-        <Card lift={false}>
+        <Card lift={false} className="flex items-center gap-3">
+          <CircleCheck className="size-5 shrink-0 text-incoming" aria-hidden />
           <p className="text-muted text-sm">No queda nada por pagar este mes.</p>
         </Card>
       )}
@@ -1156,8 +1266,27 @@ function MonthCharges({
           ) : null}
         </div>
       ) : null}
-    </section>
+    </Section>
   );
+}
+
+/** One charge in the same words as the cards: the screen has one vocabulary. */
+function chargeReading(occurrence: BillOccurrence): {
+  status: MonthStatus;
+  label: string;
+} {
+  const incoming = occurrence.direction === "incoming";
+
+  switch (occurrence.state) {
+    case "paid":
+      return { status: "done", label: incoming ? "Recibida" : "Pagada" };
+    case "skipped":
+      return { status: "skipped", label: "Este mes no" };
+    case "overdue":
+      return { status: "late", label: incoming ? "Sin llegar" : "Atrasada" };
+    default:
+      return { status: "pending", label: incoming ? "Por llegar" : "Por pagar" };
+  }
 }
 
 /**
@@ -1194,6 +1323,7 @@ function Charge({
   const name = bill?.name ?? "Factura";
   const mode = bill ? paymentMode(bill, occurrence.due_on) : "manual";
   const late = occurrence.state === "overdue";
+  const reading = chargeReading(occurrence);
 
   const run = (
     action: "pay" | "unpay" | "skip" | "unskip" | "unlink",
@@ -1220,30 +1350,33 @@ function Charge({
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 px-4 py-3.5",
+        "flex flex-col gap-2 px-4 py-4 sm:px-5",
         divided && "border-line/60 border-t",
       )}
     >
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-          <span
-            className={cn(
-              "min-w-0 truncate text-sm",
-              settled ? "text-muted" : "text-text",
-              occurrence.state === "skipped" && "line-through",
-            )}
-          >
-            {name}
+      <div className="flex items-start justify-between gap-3">
+        <span className="flex min-w-0 flex-col gap-1.5">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span
+              className={cn(
+                "min-w-0 truncate font-medium text-base",
+                settled ? "text-muted" : "text-text",
+                occurrence.state === "skipped" && "line-through",
+              )}
+            >
+              {name}
+            </span>
+            <StatusChip status={reading.status} label={reading.label} />
           </span>
           <span
             className={cn(
-              "shrink-0 text-xs",
+              "text-sm",
               settled ? "text-faint" : late ? "text-outgoing" : "text-muted",
             )}
           >
             {settled
-              ? `${formatIsoDayMonth(occurrence.due_on)} · ${doneHow(occurrence, bill)}`
-              : dueLabel(occurrence, today)}
+              ? `${formatIsoDayMonth(occurrence.due_on)}, ${doneHow(occurrence, bill)}`
+              : `${formatIsoDayMonth(occurrence.due_on)}, ${dueLabel(occurrence, today)}`}
           </span>
         </span>
         <Money
@@ -1496,16 +1629,16 @@ function Detected({ today }: { today: string }) {
   if (found.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-3">
-      <SectionTitle count={found.filter((each) => each.bill_id === null).length}>
-        Parece que se repiten
-      </SectionTitle>
-
-      <p className="text-muted text-sm">
-        Vuelven cada cierto tiempo en tu historial.{" "}
-        <strong className="text-text">Nada se declara sin ti</strong>.
-      </p>
-
+    <Section
+      title="Parece que se repiten"
+      count={found.filter((each) => each.bill_id === null).length}
+      lead={
+        <>
+          Vuelven cada cierto tiempo en tu historial.{" "}
+          <strong className="text-text">Nada se declara sin ti</strong>.
+        </>
+      }
+    >
       <Card lift={false} className="flex flex-col gap-0 p-0">
         {found.map((series, index) => (
           <Suggestion
@@ -1516,7 +1649,7 @@ function Detected({ today }: { today: string }) {
           />
         ))}
       </Card>
-    </section>
+    </Section>
   );
 }
 
@@ -1582,10 +1715,12 @@ function Suggestion({
             {certainty.label}
           </span>
         </span>
-        <span className="text-faint text-xs leading-relaxed">
-          {cadenceLabel(series.cadence)} ·{" "}
-          {nextChargeLabel(series, formatIsoDayMonth(series.next_due_on), today)} ·{" "}
-          {evidenceLabel(series)}
+        <span className="flex flex-wrap gap-x-3 text-faint text-xs leading-relaxed">
+          <span>{cadenceLabel(series.cadence)}</span>
+          <span>
+            {nextChargeLabel(series, formatIsoDayMonth(series.next_due_on), today)}
+          </span>
+          <span>{evidenceLabel(series)}</span>
         </span>
       </div>
 

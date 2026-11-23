@@ -345,6 +345,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-23 — **Facturas rediseñada con Hallmark, a la espera de que Stiven
+  la acepte.** Cada tarjeta dice cómo va su mes («Pagada», «Atrasada», «Este mes
+  no»…, `monthReading` en `bills/schedule.ts`), con las mismas palabras en las
+  filas; lo pendiente va antes que las tarjetas y «Declarar» sube a la cabecera.
+  `web-check` y `e2e-bills` en verde. Sin commit.
 - 2026-11-23 — **Resumen rediseñado con Hallmark, a la espera de que Stiven
   lo acepte.** Patrimonio con su línea de 12 meses (`/financial/history`) que se
   recorre, ingresos contra gastos en importe y no en %, categorías en barra
@@ -364,5 +369,3 @@ AWS (ver Trabas).
   ponía las compras a mediodía: del 1 al 3, antes de la 1 p. m., el mes salía
   vacío. Y «Por categoría» abre el mes que Reportes mostraba (antes, el
   actual, y su «Ver en Transacciones» también). En `dev` (3e021a3).
-- 2026-11-01 — **Un traslado avisa una vez**, «Traslado entre cuentas» con
-  `De:`/`A:`, en Telegram y la campana.

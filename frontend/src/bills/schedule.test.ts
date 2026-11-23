@@ -14,6 +14,7 @@ import {
   initialOf,
   isMatched,
   isSettled,
+  monthReading,
   parseAmount,
   paymentMode,
   pendingHint,
@@ -371,5 +372,57 @@ describe("cómo se paga cada factura", () => {
       ),
     ).toBe("lo anotó Finflow");
     expect(doneHow(occurrence({ state: "skipped" }), bill())).toBe("este mes no");
+  });
+});
+
+describe("cómo va cada factura este mes", () => {
+  it("dice pagada cuando todos sus cobros del mes están pagados", () => {
+    expect(monthReading(bill(), [occurrence({ state: "paid" })])).toEqual({
+      status: "done",
+      label: "Pagada",
+    });
+  });
+
+  it("dice por pagar mientras nadie responde por el cobro", () => {
+    expect(monthReading(bill(), [occurrence()]).label).toBe("Por pagar");
+  });
+
+  it("pone el atraso por encima de lo demás", () => {
+    const reading = monthReading(bill(), [
+      occurrence({ state: "paid" }),
+      occurrence({ due_on: "2026-09-18", state: "overdue" }),
+    ]);
+
+    expect(reading).toEqual({ status: "late", label: "Atrasada" });
+  });
+
+  it("cuenta cuántos van cuando el mes tiene más de un cobro", () => {
+    const reading = monthReading(bill({ direction: "incoming" }), [
+      occurrence({ direction: "incoming", state: "paid" }),
+      occurrence({ direction: "incoming", due_on: "2026-09-18" }),
+    ]);
+
+    expect(reading).toEqual({ status: "pending", label: "1 de 2 recibidas" });
+  });
+
+  it("separa el mes saltado del mes pagado", () => {
+    expect(monthReading(bill(), [occurrence({ state: "skipped" })]).status).toBe(
+      "skipped",
+    );
+  });
+
+  it("no inventa un estado cuando la factura no cobra este mes", () => {
+    expect(monthReading(bill(), [occurrence({ bill_id: "otra" })])).toEqual({
+      status: "none",
+      label: "Sin cobro este mes",
+    });
+  });
+
+  it("una factura en pausa no reporta mes, aunque tenga un cobro atrasado", () => {
+    const reading = monthReading(bill({ status: "paused" }), [
+      occurrence({ state: "overdue" }),
+    ]);
+
+    expect(reading.status).toBe("paused");
   });
 });

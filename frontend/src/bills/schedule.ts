@@ -377,3 +377,71 @@ export function chargedAmount(occurrence: BillOccurrence): string {
 export function initialOf(name: string): string {
   return [...name.trim()][0]?.toUpperCase() ?? "·";
 }
+
+/** How a bill stands this month, in the order the screen sorts its cards. */
+export type MonthStatus =
+  | "late"
+  | "pending"
+  | "done"
+  | "skipped"
+  | "none"
+  | "paused"
+  | "frozen";
+
+export type MonthReading = { status: MonthStatus; label: string };
+
+/** Lower first: what still needs somebody goes to the top of the grid. */
+export const MONTH_ORDER: Record<MonthStatus, number> = {
+  late: 0,
+  pending: 1,
+  done: 2,
+  skipped: 3,
+  none: 4,
+  frozen: 5,
+  paused: 6,
+};
+
+/**
+ * What a bill's card says about this month, in one or two words.
+ *
+ * The card used to describe the bill — its amount, its cadence, its next date
+ * — and nothing about whether this month's charge was answered, which left the
+ * owner matching tiles against the list below to find out. This is that
+ * answer, read from the month's own charges, so the tile and the list can
+ * never disagree.
+ *
+ * Paused and frozen outrank everything, as in `billState`: a bill that is
+ * predicting nothing has no month to report on.
+ */
+export function monthReading(
+  bill: Bill,
+  occurrences: readonly BillOccurrence[],
+): MonthReading {
+  const incoming = bill.direction === "incoming";
+
+  if (bill.status === "paused") return { status: "paused", label: "En pausa" };
+  if (bill.frozen) return { status: "frozen", label: "Cuenta cerrada" };
+
+  const mine = occurrences.filter((each) => each.bill_id === bill.id);
+  if (mine.length === 0) return { status: "none", label: "Sin cobro este mes" };
+
+  if (mine.some((each) => each.state === "overdue")) {
+    return { status: "late", label: incoming ? "Sin llegar" : "Atrasada" };
+  }
+
+  const settled = mine.filter(isSettled);
+  if (settled.length === mine.length) {
+    return settled.every((each) => each.state === "skipped")
+      ? { status: "skipped", label: "Este mes no" }
+      : { status: "done", label: incoming ? "Recibida" : "Pagada" };
+  }
+
+  if (settled.length > 0) {
+    return {
+      status: "pending",
+      label: `${settled.length} de ${mine.length} ${incoming ? "recibidas" : "pagadas"}`,
+    };
+  }
+
+  return { status: "pending", label: incoming ? "Por llegar" : "Por pagar" };
+}
