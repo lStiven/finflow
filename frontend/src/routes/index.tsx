@@ -47,6 +47,7 @@ import {
   describeBalance,
   differenceOf,
   formatMoney,
+  percentChange,
   signOf,
   toChartValue,
 } from "@/lib/money";
@@ -213,13 +214,21 @@ function Dashboard() {
 
         <div className="grid gap-4 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
           <NetWorthPanel primary={primary} currency={currency} />
-          <MonthFlow
-            thisMonth={thisMonth}
-            lastMonth={lastMonth}
-            previousName={previousName}
-            monthSearch={monthSearch}
-            currency={currency}
-          />
+          {/* Both halves of this column are "how the month is going": what came
+              in and went out, then how that stands against the caps. Together
+              they also fill the height the net worth sets, instead of leaving
+              a hole under the shorter card. The caps draw nothing until one is
+              declared. */}
+          <div className="flex flex-col gap-4">
+            <MonthFlow
+              thisMonth={thisMonth}
+              lastMonth={lastMonth}
+              previousName={previousName}
+              monthSearch={monthSearch}
+              currency={currency}
+            />
+            <BudgetSummaryCard />
+          </div>
         </div>
 
         {otherCurrencies.length > 0 ? (
@@ -252,10 +261,8 @@ function Dashboard() {
             get used said otherwise: what this screen is first asked is the four
             plain facts (cuánto tengo, cuánto entró, cuánto gasté, cuánto debo)
             and a card that starts as a form asking for two figures nobody has
-            typed yet is a wall in front of them. Both of these draw nothing
-            until something is declared. */}
+            typed yet is a wall in front of them. */}
         <AllowanceCard />
-        <BudgetSummaryCard />
       </div>
     </AppShell>
   );
@@ -512,6 +519,7 @@ function SinceClose({
         tone={up ? "positive" : "negative"}
         className="text-sm"
       />
+      <Percent previous={then.total} current={now} up={up} />
       <span className="text-faint">
         {up ? "más" : "menos"} que al cierre de {name}
       </span>
@@ -541,7 +549,7 @@ function MonthFlow({
   const net = differenceOf(incoming, outgoing);
 
   return (
-    <Card lift={false} className="flex flex-col gap-4 lg:self-start">
+    <Card lift={false} className="flex flex-col gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <h2 className="font-medium">Este mes</h2>
         {lastMonth ? (
@@ -665,12 +673,43 @@ function FlowRow({
 }
 
 /**
- * Change against the same figure at this point last month, as an amount.
+ * The same change as a share of where it started, beside the amount.
  *
- * An amount rather than a percentage: against a quiet month a percentage
- * runs to «750%», which alarms more than it informs. Silent when there is no
- * previous month to compare against, which is the normal state for a new
- * account.
+ * Second to the amount, never instead of it: against a quiet month a
+ * percentage alone runs to «750%», which alarms more than it informs. From
+ * zero there is no percentage at all, so nothing is drawn and the amount
+ * stands alone. `percentChange` goes through floats, which is fine for a
+ * rounded badge nobody reconciles.
+ */
+function Percent({
+  previous,
+  current,
+  up,
+}: {
+  previous: string;
+  current: string;
+  /** Whether the change is the good kind: it takes the amount's colour. */
+  up: boolean;
+}) {
+  const change = percentChange(previous, current);
+  if (change === null) return null;
+
+  const size = Math.abs(change);
+  const text = new Intl.NumberFormat("es-CO", {
+    style: "percent",
+    maximumFractionDigits: size < 10 ? 1 : 0,
+  }).format(size / 100);
+  return (
+    <span className={cn("tabular", up ? "text-incoming" : "text-outgoing")}>
+      ({text})
+    </span>
+  );
+}
+
+/**
+ * Change against the same figure at this point last month: the amount first,
+ * then its percentage. Silent when there is no previous month to compare
+ * against, which is the normal state for a new account.
  */
 function Change({
   previous,
@@ -688,7 +727,12 @@ function Change({
   if (change === null) return null;
 
   const sign = signOf(change);
-  if (sign === 0) return <span className="text-faint text-xs">Igual</span>;
+  // Nothing both months says nothing; the header already names the month.
+  if (sign === 0) {
+    return signOf(current) === 0 ? null : (
+      <span className="text-faint text-xs">Sin cambio</span>
+    );
+  }
 
   const good = lowerIsBetter ? sign < 0 : sign > 0;
   return (
@@ -703,6 +747,7 @@ function Change({
         tone={good ? "positive" : "negative"}
         className="text-xs"
       />
+      <Percent previous={previous} current={current} up={good} />
       <span className="text-faint">{sign > 0 ? "más" : "menos"}</span>
     </span>
   );
