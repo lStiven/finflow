@@ -365,6 +365,27 @@ export const summaryQuery = (groupBy: SummaryGrouping, filters: SummaryOptions =
       ),
   });
 
+export type History = components["schemas"]["FinancialHistoryResponse"];
+export type MonthlyPoint = components["schemas"]["MonthlyPointResponse"];
+
+/**
+ * Net worth and totals month by month, replayed from the ledger.
+ *
+ * Under `summary` like the allowance and the budgets: a movement that changes
+ * the month's totals changes every balance after it, so whatever already
+ * invalidates the totals takes this along by prefix.
+ */
+export const historyQuery = (months = 12) =>
+  queryOptions({
+    queryKey: [...queryKeys.summary, "history", months],
+    queryFn: () =>
+      unwrap(
+        api.GET("/financial/history", {
+          params: { query: { months, timezone: DISPLAY_TIMEZONE } },
+        }),
+      ),
+  });
+
 export type TrendOptions = Omit<TransactionFilters, "limit" | "offset" | "sort"> & {
   interval?: TrendInterval;
   dimension?: TrendDimension;

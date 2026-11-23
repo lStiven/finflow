@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeBalance,
+  differenceOf,
   formatMoney,
   formatSignedMoney,
   isZero,
@@ -133,5 +134,23 @@ describe("describeBalance", () => {
       tone: "negative",
       label: "Sin saldo inicial",
     });
+  });
+});
+
+describe("differenceOf", () => {
+  it("subtracts exactly, where floats would not", () => {
+    expect(differenceOf("0.3", "0.1")).toBe("0.2");
+    expect(differenceOf("900000.00", "105882.35")).toBe("794117.65");
+  });
+
+  it("keeps the sign and drops trailing zeros", () => {
+    expect(differenceOf("100", "250.50")).toBe("-150.5");
+    expect(differenceOf("-20", "-20")).toBe("0");
+    expect(differenceOf("+5", ".25")).toBe("4.75");
+  });
+
+  it("refuses what it cannot read rather than guessing", () => {
+    expect(differenceOf("abc", "1")).toBeNull();
+    expect(differenceOf("1.0000001", "1")).toBeNull();
   });
 });

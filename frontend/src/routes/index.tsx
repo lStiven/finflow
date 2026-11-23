@@ -1,22 +1,24 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import {
-  ArrowDownLeft,
   ArrowLeftRight,
-  ArrowUpRight,
   CalendarDays,
   Landmark,
   MousePointerClick,
-  TrendingDown,
   Wallet,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import {
   type Account,
   accountsQuery,
   allowanceQuery,
   budgetsQuery,
   categoriesQuery,
+  historyQuery,
+  type MonthlyPoint,
+  type NetWorth,
   planQuery,
+  queryKeys,
   type SpendingTotals,
   type SummaryGroup,
   summaryQuery,
@@ -26,12 +28,12 @@ import {
 import { BudgetSummaryCard } from "@/budgets/BudgetSummaryCard";
 import { AppShell } from "@/components/AppShell";
 import { CountUpMoney } from "@/components/CountUpMoney";
-import { Donut, type Slice } from "@/components/charts/Donut";
-import { Sparkline } from "@/components/charts/Sparkline";
+import { CategoryBar, type Part } from "@/components/charts/CategoryBar";
+import { NetWorthChart, type NetWorthPoint } from "@/components/charts/NetWorthChart";
 import { Money } from "@/components/Money";
 import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
-import { StatTile } from "@/components/ui/StatTile";
+import { cn } from "@/lib/cn";
 import {
   currentMonthKey,
   formatDate,
@@ -41,18 +43,36 @@ import {
   nowInSeconds,
   previousMonthKey,
 } from "@/lib/dates";
-import { describeBalance, percentChange, signOf, toChartValue } from "@/lib/money";
+import {
+  describeBalance,
+  differenceOf,
+  formatMoney,
+  signOf,
+  toChartValue,
+} from "@/lib/money";
 import { transferTitle } from "@/lib/transfers";
 import { categoryGroupLabel, categoryLabels } from "@/merchants/categories";
 import { EmptyDiagnosis } from "@/onboarding/EmptyDiagnosis";
 import { AllowanceCard } from "@/plan/AllowanceCard";
 
 const RECENT_LIMIT = 6;
-/** Beyond this the ring stops being readable; the rest becomes one wedge. */
+/** Beyond this the bar stops being readable; the rest becomes one part. */
 const MAX_SLICES = 5;
 const HOUR = 3600;
-/** Enough months for a shape, few enough that each one is still a segment. */
-const TREND_MONTHS = 8;
+/** A year: long enough for a shape, short enough that every month is a step. */
+const HISTORY_MONTHS = 12;
+/**
+ * How often the recent movements are asked for again while the screen is
+ * open. Movements arrive on their own, from the bank's email; this is what
+ * lets one appear here without a reload. React Query skips it while the tab
+ * is in the background.
+ */
+const LIVE_MS = 60_000;
+/** How long a movement that just arrived stays lit. */
+const FRESH_MS = 2400;
+
+const QUIET_LINK =
+  "inline-flex min-h-9 items-center rounded-lg border border-line px-3 text-muted text-xs transition-colors duration-150 hover:border-accent/40 hover:text-text";
 
 /**
  * The window the screen reports on, resolved per render.
@@ -63,7 +83,7 @@ const TREND_MONTHS = 8;
  *
  * `previousToDate` covers the same *distance* into the previous month rather
  * than the whole of it. Comparing a month that is three days old against a
- * complete one is what would show spending "down 100%" every 1st — true
+ * complete one is what would show spending "down 100%" every 1st: true
  * arithmetic, and a useless thing to tell somebody.
  */
 function currentPeriod() {
@@ -106,7 +126,6 @@ export const Route = createFileRoute("/")({
         ...summaryQuery("month", previousToDate ?? {}),
         staleTime: "static",
       }),
-      context.queryClient.query({ ...summaryQuery("month"), staleTime: "static" }),
       context.queryClient.query(categoriesQuery),
       context.queryClient.query({
         ...summaryQuery("category", range ?? {}),
@@ -116,12 +135,17 @@ export const Route = createFileRoute("/")({
         ...transactionsQuery({ limit: RECENT_LIMIT }),
         staleTime: "static",
       }),
+      // The line under the net worth is the one figure here that is optional:
+      // without it the panel still says what you have and what you owe. So a
+      // failure costs the line, never the dashboard.
+      context.queryClient
+        .query({ ...historyQuery(HISTORY_MONTHS), staleTime: "static" })
+        .catch(() => null),
       // Both answer 404 until somebody declares their month, which the query
-      // turns into `null` — so this loads a real answer either way and the
+      // turns into `null`, so this loads a real answer either way and the
       // card never flashes in after the rest of the screen has painted.
-      // Caught, because the card is the one piece of this screen that is
-      // optional: anything else failing is a broken dashboard, and this
-      // failing should only be a missing card.
+      // Caught, because the card is optional: anything else failing is a
+      // broken dashboard, and this failing should only be a missing card.
       context.queryClient.query(planQuery).catch(() => null),
       context.queryClient.query(allowanceQuery).catch(() => null),
       // Caught for the same reason, though this one never 404s: the budgets
@@ -141,17 +165,19 @@ function Dashboard() {
   const { data: byPrevious } = useSuspenseQuery(
     summaryQuery("month", previousToDate ?? {}),
   );
-  const { data: everyMonth } = useSuspenseQuery(summaryQuery("month"));
   const { data: byCategory } = useSuspenseQuery(summaryQuery("category", range ?? {}));
-  const { data: recent } = useSuspenseQuery(transactionsQuery({ limit: RECENT_LIMIT }));
+  const { data: recent } = useSuspenseQuery({
+    ...transactionsQuery({ limit: RECENT_LIMIT }),
+    refetchInterval: LIVE_MS,
+  });
   // A summary bucket is keyed by the category value and labelled with it, so
   // one this person wrote needs their own name for it from somewhere.
   const { data: categories } = useSuspenseQuery(categoriesQuery);
 
   /*
    * One currency drives the screen. Net worth is reported per currency and is
-   * never summed across them — there is no exchange rate anywhere in the
-   * backend — so the tiles commit to the first one and say so when there are
+   * never summed across them (there is no exchange rate anywhere in the
+   * backend), so the panels commit to the first one and say so when there are
    * others, rather than adding COP to USD behind a single total.
    */
   const primary = accounts.net_worth[0] ?? null;
@@ -160,11 +186,10 @@ function Dashboard() {
 
   const thisMonth = totalsFor(byMonth.groups, month, currency);
   const lastMonth = totalsFor(byPrevious.groups, previousMonthKey(month), currency);
-  const trend = monthlyTrend(everyMonth.groups, currency);
   /*
-   * The tiles report month to date, so the list they open has to be bounded
+   * The figures report month to date, so the list they open has to be bounded
    * the same way. Without this, tapping "Gastos" shows every expense ever
-   * recorded under a figure that covers this month — two different numbers,
+   * recorded under a figure that covers this month: two different numbers,
    * one of them apparently wrong.
    */
   const days = monthDayRange(month);
@@ -174,7 +199,7 @@ function Dashboard() {
 
   return (
     <AppShell>
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-4 sm:gap-5">
         <PageHeader
           title="Resumen"
           lead="Cuánto tienes, cuánto entró, cuánto gastaste y cuánto debes."
@@ -186,125 +211,19 @@ function Dashboard() {
           }
         />
 
-        <section
-          aria-label="Cifras del mes"
-          className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
-        >
-          <StatTile
-            label="Patrimonio"
-            icon={Wallet}
-            hue="violet"
-            to={{ to: "/cuentas" }}
-          >
-            {primary ? (
-              <CountUpMoney
-                amount={primary.total}
-                currency={primary.currency}
-                size="md"
-                tone={signOf(primary.total) < 0 ? "negative" : "plain"}
-              />
-            ) : (
-              <span className="text-faint text-numeral-sm tabular">—</span>
-            )}
-          </StatTile>
-
-          <StatTile
-            label="Ingresos"
-            icon={ArrowDownLeft}
-            hue="green"
-            to={{
-              to: "/transacciones",
-              search: {
-                ...monthSearch,
-                direction: "incoming",
-                // The tile reports income, and `/summary` leaves transfers
-                // out of that. The list has to be asked for the same thing or
-                // the rows behind the figure would not add up to it.
-                transfers: "exclude",
-              },
-            }}
-            caption={
-              <Delta
-                previous={lastMonth?.incoming}
-                current={thisMonth?.incoming ?? "0"}
-                against={previousName}
-              />
-            }
-            chart={
-              trend.length > 1 ? (
-                <Sparkline
-                  values={trend.map((entry) => entry.incoming)}
-                  className="text-incoming"
-                />
-              ) : null
-            }
-          >
-            <CountUpMoney
-              amount={thisMonth?.incoming ?? "0"}
-              currency={currency}
-              size="md"
-              tone="positive"
-            />
-          </StatTile>
-
-          <StatTile
-            label="Gastos"
-            icon={ArrowUpRight}
-            hue="accent"
-            to={{
-              to: "/transacciones",
-              search: {
-                ...monthSearch,
-                direction: "outgoing",
-                transfers: "exclude",
-              },
-            }}
-            caption={
-              <Delta
-                previous={lastMonth?.outgoing}
-                current={thisMonth?.outgoing ?? "0"}
-                against={previousName}
-                lowerIsBetter
-              />
-            }
-            chart={
-              trend.length > 1 ? (
-                <Sparkline
-                  values={trend.map((entry) => entry.outgoing)}
-                  className="text-accent"
-                />
-              ) : null
-            }
-          >
-            <CountUpMoney
-              amount={thisMonth?.outgoing ?? "0"}
-              currency={currency}
-              size="md"
-              tone="negative"
-            />
-          </StatTile>
-
-          <StatTile
-            label="Deuda"
-            icon={TrendingDown}
-            hue="cyan"
-            to={{ to: "/cuentas" }}
-          >
-            {primary ? (
-              <CountUpMoney
-                amount={primary.liabilities}
-                currency={primary.currency}
-                size="md"
-                tone={signOf(primary.liabilities) > 0 ? "negative" : "neutral"}
-              />
-            ) : (
-              <span className="text-faint text-numeral-sm tabular">—</span>
-            )}
-          </StatTile>
-        </section>
+        <div className="grid gap-4 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+          <NetWorthPanel primary={primary} currency={currency} />
+          <MonthFlow
+            thisMonth={thisMonth}
+            lastMonth={lastMonth}
+            previousName={previousName}
+            monthSearch={monthSearch}
+            currency={currency}
+          />
+        </div>
 
         {otherCurrencies.length > 0 ? (
-          <p className="-mt-5 text-faint text-xs">
+          <p className="text-faint text-xs">
             Además tienes saldos en{" "}
             {otherCurrencies.map((entry) => entry.currency).join(", ")}. Se muestran
             aparte porque no existe una tasa de cambio para sumarlos.
@@ -319,8 +238,6 @@ function Dashboard() {
           <CategoryCard
             groups={byCategory.groups}
             currency={currency}
-            previousOutgoing={lastMonth?.outgoing}
-            previousName={previousName}
             monthSearch={monthSearch}
             labels={categoryLabels(categories.categories)}
           />
@@ -333,7 +250,7 @@ function Dashboard() {
             This card used to sit above the tiles, on the argument that «qué me
             queda» is the question somebody opens this screen with. Watching it
             get used said otherwise: what this screen is first asked is the four
-            plain facts — cuánto tengo, cuánto entró, cuánto gasté, cuánto debo —
+            plain facts (cuánto tengo, cuánto entró, cuánto gasté, cuánto debo)
             and a card that starts as a form asking for two figures nobody has
             typed yet is a wall in front of them. Both of these draw nothing
             until something is declared. */}
@@ -370,7 +287,7 @@ const HELP: PageHelp = {
     {
       icon: MousePointerClick,
       title: "Toca para ver",
-      body: "Cada cifra, categoría y cuenta abre lo que la forma.",
+      body: "Cada cifra, categoría y cuenta abre lo que la forma. La línea del patrimonio se recorre mes a mes.",
     },
   ],
 };
@@ -386,61 +303,407 @@ function totalsFor(
 }
 
 /**
- * The last few months, oldest first, for the shapes behind the KPIs.
+ * Where a counting figure should start: zero on arrival, then whatever it
+ * showed before each time the amount changes, so a movement that lands moves
+ * the figure from the old balance to the new one instead of from nothing.
  *
- * Through floats like every other chart value — these drive a polyline, and
- * no figure beside them comes from here.
+ * State rather than a ref, adjusted during render, which is React's own
+ * pattern for a value derived from the previous props.
  */
-function monthlyTrend(
-  groups: SummaryGroup[],
-  currency: string,
-): { incoming: number; outgoing: number }[] {
-  return groups
-    .filter((group) => group.key !== null)
-    .sort((left, right) => String(left.key).localeCompare(String(right.key)))
-    .slice(-TREND_MONTHS)
-    .map((group) => {
-      const totals = group.totals.find((total) => total.currency === currency);
+function useStartingPoint(amount: string): string {
+  const [seen, setSeen] = useState({ amount, from: "0" });
+  if (seen.amount !== amount) {
+    setSeen({ amount, from: seen.amount });
+    return seen.amount;
+  }
+  return seen.from;
+}
+
+/** A decimal string without its sign: the arrow beside it already says which way. */
+function magnitude(amount: string): string {
+  return amount.replace(/^[+-]/, "");
+}
+
+/** «nov», from «2026-11». */
+function shortMonth(key: string): string {
+  const [year, month] = key.split("-").map(Number);
+  if (!year || !month) return key;
+  return new Date(Date.UTC(year, month - 1, 15))
+    .toLocaleDateString("es-CO", { month: "short", timeZone: "UTC" })
+    .replace(".", "");
+}
+
+type NetWorthMonth = {
+  key: string;
+  total: string;
+  assets: string;
+  liabilities: string;
+  point: NetWorthPoint;
+};
+
+/** One currency's net worth per month, oldest first. A month with none is zero. */
+function netWorthMonths(months: MonthlyPoint[], currency: string): NetWorthMonth[] {
+  return [...months]
+    .sort((left, right) => left.key.localeCompare(right.key))
+    .map((month) => {
+      const worth = month.net_worth.find((entry) => entry.currency === currency);
+      const total = worth?.total ?? "0";
+      const value = Number(total);
       return {
-        incoming: totals ? toChartValue(totals.incoming) : 0,
-        outgoing: totals ? toChartValue(totals.outgoing) : 0,
+        key: month.key,
+        total,
+        assets: worth?.assets ?? "0",
+        liabilities: worth?.liabilities ?? "0",
+        point: {
+          key: month.key,
+          label: shortMonth(month.key),
+          value: Number.isFinite(value) ? value : 0,
+          partial: month.partial,
+        },
       };
     });
 }
 
 /**
- * Change against the same figure last month.
- *
- * Silent when there is no previous month to compare against, which is the
- * normal state for a new account — a badge reading "+100%" against nothing
- * is the kind of number people quote back at you.
+ * The screen's one object: what you are worth, and the line of how you got
+ * here. Running a finger along the line puts that month's figure in the big
+ * number, and letting go brings back today's.
  */
-function Delta({
+function NetWorthPanel({
+  primary,
+  currency,
+}: {
+  primary: NetWorth | null;
+  currency: string;
+}) {
+  const { data: history } = useQuery(historyQuery(HISTORY_MONTHS));
+  const months = history ? netWorthMonths(history.months, currency) : [];
+  const [scrub, setScrub] = useState<number | null>(null);
+  const from = useStartingPoint(primary?.total ?? "0");
+
+  const latest = months.length - 1;
+  const selected = scrub ?? latest;
+  const past = scrub !== null && scrub !== latest ? months[scrub] : undefined;
+  const closed = months[latest]?.point.partial ? months[latest - 1] : months[latest];
+
+  const shownAssets = past?.assets ?? primary?.assets;
+  const shownLiabilities = past?.liabilities ?? primary?.liabilities;
+
+  return (
+    <Card lift={false} className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-medium">Patrimonio</h2>
+        <Link
+          to="/cuentas"
+          aria-label="Patrimonio: ver tus cuentas"
+          className={QUIET_LINK}
+        >
+          Ver cuentas
+        </Link>
+      </div>
+
+      <div className="flex min-w-0 flex-col gap-1">
+        {primary ? (
+          <>
+            {/* Kept mounted while scrubbing, so letting go does not count the
+                balance up from zero all over again. */}
+            <span className={past ? "hidden" : undefined}>
+              <CountUpMoney
+                amount={primary.total}
+                from={from}
+                currency={primary.currency}
+                size="lg"
+                tone={signOf(primary.total) < 0 ? "negative" : "plain"}
+              />
+            </span>
+            {past ? (
+              <Money
+                amount={past.total}
+                currency={currency}
+                size="lg"
+                tone={signOf(past.total) < 0 ? "negative" : "plain"}
+              />
+            ) : null}
+          </>
+        ) : (
+          <p className="text-faint text-numeral-sm">Sin cuentas</p>
+        )}
+
+        <p className="min-h-5 text-sm">
+          {past ? (
+            <span className="text-muted">Al cierre de {formatMonthKey(past.key)}</span>
+          ) : primary && closed ? (
+            <SinceClose now={primary.total} then={closed} currency={currency} />
+          ) : null}
+        </p>
+      </div>
+
+      {months.length > 1 ? (
+        <div className="flex flex-col gap-1.5">
+          <NetWorthChart
+            points={months.map((month) => month.point)}
+            selected={selected}
+            onSelect={setScrub}
+            currency={currency}
+            describe={(index) => {
+              const month = months[index];
+              if (!month) return "";
+              return `${formatMonthKey(month.key)}${month.point.partial ? ", en curso" : ""}: ${formatMoney(month.total, currency)}`;
+            }}
+          />
+          <p className="text-faint text-xs">Recorre la línea para ver cada mes.</p>
+        </div>
+      ) : null}
+
+      {primary && shownAssets !== undefined && shownLiabilities !== undefined ? (
+        <div className="mt-auto grid grid-cols-2 gap-3 border-line border-t pt-3">
+          <Link
+            to="/cuentas"
+            className="-mx-2 flex min-w-0 flex-col rounded-lg px-2 py-1.5 transition-colors duration-150 hover:bg-surface-raised"
+          >
+            <span className="text-faint text-xs">Tienes</span>
+            <Money amount={shownAssets} currency={currency} size="sm" />
+          </Link>
+          <Link
+            to="/cuentas"
+            className="-mx-2 flex min-w-0 flex-col rounded-lg px-2 py-1.5 text-right transition-colors duration-150 hover:bg-surface-raised"
+          >
+            <span className="text-faint text-xs">Deuda</span>
+            <Money
+              amount={shownLiabilities}
+              currency={currency}
+              size="sm"
+              tone={signOf(shownLiabilities) > 0 ? "negative" : "neutral"}
+            />
+          </Link>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+/** Today's net worth against the last month that has finished. */
+function SinceClose({
+  now,
+  then,
+  currency,
+}: {
+  now: string;
+  then: NetWorthMonth;
+  currency: string;
+}) {
+  const change = differenceOf(now, then.total);
+  const name = formatMonthKey(then.key).split(" ")[0] ?? "";
+  if (change === null) return null;
+
+  const sign = signOf(change);
+  if (sign === 0) {
+    return <span className="text-faint">Igual que al cierre de {name}</span>;
+  }
+
+  const up = sign > 0;
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1">
+      <span className={up ? "text-incoming" : "text-outgoing"}>{up ? "↑" : "↓"}</span>
+      <Money
+        amount={magnitude(change)}
+        currency={currency}
+        size="sm"
+        tone={up ? "positive" : "negative"}
+        className="text-sm"
+      />
+      <span className="text-faint">
+        {up ? "más" : "menos"} que al cierre de {name}
+      </span>
+    </span>
+  );
+}
+
+/** What came in and what went out this month, on one scale so they compare. */
+function MonthFlow({
+  thisMonth,
+  lastMonth,
+  previousName,
+  monthSearch,
+  currency,
+}: {
+  thisMonth: SpendingTotals | null;
+  lastMonth: SpendingTotals | null;
+  previousName: string;
+  /** The month's bounds as Transacciones reads them. */
+  monthSearch: { from?: string; to?: string };
+  currency: string;
+}) {
+  const incoming = thisMonth?.incoming ?? "0";
+  const outgoing = thisMonth?.outgoing ?? "0";
+  // One scale for both bars, so their lengths are the comparison.
+  const scale = Math.max(toChartValue(incoming), toChartValue(outgoing));
+  const net = differenceOf(incoming, outgoing);
+
+  return (
+    <Card lift={false} className="flex flex-col gap-4 lg:self-start">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h2 className="font-medium">Este mes</h2>
+        {lastMonth ? (
+          <p className="text-faint text-xs">Frente a {previousName} a esta altura</p>
+        ) : null}
+      </div>
+
+      <FlowRow
+        label="Ingresos"
+        amount={incoming}
+        previous={lastMonth?.incoming}
+        scale={scale}
+        currency={currency}
+        fill="bg-incoming"
+        tone="positive"
+        // `/summary` leaves transfers out of income, so the list behind the
+        // figure has to be asked for the same thing or its rows would not add
+        // up to it.
+        search={{ ...monthSearch, direction: "incoming", transfers: "exclude" }}
+      />
+      <FlowRow
+        label="Gastos"
+        amount={outgoing}
+        previous={lastMonth?.outgoing}
+        scale={scale}
+        currency={currency}
+        fill="bg-accent"
+        tone="negative"
+        lowerIsBetter
+        search={{ ...monthSearch, direction: "outgoing", transfers: "exclude" }}
+      />
+
+      {net !== null ? (
+        <p className="mt-auto border-line border-t pt-3 text-muted text-sm">
+          {signOf(net) === 0 ? (
+            "Entró lo mismo que gastaste."
+          ) : (
+            <>
+              {signOf(net) > 0 ? "Entraron " : "Gastaste "}
+              <Money
+                amount={magnitude(net)}
+                currency={currency}
+                size="sm"
+                className="text-sm"
+              />
+              {signOf(net) > 0 ? " más de lo que gastaste." : " más de lo que entró."}
+            </>
+          )}
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
+function FlowRow({
+  label,
+  amount,
+  previous,
+  scale,
+  currency,
+  fill,
+  tone,
+  lowerIsBetter = false,
+  search,
+}: {
+  label: string;
+  amount: string;
+  previous?: string;
+  scale: number;
+  currency: string;
+  /** A `bg-*` class for the bar. */
+  fill: string;
+  tone: "positive" | "negative";
+  lowerIsBetter?: boolean;
+  search: Record<string, unknown>;
+}) {
+  const from = useStartingPoint(amount);
+  const ratio = scale > 0 ? toChartValue(amount) / scale : 0;
+
+  return (
+    <Link
+      to="/transacciones"
+      search={search}
+      className="-mx-2 flex flex-col gap-2 rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised"
+    >
+      <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-col">
+          <span className="text-muted text-sm">{label}</span>
+          <CountUpMoney
+            amount={amount}
+            from={from}
+            currency={currency}
+            size="md"
+            tone={tone}
+          />
+        </div>
+        <Change
+          previous={previous}
+          current={amount}
+          currency={currency}
+          lowerIsBetter={lowerIsBetter}
+        />
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-surface-raised">
+        <div
+          className={cn(
+            "h-full origin-left rounded-full transition-transform duration-500 ease-out motion-reduce:transition-none",
+            fill,
+          )}
+          style={{
+            transform: `scaleX(${ratio})`,
+            // `backwards`, not `both`: once grown, the bar must be free to
+            // ease to a new length when a movement lands.
+            animation:
+              "grow-from-zero 800ms cubic-bezier(0.16, 1, 0.3, 1) 150ms backwards",
+          }}
+        />
+      </div>
+    </Link>
+  );
+}
+
+/**
+ * Change against the same figure at this point last month, as an amount.
+ *
+ * An amount rather than a percentage: against a quiet month a percentage
+ * runs to «750%», which alarms more than it informs. Silent when there is no
+ * previous month to compare against, which is the normal state for a new
+ * account.
+ */
+function Change({
   previous,
   current,
-  against,
-  lowerIsBetter = false,
+  currency,
+  lowerIsBetter,
 }: {
   previous?: string;
   current: string;
-  /** The previous month's name: what this compares with, said in words. */
-  against: string;
-  lowerIsBetter?: boolean;
+  currency: string;
+  lowerIsBetter: boolean;
 }) {
   if (previous === undefined) return null;
-  const change = percentChange(previous, current);
+  const change = differenceOf(current, previous);
   if (change === null) return null;
 
-  const rounded = Math.round(change * 10) / 10;
-  if (rounded === 0) {
-    return <span className="text-faint">Igual que {against} a esta altura</span>;
-  }
+  const sign = signOf(change);
+  if (sign === 0) return <span className="text-faint text-xs">Igual</span>;
 
-  const good = lowerIsBetter ? rounded < 0 : rounded > 0;
+  const good = lowerIsBetter ? sign < 0 : sign > 0;
   return (
-    <span className={good ? "text-incoming" : "text-outgoing"}>
-      {rounded > 0 ? "↑" : "↓"} {Math.abs(rounded)}%{" "}
-      <span className="text-faint">vs {against} a esta altura</span>
+    <span className="inline-flex items-baseline gap-1 whitespace-nowrap text-xs">
+      <span className={good ? "text-incoming" : "text-outgoing"}>
+        {sign > 0 ? "↑" : "↓"}
+      </span>
+      <Money
+        amount={magnitude(change)}
+        currency={currency}
+        size="sm"
+        tone={good ? "positive" : "negative"}
+        className="text-xs"
+      />
+      <span className="text-faint">{sign > 0 ? "más" : "menos"}</span>
     </span>
   );
 }
@@ -448,102 +711,64 @@ function Delta({
 function CategoryCard({
   groups,
   currency,
-  previousOutgoing,
-  previousName,
   monthSearch,
   labels,
 }: {
   groups: SummaryGroup[];
   currency: string;
-  previousOutgoing?: string;
-  previousName: string;
   /** The month's bounds as Transacciones reads them. */
   monthSearch: { from?: string; to?: string };
   labels: Record<string, string>;
 }) {
-  const slices = toSlices(groups, currency, labels);
-  const biggest = slices.parts[0];
-  const change =
-    previousOutgoing === undefined
-      ? null
-      : percentChange(previousOutgoing, slices.total);
+  const parts = toParts(groups, currency, labels);
 
   return (
-    <Card glow="violet" lift={false} className="flex flex-col gap-5">
+    <Card lift={false} className="flex flex-col gap-5">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-medium">Gastos por categoría</h2>
-        <Link
-          to="/reportes"
-          className="rounded-lg border border-line px-2.5 py-1 text-muted text-xs transition-colors duration-150 hover:border-accent/40 hover:text-text"
-        >
+        <Link to="/reportes" className={QUIET_LINK}>
           Ver en Reportes
         </Link>
       </div>
 
-      {slices.parts.length === 0 ? (
+      {parts.length === 0 ? (
         <Empty>Todavía no hay gastos registrados este mes.</Empty>
       ) : (
-        <>
-          <Donut
-            slices={slices.parts}
-            total={slices.total}
-            currency={currency}
-            // The same spending the ring counts: this month, out, no transfers.
-            // The folded tail and the no-merchant bucket have no one category.
-            movementsOf={(slice) =>
-              slice.key.startsWith("__")
-                ? null
-                : {
-                    ...monthSearch,
-                    category: slice.key,
-                    direction: "outgoing",
-                    transfers: "exclude",
-                  }
-            }
-          />
-
-          {/* The two readings the ring cannot make on its own. */}
-          <dl className="mt-auto grid grid-cols-2 gap-3 border-line/70 border-t pt-4 text-sm">
-            <div className="min-w-0">
-              <dt className="text-faint text-xs">Mayor gasto</dt>
-              <dd className="mt-0.5 truncate">{biggest?.label ?? "—"}</dd>
-            </div>
-            <div className="min-w-0 text-right">
-              <dt className="text-faint text-xs">Frente a {previousName}</dt>
-              <dd className="mt-0.5">
-                {change === null ? (
-                  <span className="text-faint">Sin comparación</span>
-                ) : (
-                  <span className={change > 0 ? "text-outgoing" : "text-incoming"}>
-                    {Math.abs(Math.round(change))}% {change > 0 ? "más" : "menos"} que{" "}
-                    {previousName} a esta altura
-                  </span>
-                )}
-              </dd>
-            </div>
-          </dl>
-        </>
+        <CategoryBar
+          parts={parts}
+          currency={currency}
+          // The same spending the bar counts: this month, out, no transfers.
+          // The folded tail and the no-merchant bucket have no one category.
+          movementsOf={(part) =>
+            part.key.startsWith("__")
+              ? null
+              : {
+                  ...monthSearch,
+                  category: part.key,
+                  direction: "outgoing",
+                  transfers: "exclude",
+                }
+          }
+        />
       )}
     </Card>
   );
 }
 
-type Slices = { parts: Slice[]; total: string };
-
 /**
  * Outgoing money per category, largest first, with the tail folded into one
- * wedge. Shares are computed from the same rounded floats the ring is drawn
- * with, so the legend's percentages always add up to what is on screen.
+ * part. Shares are computed from the same rounded floats the bar is drawn
+ * with, so the percentages always add up to what is on screen.
  */
-function toSlices(
+function toParts(
   groups: SummaryGroup[],
   currency: string,
   labels: Record<string, string>,
-): Slices {
+): Part[] {
   const rows = groups
     .map((group) => {
       const totals = group.totals.find((total) => total.currency === currency);
-      // `key` is nullable in the contract — the bucket for movements with no
+      // `key` is nullable in the contract: the bucket for movements with no
       // merchant behind them, and the one whose label the API sends in
       // English. `categoryGroupLabel` is what answers both.
       return totals
@@ -560,11 +785,11 @@ function toSlices(
     .sort((left, right) => right.value - left.value);
 
   const sum = rows.reduce((running, row) => running + row.value, 0);
-  if (sum === 0) return { parts: [], total: "0" };
+  if (sum === 0) return [];
 
   const head = rows.slice(0, MAX_SLICES);
   const tail = rows.slice(MAX_SLICES);
-  const parts: Slice[] = head.map((row) => ({
+  const parts: Part[] = head.map((row) => ({
     key: row.key,
     label: row.label,
     amount: row.amount,
@@ -577,24 +802,61 @@ function toSlices(
       key: "__rest__",
       label: `Otros (${tail.length})`,
       // Summed through floats like the shares, and shown as a chart figure
-      // rather than a ledger one — every exact amount is a category away.
+      // rather than a ledger one: every exact amount is a category away.
       amount: rest.toFixed(2),
       share: rest / sum,
     });
   }
 
-  return { parts, total: sum.toFixed(2) };
+  return parts;
+}
+
+/**
+ * The ids that just arrived, for as long as they stay lit.
+ *
+ * The first list is what was already there, so nothing lights on arrival.
+ * After that, an id the screen has never seen is a movement the bank just
+ * sent: it lights, and the figures above it are asked for again so the
+ * balance moves to include it.
+ */
+function useArrivals(transactions: Transaction[]): ReadonlySet<string> {
+  const queryClient = useQueryClient();
+  const known = useRef<Set<string> | null>(null);
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
+  const signature = transactions.map((movement) => movement.id).join(",");
+
+  useEffect(() => {
+    const ids = signature ? signature.split(",") : [];
+    const before = known.current;
+    known.current = new Set([...(before ?? []), ...ids]);
+    if (before === null) return;
+
+    const arrived = ids.filter((id) => !before.has(id));
+    if (arrived.length === 0) return;
+
+    setFresh(new Set(arrived));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.summary });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.accounts });
+    const timer = window.setTimeout(() => setFresh(new Set()), FRESH_MS);
+    return () => window.clearTimeout(timer);
+  }, [signature, queryClient]);
+
+  return fresh;
+}
+
+/** The first letter of a name, as the row's mark. */
+function initialOf(name: string): string {
+  return Array.from(name.trim())[0]?.toLocaleUpperCase("es-CO") ?? "";
 }
 
 function RecentCard({ transactions }: { transactions: Transaction[] }) {
+  const fresh = useArrivals(transactions);
+
   return (
-    <Card glow="cyan" lift={false} className="flex flex-col gap-4">
+    <Card lift={false} className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-medium">Movimientos recientes</h2>
-        <Link
-          to="/transacciones"
-          className="rounded-lg border border-line px-2.5 py-1 text-muted text-xs transition-colors duration-150 hover:border-accent/40 hover:text-text"
-        >
+        <Link to="/transacciones" className={QUIET_LINK}>
           Ver todos
         </Link>
       </div>
@@ -610,65 +872,74 @@ function RecentCard({ transactions }: { transactions: Transaction[] }) {
         />
       ) : (
         <ul className="-mx-2 flex flex-col">
-          {transactions.map((movement) => (
-            <li key={movement.id}>
-              <Link
-                to="/transacciones/$transactionId"
-                params={{ transactionId: movement.id }}
-                className="group flex items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised"
-              >
-                <span
-                  aria-hidden
-                  className={
-                    movement.transfer
-                      ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-violet/25 to-cyan/5 text-violet transition-transform duration-200 group-hover:scale-110"
-                      : movement.direction === "incoming"
-                        ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
-                        : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
-                  }
+          {transactions.map((movement) => {
+            const title = movement.transfer
+              ? transferTitle(movement.transfer, movement.counterparty)
+              : (movement.merchant?.display_name ?? movement.counterparty);
+            const lit = fresh.has(movement.id);
+            const notes = [
+              movement.transfer ? "traslado" : null,
+              movement.account_id ? null : "sin asignar",
+            ].filter(Boolean);
+
+            return (
+              <li key={movement.id} className={lit ? "rise" : undefined}>
+                <Link
+                  to="/transacciones/$transactionId"
+                  params={{ transactionId: movement.id }}
+                  className="group relative isolate flex items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised"
                 >
-                  {movement.transfer ? (
-                    <ArrowLeftRight className="size-3.5" />
-                  ) : movement.direction === "incoming" ? (
-                    <ArrowDownLeft className="size-3.5" />
-                  ) : (
-                    <ArrowUpRight className="size-3.5" />
-                  )}
-                </span>
+                  {lit ? (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 -z-10 rounded-xl bg-accent-soft"
+                      style={{ animation: `arrive ${FRESH_MS}ms ease-out both` }}
+                    />
+                  ) : null}
+                  <span
+                    aria-hidden
+                    className={
+                      movement.transfer
+                        ? "grid size-9 shrink-0 place-items-center rounded-lg bg-violet/12 text-violet"
+                        : "grid size-9 shrink-0 place-items-center rounded-lg bg-surface-raised font-medium text-muted text-sm transition-colors duration-150 group-hover:text-text"
+                    }
+                  >
+                    {movement.transfer ? (
+                      <ArrowLeftRight className="size-4" />
+                    ) : (
+                      initialOf(title)
+                    )}
+                  </span>
 
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">
-                    {movement.transfer
-                      ? transferTitle(movement.transfer, movement.counterparty)
-                      : (movement.merchant?.display_name ?? movement.counterparty)}
-                  </p>
-                  <p className="truncate text-faint text-xs">
-                    {formatDate(movement.occurred_at)}
-                    {movement.transfer ? " · traslado" : null}
-                    {movement.account_id ? null : " · sin asignar"}
-                  </p>
-                </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm">{title}</p>
+                    <p className="truncate text-faint text-xs">
+                      {formatDate(movement.occurred_at)}
+                      {notes.length > 0 ? `, ${notes.join(", ")}` : null}
+                    </p>
+                  </div>
 
-                <Money
-                  amount={
-                    movement.direction === "outgoing"
-                      ? `-${movement.amount}`
-                      : movement.amount
-                  }
-                  currency={movement.currency}
-                  signed
-                  size="sm"
-                  tone={
-                    movement.transfer
-                      ? "neutral"
-                      : movement.direction === "incoming"
-                        ? "positive"
-                        : "plain"
-                  }
-                />
-              </Link>
-            </li>
-          ))}
+                  <Money
+                    amount={
+                      movement.direction === "outgoing"
+                        ? `-${movement.amount}`
+                        : movement.amount
+                    }
+                    currency={movement.currency}
+                    signed
+                    size="sm"
+                    tone={
+                      movement.transfer
+                        ? "neutral"
+                        : movement.direction === "incoming"
+                          ? "positive"
+                          : "plain"
+                    }
+                  />
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>
@@ -680,19 +951,18 @@ function AccountList({
   currency,
 }: {
   accounts: Account[];
-  /** The one the tiles above report in — not whichever account sorts first. */
+  /** The one the figures above report in, not whichever account sorts first. */
   currency: string;
 }) {
   if (accounts.length === 0) {
     return (
-      <Card glow="accent" className="flex flex-col items-start gap-3">
+      <Card className="flex flex-col items-start gap-3">
         <Landmark className="size-5 text-accent" aria-hidden />
         <div>
           <h2 className="font-medium">Todavía no declaraste ninguna cuenta</h2>
           <p className="mt-1 text-muted text-sm">
             Finflow funciona sin ninguna: todo lo que llegue queda registrado sin
-            asignar. Declarar una cuenta es retroactivo — adopta lo que estaba
-            esperando.
+            asignar. Declarar una cuenta es retroactivo: adopta lo que estaba esperando.
           </p>
         </div>
       </Card>
@@ -702,9 +972,9 @@ function AccountList({
   const mixed = accounts.some((account) => account.currency !== currency);
 
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-muted text-sm">Cuentas</h2>
-      <div className="grid grid-cols-1 gap-3 [&>*]:min-w-0 sm:grid-cols-2 lg:grid-cols-3">
+    <Card lift={false} className="flex flex-col gap-3">
+      <h2 className="font-medium">Cuentas</h2>
+      <ul className="-mx-2 grid grid-cols-1 gap-x-6 [&>*]:min-w-0 lg:grid-cols-2">
         {accounts.map((account) => {
           // Tone and caption both, from the one place allowed to decide what
           // a balance means: a paid-off card must not read "Debes" beside a
@@ -715,53 +985,41 @@ function AccountList({
             account.currency,
             account.category,
           );
-          const owed = account.category === "liability";
           return (
-            <Link
-              key={account.id}
-              to="/transacciones"
-              search={{ account: account.id }}
-              aria-label={`${account.name}: ver sus movimientos`}
-              className="block rounded-card"
-            >
-              <Card
-                glow={owed ? "accent" : "cyan"}
-                className="relative flex h-full items-center justify-between gap-4 overflow-hidden"
+            <li key={account.id}>
+              <Link
+                to="/transacciones"
+                search={{ account: account.id }}
+                aria-label={`${account.name}: ver sus movimientos`}
+                className="flex min-h-11 items-center justify-between gap-4 rounded-xl px-2 py-2.5 transition-colors duration-150 hover:bg-surface-raised"
               >
-                {/* What kind of account this is, said in one hairline. */}
-                <span
-                  aria-hidden
-                  className={
-                    owed
-                      ? "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/50 to-transparent"
-                      : "absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan/50 to-transparent"
-                  }
-                />
                 <div className="min-w-0">
-                  <p className="truncate font-medium">{account.name}</p>
-                  {/* A watched credit is not in the Deuda tile above it, so it
-                    must not read "Debes" either — `/cuentas` names it the
+                  <p className="break-words text-sm">{account.name}</p>
+                  {/* A watched credit is not in the Deuda figure above, so it
+                    must not read "Debes" either: `/cuentas` names it the
                     same way. */}
-                  <p className="mt-0.5 text-faint text-xs">
+                  <p className="text-faint text-xs">
                     {account.informational ? "Saldo del crédito" : label}
                   </p>
                 </div>
                 <Money
                   amount={account.balance}
                   currency={account.currency}
+                  size="sm"
                   tone={tone}
+                  className="shrink-0"
                 />
-              </Card>
-            </Link>
+              </Link>
+            </li>
           );
         })}
-      </div>
+      </ul>
       {mixed ? (
         <p className="text-faint text-xs">
           Los totales de arriba cubren {currency} únicamente.
         </p>
       ) : null}
-    </section>
+    </Card>
   );
 }
 

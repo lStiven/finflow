@@ -345,6 +345,11 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-23 — **Resumen rediseñado con Hallmark, a la espera de que Stiven
+  lo acepte.** Patrimonio con su línea de 12 meses (`/financial/history`) que se
+  recorre, ingresos contra gastos en importe y no en %, categorías en barra
+  apilada, movimientos que entran en vivo (cada 60 s). `web-check`, `sloplint`
+  y `e2e-resumen` en verde. Sin commit; `Donut.tsx` y `Sparkline.tsx` quedan sin uso.
 - 2026-11-16 — **Contraste de texto y cuenta demo para QA.** `faint` y `muted`
   más claros, textos sueltos sobre el plasma en `text-text/85`, y un token
   `accent-solid` para botones magenta (antes 3,7:1). Cuenta `qa.demo@finflow.local`
@@ -361,11 +366,3 @@ AWS (ver Trabas).
   actual, y su «Ver en Transacciones» también). En `dev` (3e021a3).
 - 2026-11-01 — **Un traslado avisa una vez**, «Traslado entre cuentas» con
   `De:`/`A:`, en Telegram y la campana.
-- 2026-11-01 — **Traslados «de dónde → a dónde».** Entre dos cuentas propias
-  se escriben los dos lados y bajan los dos saldos; «Otro» con nombre
-  opcional; a un crédito o hipoteca, gasto + abono. `detachable` en cada
-  movimiento. Puertas, `/code-review` y `/security-review` en verde.
-- 2026-10-31 — **Diagramas en D2 y guías de `docs/` más visuales.** 19 SVG en
-  `docs/assets/` (íconos embebidos, cada uno con su `.d2`); sin Mermaid en el
-  README. Guías verificadas contra el código y reescritas con tablas; la
-  referencia de endpoints cubre las 91 operaciones. Sin commit.
