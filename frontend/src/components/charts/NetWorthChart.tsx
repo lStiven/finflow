@@ -156,9 +156,16 @@ export function NetWorthChart({
             </linearGradient>
           </defs>
 
-          {[PAD_TOP, (PAD_TOP + y(low)) / 2, y(low)].map((line) => (
+          {(
+            [
+              ["top", PAD_TOP],
+              ["middle", (PAD_TOP + y(low)) / 2],
+              ["base", y(low)],
+            ] as const
+          ).map(([position, line]) => (
+            // Keyed by position: on a flat series all three share one y.
             <line
-              key={line}
+              key={position}
               x1="0"
               x2={WIDTH}
               y1={line}

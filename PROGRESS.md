@@ -345,6 +345,9 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-24 — **`e2e-guias` en verde tras el merge a master.** La línea de
+  patrimonio repetía la key de sus guías cuando la serie era plana (todo en 0,
+  usuario nuevo); ahora van por posición. `web-check` y `e2e-guias` en verde. Sin commit.
 - 2026-11-23 — **Facturas rediseñada con Hallmark, a la espera de que Stiven
   la acepte.** Cada tarjeta dice cómo va su mes («Pagada», «Atrasada», «Este mes
   no»…, `monthReading` en `bills/schedule.ts`), con las mismas palabras en las
@@ -364,8 +367,3 @@ AWS (ver Trabas).
 - 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
   comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
   al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.
-- 2026-11-03 — **Reportes cuenta la hora en curso, y la e2e ya no depende de
-  ella.** «Este mes» terminaba en la hora en punto hacia abajo y la semilla
-  ponía las compras a mediodía: del 1 al 3, antes de la 1 p. m., el mes salía
-  vacío. Y «Por categoría» abre el mes que Reportes mostraba (antes, el
-  actual, y su «Ver en Transacciones» también). En `dev` (3e021a3).
