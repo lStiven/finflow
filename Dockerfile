@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# One image for all six functions.
+# One image for all seven functions.
 #
 # Which one a container becomes is decided by the entry point the SAM template
-# gives it, never by anything baked in here: the four workers run Lambda's
+# gives it, never by anything baked in here: the workers run Lambda's
 # runtime client against their handler, and the API runs the same uvicorn
-# command as `just run-prod` behind the Lambda Web Adapter. Six images would
-# be six things to keep in step, and the drift would only show in production.
+# command as `just run-prod` behind the Lambda Web Adapter. Seven images would
+# be seven things to keep in step, and the drift would only show in production.
 #
 # Both stages sit on Lambda's own base image on purpose. `bcrypt` is a
 # compiled extension, so wheels built against another distribution's glibc can
@@ -38,7 +38,7 @@ FROM public.ecr.aws/lambda/python:3.13
 
 # The adapter is a Lambda extension, not a Python package: it registers with
 # the Runtime API and forwards each invocation to whatever HTTP server the
-# container is running. It is inert for the four worker functions, which never
+# container is running. It is inert for the worker functions, which never
 # start one.
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 \
      /lambda-adapter /opt/extensions/lambda-adapter

@@ -345,11 +345,22 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-23 — **Facturas rediseñada con Hallmark, a la espera de que Stiven
+  la acepte.** Cada tarjeta dice cómo va su mes («Pagada», «Atrasada», «Este mes
+  no»…, `monthReading` en `bills/schedule.ts`), con las mismas palabras en las
+  filas; lo pendiente va antes que las tarjetas y «Declarar» sube a la cabecera.
+  `web-check` y `e2e-bills` en verde. Sin commit.
+- 2026-11-23 — **Resumen rediseñado con Hallmark, a la espera de que Stiven
+  lo acepte.** Patrimonio con su línea de 12 meses (`/financial/history`) que se
+  recorre, ingresos contra gastos en importe y no en %, categorías en barra
+  apilada, movimientos que entran en vivo (cada 60 s). `web-check`, `sloplint`
+  y `e2e-resumen` en verde. Sin commit; `Donut.tsx` y `Sparkline.tsx` quedan sin uso.
 - 2026-11-16 — **Contraste de texto y cuenta demo para QA.** `faint` y `muted`
   más claros, textos sueltos sobre el plasma en `text-text/85`, y un token
   `accent-solid` para botones magenta (antes 3,7:1). Cuenta `qa.demo@finflow.local`
   en producción (1 ahorros, 2 tarjetas, 27 movimientos, 4 facturas, 2 topes, mesada).
-  Frontend sin commit; la web de producción sigue sin republicar.
+  Frontend en `5fbde41`; la web de producción sigue sin republicar. Nueva
+  `docs/requisitos.md` (dependencias, local y servidor), revisada con el revisor.
 - 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
   comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
   al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.
@@ -358,13 +369,3 @@ AWS (ver Trabas).
   ponía las compras a mediodía: del 1 al 3, antes de la 1 p. m., el mes salía
   vacío. Y «Por categoría» abre el mes que Reportes mostraba (antes, el
   actual, y su «Ver en Transacciones» también). En `dev` (3e021a3).
-- 2026-11-01 — **Un traslado avisa una vez**, «Traslado entre cuentas» con
-  `De:`/`A:`, en Telegram y la campana.
-- 2026-11-01 — **Traslados «de dónde → a dónde».** Entre dos cuentas propias
-  se escriben los dos lados y bajan los dos saldos; «Otro» con nombre
-  opcional; a un crédito o hipoteca, gasto + abono. `detachable` en cada
-  movimiento. Puertas, `/code-review` y `/security-review` en verde.
-- 2026-10-31 — **Diagramas en D2 y guías de `docs/` más visuales.** 19 SVG en
-  `docs/assets/` (íconos embebidos, cada uno con su `.d2`); sin Mermaid en el
-  README. Guías verificadas contra el código y reescritas con tablas; la
-  referencia de endpoints cubre las 91 operaciones. Sin commit.

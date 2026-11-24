@@ -96,6 +96,42 @@ export function isZero(amount: string): boolean {
   return signOf(amount) === 0;
 }
 
+/** Enough places for any currency the API sends; more are refused, not rounded. */
+const SCALE = 6;
+
+function toScaled(amount: string): bigint | null {
+  const numeric = asNumeric(amount);
+  if (numeric === null) return null;
+
+  const negative = numeric.startsWith("-");
+  const [whole = "", fraction = ""] = numeric.replace(/^[+-]/, "").split(".");
+  if (fraction.length > SCALE) return null;
+
+  const scaled = BigInt(`${whole || "0"}${fraction.padEnd(SCALE, "0")}`);
+  return negative ? -scaled : scaled;
+}
+
+function fromScaled(value: bigint): string {
+  const negative = value < 0n;
+  const digits = (negative ? -value : value).toString().padStart(SCALE + 1, "0");
+  const whole = digits.slice(0, -SCALE);
+  const fraction = digits.slice(-SCALE).replace(/0+$/, "");
+  return `${negative ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+/**
+ * `left - right` between two decimal strings, exactly, or null when either is
+ * not one.
+ *
+ * Unlike `percentChange` the result is a figure somebody reads ("$795.000 más
+ * que octubre"), so it goes through integers, never floats.
+ */
+export function differenceOf(left: string, right: string): string | null {
+  const a = toScaled(left);
+  const b = toScaled(right);
+  return a === null || b === null ? null : fromScaled(a - b);
+}
+
 export type BalanceReading = {
   /** The figure, formatted. */
   text: string;

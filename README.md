@@ -20,7 +20,7 @@
 [![Contextos](https://img.shields.io/badge/arquitectura-5_contextos_acotados-7C3AED?style=flat-square)](#los-cinco-contextos)
 [![Eventos](https://img.shields.io/badge/integración-EventBridge_%2B_SQS-D946EF?style=flat-square)](#arquitectura)
 [![API](https://img.shields.io/badge/API-91_operaciones-22D3EE?style=flat-square)](docs/frontend-integration.md#referencia-de-endpoints)
-[![Pruebas](https://img.shields.io/badge/pruebas-2689_Python_·_592_frontend-2ea44f?style=flat-square)](#calidad)
+[![Pruebas](https://img.shields.io/badge/pruebas-2689_Python_·_618_frontend-2ea44f?style=flat-square)](#calidad)
 
 [**Cómo funciona**](#cómo-funciona) · [**Arquitectura**](#arquitectura) · [**Qué hace hoy**](#qué-hace-hoy) · [**Arrancarlo en local**](#arrancarlo-en-local) · [**Guías**](#guías)
 
@@ -244,7 +244,8 @@ Todo corre dentro del DevContainer, contra **moto**: AWS emulado en proceso, sin
 Docker extra ni credenciales.
 
 ```bash
-cp .env.example .env   # y edita dos valores
+cp .env.example .env   # y rellena IDENTITY_JWT_SECRET e INGESTION_INGEST_MAILBOX_ADDRESS
+cp frontend/.env.example frontend/.env.development
 just up                # emulador, recursos, datos de prueba, la API y los workers
 just web               # el frontend
 ```
@@ -257,7 +258,8 @@ just web               # el frontend
 En local los códigos de verificación se escriben en el log en vez de enviarse,
 así que te registras sin buzón. Tampoco se lee el buzón de ingesta, que
 comparten todos los entornos: el correo de un banco se simula con
-`POST /ingestion/bank-notifications`. El detalle, y cómo correrlo contra AWS, está en
+`POST /ingestion/bank-notifications`. Qué instalar, con versiones, y cómo dejarlo en un servidor:
+[requisitos.md](docs/requisitos.md). El detalle, y cómo correrlo contra AWS, está en
 [running.md](docs/running.md).
 
 ## Del push a producción
@@ -274,7 +276,7 @@ guardadas en GitHub**. Backend y web salen siempre juntos. El detalle está en
 |:---|:---|
 | **Operaciones de API** | 91, todas en el contrato OpenAPI |
 | **Pruebas de Python** | 2689, unitarias y de integración contra moto |
-| **Pruebas del frontend** | 592, con Vitest |
+| **Pruebas del frontend** | 618, con Vitest |
 | **Suites en navegador** | 14 con Playwright contra la pila real, una de ellas recorre las 23 pantallas en teléfono y escritorio |
 | **Revisión por cambio** | Una pasada de revisión de código, y otra de seguridad cuando toca dinero, autenticación o entrada no confiable |
 

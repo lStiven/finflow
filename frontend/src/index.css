@@ -1,3 +1,10 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full (/)
+ * paper: #07080d · accent: oklch(0.64 0.24 349) · display: Inter · body: Inter
+ * nav: kept (AppShell) · signature: the net-worth line, scrubbed month by month · states: loading (route), empty, full
+ * axes: dark/grotesk-sans/chromatic-magenta · posture: dark-only, 80% calm 20% neon · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H5 E4 S4 R4 V3 · weakest: V, the shell and the cards are the app's own; kept on purpose, the screen changes inside them */
+/* Hallmark · redesign: full (/facturas) · shape: app screen · signature: each bill's month in one word, the same chip on cards and rows · order: month, to pay, your bills, detected · states: empty, full, per-action error */
+/* Hallmark · waive 26a 26b on /facturas · the focus ring is the global :focus-visible below and :active lives in Button; the route file is linted alone */
 @import "tailwindcss";
 
 /*
@@ -359,6 +366,23 @@
     }
     to {
       transform: scaleX(1);
+    }
+  }
+
+  /* `grow-x` without its `to`: a bar that rests at 0.4 grows to 0.4, not 1. */
+  @keyframes grow-from-zero {
+    from {
+      transform: scaleX(0);
+    }
+  }
+
+  /* A row that just came in from the bank: lit, then settled. */
+  @keyframes arrive {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
     }
   }
 
