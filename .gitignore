@@ -100,5 +100,10 @@ frontend/.vite/
 # Dev container local overrides
 .devcontainer/devcontainer.local.json
 
+# Hallmark design skill: its before/after captures, shots and run log are
+# local working state, regenerated on every pass and stale the moment a screen
+# changes.
+.hallmark/
+
 # Claude
 .claude/
