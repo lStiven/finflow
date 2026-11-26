@@ -345,6 +345,21 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-26 — **Gráficas del Resumen con comportamiento.** Patrimonio: al recorrer
+  la línea sale el cambio contra el mes anterior, y bajo la gráfica el cambio del
+  periodo. Gastos por categoría: segmentos tocables con variación contra el mes
+  anterior a la misma altura. `Donut.tsx` (huérfano) borrado. Sin línea de deuda.
+  `web-check` y `just e2e` (14 suites) en verde. Sin commit.
+- 2026-11-24 — **Reportes rediseñada con Hallmark, a la espera de que Stiven la
+  acepte.** Las cuatro tarjetas ganan el periodo anterior («Antes») y una línea de
+  tendencia; las gráficas animan al entrar, atenúan las columnas vecinas, marcan el
+  promedio y la más alta, y el tooltip da % del periodo y contra el promedio. Las
+  leyendas ocultan series y resaltan al pasar. `/reportes/categoria` sin rediseñar.
+  `e2e-reportes` en verde. Sin commit.
+- 2026-11-24 — **Transacciones rediseñada con Hallmark, a la espera de que Stiven
+  la acepte.** El día ancla cada fila (una vez por día, como un extracto), la
+  baldosa de flechas se fue, y búsqueda, dirección y filtros van en una línea.
+  `web-check` y las e2e de transacciones, exportar, guías y pantallas en verde. Sin commit.
 - 2026-11-24 — **`e2e-guias` en verde tras el merge a master.** La línea de
   patrimonio repetía la key de sus guías cuando la serie era plana (todo en 0,
   usuario nuevo); ahora van por posición. `web-check` y `e2e-guias` en verde. Sin commit.
@@ -364,6 +379,3 @@ AWS (ver Trabas).
   en producción (1 ahorros, 2 tarjetas, 27 movimientos, 4 facturas, 2 topes, mesada).
   Frontend en `5fbde41`; la web de producción sigue sin republicar. Nueva
   `docs/requisitos.md` (dependencias, local y servidor), revisada con el revisor.
-- 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
-  comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
-  al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.

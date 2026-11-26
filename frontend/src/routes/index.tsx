@@ -132,6 +132,14 @@ export const Route = createFileRoute("/")({
         ...summaryQuery("category", range ?? {}),
         staleTime: "static",
       }),
+      // Last month's spending per category, to the same day, for the bar's
+      // «frente a septiembre». Caught: losing it costs the comparison only.
+      context.queryClient
+        .query({
+          ...summaryQuery("category", previousToDate ?? {}),
+          staleTime: "static",
+        })
+        .catch(() => null),
       context.queryClient.query({
         ...transactionsQuery({ limit: RECENT_LIMIT }),
         staleTime: "static",
@@ -167,6 +175,9 @@ function Dashboard() {
     summaryQuery("month", previousToDate ?? {}),
   );
   const { data: byCategory } = useSuspenseQuery(summaryQuery("category", range ?? {}));
+  const { data: byCategoryPrevious } = useQuery(
+    summaryQuery("category", previousToDate ?? {}),
+  );
   const { data: recent } = useSuspenseQuery({
     ...transactionsQuery({ limit: RECENT_LIMIT }),
     refetchInterval: LIVE_MS,
@@ -246,6 +257,8 @@ function Dashboard() {
         <div className="grid gap-4 [&>*]:min-w-0 lg:grid-cols-2">
           <CategoryCard
             groups={byCategory.groups}
+            previousGroups={byCategoryPrevious?.groups}
+            previousName={previousName}
             currency={currency}
             monthSearch={monthSearch}
             labels={categoryLabels(categories.categories)}
@@ -436,9 +449,21 @@ function NetWorthPanel({
           <p className="text-faint text-numeral-sm">Sin cuentas</p>
         )}
 
-        <p className="min-h-5 text-sm">
+        <p className="flex min-h-5 flex-col gap-0.5 text-sm">
           {past ? (
-            <span className="text-muted">Al cierre de {formatMonthKey(past.key)}</span>
+            <>
+              <span className="text-muted">
+                Al cierre de {formatMonthKey(past.key)}
+                {past.point.partial ? " (en curso)" : ""}
+              </span>
+              {months[(scrub ?? 0) - 1] ? (
+                <SinceClose
+                  now={past.total}
+                  then={months[(scrub ?? 0) - 1] as NetWorthMonth}
+                  currency={currency}
+                />
+              ) : null}
+            </>
           ) : primary && closed ? (
             <SinceClose now={primary.total} then={closed} currency={currency} />
           ) : null}
@@ -458,7 +483,18 @@ function NetWorthPanel({
               return `${formatMonthKey(month.key)}${month.point.partial ? ", en curso" : ""}: ${formatMoney(month.total, currency)}`;
             }}
           />
-          <p className="text-faint text-xs">Recorre la línea para ver cada mes.</p>
+          <p className="text-xs">
+            {primary && months[0] && months[0].key !== months[latest]?.key ? (
+              <SinceClose
+                now={primary.total}
+                then={months[0]}
+                currency={currency}
+                against={`hace ${months.length - 1} meses`}
+              />
+            ) : (
+              <span className="text-faint">Recorre la línea para ver cada mes.</span>
+            )}
+          </p>
         </div>
       ) : null}
 
@@ -494,18 +530,22 @@ function SinceClose({
   now,
   then,
   currency,
+  against,
 }: {
   now: string;
   then: NetWorthMonth;
   currency: string;
+  /** What `then` is called; the default names its month's close. */
+  against?: string;
 }) {
   const change = differenceOf(now, then.total);
   const name = formatMonthKey(then.key).split(" ")[0] ?? "";
+  const when = against ?? `al cierre de ${name}`;
   if (change === null) return null;
 
   const sign = signOf(change);
   if (sign === 0) {
-    return <span className="text-faint">Igual que al cierre de {name}</span>;
+    return <span className="text-faint">Igual que {when}</span>;
   }
 
   const up = sign > 0;
@@ -521,7 +561,7 @@ function SinceClose({
       />
       <Percent previous={then.total} current={now} up={up} />
       <span className="text-faint">
-        {up ? "más" : "menos"} que al cierre de {name}
+        {up ? "más" : "menos"} que {when}
       </span>
     </span>
   );
@@ -753,19 +793,53 @@ function Change({
   );
 }
 
+/** One category against last month to the same day: spent more is the bad way. */
+function PartChange({
+  part,
+  currency,
+  previousName,
+}: {
+  part: Part;
+  currency: string;
+  previousName: string;
+}) {
+  if (part.previous === undefined) return null;
+  if (signOf(part.previous) === 0) {
+    return (
+      <span className="text-faint">Sin gasto en {previousName} a esta altura</span>
+    );
+  }
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1">
+      <Change
+        previous={part.previous}
+        current={part.amount}
+        currency={currency}
+        lowerIsBetter
+      />
+      <span className="text-faint">que en {previousName}</span>
+    </span>
+  );
+}
+
 function CategoryCard({
   groups,
+  previousGroups,
+  previousName,
   currency,
   monthSearch,
   labels,
 }: {
   groups: SummaryGroup[];
+  /** The same grouping for last month to date; absent while it loads or fails. */
+  previousGroups?: SummaryGroup[];
+  previousName: string;
   currency: string;
   /** The month's bounds as Transacciones reads them. */
   monthSearch: { from?: string; to?: string };
   labels: Record<string, string>;
 }) {
-  const parts = toParts(groups, currency, labels);
+  const parts = toParts(groups, currency, labels, previousGroups);
 
   return (
     <Card lift={false} className="flex flex-col gap-5">
@@ -782,6 +856,16 @@ function CategoryCard({
         <CategoryBar
           parts={parts}
           currency={currency}
+          hint={
+            previousGroups
+              ? `Toca un segmento para compararlo con ${previousName}.`
+              : undefined
+          }
+          compare={(part) =>
+            previousGroups ? (
+              <PartChange part={part} currency={currency} previousName={previousName} />
+            ) : null
+          }
           // The same spending the bar counts: this month, out, no transfers.
           // The folded tail and the no-merchant bucket have no one category.
           movementsOf={(part) =>
@@ -809,7 +893,15 @@ function toParts(
   groups: SummaryGroup[],
   currency: string,
   labels: Record<string, string>,
+  previousGroups?: SummaryGroup[],
 ): Part[] {
+  const before = (key: string) =>
+    previousGroups
+      ? (previousGroups
+          .find((group) => (group.key ?? "__none__") === key)
+          ?.totals.find((total) => total.currency === currency)?.outgoing ?? "0")
+      : undefined;
+
   const rows = groups
     .map((group) => {
       const totals = group.totals.find((total) => total.currency === currency);
@@ -839,6 +931,7 @@ function toParts(
     label: row.label,
     amount: row.amount,
     share: row.value / sum,
+    previous: before(row.key),
   }));
 
   if (tail.length > 0) {
@@ -850,6 +943,11 @@ function toParts(
       // rather than a ledger one: every exact amount is a category away.
       amount: rest.toFixed(2),
       share: rest / sum,
+      previous: previousGroups
+        ? tail
+            .reduce((running, row) => running + toChartValue(before(row.key) ?? "0"), 0)
+            .toFixed(2)
+        : undefined,
     });
   }
 

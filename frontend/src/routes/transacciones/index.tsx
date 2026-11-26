@@ -1,9 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
-  ArrowDownLeft,
   ArrowLeftRight,
-  ArrowUpRight,
   ChevronLeft,
   ChevronRight,
   Mail,
@@ -36,6 +34,7 @@ import { Notice } from "@/components/ui/Notice";
 import { type Option, Select } from "@/components/ui/Select";
 import { storyOf } from "@/guides/stories";
 import {
+  dayStringOf,
   formatDayMonth,
   formatMonthKey,
   fromLocalInput,
@@ -273,36 +272,41 @@ function TransactionsScreen() {
           without this "Limpiar" or the back button would clear the filter
           while leaving the old text sitting in the field.
         */}
-        <SearchBar
-          key={search.search ?? ""}
-          value={search.search ?? ""}
-          onSubmit={(value) => apply({ search: value })}
-        />
-
-        <div
-          role="tablist"
-          aria-label="Dirección"
-          className="flex gap-1 rounded-xl border border-line bg-surface p-1"
-        >
-          {DIRECTION_TABS.map((tab) => (
-            <button
-              key={tab.label}
-              type="button"
-              role="tab"
-              aria-selected={search.direction === tab.value}
-              onClick={() => apply({ direction: tab.value })}
-              className={
-                search.direction === tab.value
-                  ? "flex-1 rounded-lg bg-accent-soft py-2 font-medium text-sm text-text transition-colors"
-                  : "flex-1 rounded-lg py-2 text-muted text-sm transition-colors hover:text-text"
-              }
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
+        {/* One toolbar: on a desktop the search, the direction and the
+            filters sit on a single line above the ledger; on a phone they
+            wrap, the search first. */}
         <div className="flex flex-wrap items-center gap-2">
+          <div className="w-full min-w-0 lg:w-auto lg:flex-1">
+            <SearchBar
+              key={search.search ?? ""}
+              value={search.search ?? ""}
+              onSubmit={(value) => apply({ search: value })}
+            />
+          </div>
+
+          <div
+            role="tablist"
+            aria-label="Dirección"
+            className="flex w-full gap-1 rounded-xl border border-line bg-surface p-1 lg:w-auto"
+          >
+            {DIRECTION_TABS.map((tab) => (
+              <button
+                key={tab.label}
+                type="button"
+                role="tab"
+                aria-selected={search.direction === tab.value}
+                onClick={() => apply({ direction: tab.value })}
+                className={
+                  search.direction === tab.value
+                    ? "flex-1 rounded-lg bg-accent-soft px-4 py-1.5 font-medium text-sm text-text transition-colors lg:flex-none"
+                    : "flex-1 rounded-lg px-4 py-1.5 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text active:bg-ink lg:flex-none"
+                }
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
           <Button
             variant="ghost"
             className="px-3 py-2 text-xs"
@@ -541,7 +545,7 @@ function SearchBar({
         onChange={(event) => setDraft(event.target.value)}
         placeholder="Buscar por comercio o descripción…"
         aria-label="Buscar movimientos"
-        className="w-full rounded-xl border border-line bg-surface py-3 pr-4 pl-11 text-base text-text placeholder:text-faint focus:border-accent focus:outline-none"
+        className="w-full rounded-xl border border-line bg-surface py-2.5 pr-4 pl-11 text-base text-text placeholder:text-faint focus:border-accent focus:outline-none"
       />
     </form>
   );
@@ -589,8 +593,8 @@ function Toggle({
       aria-pressed={on}
       className={
         on
-          ? "rounded-full border border-accent bg-accent-soft px-3 py-1.5 text-text text-xs"
-          : "rounded-full border border-line px-3 py-1.5 text-muted text-xs hover:text-text"
+          ? "rounded-full border border-accent bg-accent-soft px-3 py-2 text-text text-xs transition-colors active:bg-surface"
+          : "rounded-full border border-line px-3 py-2 text-muted text-xs transition-colors hover:bg-surface-raised hover:text-text active:bg-surface"
       }
     >
       {label}
@@ -615,24 +619,43 @@ function MovementList({
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {[...months].map(([key, movements]) => (
-        <section key={key} className="flex flex-col gap-2">
-          <h2 className="text-muted text-sm first-letter:uppercase">
-            {formatMonthKey(key)}
-          </h2>
-          <Card lift={false} className="p-0">
-            <ul>
-              {movements.map((movement) => (
-                <li key={movement.id}>
-                  <MovementRow movement={movement} labels={labels} />
-                </li>
-              ))}
-            </ul>
-          </Card>
-        </section>
-      ))}
+    <div className="flex flex-col gap-8">
+      {[...months].map(([key, movements]) => {
+        const month = formatMonthKey(key);
+        return (
+          <section key={key} className="flex flex-col gap-3">
+            <h2 className="px-1 font-medium text-base text-text">
+              {month.charAt(0).toUpperCase() + month.slice(1)}
+            </h2>
+            <Card lift={false} className="p-0">
+              <ul>
+                {movements.map((movement, index) => (
+                  <li
+                    key={movement.id}
+                    className="border-line/40 border-b last:border-b-0"
+                  >
+                    <MovementRow
+                      movement={movement}
+                      labels={labels}
+                      // A statement prints the day once, on the first line of
+                      // that day; the rows under it read as the same day.
+                      sameDayAsPrevious={sameDay(movements[index - 1], movement)}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </section>
+        );
+      })}
     </div>
+  );
+}
+
+function sameDay(previous: Transaction | undefined, movement: Transaction): boolean {
+  return (
+    previous !== undefined &&
+    dayStringOf(previous.occurred_at) === dayStringOf(movement.occurred_at)
   );
 }
 
@@ -641,73 +664,71 @@ function MovementRow({
   // A row holds a category value and nothing else, so one this person wrote
   // would render as `custom:mascotas` without the names beside it.
   labels,
+  sameDayAsPrevious,
 }: {
   movement: Transaction;
   labels: Record<string, string>;
+  sameDayAsPrevious: boolean;
 }) {
   const incoming = movement.direction === "incoming";
   const transfer = movement.transfer;
+  const category =
+    movement.merchant?.category && !isUncategorized(movement.merchant.category)
+      ? labelFrom(labels, movement.merchant.category)
+      : null;
+  const manual = movement.origin === "manual";
+  const unassigned = !movement.account_id;
 
   return (
     <Link
       to="/transacciones/$transactionId"
       params={{ transactionId: movement.id }}
-      className="group flex items-center gap-3 border-line/40 border-b px-4 py-2.5 transition-colors duration-150 hover:bg-surface-raised/70"
+      className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 transition-colors duration-150 hover:bg-surface-raised/70 active:bg-surface-raised sm:grid-cols-[2.5rem_minmax(0,1fr)_auto]"
       activeProps={{ className: "bg-surface-raised/70" }}
     >
-      {/*
-       * A transfer wears neither hue: green means money arriving and magenta
-       * means money leaving, and this is the one movement that is neither.
-       */}
-      <span
-        aria-hidden
-        className={
-          transfer
-            ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-violet/25 to-cyan/5 text-violet transition-transform duration-200 group-hover:scale-110"
-            : incoming
-              ? "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-incoming/25 to-cyan/5 text-incoming transition-transform duration-200 group-hover:scale-110"
-              : "grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-accent/25 to-violet/5 text-accent transition-transform duration-200 group-hover:scale-110"
-        }
-      >
-        {transfer ? (
-          <ArrowLeftRight className="size-3.5" />
-        ) : incoming ? (
-          <ArrowDownLeft className="size-3.5" />
-        ) : (
-          <ArrowUpRight className="size-3.5" />
-        )}
+      {/* The day is the row's anchor, the way a bank statement reads. */}
+      <span className="text-right font-semibold text-base text-muted tabular">
+        <span aria-hidden>
+          {sameDayAsPrevious ? "" : dayStringOf(movement.occurred_at).slice(8)}
+        </span>
+        <span className="sr-only">{formatDayMonth(movement.occurred_at)}</span>
       </span>
 
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm">
+      <div className="min-w-0">
+        <p className="truncate text-sm text-text">
           {transfer
             ? transferTitle(transfer, movement.counterparty)
             : (movement.merchant?.display_name ?? movement.counterparty)}
         </p>
-        {/* One line, cut at the end rather than wrapped: these read
-            most-important-first, and wrapping made every third row two lines
-            taller than its neighbours on a phone. */}
-        <p className="mt-0.5 truncate text-faint text-xs">
-          <span>{formatDayMonth(movement.occurred_at)}</span>
-          {transfer ? <span className="text-violet"> · traslado</span> : null}
-          {movement.merchant?.category &&
-          !isUncategorized(movement.merchant.category) ? (
-            <span> · {labelFrom(labels, movement.merchant.category)}</span>
-          ) : null}
-          {movement.origin === "manual" ? <span> · a mano</span> : null}
-          {movement.account_id ? null : (
-            <span className="text-warn"> · sin asignar</span>
-          )}
-        </p>
+        {/*
+         * A transfer wears neither green nor magenta: green means money
+         * arriving and magenta money leaving, and this is neither. It says so
+         * in violet, in the place a category would go.
+         */}
+        {transfer ? (
+          <p className="mt-0.5 truncate text-violet text-xs">Traslado</p>
+        ) : category ? (
+          <p className="mt-0.5 truncate text-faint text-xs">{category}</p>
+        ) : null}
       </div>
 
-      <Money
-        amount={incoming ? movement.amount : `-${movement.amount}`}
-        currency={movement.currency}
-        signed
-        size="sm"
-        tone={transfer ? "neutral" : incoming ? "positive" : "plain"}
-      />
+      {/* The amount, and under it what is unusual about how it got here:
+          its own column, so a phone never cuts it off the end of a line. */}
+      <div className="flex flex-col items-end gap-0.5">
+        <Money
+          amount={incoming ? movement.amount : `-${movement.amount}`}
+          currency={movement.currency}
+          signed
+          size="sm"
+          tone={transfer ? "neutral" : incoming ? "positive" : "plain"}
+        />
+        {manual || unassigned ? (
+          <span className="flex gap-2 text-xs">
+            {manual ? <span className="text-faint">a mano</span> : null}
+            {unassigned ? <span className="text-warn">sin asignar</span> : null}
+          </span>
+        ) : null}
+      </div>
     </Link>
   );
 }

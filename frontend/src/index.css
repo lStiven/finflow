@@ -5,6 +5,10 @@
 /* Hallmark · pre-emit critique: P4 H5 E4 S4 R4 V3 · weakest: V, the shell and the cards are the app's own; kept on purpose, the screen changes inside them */
 /* Hallmark · redesign: full (/facturas) · shape: app screen · signature: each bill's month in one word, the same chip on cards and rows · order: month, to pay, your bills, detected · states: empty, full, per-action error */
 /* Hallmark · waive 26a 26b on /facturas · the focus ring is the global :focus-visible below and :active lives in Button; the route file is linted alone */
+/* Hallmark · redesign: full (/transacciones) · shape: app screen · signature: the day as each row's anchor, printed once per day like a statement · order: one toolbar, then the ledger by month · states: empty (filtered or not), full · loading is the route's */
+/* Hallmark · waive 26a 26b on /transacciones · the focus ring is the global :focus-visible below and :disabled lives in Button; the route file is linted alone */
+/* Hallmark · redesign: full (/reportes) · shape: app screen · signature: the period as a statement, the balance large and income, spending and daily average ruled beneath · order: filters, statement, cashflow, categories, trend, merchants, weekday, biggest · states: empty, full · loading is the route's */
+/* Hallmark · waive 26a 26b on /reportes · the focus ring is the global :focus-visible below and :disabled lives in Select; the route file is linted alone */
 @import "tailwindcss";
 
 /*
@@ -366,6 +370,13 @@
     }
     to {
       transform: scaleX(1);
+    }
+  }
+
+  /* A column rising off the baseline, one after another via --delay. */
+  @keyframes grow-y {
+    from {
+      transform: scaleY(0);
     }
   }
 
@@ -737,6 +748,11 @@
   .ghost-slide * {
     /* biome-ignore lint/complexity/noImportantStyles: the animations it stops are set by classes on the elements themselves */
     animation: none !important;
+  }
+
+  .grow-y {
+    transform-origin: bottom;
+    animation: grow-y 650ms var(--delay, 0ms) cubic-bezier(0.16, 1, 0.3, 1) backwards;
   }
 
   .grow-x {

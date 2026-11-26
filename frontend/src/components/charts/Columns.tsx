@@ -15,7 +15,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
-import { useId, useState } from "react";
+import { type CSSProperties, useId, useState } from "react";
 import { Money } from "@/components/Money";
 import { cn } from "@/lib/cn";
 import { formatMoney } from "@/lib/money";
@@ -61,6 +61,7 @@ export function Columns({
   className,
   caption,
   movementsOf,
+  highlight = null,
 }: {
   buckets: ColumnBucket[];
   series: ColumnSeries[];
@@ -78,6 +79,8 @@ export function Columns({
    * would vanish before anybody read them.
    */
   movementsOf?: (index: number) => Record<string, unknown> | null;
+  /** A series key to hold in focus while the rest recede, e.g. from a legend. */
+  highlight?: string | null;
 }) {
   const tableId = useId();
   const [active, setActive] = useState<number | null>(null);
@@ -97,6 +100,26 @@ export function Columns({
       0,
     ) || 1;
 
+  // The average is only honest where one number per column exists: a stack's
+  // total, or a lone series. Two series side by side have no single height.
+  const totals = buckets.map((_, index) =>
+    mode === "stacked" || series.length === 1
+      ? series.reduce((sum, band) => sum + (band.points[index]?.value ?? 0), 0)
+      : null,
+  );
+  const settled = totals.filter(
+    (total, index): total is number => total !== null && !buckets[index]?.partial,
+  );
+  const average =
+    settled.length > 1 ? settled.reduce((sum, v) => sum + v, 0) / settled.length : null;
+  const peakIndex = totals.reduce<number | null>(
+    (best, total, index) =>
+      total !== null && total > 0 && (best === null || total > (totals[best] ?? 0))
+        ? index
+        : best,
+    null,
+  );
+
   const step = Math.ceil(buckets.length / MAX_TICKS);
   const anyPartial = buckets.some((bucket) => bucket.partial);
 
@@ -107,6 +130,9 @@ export function Columns({
 
         <div className="relative min-w-0 flex-1">
           <Gridlines />
+          {average !== null && average > 0 ? (
+            <AverageLine value={average} ceiling={ceiling} currency={currency} />
+          ) : null}
 
           <div className={cn("relative flex items-end gap-[2px]", PLOT_HEIGHT)}>
             {buckets.map((bucket, index) => (
@@ -120,6 +146,9 @@ export function Columns({
                     index={index}
                     ceiling={ceiling}
                     dimmed={bucket.partial === true}
+                    receded={active !== null && active !== index}
+                    highlight={highlight}
+                    delay={index * 28}
                   />
                 ) : (
                   <Pair
@@ -127,6 +156,9 @@ export function Columns({
                     index={index}
                     ceiling={ceiling}
                     dimmed={bucket.partial === true}
+                    receded={active !== null && active !== index}
+                    highlight={highlight}
+                    delay={index * 28}
                   />
                 )}
 
@@ -168,6 +200,15 @@ export function Columns({
               index={active}
               currency={currency}
               position={(active + 0.5) / buckets.length}
+              total={totals[active] ?? null}
+              average={average}
+              periodTotal={
+                settled.length > 0
+                  ? totals.reduce<number>((a, v) => a + (v ?? 0), 0)
+                  : null
+              }
+              peak={peakIndex === active}
+              mode={mode}
             />
           ) : null}
 
@@ -249,22 +290,31 @@ function Stack({
   index,
   ceiling,
   dimmed,
+  receded,
+  highlight,
+  delay,
 }: {
   series: ColumnSeries[];
   index: number;
   ceiling: number;
   dimmed: boolean;
+  /** Another column is under the pointer: this one steps back. */
+  receded: boolean;
+  highlight: string | null;
+  delay: number;
 }) {
   // `flex-col-reverse` so the first band sits on the baseline, which is where
   // a reader expects the first legend entry to be.
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-col-reverse gap-[2px]",
+        "grow-y flex h-full w-full flex-col-reverse gap-[2px] transition-opacity duration-150",
         SINGLE_WIDTH,
         "mx-auto",
         dimmed && "opacity-60",
+        receded && "opacity-40",
       )}
+      style={{ "--delay": `${delay}ms` } as CSSProperties}
     >
       {series.map((band, depth) => {
         const point = band.points[index];
@@ -278,9 +328,10 @@ function Stack({
           <div
             key={band.key}
             className={cn(
-              "min-h-[2px] w-full",
+              "min-h-[2px] w-full transition-opacity duration-150",
               band.tone,
               highest && "rounded-t-[4px]",
+              highlight !== null && highlight !== band.key && "opacity-20",
             )}
             style={{ height: `${(point.value / ceiling) * 100}%` }}
           />
@@ -295,11 +346,18 @@ function Pair({
   index,
   ceiling,
   dimmed,
+  receded,
+  highlight,
+  delay,
 }: {
   series: ColumnSeries[];
   index: number;
   ceiling: number;
   dimmed: boolean;
+  /** Another column is under the pointer: this one steps back. */
+  receded: boolean;
+  highlight: string | null;
+  delay: number;
 }) {
   // One series is not a pair: splitting the slot in half for a bar that has
   // no neighbour leaves a thread of ink and half a slot of nothing.
@@ -308,8 +366,9 @@ function Pair({
   return (
     <div
       className={cn(
-        "flex h-full w-full items-end justify-center gap-[2px]",
+        "flex h-full w-full items-end justify-center gap-[2px] transition-opacity duration-150",
         dimmed && "opacity-60",
+        receded && "opacity-40",
       )}
     >
       {series.map((band) => {
@@ -319,12 +378,18 @@ function Pair({
           <div
             key={band.key}
             className={cn(
-              "w-full rounded-t-[4px]",
+              "grow-y w-full rounded-t-[4px] transition-opacity duration-150",
               width,
               band.tone,
               value > 0 && "min-h-[2px]",
+              highlight !== null && highlight !== band.key && "opacity-20",
             )}
-            style={{ height: `${(value / ceiling) * 100}%` }}
+            style={
+              {
+                height: `${(value / ceiling) * 100}%`,
+                "--delay": `${delay}ms`,
+              } as CSSProperties
+            }
           />
         );
       })}
@@ -354,6 +419,33 @@ function describeSlot(
       `${band.label} ${formatMoney(band.points[index]?.amount ?? "0", currency)}`,
   );
   return `${period}: ${parts.join(", ")}`;
+}
+
+/** The period's own typical column: a dashed rule, named once at its right end. */
+function AverageLine({
+  value,
+  ceiling,
+  currency,
+}: {
+  value: number;
+  ceiling: number;
+  currency: string;
+}) {
+  return (
+    <div
+      aria-hidden
+      className={cn("pointer-events-none absolute inset-x-0 top-0 z-[1]", PLOT_HEIGHT)}
+    >
+      <div
+        className="rise absolute inset-x-0 border-cyan/60 border-t border-dashed"
+        style={{ bottom: `${(value / ceiling) * 100}%` }}
+      >
+        <span className="absolute right-0 bottom-1 rounded bg-surface/80 px-1 text-[10px] text-cyan tabular">
+          Promedio {formatMoney(value.toFixed(0), currency)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 /** Three ticks: nothing, half, and the ceiling. More is chrome. */
@@ -398,12 +490,22 @@ function Readout({
   index,
   currency,
   position,
+  total,
+  average,
+  periodTotal,
+  peak,
+  mode,
 }: {
   bucket: ColumnBucket;
   series: ColumnSeries[];
   index: number;
   currency: string;
   position: number;
+  total: number | null;
+  average: number | null;
+  periodTotal: number | null;
+  peak: boolean;
+  mode: "grouped" | "stacked";
 }) {
   const shown = series.filter((band) => (band.points[index]?.value ?? 0) > 0);
 
@@ -422,6 +524,9 @@ function Readout({
         {bucket.full}
         {bucket.partial ? " · en curso" : null}
       </p>
+      {peak ? (
+        <p className="mb-1.5 text-cyan text-xs">La más alta del periodo</p>
+      ) : null}
       {shown.length === 0 ? (
         <p className="text-muted text-xs">Sin movimientos</p>
       ) : (
@@ -443,6 +548,25 @@ function Readout({
           ))}
         </ul>
       )}
+      {total !== null && total > 0 ? (
+        <p className="mt-2 border-line border-t pt-1.5 text-faint text-xs tabular">
+          {mode === "stacked" && shown.length > 1 ? (
+            <>
+              Total{" "}
+              <span className="text-muted">
+                {formatMoney(total.toFixed(0), currency)}
+              </span>
+              <br />
+            </>
+          ) : null}
+          {periodTotal
+            ? `${Math.round((total / periodTotal) * 100)}% del periodo`
+            : null}
+          {average && !bucket.partial
+            ? `${periodTotal ? ", " : ""}${total >= average ? "+" : "-"}${Math.round((Math.abs(total - average) / average) * 100)}% vs el promedio`
+            : null}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -25,11 +25,10 @@ import {
   CalendarDays,
   CalendarRange,
   MousePointerClick,
-  Receipt,
   Scale,
   Tags,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import {
   type Account,
   accountsQuery,
@@ -45,6 +44,7 @@ import { CountUpMoney } from "@/components/CountUpMoney";
 import { Columns } from "@/components/charts/Columns";
 import { bandPalette } from "@/components/charts/palette";
 import { RankedBars } from "@/components/charts/RankedBars";
+import { Sparkline } from "@/components/charts/Sparkline";
 import { Money } from "@/components/Money";
 import { PageHeader, type PageHelp } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -252,6 +252,23 @@ function ReportsScreen() {
   // rank and colour the same bands twice on every render.
   const bands = bandsOf(trend, hues, (value) => labelFrom(labels, value));
 
+  // Legends are controls: hover holds one series in focus, a press hides it.
+  const [hiddenBands, setHiddenBands] = useState<string[]>([]);
+  const [hiddenFlow, setHiddenFlow] = useState<string[]>([]);
+  const [focusBand, setFocusBand] = useState<string | null>(null);
+  const flowSeries = cashflowSeries(flow);
+  // The runs behind the tiles: what each figure did across the period, so a
+  // total also says whether it was steady or one bad week.
+  const incomingRun = flowSeries[0]?.points.map((point) => point.value) ?? [];
+  const outgoingRun = flowSeries[1]?.points.map((point) => point.value) ?? [];
+  const netRun = incomingRun.map((value, index) => value - (outgoingRun[index] ?? 0));
+  const paceRun = outgoingRun.reduce<number[]>((run, value) => {
+    run.push((run[run.length - 1] ?? 0) + value);
+    return run;
+  }, []);
+  const shownFlow = flowSeries.filter((band) => !hiddenFlow.includes(band.key));
+  const shownBands = bands.filter((band) => !hiddenBands.includes(band.key));
+
   return (
     <AppShell>
       <div className="flex flex-col gap-6">
@@ -298,12 +315,19 @@ function ReportsScreen() {
                   search: drilldown(view, { direction: "outgoing" }),
                 }}
                 caption={
-                  <Delta
+                  <Compared
+                    delta={
+                      <Delta
+                        previous={before?.outgoing}
+                        current={now.outgoing}
+                        lowerIsBetter
+                      />
+                    }
                     previous={before?.outgoing}
-                    current={now.outgoing}
-                    lowerIsBetter
+                    currency={currency}
                   />
                 }
+                chart={<Sparkline values={outgoingRun} className="text-accent" />}
               >
                 <CountUpMoney
                   amount={now.outgoing}
@@ -321,7 +345,14 @@ function ReportsScreen() {
                   to: "/transacciones",
                   search: drilldown(view, { direction: "incoming" }),
                 }}
-                caption={<Delta previous={before?.incoming} current={now.incoming} />}
+                caption={
+                  <Compared
+                    delta={<Delta previous={before?.incoming} current={now.incoming} />}
+                    previous={before?.incoming}
+                    currency={currency}
+                  />
+                }
+                chart={<Sparkline values={incomingRun} className="text-incoming" />}
               >
                 <CountUpMoney
                   amount={now.incoming}
@@ -338,12 +369,19 @@ function ReportsScreen() {
                 // Both directions, which is what a balance is made of.
                 to={{ to: "/transacciones", search: drilldown(view) }}
                 caption={
-                  <span className="text-faint">
-                    {netOf(now) >= 0
-                      ? "Te quedó a favor"
-                      : "Gastaste más de lo que entró"}
-                  </span>
+                  <Compared
+                    delta={
+                      <span className="text-faint">
+                        {netOf(now) >= 0
+                          ? "Te quedó a favor"
+                          : "Gastaste más de lo que entró"}
+                      </span>
+                    }
+                    previous={before?.net}
+                    currency={currency}
+                  />
                 }
+                chart={<Sparkline values={netRun} className="text-cyan" />}
               >
                 <CountUpMoney
                   amount={now.net}
@@ -359,10 +397,16 @@ function ReportsScreen() {
                 icon={CalendarDays}
                 hue="violet"
                 caption={
-                  <span className="text-faint">
-                    Promedio en {elapsedDays(range)} días
-                  </span>
+                  <Compared
+                    delta={
+                      <span className="text-faint">
+                        Promedio en {elapsedDays(range)} días
+                      </span>
+                    }
+                    currency={currency}
+                  />
                 }
+                chart={<Sparkline values={paceRun} className="text-violet" />}
               >
                 <CountUpMoney
                   amount={perDay(now.outgoing, range)}
@@ -376,18 +420,23 @@ function ReportsScreen() {
               <Panel
                 title="Flujo de caja"
                 hint="Lo que entró contra lo que salió, periodo a periodo."
-                glow="cyan"
               >
                 <Legend
-                  entries={[
-                    { label: "Ingresos", tone: "bg-incoming" },
-                    { label: "Gastos", tone: "bg-accent" },
-                  ]}
+                  entries={flowSeries.map((band) => ({
+                    key: band.key,
+                    label: band.label,
+                    tone: band.tone,
+                  }))}
+                  hidden={hiddenFlow}
+                  onToggle={(key) =>
+                    setHiddenFlow((now) => toggled(now, key, flowSeries))
+                  }
                 />
                 <Columns
+                  key={hiddenFlow.join()}
                   mode="grouped"
                   buckets={bucketsOf(flow, interval)}
-                  series={cashflowSeries(flow)}
+                  series={shownFlow}
                   currency={currency}
                   caption="Ingresos y gastos por periodo"
                   movementsOf={(index) => {
@@ -404,7 +453,6 @@ function ReportsScreen() {
                     ? "En qué se fue la plata este periodo."
                     : `Comparado con ${describePrevious(byCategory)}.`
                 }
-                glow="accent"
               >
                 <Link
                   to="/reportes/categoria"
@@ -434,7 +482,6 @@ function ReportsScreen() {
             <Panel
               title="En qué se va, periodo a periodo"
               hint="Cada banda es una categoría. Se ordenan una sola vez sobre todo el rango, así que la pila es comparable de una barra a otra."
-              glow="violet"
             >
               <Legend
                 entries={bands.map((band) => ({
@@ -442,11 +489,16 @@ function ReportsScreen() {
                   label: band.label,
                   tone: band.tone,
                 }))}
+                hidden={hiddenBands}
+                onToggle={(key) => setHiddenBands((now) => toggled(now, key, bands))}
+                onFocusKey={setFocusBand}
               />
               <Columns
+                key={hiddenBands.join()}
                 mode="stacked"
+                highlight={focusBand}
                 buckets={bucketsOf(trend, interval)}
-                series={bands}
+                series={shownBands}
                 currency={currency}
                 caption="Gasto por categoría y periodo"
                 movementsOf={(index) => {
@@ -462,7 +514,6 @@ function ReportsScreen() {
               <Panel
                 title="Dónde más gastas"
                 hint="Los comercios que más pesan en el periodo."
-                glow="accent"
               >
                 <RankedBars
                   rows={rankedRows(byMerchant, {
@@ -480,11 +531,7 @@ function ReportsScreen() {
                 />
               </Panel>
 
-              <Panel
-                title="Por día de la semana"
-                hint="Cuándo se te va la plata."
-                glow="cyan"
-              >
+              <Panel title="Por día de la semana" hint="Cuándo se te va la plata.">
                 <Columns
                   mode="grouped"
                   buckets={WEEKDAYS.map((day) => ({
@@ -502,7 +549,6 @@ function ReportsScreen() {
             <Panel
               title="Tus mayores gastos"
               hint="Los movimientos más grandes del periodo, de uno en uno."
-              glow="accent"
             >
               <Biggest transactions={largest.transactions} />
             </Panel>
@@ -539,19 +585,17 @@ const HELP: PageHelp = {
 function Panel({
   title,
   hint,
-  glow,
   children,
 }: {
   title: string;
   hint: string;
-  glow: "accent" | "cyan" | "violet";
   children: ReactNode;
 }) {
   return (
-    <Card glow={glow} lift={false} className="flex flex-col gap-4">
+    <Card lift={false} className="flex flex-col gap-4">
       <div>
-        <h2 className="font-medium">{title}</h2>
-        <p className="mt-0.5 text-faint text-xs">{hint}</p>
+        <h2 className="font-medium text-base">{title}</h2>
+        <p className="mt-1 text-faint text-sm">{hint}</p>
       </div>
       {children}
     </Card>
@@ -564,31 +608,92 @@ function Panel({
  * Always present once there are two bands: colour alone is not an identity
  * channel everybody has.
  */
+function toggled(hidden: string[], key: string, all: { key: string }[]): string[] {
+  if (hidden.includes(key)) return hidden.filter((entry) => entry !== key);
+  // The last visible series stays: an empty chart explains nothing.
+  return all.length - hidden.length > 1 ? [...hidden, key] : hidden;
+}
+
 function Legend({
   entries,
+  hidden = [],
+  onToggle,
+  onFocusKey,
 }: {
   entries: { key?: string; label: string; tone: string }[];
+  hidden?: string[];
+  onToggle?: (key: string) => void;
+  onFocusKey?: (key: string | null) => void;
 }) {
   if (entries.length < 2) return null;
 
   return (
-    <ul className="-mt-1 flex flex-wrap gap-x-4 gap-y-1.5">
-      {entries.map((entry) => (
-        // Keyed by the band's own key where there is one: two bands can share
-        // a label — a merchant really called "Otros" — and a duplicate React
-        // key silently drops one of them.
-        <li
-          key={entry.key ?? entry.label}
-          className="flex items-center gap-1.5 text-muted text-xs"
-        >
-          <span
-            aria-hidden
-            className={cn("size-2 shrink-0 rounded-full", entry.tone)}
-          />
-          {entry.label}
-        </li>
-      ))}
+    <ul className="-mt-1 flex flex-wrap gap-x-1 gap-y-1">
+      {entries.map((entry) => {
+        const key = entry.key ?? entry.label;
+        const off = hidden.includes(key);
+        return (
+          // Keyed by the band's own key where there is one: two bands can
+          // share a label, and a duplicate React key drops one of them.
+          <li key={key}>
+            <label
+              onPointerEnter={() => onFocusKey?.(key)}
+              onPointerLeave={() => onFocusKey?.(null)}
+              className={cn(
+                "flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent hover:bg-surface-raised active:bg-surface-raised",
+                off ? "text-faint line-through" : "text-muted",
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={!off}
+                onChange={() => onToggle?.(key)}
+                onFocus={() => onFocusKey?.(key)}
+                onBlur={() => onFocusKey?.(null)}
+                className="sr-only"
+              />
+              <span
+                aria-hidden
+                className={cn(
+                  "size-2 shrink-0 rounded-full transition-opacity duration-150",
+                  entry.tone,
+                  off && "opacity-30",
+                )}
+              />
+              {entry.label}
+            </label>
+          </li>
+        );
+      })}
     </ul>
+  );
+}
+
+/** What the tile's figure was before, said once under the change. */
+function Compared({
+  delta,
+  previous,
+  currency,
+}: {
+  delta: ReactNode;
+  previous?: string;
+  currency: string;
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      {delta}
+      {previous !== undefined ? (
+        <span className="text-faint">
+          Antes{" "}
+          <Money
+            amount={previous}
+            currency={currency}
+            size="sm"
+            className="text-xs text-muted"
+          />
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -622,7 +727,7 @@ function Filters({
               )
             }
             className={cn(
-              "rounded-lg border px-3 py-1.5 text-xs transition-colors duration-150",
+              "rounded-lg border px-3 py-2 text-sm transition-colors duration-150 active:bg-surface-raised",
               active === entry.id
                 ? "border-accent/50 bg-accent/12 text-text"
                 : "border-line text-muted hover:border-accent/30 hover:text-text",
@@ -667,8 +772,8 @@ function Filters({
       ) : null}
 
       <div className="flex flex-wrap items-center gap-3 border-line/70 border-t pt-3">
-        <p className="text-faint text-xs">
-          {formatDate(view.range.from)} — {formatDate(view.range.to - 1)}
+        <p className="text-faint text-sm">
+          {formatDate(view.range.from)} a {formatDate(view.range.to - 1)}
         </p>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -775,8 +880,7 @@ function Biggest({ transactions }: { transactions: Transaction[] }) {
 
 function NothingHere() {
   return (
-    <Card glow="violet" lift={false} className="flex flex-col items-start gap-3">
-      <Receipt className="size-5 text-violet" aria-hidden />
+    <Card lift={false} className="flex flex-col items-start gap-3">
       <div>
         <h2 className="font-medium">No hay nada que reportar en este periodo</h2>
         <p className="mt-1 text-muted text-sm">
