@@ -345,25 +345,26 @@ AWS (ver Trabas).
 
 ## Últimos trabajos terminados
 
+- 2026-11-26 — **Transacciones, segunda pasada con Hallmark, a la espera de que
+  Stiven la acepte.** Columnas Día, Movimiento (ícono y categoría bajo el comercio),
+  Cuenta (sin ícono) y Monto; «Mes» y «Tipo» desplegables (Ingresos/Gastos sin
+  traslados), totales del mes desde `/summary`, orden «Más grandes». Nota y «a mano»
+  fuera de la lista. `web-check` y `just e2e` en verde. Sin commit.
+- 2026-11-26 — **Gráficas del Resumen con comportamiento.** Patrimonio: al recorrer
+  la línea sale el cambio contra el mes anterior, y bajo la gráfica el cambio del
+  periodo. Gastos por categoría: segmentos tocables con variación contra el mes
+  anterior a la misma altura. `Donut.tsx` (huérfano) borrado. Sin línea de deuda.
+  `web-check` y `just e2e` (14 suites) en verde. Sin commit.
+- 2026-11-24 — **Reportes rediseñada con Hallmark, a la espera de que Stiven la
+  acepte.** Las cuatro tarjetas ganan el periodo anterior («Antes») y una línea de
+  tendencia; las gráficas animan al entrar, atenúan las columnas vecinas, marcan el
+  promedio y la más alta, y el tooltip da % del periodo y contra el promedio. Las
+  leyendas ocultan series y resaltan al pasar. `/reportes/categoria` sin rediseñar.
+  `e2e-reportes` en verde. Sin commit.
+- 2026-11-24 — **Transacciones rediseñada con Hallmark, a la espera de que Stiven
+  la acepte.** El día ancla cada fila (una vez por día, como un extracto), la
+  baldosa de flechas se fue, y búsqueda, dirección y filtros van en una línea.
+  `web-check` y las e2e de transacciones, exportar, guías y pantallas en verde. Sin commit.
 - 2026-11-24 — **`e2e-guias` en verde tras el merge a master.** La línea de
   patrimonio repetía la key de sus guías cuando la serie era plana (todo en 0,
   usuario nuevo); ahora van por posición. `web-check` y `e2e-guias` en verde. Sin commit.
-- 2026-11-23 — **Facturas rediseñada con Hallmark, a la espera de que Stiven
-  la acepte.** Cada tarjeta dice cómo va su mes («Pagada», «Atrasada», «Este mes
-  no»…, `monthReading` en `bills/schedule.ts`), con las mismas palabras en las
-  filas; lo pendiente va antes que las tarjetas y «Declarar» sube a la cabecera.
-  `web-check` y `e2e-bills` en verde. Sin commit.
-- 2026-11-23 — **Resumen rediseñado con Hallmark, a la espera de que Stiven
-  lo acepte.** Patrimonio con su línea de 12 meses (`/financial/history`) que se
-  recorre, ingresos contra gastos en importe y no en %, categorías en barra
-  apilada, movimientos que entran en vivo (cada 60 s). `web-check`, `sloplint`
-  y `e2e-resumen` en verde. Sin commit; `Donut.tsx` y `Sparkline.tsx` quedan sin uso.
-- 2026-11-16 — **Contraste de texto y cuenta demo para QA.** `faint` y `muted`
-  más claros, textos sueltos sobre el plasma en `text-text/85`, y un token
-  `accent-solid` para botones magenta (antes 3,7:1). Cuenta `qa.demo@finflow.local`
-  en producción (1 ahorros, 2 tarjetas, 27 movimientos, 4 facturas, 2 topes, mesada).
-  Frontend en `5fbde41`; la web de producción sigue sin republicar. Nueva
-  `docs/requisitos.md` (dependencias, local y servidor), revisada con el revisor.
-- 2026-11-03 — **Del movimiento a su comercio, y de vuelta.** El nombre del
-  comercio en el detalle es un enlace; su pantalla, abierta desde ahí, vuelve
-  al movimiento (`?movement=`). `e2e-comercios` lo recorre. Sin commit.

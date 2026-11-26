@@ -20,6 +20,8 @@ export type Part = {
   amount: string;
   /** Its share of the total, 0 to 1. Drives the drawing only. */
   share: number;
+  /** The same figure at this point last month, when there was one. */
+  previous?: string;
 };
 
 /* Whole class names, so Tailwind's scanner finds them. */
@@ -36,32 +38,62 @@ export function CategoryBar({
   parts,
   currency,
   movementsOf,
+  compare,
+  hint,
 }: {
   parts: Part[];
   currency: string;
+  /** What changed for one part against last month; nothing when it cannot say. */
+  compare?: (part: Part) => ReactNode;
+  /** Shown while no part is picked. */
+  hint?: string;
   /** The Transacciones filters behind one part, or null when no list can show it. */
   movementsOf: (part: Part) => Record<string, unknown> | null;
 }) {
   const [active, setActive] = useState<string | null>(null);
+  const focused = parts.find((part) => part.key === active) ?? null;
 
   return (
     <div className="flex flex-col gap-4">
       <div
-        aria-hidden
-        className="flex h-3 origin-left gap-0.5 overflow-hidden rounded-full"
+        className="flex h-6 origin-left gap-0.5 overflow-hidden rounded-full"
         style={{ animation: "grow-from-zero 700ms cubic-bezier(0.16, 1, 0.3, 1) both" }}
       >
         {parts.map((part, index) => (
-          <span
+          <button
             key={part.key}
+            type="button"
+            aria-label={`${part.label}, ${Math.round(part.share * 100)}%`}
+            aria-pressed={active === part.key}
             className={cn(
-              "h-full transition-opacity duration-200",
+              "h-full min-w-1 cursor-pointer transition-opacity duration-200 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2",
               FILLS[index % FILLS.length],
               active !== null && active !== part.key ? "opacity-25" : null,
             )}
             style={{ flex: `${part.share} 1 0` }}
+            onPointerEnter={(event) => {
+              if (event.pointerType === "mouse") setActive(part.key);
+            }}
+            onPointerLeave={(event) => {
+              if (event.pointerType === "mouse") setActive(null);
+            }}
+            // A finger has no hover: tapping picks, tapping again lets go.
+            onClick={() => setActive(active === part.key ? null : part.key)}
           />
         ))}
+      </div>
+
+      <div className="flex min-h-10 flex-col gap-0.5 text-sm" aria-live="polite">
+        {focused ? (
+          <>
+            <span className="text-muted">
+              {focused.label}, {Math.round(focused.share * 100)}% de lo gastado
+            </span>
+            <span className="text-xs">{compare?.(focused)}</span>
+          </>
+        ) : hint ? (
+          <span className="text-faint text-xs">{hint}</span>
+        ) : null}
       </div>
 
       <ul className="-mx-2 flex flex-col">

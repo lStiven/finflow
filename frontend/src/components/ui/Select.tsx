@@ -55,9 +55,11 @@ type Props = {
   /**
    * `field` is a form field with its label above. `pill` and `compact` are a
    * control inside a row or a toolbar: the label is still there, for a screen
-   * reader, and the field says the value.
+   * reader, and the field says the value. `toolbar` is the same, at the height
+   * of the search box it sits beside. `quiet` is only its words and a
+   * chevron, for a choice that sits beside a heading.
    */
-  variant?: "field" | "pill" | "compact";
+  variant?: "field" | "pill" | "compact" | "toolbar" | "quiet";
   icon?: ComponentType<{ className?: string }>;
   className?: string;
 };
@@ -283,6 +285,14 @@ export function Select({
       "inline-flex min-h-11 items-center gap-1.5 rounded-lg border bg-ink px-3 text-muted text-xs transition-colors sm:min-h-9",
       open ? "border-accent" : "border-line hover:text-text",
     ),
+    quiet: cn(
+      "inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm transition-colors sm:min-h-9",
+      open ? "text-text" : "text-muted hover:text-text",
+    ),
+    toolbar: cn(
+      "inline-flex min-h-11 w-full items-center gap-1.5 rounded-xl border bg-surface px-3 text-left text-sm text-text transition-colors sm:gap-2 sm:px-4",
+      open ? "border-accent" : "border-line hover:border-muted/50",
+    ),
   }[variant];
 
   const rows = (
@@ -438,7 +448,11 @@ export function Select({
     <div
       className={cn(
         "relative min-w-0",
-        variant === "field" ? "flex flex-col gap-2" : "inline-flex",
+        variant === "field"
+          ? "flex flex-col gap-2"
+          : variant === "toolbar"
+            ? "flex"
+            : "inline-flex",
       )}
     >
       <span
@@ -465,11 +479,23 @@ export function Select({
           className,
         )}
       >
-        {Icon ? <Icon aria-hidden className="size-3.5 shrink-0 text-faint" /> : null}
+        {Icon ? (
+          <Icon
+            aria-hidden
+            className={cn(
+              "shrink-0",
+              variant === "toolbar" ? "size-4 text-muted" : "size-3.5 text-faint",
+            )}
+          />
+        ) : null}
         <span
           className={cn(
             "min-w-0 flex-1 truncate",
-            !selected || (selected.value === "" && placeholder) ? "text-faint" : "",
+            !selected || (selected.value === "" && placeholder)
+              ? variant === "toolbar"
+                ? "text-muted"
+                : "text-faint"
+              : "",
             variant === "field" && !selected && "text-faint",
           )}
         >

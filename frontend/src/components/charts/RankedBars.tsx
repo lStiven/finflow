@@ -48,40 +48,66 @@ export function RankedBars({
     return <p className="py-6 text-center text-muted text-sm">{empty}</p>;
   }
 
+  const total = rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+
   return (
     <ul className="flex flex-col gap-1">
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <li key={row.key}>
-          <Row row={row} currency={currency} />
+          <Row
+            row={row}
+            currency={currency}
+            delay={index * 70}
+            share={total > 0 ? (Number(row.amount) || 0) / total : null}
+          />
         </li>
       ))}
     </ul>
   );
 }
 
-function Row({ row, currency }: { row: RankedRow; currency: string }) {
+function Row({
+  row,
+  currency,
+  delay,
+  share,
+}: {
+  row: RankedRow;
+  currency: string;
+  delay: number;
+  /** Of everything listed, 0 to 1 — display only, the bar's own length is `fill`. */
+  share: number | null;
+}) {
   const body = (
     <>
       <div className="flex items-baseline justify-between gap-3">
         <span className="min-w-0 flex-1 truncate text-sm">{row.label}</span>
         <Delta previous={row.previous} current={row.amount} />
+        {share !== null ? (
+          <span className="w-9 shrink-0 text-right text-[11px] text-faint tabular">
+            {share < 0.01 ? "<1" : Math.round(share * 100)}%
+          </span>
+        ) : null}
         <Money amount={row.amount} currency={currency} size="sm" />
       </div>
       {/*
        * The track is the surface, the fill is the hue. No stroke round
        * either: the gap between rows is what separates them.
        */}
-      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised transition-transform duration-150 group-hover/row:scale-y-150">
         <div
-          className={cn("h-full rounded-full", row.tone)}
-          style={{ width: `${Math.max(row.fill * 100, 1.5)}%` }}
+          className={cn("h-full origin-left rounded-full", row.tone)}
+          style={{
+            width: `${Math.max(row.fill * 100, 1.5)}%`,
+            animation: `grow-from-zero 800ms ${delay}ms cubic-bezier(0.16, 1, 0.3, 1) backwards`,
+          }}
         />
       </div>
     </>
   );
 
   const shell =
-    "block rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised";
+    "group/row block rounded-xl px-2 py-2 transition-colors duration-150 hover:bg-surface-raised active:bg-surface-raised";
 
   if (!row.to) return <div className={cn(shell, "hover:bg-transparent")}>{body}</div>;
 

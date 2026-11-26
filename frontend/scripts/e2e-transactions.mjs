@@ -20,6 +20,9 @@
  *    is answered from the movement too — «Está bien» confirms it in place.
  * 5. **The redundant «Estado» row is gone**, the page does not scroll
  *    sideways on a phone, and nothing is logged as an error.
+ * 6. **The list answers like the API**: a month's totals are `/summary`'s,
+ *    «Gastos» leaves transfers out, «Traslados» lists only them, «Más grandes»
+ *    starts where the API's ranking does, and a row opens its own movement.
  *
  * It cleans up after itself, including when an assertion fails: the movement
  * is erased (which gives the account its money back, and that is checked) and
@@ -128,6 +131,21 @@ async function dismissOnboarding(page) {
       }),
     );
   });
+}
+
+/**
+ * What `read` returns once it equals `expected`, or what it returns after five
+ * seconds. The URL changes before the list re-renders, so a reading taken at
+ * once can still be the previous list's.
+ */
+async function settlesOn(read, expected) {
+  const until = Date.now() + 5_000;
+  let value = await read();
+  while (value !== expected && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    value = await read();
+  }
+  return value;
 }
 
 async function noSidewaysScroll(page) {
@@ -389,6 +407,121 @@ async function main() {
       "borrado el movimiento, la cuenta recupera su saldo",
       Number(restored.balance),
       before,
+    );
+
+    // ------------------------------------------------------------ the list
+    // The tabs, the month totals, the largest-first order and a row opening
+    // its detail, each checked against what the API says rather than the
+    // screen against itself.
+    const rowLinks = page.locator('main li > a[href^="/transacciones/"]');
+    await page.goto(`${WEB}/transacciones`, { waitUntil: "networkidle" });
+
+    const firstRow = await call("/financial/transactions?limit=1");
+    const firstMovement = firstRow.transactions[0];
+    if (firstMovement) {
+      const month = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Bogota",
+        year: "numeric",
+        month: "2-digit",
+      })
+        .format(new Date(firstMovement.occurred_at * 1000))
+        .slice(0, 7);
+      const summary = await call("/financial/summary?group_by=month");
+      const totals = summary.groups
+        .find((group) => group.key === month)
+        ?.totals.find((entry) => entry.currency === firstMovement.currency);
+      const shown = await page.locator("main section").first().textContent();
+      const grouped = (amount) =>
+        new Intl.NumberFormat("es-CO", { maximumFractionDigits: 0 }).format(
+          Math.trunc(Number(amount)),
+        );
+      check(
+        "el mes dice lo que entró y salió, igual que /summary",
+        totals !== undefined &&
+          shown.includes(`Entró`) &&
+          shown.includes(grouped(totals.incoming)) &&
+          shown.includes(grouped(totals.outgoing)),
+        true,
+      );
+    }
+
+    await choose(page, page, "Tipo", { label: "Gastos" });
+    await page.waitForURL((url) => url.searchParams.get("direction") === "outgoing");
+    check(
+      "«Gastos» deja fuera los traslados",
+      new URL(page.url()).searchParams.get("transfers"),
+      "exclude",
+    );
+
+    await choose(page, page, "Tipo", { label: "Traslados" });
+    await page.waitForURL((url) => url.searchParams.get("transfers") === "only");
+    await page.waitForLoadState("networkidle");
+    const transfers = await call("/financial/transactions?transfers=only&limit=25");
+    const settled = await settlesOn(
+      () => rowLinks.count(),
+      transfers.transactions.length,
+    );
+    check(
+      "«Traslados» lista solo los traslados",
+      settled,
+      transfers.transactions.length,
+    );
+    check(
+      "y ninguno sin su etiqueta de traslado",
+      await page.locator("main li").filter({ hasText: "Traslado" }).count(),
+      transfers.transactions.length,
+    );
+
+    await choose(page, page, "Tipo", { label: "Todos los tipos" });
+    await page.waitForURL((url) => !url.searchParams.has("transfers"));
+    const thisMonth = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Bogota",
+      year: "numeric",
+      month: "2-digit",
+    })
+      .format(new Date())
+      .slice(0, 7);
+    await choose(page, page, "Mes", { value: thisMonth });
+    await page.waitForURL((url) => url.searchParams.has("from"));
+    const chosen = new URL(page.url()).searchParams;
+    check(
+      "«Mes» filtra del primer al último día de ese mes",
+      [
+        chosen.get("from")?.replaceAll('"', ""),
+        chosen.get("to")?.replaceAll('"', "").slice(0, 7),
+      ],
+      [`${thisMonth}-01`, thisMonth],
+    );
+    await choose(page, page, "Mes", { label: "Todos los meses" });
+    await page.waitForURL((url) => !url.searchParams.has("from"));
+
+    await choose(page, page, "Orden", { label: "Más grandes" });
+    await page.waitForURL((url) => url.searchParams.get("sort") === "amount");
+    await page.waitForLoadState("networkidle");
+    const largest = await call(
+      `/financial/transactions?sort=amount&currency=${firstMovement?.currency ?? "COP"}&limit=1`,
+    );
+    const top = `/transacciones/${largest.transactions[0]?.id}`;
+    check(
+      "«Más grandes» empieza por el más grande de la API",
+      await settlesOn(() => rowLinks.first().getAttribute("href"), top),
+      top,
+    );
+    check(
+      "la lista no se va de lado en un teléfono",
+      await noSidewaysScroll(page),
+      true,
+    );
+
+    const opened = await rowLinks.first().getAttribute("href");
+    await rowLinks.first().click();
+    await page.waitForURL((url) => url.pathname === opened);
+    check("tocar una fila abre ese movimiento", true, true);
+    await page.goBack({ waitUntil: "networkidle" });
+    check(
+      "y volver deja la lista como estaba",
+      new URL(page.url()).searchParams.get("sort"),
+      "amount",
     );
 
     check("la pantalla no registró errores", problems, []);
