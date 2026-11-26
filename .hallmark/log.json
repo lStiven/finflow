@@ -1,47 +1,65 @@
 [
- {
-  "mode": "redesign",
-  "depth": "full",
-  "scope": "app",
-  "shape": "app screen",
-  "theme": "brand",
-  "prompt": "movement list: find a movement and open it to fix it",
-  "signature": "the day as each row anchor, printed once per day like a statement",
-  "sections": [
-   "header with export and add",
-   "one toolbar: search, direction, filters",
-   "ledger by month"
-  ],
-  "waived": [
-   "26a",
-   "26b"
-  ],
-  "nav": "kept (AppShell)",
-  "footer": "kept",
-  "date": "2026-11-24"
- },
- {
-  "mode": "redesign",
-  "depth": "full",
-  "scope": "app",
-  "shape": "app screen",
-  "theme": "brand",
-  "prompt": "bills screen: what the month costs, what is paid, what is still due",
-  "signature": "each bill month status in one word, shared by cards and rows",
-  "sections": [
-   "header with declare action",
-   "month figure",
-   "settled and proposals",
-   "pending charges",
-   "declared cards",
-   "detected"
-  ],
-  "waived": [
-   "26a",
-   "26b"
-  ],
-  "nav": "kept (AppShell)",
-  "footer": "kept",
-  "date": "2026-11-23"
- }
+  {
+    "mode": "redesign",
+    "depth": "full",
+    "scope": "app",
+    "shape": "app screen",
+    "theme": "brand",
+    "prompt": "movement list: see where each movement went, in which account, and what a month added up to",
+    "signature": "a ledger whose rows say category and account at a glance, under month headings that carry what came in and went out",
+    "sections": [
+      "header with export and add",
+      "toolbar: search, month and kind dropdowns, filters",
+      "ledger by month with totals and largest-first switch"
+    ],
+    "waived": [],
+    "nav": "kept (AppShell)",
+    "footer": "kept",
+    "date": "2026-11-26"
+  },
+  {
+    "mode": "redesign",
+    "depth": "full",
+    "scope": "app",
+    "shape": "app screen",
+    "theme": "brand",
+    "prompt": "movement list: find a movement and open it to fix it",
+    "signature": "the day as each row anchor, printed once per day like a statement",
+    "sections": [
+      "header with export and add",
+      "one toolbar: search, direction, filters",
+      "ledger by month"
+    ],
+    "waived": [
+      "26a",
+      "26b"
+    ],
+    "nav": "kept (AppShell)",
+    "footer": "kept",
+    "date": "2026-11-24"
+  },
+  {
+    "mode": "redesign",
+    "depth": "full",
+    "scope": "app",
+    "shape": "app screen",
+    "theme": "brand",
+    "prompt": "bills screen: what the month costs, what is paid, what is still due",
+    "signature": "each bill month status in one word, shared by cards and rows",
+    "sections": [
+      "header with declare action",
+      "month figure",
+      "settled and proposals",
+      "pending charges",
+      "declared cards",
+      "detected"
+    ],
+    "waived": [
+      "26a",
+      "26b"
+    ],
+    "nav": "kept (AppShell)",
+    "footer": "kept",
+    "date": "2026-11-23"
+  }
 ]

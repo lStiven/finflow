@@ -1,7 +1,8 @@
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, redirect, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftRight,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Mail,
@@ -12,13 +13,18 @@ import {
   Unlink,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { originLabel } from "@/accounts/kinds";
 import {
+  type Account,
   accountsQuery,
+  type Currency,
   categoriesQuery,
   financialCatalogQuery,
   merchantsForFilterQuery,
+  type SpendingTotals,
+  type SummaryOptions,
+  summaryQuery,
   type Transaction,
   type TransactionFilters,
   type TransactionOrigin,
@@ -33,12 +39,16 @@ import { Card } from "@/components/ui/Card";
 import { Notice } from "@/components/ui/Notice";
 import { type Option, Select } from "@/components/ui/Select";
 import { storyOf } from "@/guides/stories";
+import { cn } from "@/lib/cn";
 import {
+  currentMonthKey,
   dayStringOf,
   formatDayMonth,
   formatMonthKey,
   fromLocalInput,
+  monthDayRange,
   monthKeyOf,
+  previousMonthKey,
 } from "@/lib/dates";
 import { transferTitle } from "@/lib/transfers";
 import {
@@ -47,6 +57,7 @@ import {
   isUncategorized,
   labelFrom,
 } from "@/merchants/categories";
+import { categoryIcon, TRANSFER_ICON } from "@/merchants/categoryIcons";
 import { EmptyDiagnosis } from "@/onboarding/EmptyDiagnosis";
 
 const PAGE_SIZE = 25;
@@ -56,11 +67,89 @@ const PAGE_SIZE = 25;
  * count of what the tab selected. Filtering a loaded page in the browser
  * instead would show three movements under a total of forty.
  */
-const DIRECTION_TABS = [
-  { label: "Todas", value: undefined },
-  { label: "Ingresos", value: "incoming" },
-  { label: "Gastos", value: "outgoing" },
+/**
+ * What «Tipo» offers. Money in and money out leave transfers out, so the three
+ * never overlap and each adds up to what the summary calls the same thing.
+ */
+const KINDS = [
+  {
+    value: "incoming",
+    label: "Ingresos",
+    patch: { direction: "incoming", transfers: "exclude" },
+  },
+  {
+    value: "outgoing",
+    label: "Gastos",
+    patch: { direction: "outgoing", transfers: "exclude" },
+  },
+  {
+    value: "transfers",
+    label: "Traslados",
+    patch: { direction: undefined, transfers: "only" },
+  },
 ] as const;
+
+/**
+ * The kind a URL reads as. One that arrives with a direction and transfers
+ * included (an older link) still reads as its direction: the list is that
+ * direction, plus the transfers the link asked for.
+ */
+function kindOf(search: TransactionSearch): string {
+  if (search.transfers === "only") return "transfers";
+  return search.direction ?? "";
+}
+
+function kindPatch(value: string): Partial<TransactionSearch> {
+  return (
+    KINDS.find((kind) => kind.value === value)?.patch ?? {
+      direction: undefined,
+      transfers: undefined,
+    }
+  );
+}
+
+/** How many months back «Mes» offers, the running one included. */
+const MONTHS_OFFERED = 12;
+/** The value «Mes» holds while the dates came from «Desde» and «Hasta». */
+const CUSTOM_RANGE = "custom";
+
+/** The month the dates cover exactly, a custom range, or nothing at all. */
+function monthOf(search: TransactionSearch): string {
+  if (!search.from && !search.to) return "";
+  const key = search.from?.slice(0, 7) ?? "";
+  const whole = monthDayRange(key);
+  return whole && whole.from === search.from && whole.to === search.to
+    ? key
+    : CUSTOM_RANGE;
+}
+
+function monthPatch(value: string): Partial<TransactionSearch> {
+  if (value === CUSTOM_RANGE) return {};
+  const whole = value ? monthDayRange(value) : null;
+  return { from: whole?.from, to: whole?.to };
+}
+
+function monthOptions(search: TransactionSearch): Option[] {
+  const options: Option[] = [];
+  let key = currentMonthKey();
+  for (let at = 0; at < MONTHS_OFFERED; at += 1) {
+    const name = formatMonthKey(key);
+    options.push({ value: key, label: name.charAt(0).toUpperCase() + name.slice(1) });
+    key = previousMonthKey(key);
+  }
+  const chosen = monthOf(search);
+  if (chosen === CUSTOM_RANGE) {
+    options.unshift({ value: CUSTOM_RANGE, label: "Fechas a medida" });
+  } else if (chosen && !options.some((option) => option.value === chosen)) {
+    // A month older than the offer, arriving by URL, still names itself.
+    const name = formatMonthKey(chosen);
+    options.push({
+      value: chosen,
+      label: name.charAt(0).toUpperCase() + name.slice(1),
+    });
+  }
+  return options;
+}
 
 /**
  * The filters live in the URL, not in component state.
@@ -85,6 +174,8 @@ export type TransactionSearch = {
   transfers?: "exclude" | "only";
   from?: string;
   to?: string;
+  /** Largest first instead of newest first. Absent is by date. */
+  sort?: "amount";
   /**
    * Optional so a plain `<Link to="/transacciones">` needs no search object;
    * every read below defaults it to the first page.
@@ -136,20 +227,36 @@ export const Route = createFileRoute("/transacciones/")({
         : undefined,
     from: text(raw.from),
     to: text(raw.to),
+    sort: raw.sort === "amount" ? "amount" : undefined,
     page: raw.page === undefined ? undefined : Math.max(1, Number(raw.page) || 1),
   }),
   loaderDeps: ({ search }) => search,
-  loader: ({ context, deps }) =>
-    Promise.all([
+  loader: async ({ context, deps }) => {
+    // First, because sorting by amount needs the currency it ranks in.
+    const accounts = await context.queryClient.query({
+      ...accountsQuery("all"),
+      staleTime: "static",
+    });
+    const currency = rankingCurrency(accounts);
+    return Promise.all([
       context.queryClient.query({
-        ...transactionsQuery(toFilters(deps)),
+        ...transactionsQuery(toFilters(deps, currency)),
         staleTime: "static",
       }),
-      context.queryClient.query({ ...accountsQuery("all"), staleTime: "static" }),
+      // The month headings' totals. Optional: failing costs the totals only.
+      monthTotalsShown(deps)
+        ? context.queryClient
+            .query({
+              ...summaryQuery("month", summaryFilters(deps)),
+              staleTime: "static",
+            })
+            .catch(() => null)
+        : null,
       context.queryClient.query({ ...merchantsForFilterQuery, staleTime: "static" }),
       context.queryClient.query(categoriesQuery),
       context.queryClient.query({ ...financialCatalogQuery, staleTime: "static" }),
-    ]),
+    ]);
+  },
   component: TransactionsScreen,
 });
 
@@ -175,10 +282,29 @@ function pageOf(search: TransactionSearch): number {
   return search.page ?? 1;
 }
 
-function toFilters(search: TransactionSearch): TransactionFilters {
+/**
+ * The currency a largest-first list ranks in: the one the net worth leads
+ * with, as on the dashboard. The API refuses to rank across currencies.
+ */
+function rankingCurrency(accounts: { net_worth: { currency: string }[] }): Currency {
+  return (accounts.net_worth[0]?.currency ?? "COP") as Currency;
+}
+
+function toFilters(search: TransactionSearch, currency: Currency): TransactionFilters {
   return {
     limit: PAGE_SIZE,
     offset: (pageOf(search) - 1) * PAGE_SIZE,
+    ...(search.sort === "amount" ? { sort: "amount", currency } : {}),
+    ...summaryFilters(search),
+  };
+}
+
+/**
+ * The list's filters without its paging: what the month totals are asked
+ * with, so a heading's figure covers exactly the movements under it.
+ */
+function summaryFilters(search: TransactionSearch): SummaryOptions {
+  return {
     search: search.search,
     account_id: search.account,
     category: search.category,
@@ -194,12 +320,29 @@ function toFilters(search: TransactionSearch): TransactionFilters {
   };
 }
 
+/**
+ * Month totals only where the list is grouped by month, and never for
+ * transfers alone: a transfer is neither money in nor money out, so «entró» and
+ * «salió» would both be zero over a list of them.
+ */
+function monthTotalsShown(search: TransactionSearch): boolean {
+  return search.sort !== "amount" && search.transfers !== "only";
+}
+
 function TransactionsScreen() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
 
-  const { data: page } = useSuspenseQuery(transactionsQuery(toFilters(search)));
   const { data: accounts } = useSuspenseQuery(accountsQuery("all"));
+  const currency = rankingCurrency(accounts);
+  const { data: page } = useSuspenseQuery(
+    transactionsQuery(toFilters(search, currency)),
+  );
+  const showTotals = monthTotalsShown(search);
+  const { data: byMonth } = useQuery({
+    ...summaryQuery("month", summaryFilters(search)),
+    enabled: showTotals,
+  });
   const { data: merchants } = useSuspenseQuery(merchantsForFilterQuery);
   const { data: categories } = useSuspenseQuery(categoriesQuery);
   const labels = categoryLabels(categories.categories);
@@ -284,32 +427,31 @@ function TransactionsScreen() {
             />
           </div>
 
-          <div
-            role="tablist"
-            aria-label="Dirección"
-            className="flex w-full gap-1 rounded-xl border border-line bg-surface p-1 lg:w-auto"
-          >
-            {DIRECTION_TABS.map((tab) => (
-              <button
-                key={tab.label}
-                type="button"
-                role="tab"
-                aria-selected={search.direction === tab.value}
-                onClick={() => apply({ direction: tab.value })}
-                className={
-                  search.direction === tab.value
-                    ? "flex-1 rounded-lg bg-accent-soft px-4 py-1.5 font-medium text-sm text-text transition-colors lg:flex-none"
-                    : "flex-1 rounded-lg px-4 py-1.5 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text active:bg-ink lg:flex-none"
-                }
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="grid w-full grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-2 lg:flex lg:w-auto">
+            <Select
+              variant="toolbar"
+              label="Mes"
+              icon={CalendarDays}
+              placeholder="Todos los meses"
+              value={monthOf(search)}
+              onChange={(event) => apply(monthPatch(event.target.value))}
+              options={monthOptions(search)}
+              className="min-w-0 lg:w-56"
+            />
+            <Select
+              variant="toolbar"
+              label="Tipo"
+              placeholder="Todos los tipos"
+              value={kindOf(search)}
+              onChange={(event) => apply(kindPatch(event.target.value))}
+              options={KINDS.map((kind) => ({ value: kind.value, label: kind.label }))}
+              className="min-w-0 lg:w-44"
+            />
           </div>
 
           <Button
             variant="ghost"
-            className="px-3 py-2 text-xs"
+            className="min-h-11 rounded-xl px-4 text-sm"
             onClick={() => setPanelOpen((open) => !open)}
             aria-expanded={panelOpen}
           >
@@ -409,7 +551,23 @@ function TransactionsScreen() {
         {page.transactions.length === 0 ? (
           <Empty filtered={active > 0} />
         ) : (
-          <MovementList transactions={page.transactions} labels={labels} />
+          <MovementList
+            transactions={page.transactions}
+            labels={labels}
+            accounts={accounts.accounts}
+            byLargest={search.sort === "amount"}
+            totals={showTotals ? byMonth?.groups : undefined}
+            direction={search.direction}
+            currency={currency}
+            sortControl={
+              <SortSwitch
+                byLargest={search.sort === "amount"}
+                onChange={(byLargest) =>
+                  apply({ sort: byLargest ? "amount" : undefined })
+                }
+              />
+            }
+          />
         )}
 
         {page.total > PAGE_SIZE ? (
@@ -431,7 +589,8 @@ function TransactionsScreen() {
               Anterior
             </Button>
             <p className="text-faint text-xs tabular">
-              Página {current} de {lastPage}
+              {(current - 1) * PAGE_SIZE + 1}–
+              {Math.min(current * PAGE_SIZE, page.total)} de {page.total}
             </p>
             <Button
               variant="ghost"
@@ -502,6 +661,9 @@ function merchantOptions(
 }
 
 function countActive(search: TransactionSearch): number {
+  // «Ingresos» and «Gastos» write `transfers` beside the direction; a kind is
+  // one filter, so that `transfers` rides on the direction's count.
+  const fromTab = search.transfers === "exclude" && search.direction !== undefined;
   return [
     search.search,
     search.account,
@@ -510,9 +672,11 @@ function countActive(search: TransactionSearch): number {
     search.origin,
     search.direction,
     search.unassigned,
-    search.transfers,
-    search.from,
-    search.to,
+    fromTab ? undefined : search.transfers,
+    // A whole month chosen in «Mes» is one filter, not a «Desde» and a «Hasta».
+    ...(monthOf(search) === CUSTOM_RANGE
+      ? [search.from, search.to]
+      : [monthOf(search) || undefined]),
   ].filter((value) => value !== undefined).length;
 }
 
@@ -593,8 +757,8 @@ function Toggle({
       aria-pressed={on}
       className={
         on
-          ? "rounded-full border border-accent bg-accent-soft px-3 py-2 text-text text-xs transition-colors active:bg-surface"
-          : "rounded-full border border-line px-3 py-2 text-muted text-xs transition-colors hover:bg-surface-raised hover:text-text active:bg-surface"
+          ? "min-h-11 rounded-full border border-accent bg-accent-soft px-4 text-sm text-text transition-colors active:bg-surface"
+          : "min-h-11 rounded-full border border-line px-4 text-muted text-sm transition-colors hover:bg-surface-raised hover:text-text active:bg-surface"
       }
     >
       {label}
@@ -602,34 +766,107 @@ function Toggle({
   );
 }
 
-/** Grouped by month, the way a statement reads. */
+/** Newest first or largest first: the one ordering choice the list offers. */
+/** Newest first or largest first: the one ordering choice the list offers. */
+function SortSwitch({
+  byLargest,
+  onChange,
+}: {
+  byLargest: boolean;
+  onChange: (byLargest: boolean) => void;
+}) {
+  return (
+    <Select
+      variant="quiet"
+      label="Orden"
+      value={byLargest ? "amount" : "date"}
+      onChange={(event) => onChange(event.target.value === "amount")}
+      options={[
+        { value: "date", label: "Más recientes" },
+        { value: "amount", label: "Más grandes" },
+      ]}
+    />
+  );
+}
+
+/**
+ * Grouped by month, the way a statement reads; largest first is one ranking,
+ * so it is one block with each row's full date instead.
+ */
 function MovementList({
   transactions,
   labels,
+  accounts,
+  byLargest,
+  totals,
+  direction,
+  currency,
+  sortControl,
 }: {
   transactions: Transaction[];
   labels: Record<string, string>;
+  accounts: Account[];
+  byLargest: boolean;
+  /** The summary's month groups for the same filters, when it has them. */
+  totals?: { key: string | null; totals: SpendingTotals[] }[];
+  direction?: "incoming" | "outgoing";
+  currency: string;
+  sortControl: ReactNode;
 }) {
-  const months = new Map<string, Transaction[]>();
-  for (const movement of transactions) {
-    const key = monthKeyOf(movement.occurred_at);
-    const bucket = months.get(key);
-    if (bucket) bucket.push(movement);
-    else months.set(key, [movement]);
+  const byId = new Map(accounts.map((account) => [account.id, account]));
+
+  const sections: { key: string; title: string; movements: Transaction[] }[] = [];
+  if (byLargest) {
+    sections.push({
+      key: "largest",
+      title: `Más grandes primero, en ${currency}`,
+      movements: transactions,
+    });
+  } else {
+    for (const movement of transactions) {
+      const key = monthKeyOf(movement.occurred_at);
+      const last = sections.at(-1);
+      if (last?.key === key) last.movements.push(movement);
+      else {
+        const month = formatMonthKey(key);
+        sections.push({
+          key,
+          title: month.charAt(0).toUpperCase() + month.slice(1),
+          movements: [movement],
+        });
+      }
+    }
   }
 
   return (
     <div className="flex flex-col gap-8">
-      {[...months].map(([key, movements]) => {
-        const month = formatMonthKey(key);
+      {sections.map((section, sectionIndex) => {
+        const monthTotals = totals
+          ?.find((group) => group.key === section.key)
+          ?.totals.find((entry) => entry.currency === currency);
         return (
-          <section key={key} className="flex flex-col gap-3">
-            <h2 className="px-1 font-medium text-base text-text">
-              {month.charAt(0).toUpperCase() + month.slice(1)}
-            </h2>
+          <section key={section.key} className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 px-1">
+              <div className="flex min-w-0 flex-col gap-1">
+                <h2 className="font-medium text-base text-text">{section.title}</h2>
+                {monthTotals ? (
+                  <MonthTotals totals={monthTotals} direction={direction} />
+                ) : null}
+              </div>
+              {sectionIndex === 0 ? sortControl : null}
+            </div>
             <Card lift={false} className="p-0">
+              <div
+                aria-hidden
+                className="hidden grid-cols-[6rem_minmax(0,1.6fr)_minmax(0,1fr)_9rem] gap-x-6 border-line border-b px-6 py-3 text-faint text-xs lg:grid"
+              >
+                <span>Día</span>
+                <span>Movimiento</span>
+                <span>Cuenta</span>
+                <span className="text-right">Monto</span>
+              </div>
               <ul>
-                {movements.map((movement, index) => (
+                {section.movements.map((movement, index) => (
                   <li
                     key={movement.id}
                     className="border-line/40 border-b last:border-b-0"
@@ -637,9 +874,15 @@ function MovementList({
                     <MovementRow
                       movement={movement}
                       labels={labels}
+                      account={
+                        movement.account_id ? byId.get(movement.account_id) : undefined
+                      }
+                      fullDate={byLargest}
                       // A statement prints the day once, on the first line of
                       // that day; the rows under it read as the same day.
-                      sameDayAsPrevious={sameDay(movements[index - 1], movement)}
+                      sameDayAsPrevious={
+                        !byLargest && sameDay(section.movements[index - 1], movement)
+                      }
                     />
                   </li>
                 ))}
@@ -652,6 +895,52 @@ function MovementList({
   );
 }
 
+/**
+ * What came in and went out over the month, for the same filters as the list.
+ * A tab that shows one direction shows only its figure: the other is zero by
+ * construction.
+ */
+function MonthTotals({
+  totals,
+  direction,
+}: {
+  totals: SpendingTotals;
+  direction?: "incoming" | "outgoing";
+}) {
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-faint text-xs">
+      {direction !== "outgoing" ? (
+        <span className="inline-flex items-baseline gap-1">
+          Entró
+          <Money
+            amount={totals.incoming}
+            currency={totals.currency}
+            size="sm"
+            tone="positive"
+            className="text-xs"
+          />
+        </span>
+      ) : null}
+      {direction !== "incoming" ? (
+        <span className="inline-flex items-baseline gap-1">
+          Salió
+          <Money
+            amount={totals.outgoing}
+            currency={totals.currency}
+            size="sm"
+            className="text-xs"
+          />
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
+/** «nov», the month a row belongs to where the list is not grouped by month. */
+function shortMonthOf(epochSeconds: number): string {
+  return formatDayMonth(epochSeconds).split(" ").at(-1)?.replace(".", "") ?? "";
+}
+
 function sameDay(previous: Transaction | undefined, movement: Transaction): boolean {
   return (
     previous !== undefined &&
@@ -659,61 +948,101 @@ function sameDay(previous: Transaction | undefined, movement: Transaction): bool
   );
 }
 
+/**
+ * One movement: the day, what it was (its category under the name, an icon
+ * beside both), the account and the amount. On a phone the account rides
+ * under the amount instead of having a column.
+ *
+ * What a row does not say is on purpose: the note, how it was entered and
+ * the account's kind are a tap away, in the movement itself. A list that says
+ * everything about every row is one where nothing stands out.
+ */
 function MovementRow({
   movement,
   // A row holds a category value and nothing else, so one this person wrote
   // would render as `custom:mascotas` without the names beside it.
   labels,
+  account,
+  fullDate,
   sameDayAsPrevious,
 }: {
   movement: Transaction;
   labels: Record<string, string>;
+  account?: Account;
+  /** «17 nov» instead of «17», where rows are not grouped by month. */
+  fullDate: boolean;
   sameDayAsPrevious: boolean;
 }) {
   const incoming = movement.direction === "incoming";
   const transfer = movement.transfer;
-  const category =
-    movement.merchant?.category && !isUncategorized(movement.merchant.category)
-      ? labelFrom(labels, movement.merchant.category)
-      : null;
-  const manual = movement.origin === "manual";
-  const unassigned = !movement.account_id;
+  const value = movement.merchant?.category;
+  const categorised = !isUncategorized(value);
+  const category = transfer
+    ? "Traslado"
+    : categorised && value
+      ? labelFrom(labels, value)
+      : "Sin categoría";
+  const Icon = transfer ? TRANSFER_ICON : categoryIcon(value);
+  /*
+   * A transfer wears neither green nor magenta: green means money arriving
+   * and magenta money leaving, and this is neither. It says so in violet.
+   */
+  const tile = transfer
+    ? "bg-violet/15 text-violet"
+    : incoming
+      ? "bg-incoming/15 text-incoming"
+      : "bg-surface-raised text-muted";
+  const categoryText = transfer
+    ? "text-violet"
+    : categorised
+      ? "text-muted"
+      : "text-faint";
+  const accountName = account?.name ?? "Sin asignar";
+  const accountText = account ? "text-muted" : "text-warn";
+  const day = dayStringOf(movement.occurred_at).slice(8);
 
   return (
     <Link
       to="/transacciones/$transactionId"
       params={{ transactionId: movement.id }}
-      className="grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 transition-colors duration-150 hover:bg-surface-raised/70 active:bg-surface-raised sm:grid-cols-[2.5rem_minmax(0,1fr)_auto]"
+      className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3.5 transition-colors duration-150 hover:bg-surface-raised/70 active:bg-surface-raised sm:grid-cols-[3rem_minmax(0,1fr)_auto] sm:gap-x-4 lg:grid-cols-[6rem_minmax(0,1.6fr)_minmax(0,1fr)_9rem] lg:gap-x-6 lg:px-6 lg:py-4"
       activeProps={{ className: "bg-surface-raised/70" }}
     >
       {/* The day is the row's anchor, the way a bank statement reads. */}
-      <span className="text-right font-semibold text-base text-muted tabular">
-        <span aria-hidden>
-          {sameDayAsPrevious ? "" : dayStringOf(movement.occurred_at).slice(8)}
-        </span>
+      <span className="flex flex-col text-base text-muted tabular">
+        <span aria-hidden>{sameDayAsPrevious ? "" : day}</span>
+        {fullDate ? (
+          <span aria-hidden className="text-faint text-xs">
+            {shortMonthOf(movement.occurred_at)}
+          </span>
+        ) : null}
         <span className="sr-only">{formatDayMonth(movement.occurred_at)}</span>
       </span>
 
-      <div className="min-w-0">
-        <p className="truncate text-sm text-text">
-          {transfer
-            ? transferTitle(transfer, movement.counterparty)
-            : (movement.merchant?.display_name ?? movement.counterparty)}
-        </p>
-        {/*
-         * A transfer wears neither green nor magenta: green means money
-         * arriving and magenta money leaving, and this is neither. It says so
-         * in violet, in the place a category would go.
-         */}
-        {transfer ? (
-          <p className="mt-0.5 truncate text-violet text-xs">Traslado</p>
-        ) : category ? (
-          <p className="mt-0.5 truncate text-faint text-xs">{category}</p>
-        ) : null}
+      <div className="flex min-w-0 items-center gap-3 lg:gap-4">
+        <span
+          aria-hidden
+          className={cn(
+            "grid size-9 shrink-0 place-items-center rounded-xl lg:size-10",
+            tile,
+          )}
+        >
+          <Icon className="size-4 lg:size-5" />
+        </span>
+        <div className="min-w-0">
+          <p className="truncate font-medium text-sm text-text">
+            {transfer
+              ? transferTitle(transfer, movement.counterparty)
+              : (movement.merchant?.display_name ?? movement.counterparty)}
+          </p>
+          <p className={cn("mt-0.5 truncate text-xs", categoryText)}>{category}</p>
+        </div>
       </div>
 
-      {/* The amount, and under it what is unusual about how it got here:
-          its own column, so a phone never cuts it off the end of a line. */}
+      <span className={cn("hidden truncate text-sm lg:block", accountText)}>
+        {accountName}
+      </span>
+
       <div className="flex flex-col items-end gap-0.5">
         <Money
           amount={incoming ? movement.amount : `-${movement.amount}`}
@@ -721,13 +1050,16 @@ function MovementRow({
           signed
           size="sm"
           tone={transfer ? "neutral" : incoming ? "positive" : "plain"}
+          className="font-semibold"
         />
-        {manual || unassigned ? (
-          <span className="flex gap-2 text-xs">
-            {manual ? <span className="text-faint">a mano</span> : null}
-            {unassigned ? <span className="text-warn">sin asignar</span> : null}
-          </span>
-        ) : null}
+        <span
+          className={cn(
+            "max-w-24 truncate text-xs sm:max-w-40 lg:hidden",
+            account ? "text-faint" : "text-warn",
+          )}
+        >
+          {accountName}
+        </span>
       </div>
     </Link>
   );
